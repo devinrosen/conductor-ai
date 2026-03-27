@@ -2,93 +2,81 @@
 
 ```yaml
 - generic [ref=e3]:
-  - complementary [ref=e4]:
-    - generic [ref=e5]:
-      - heading "Conductor" [level=1] [ref=e6]
-      - button "Close menu" [ref=e7]: ✕
-    - navigation [ref=e8]:
-      - link "Activity" [ref=e9]:
+  - complementary:
+    - generic:
+      - generic:
+        - img "Station clock"
+        - img "Conductor"
+        - heading "Conductor" [level=1]
+      - button "Close menu": ✕
+    - navigation:
+      - link "Home":
         - /url: /
-      - link "Repos" [ref=e10]:
+      - link "Repos":
         - /url: /repos
-      - link "Workflows" [ref=e11]:
+      - link "Workflows":
         - /url: /workflows
-      - link "Tickets" [ref=e12]:
+      - link "Tickets":
         - /url: /tickets
-      - generic [ref=e13]: Repos
-      - generic [ref=e14]: Loading...
-      - link "e2e-repo-1774135339566-ba0118" [ref=e15]:
-        - /url: /repos/01KM9B9TV6B8QGH6WA1M1D7CVJ
-      - link "e2e-repo-1774135341436-adde65" [ref=e16]:
-        - /url: /repos/01KM9B9WNM1X71AT021WMMJJFG
-      - link "e2e-repo-1774135356090-4142ff" [ref=e17]:
-        - /url: /repos/01KM9BAAZHE9ZFVKNBP11TG0KJ
-      - link "e2e-repo-1774135358102-80aa4f" [ref=e18]:
-        - /url: /repos/01KM9BACYCH5EX9RHPXK9C6HXB
-      - link "e2e-repo-1774135359191-c23eaa" [ref=e19]:
-        - /url: /repos/01KM9BAE0ECMD66QXPDADKX4ZA
-    - generic [ref=e20]:
-      - link "Settings" [ref=e21]:
+      - generic: Repos
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "e2e-repo-1774636008949-b46ea1":
+        - /url: /repos/01KMR8S1SMHCHMKJ9T8W4RBE6G
+        - generic: e2e-repo-1774636008949-b46ea1
+      - link "e2e-repo-1774636010485-5d1d03":
+        - /url: /repos/01KMR8S39M17PJZN4BA5T6QSBR
+        - generic: e2e-repo-1774636010485-5d1d03
+      - link "e2e-repo-1774636013815-e0d25a":
+        - /url: /repos/01KMR8S6HDEPRMJT04XP4SSB13
+        - generic: e2e-repo-1774636013815-e0d25a
+      - link "e2e-repo-1774636028692-8a963e":
+        - /url: /repos/01KMR8SN2MT7AASJ4B06M0R0CT
+        - generic: e2e-repo-1774636028692-8a963e
+      - link "e2e-repo-1774636032135-9d92b5":
+        - /url: /repos/01KMR8SRDYE6HN2HSE3YZ4DWBW
+        - generic: e2e-repo-1774636032135-9d92b5
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
+    - generic:
+      - link "Settings":
         - /url: /settings
-      - generic [ref=e22]: Press ? for shortcuts
-  - main [ref=e23]:
-    - generic [ref=e24]:
-      - button "Open menu" [ref=e25]: ☰
-      - generic [ref=e26]: Conductor
-      - button "Notifications" [ref=e29]:
-        - img [ref=e30]
-    - generic [ref=e33]:
-      - generic [ref=e34]:
-        - generic [ref=e35]:
-          - heading "e2e-repo-1774135356090-4142ff" [level=2] [ref=e36]
-          - button "Delete Repo" [ref=e37]
-        - generic [ref=e38]:
-          - term [ref=e39]: Remote
-          - definition [ref=e40]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-OxCrSJ
-          - term [ref=e41]: Local Path
-          - definition [ref=e42]: /var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-OxCrSJ
-          - term [ref=e43]: Default Branch
-          - definition [ref=e44]: main
-          - term [ref=e45]: Model
-          - definition [ref=e46]:
-            - generic [ref=e47]:
-              - generic [ref=e48]: Not set
-              - button "Edit" [ref=e49]
-          - term [ref=e50]: Agent Issue Creation
-          - definition [ref=e51]:
-            - button "Disabled" [ref=e52]
-      - generic [ref=e53]:
-        - generic [ref=e54]:
-          - generic [ref=e55]:
-            - heading "Issue Sources" [level=3] [ref=e56]
-            - paragraph [ref=e57]: Configure where tickets are synced from for this repo.
-          - button "Add Source" [ref=e58]
-        - generic [ref=e59]: No issue sources configured
-      - generic [ref=e60]:
-        - generic [ref=e61]:
-          - heading "Worktrees" [level=3] [ref=e62]
-          - generic [ref=e63]:
-            - button "Show completed" [ref=e64]
-            - button "Create Worktree" [ref=e65]
-        - generic [ref=e66]: No worktrees yet
-      - generic [ref=e67]:
-        - generic [ref=e68]:
-          - heading "Tickets" [level=3] [ref=e69]
-          - generic [ref=e70]:
-            - button "Show closed" [ref=e71]
-            - button "Sync Tickets" [ref=e72]
-        - generic [ref=e73]: No tickets synced yet
-  - generic [ref=e74]:
-    - link "Activity" [ref=e75]:
+      - link "Getting Started 🚂":
+        - /url: /getting-started
+        - text: Getting Started
+        - generic: 🚂
+      - generic:
+        - generic: ⌘K command palette
+        - generic: "? shortcuts"
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - button "Open menu" [ref=e6]: ☰
+      - generic [ref=e7]: Conductor
+      - button "Notifications" [ref=e10]:
+        - img [ref=e11]
+    - generic [ref=e14]:
+      - paragraph [ref=e15]: Repo not found
+      - link "Back to dashboard" [ref=e16]:
+        - /url: /
+  - generic [ref=e17]:
+    - link "Home" [ref=e18]:
       - /url: /
-      - img [ref=e76]
-      - text: Activity
-    - link "Repos" [ref=e78]:
+      - img [ref=e19]
+      - text: Home
+    - link "Repos" [ref=e21]:
       - /url: /repos
-      - img [ref=e79]
+      - img [ref=e22]
       - text: Repos
-    - link "Workflows" [ref=e81]:
+    - link "Workflows" [ref=e24]:
       - /url: /workflows
-      - img [ref=e82]
+      - img [ref=e25]
       - text: Workflows
 ```

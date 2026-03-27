@@ -2,55 +2,119 @@
 
 ```yaml
 - generic [ref=e3]:
-  - complementary [ref=e4]:
-    - generic [ref=e5]:
-      - heading "Conductor" [level=1] [ref=e6]
-      - button "Close menu" [ref=e7]: ✕
-    - navigation [ref=e8]:
-      - link "Activity" [ref=e9]:
+  - complementary:
+    - generic:
+      - generic:
+        - img "Station clock"
+        - img "Conductor"
+        - heading "Conductor" [level=1]
+      - button "Close menu": ✕
+    - navigation:
+      - link "Home":
         - /url: /
-      - link "Repos" [ref=e10]:
+      - link "Repos":
         - /url: /repos
-      - link "Workflows" [ref=e11]:
+      - link "Workflows":
         - /url: /workflows
-      - link "Tickets" [ref=e12]:
+      - link "Tickets":
         - /url: /tickets
-      - generic [ref=e13]: Repos
-      - link "e2e-repo-1774135339557-250f51" [ref=e14]:
-        - /url: /repos/01KM9B9TTY74WH93RC7YA6289W
-      - link "e2e-repo-1774135339566-ba0118" [ref=e15]:
-        - /url: /repos/01KM9B9TV6B8QGH6WA1M1D7CVJ
-      - link "e2e-repo-1774135341436-adde65" [ref=e16]:
-        - /url: /repos/01KM9B9WNM1X71AT021WMMJJFG
-      - link "e2e-repo-1774135341462-d1275b" [ref=e17]:
-        - /url: /repos/01KM9B9WPEJE2SHK1T5D790ZYJ
-      - link "e2e-repo-1774135342487-279a9e" [ref=e18]:
-        - /url: /repos/01KM9B9XPD7Q9HTSNMXG6722KY
-    - generic [ref=e19]:
-      - link "Settings" [ref=e20]:
+      - generic: Repos
+      - generic: Loading...
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "e2e-repo-1774636005914-18a872":
+        - /url: /repos/01KMR8RYTHC4QG1MRHEW8D9BJY
+        - generic: e2e-repo-1774636005914-18a872
+      - link "e2e-repo-1774636008949-b46ea1":
+        - /url: /repos/01KMR8S1SMHCHMKJ9T8W4RBE6G
+        - generic: e2e-repo-1774636008949-b46ea1
+      - link "e2e-repo-1774636010477-e4be3a":
+        - /url: /repos/01KMR8S39JPXX9Y4DZQJS9AYR8
+        - generic: e2e-repo-1774636010477-e4be3a
+      - link "e2e-repo-1774636010478-167ede":
+        - /url: /repos/01KMR8S39G9CHZEYRF6WN5KMG5
+        - generic: e2e-repo-1774636010478-167ede
+      - link "e2e-repo-1774636010485-5d1d03":
+        - /url: /repos/01KMR8S39M17PJZN4BA5T6QSBR
+        - generic: e2e-repo-1774636010485-5d1d03
+      - link "e2e-repo-1774636010683-d0973c":
+        - /url: /repos/01KMR8S3FPJSX6BSE3ZNX4MF36
+        - generic: e2e-repo-1774636010683-d0973c
+      - link "e2e-repo-1774636013815-e0d25a":
+        - /url: /repos/01KMR8S6HDEPRMJT04XP4SSB13
+        - generic: e2e-repo-1774636013815-e0d25a
+      - link "e2e-repo-1774636016631-06f664":
+        - /url: /repos/01KMR8S99D88SZ15RP84GPARRN
+        - generic: e2e-repo-1774636016631-06f664
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
+    - generic:
+      - link "Settings":
         - /url: /settings
-      - generic [ref=e21]: Press ? for shortcuts
-  - main [ref=e22]:
-    - generic [ref=e23]:
-      - button "Open menu" [ref=e24]: ☰
-      - generic [ref=e25]: Conductor
-      - button "Notifications" [ref=e28]:
-        - img [ref=e29]
-    - generic [ref=e32]:
-      - paragraph [ref=e33]: Repo not found
-      - link "Back to dashboard" [ref=e34]:
-        - /url: /
-  - generic [ref=e35]:
-    - link "Activity" [ref=e36]:
+      - link "Getting Started 🚂":
+        - /url: /getting-started
+        - text: Getting Started
+        - generic: 🚂
+      - generic:
+        - generic: ⌘K command palette
+        - generic: "? shortcuts"
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - button "Open menu" [ref=e6]: ☰
+      - generic [ref=e7]: Conductor
+      - button "Notifications" [ref=e10]:
+        - img [ref=e11]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - heading "e2e-repo-1774636010477-e4be3a" [level=2] [ref=e16]
+        - button "Settings" [ref=e17]:
+          - img [ref=e18]
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - heading "Worktrees" [level=3] [ref=e22]
+          - generic [ref=e23]:
+            - button "Show completed" [ref=e24]
+            - generic [ref=e25]:
+              - generic [ref=e26]:
+                - generic [ref=e27]:
+                  - generic [ref=e28]: Name
+                  - textbox "feat-my-feature" [ref=e29]: e2e-create-1774636011121-aa611e
+                - generic [ref=e30]:
+                  - generic [ref=e31]: From Branch (optional)
+                  - textbox "main" [ref=e32]
+              - paragraph [ref=e33]: "invalid input: uncommitted changes on base branch, please commit or stash first"
+              - generic [ref=e34]:
+                - button "Create" [ref=e35]
+                - button "Cancel" [ref=e36]
+        - generic [ref=e37]:
+          - img [ref=e38]
+          - paragraph [ref=e44]: No platforms active. Create a worktree to lay some track.
+      - generic [ref=e45]:
+        - generic [ref=e46]:
+          - heading "Tickets" [level=3] [ref=e47]
+          - button "Configure Issue Sources" [ref=e48]
+        - generic [ref=e49]:
+          - img [ref=e50]
+          - paragraph [ref=e57]: No issue sources configured. Add one in Settings to sync tickets.
+  - generic [ref=e58]:
+    - link "Home" [ref=e59]:
       - /url: /
-      - img [ref=e37]
-      - text: Activity
-    - link "Repos" [ref=e39]:
+      - img [ref=e60]
+      - text: Home
+    - link "Repos" [ref=e62]:
       - /url: /repos
-      - img [ref=e40]
+      - img [ref=e63]
       - text: Repos
-    - link "Workflows" [ref=e42]:
+    - link "Workflows" [ref=e65]:
       - /url: /workflows
-      - img [ref=e43]
+      - img [ref=e66]
       - text: Workflows
 ```

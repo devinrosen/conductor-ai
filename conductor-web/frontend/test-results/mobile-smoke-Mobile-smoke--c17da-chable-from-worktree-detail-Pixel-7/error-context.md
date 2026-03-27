@@ -2,46 +2,75 @@
 
 ```yaml
 - generic [ref=e3]:
-  - complementary [ref=e4]:
-    - generic [ref=e5]:
-      - heading "Conductor" [level=1] [ref=e6]
-      - button "Close menu" [ref=e7]: ✕
-    - navigation [ref=e8]:
-      - link "Activity" [ref=e9] [cursor=pointer]:
+  - complementary:
+    - generic:
+      - generic:
+        - img "Station clock"
+        - img "Conductor"
+        - heading "Conductor" [level=1]
+      - button "Close menu": ✕
+    - navigation:
+      - link "Home":
         - /url: /
-      - link "Repos" [ref=e10] [cursor=pointer]:
+      - link "Repos":
         - /url: /repos
-      - link "Workflows" [ref=e11] [cursor=pointer]:
+      - link "Workflows":
         - /url: /workflows
-      - link "Tickets" [ref=e12] [cursor=pointer]:
+      - link "Tickets":
         - /url: /tickets
-      - generic [ref=e13]: Repos
-      - generic [ref=e14]: No repos yet
-    - generic [ref=e15]:
-      - link "Settings" [ref=e16] [cursor=pointer]:
+      - generic: Repos
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "e2e-repo-1774636039488-ef2184":
+        - /url: /repos/01KMR8SZKQV2P94BKQVJ583KXB
+        - generic: e2e-repo-1774636039488-ef2184
+      - link "e2e-repo-1774636040511-a7878b":
+        - /url: /repos/01KMR8T0KPR9WKVKS79PV4PYDD
+        - generic: e2e-repo-1774636040511-a7878b
+      - link "e2e-repo-1774636049000-2ac1ca":
+        - /url: /repos/01KMR8T8WZ87CPQYMZTXBMFXTZ
+        - generic: e2e-repo-1774636049000-2ac1ca
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
+    - generic:
+      - link "Settings":
         - /url: /settings
-      - generic [ref=e17]: Press ? for shortcuts
-  - main [ref=e18]:
-    - generic [ref=e19]:
-      - button "Open menu" [ref=e20]: ☰
-      - generic [ref=e21]: Conductor
-      - button "Notifications" [ref=e24]:
-        - img [ref=e25]
-    - generic [ref=e28]:
-      - paragraph [ref=e29]: Worktree not found
-      - link "Back to repo" [ref=e30] [cursor=pointer]:
-        - /url: /repos/01KM9BAR6M1SGBGNDZN99N12R5
-  - generic [ref=e31]:
-    - link "Activity" [ref=e32] [cursor=pointer]:
+      - link "Getting Started 🚂":
+        - /url: /getting-started
+        - text: Getting Started
+        - generic: 🚂
+      - generic:
+        - generic: ⌘K command palette
+        - generic: "? shortcuts"
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - button "Open menu" [ref=e6]: ☰
+      - generic [ref=e7]: Conductor
+      - button "Notifications" [ref=e10]:
+        - img [ref=e11]
+    - generic [ref=e14]:
+      - paragraph [ref=e15]: Worktree not found
+      - link "Back to repo" [ref=e16] [cursor=pointer]:
+        - /url: /repos/01KMR8T0KPR9WKVKS79PV4PYDD
+  - generic [ref=e17]:
+    - link "Home" [ref=e18] [cursor=pointer]:
       - /url: /
-      - img [ref=e33]
-      - text: Activity
-    - link "Repos" [ref=e35] [cursor=pointer]:
+      - img [ref=e19]
+      - text: Home
+    - link "Repos" [ref=e21] [cursor=pointer]:
       - /url: /repos
-      - img [ref=e36]
+      - img [ref=e22]
       - text: Repos
-    - link "Workflows" [ref=e38] [cursor=pointer]:
+    - link "Workflows" [ref=e24] [cursor=pointer]:
       - /url: /workflows
-      - img [ref=e39]
+      - img [ref=e25]
       - text: Workflows
 ```

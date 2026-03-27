@@ -2,53 +2,84 @@
 
 ```yaml
 - generic [ref=e3]:
-  - complementary [ref=e4]:
-    - generic [ref=e5]:
-      - heading "Conductor" [level=1] [ref=e6]
-      - button "Close menu" [ref=e7]: ✕
-    - navigation [ref=e8]:
-      - link "Activity" [ref=e9]:
+  - complementary:
+    - generic:
+      - generic:
+        - img "Station clock"
+        - img "Conductor"
+        - heading "Conductor" [level=1]
+      - button "Close menu": ✕
+    - navigation:
+      - link "Home":
         - /url: /
-      - link "Repos" [ref=e10]:
+      - link "Repos":
         - /url: /repos
-      - link "Workflows" [ref=e11]:
+      - link "Workflows":
         - /url: /workflows
-      - link "Tickets" [ref=e12]:
+      - link "Tickets":
         - /url: /tickets
-      - generic [ref=e13]: Repos
-      - link "e2e-repo-1774135339566-ba0118" [ref=e14]:
-        - /url: /repos/01KM9B9TV6B8QGH6WA1M1D7CVJ
-      - link "e2e-repo-1774135341436-adde65" [ref=e15]:
-        - /url: /repos/01KM9B9WNM1X71AT021WMMJJFG
-      - link "e2e-repo-1774135341462-d1275b" [ref=e16]:
-        - /url: /repos/01KM9B9WPEJE2SHK1T5D790ZYJ
-      - link "e2e-repo-1774135342487-279a9e" [ref=e17]:
-        - /url: /repos/01KM9B9XPD7Q9HTSNMXG6722KY
-    - generic [ref=e18]:
-      - link "Settings" [ref=e19]:
+      - generic: Repos
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "e2e-repo-1774636005914-18a872":
+        - /url: /repos/01KMR8RYTHC4QG1MRHEW8D9BJY
+        - generic: e2e-repo-1774636005914-18a872
+      - link "e2e-repo-1774636008949-b46ea1":
+        - /url: /repos/01KMR8S1SMHCHMKJ9T8W4RBE6G
+        - generic: e2e-repo-1774636008949-b46ea1
+      - link "e2e-repo-1774636010485-5d1d03":
+        - /url: /repos/01KMR8S39M17PJZN4BA5T6QSBR
+        - generic: e2e-repo-1774636010485-5d1d03
+      - link "e2e-repo-1774636010683-d0973c":
+        - /url: /repos/01KMR8S3FPJSX6BSE3ZNX4MF36
+        - generic: e2e-repo-1774636010683-d0973c
+      - link "e2e-repo-1774636013815-e0d25a":
+        - /url: /repos/01KMR8S6HDEPRMJT04XP4SSB13
+        - generic: e2e-repo-1774636013815-e0d25a
+      - link "e2e-repo-1774636016631-06f664":
+        - /url: /repos/01KMR8S99D88SZ15RP84GPARRN
+        - generic: e2e-repo-1774636016631-06f664
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
+    - generic:
+      - link "Settings":
         - /url: /settings
-      - generic [ref=e20]: Press ? for shortcuts
-  - main [ref=e21]:
-    - generic [ref=e22]:
-      - button "Open menu" [ref=e23]: ☰
-      - generic [ref=e24]: Conductor
-      - button "Notifications" [ref=e27]:
-        - img [ref=e28]
-    - generic [ref=e31]:
-      - paragraph [ref=e32]: Repo not found
-      - link "Back to dashboard" [ref=e33]:
+      - link "Getting Started 🚂":
+        - /url: /getting-started
+        - text: Getting Started
+        - generic: 🚂
+      - generic:
+        - generic: ⌘K command palette
+        - generic: "? shortcuts"
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - button "Open menu" [ref=e6]: ☰
+      - generic [ref=e7]: Conductor
+      - button "Notifications" [ref=e10]:
+        - img [ref=e11]
+    - generic [ref=e14]:
+      - paragraph [ref=e15]: Repo not found
+      - link "Back to dashboard" [ref=e16]:
         - /url: /
-  - generic [ref=e34]:
-    - link "Activity" [ref=e35]:
+  - generic [ref=e17]:
+    - link "Home" [ref=e18]:
       - /url: /
-      - img [ref=e36]
-      - text: Activity
-    - link "Repos" [ref=e38]:
+      - img [ref=e19]
+      - text: Home
+    - link "Repos" [ref=e21]:
       - /url: /repos
-      - img [ref=e39]
+      - img [ref=e22]
       - text: Repos
-    - link "Workflows" [ref=e41]:
+    - link "Workflows" [ref=e24]:
       - /url: /workflows
-      - img [ref=e42]
+      - img [ref=e25]
       - text: Workflows
 ```

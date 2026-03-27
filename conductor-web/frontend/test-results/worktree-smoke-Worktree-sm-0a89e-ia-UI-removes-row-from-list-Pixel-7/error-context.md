@@ -2,49 +2,94 @@
 
 ```yaml
 - generic [ref=e3]:
-  - complementary [ref=e4]:
-    - generic [ref=e5]:
-      - heading "Conductor" [level=1] [ref=e6]
-      - button "Close menu" [ref=e7]: ✕
-    - navigation [ref=e8]:
-      - link "Activity" [ref=e9] [cursor=pointer]:
+  - complementary:
+    - generic:
+      - generic:
+        - img "Station clock"
+        - img "Conductor"
+        - heading "Conductor" [level=1]
+      - button "Close menu": ✕
+    - navigation:
+      - link "Home":
         - /url: /
-      - link "Repos" [ref=e10] [cursor=pointer]:
+      - link "Repos":
         - /url: /repos
-      - link "Workflows" [ref=e11] [cursor=pointer]:
+      - link "Workflows":
         - /url: /workflows
-      - link "Tickets" [ref=e12] [cursor=pointer]:
+      - link "Tickets":
         - /url: /tickets
-      - generic [ref=e13]: Repos
-      - link "e2e-repo-1774135341436-adde65" [ref=e14] [cursor=pointer]:
-        - /url: /repos/01KM9B9WNM1X71AT021WMMJJFG
-      - link "e2e-repo-1774135367375-402aa3" [ref=e15] [cursor=pointer]:
-        - /url: /repos/01KM9BAP06M9BPKMDM1S212F34
-    - generic [ref=e16]:
-      - link "Settings" [ref=e17] [cursor=pointer]:
+      - generic: Repos
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "e2e-repo-1774636039488-ef2184":
+        - /url: /repos/01KMR8SZKQV2P94BKQVJ583KXB
+        - generic: e2e-repo-1774636039488-ef2184
+      - link "e2e-repo-1774636040511-a7878b":
+        - /url: /repos/01KMR8T0KPR9WKVKS79PV4PYDD
+        - generic: e2e-repo-1774636040511-a7878b
+      - link "e2e-repo-1774636049000-2ac1ca":
+        - /url: /repos/01KMR8T8WZ87CPQYMZTXBMFXTZ
+        - generic: e2e-repo-1774636049000-2ac1ca
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
+    - generic:
+      - link "Settings":
         - /url: /settings
-      - generic [ref=e18]: Press ? for shortcuts
-  - main [ref=e19]:
-    - generic [ref=e20]:
-      - button "Open menu" [ref=e21]: ☰
-      - generic [ref=e22]: Conductor
-      - button "Notifications" [ref=e25]:
-        - img [ref=e26]
-    - generic [ref=e29]:
-      - paragraph [ref=e30]: Repo not found
-      - link "Back to dashboard" [ref=e31] [cursor=pointer]:
-        - /url: /
-  - generic [ref=e32]:
-    - link "Activity" [ref=e33] [cursor=pointer]:
+      - link "Getting Started 🚂":
+        - /url: /getting-started
+        - text: Getting Started
+        - generic: 🚂
+      - generic:
+        - generic: ⌘K command palette
+        - generic: "? shortcuts"
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - button "Open menu" [ref=e6]: ☰
+      - generic [ref=e7]: Conductor
+      - button "Notifications" [ref=e10]:
+        - img [ref=e11]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - heading "e2e-repo-1774636049000-2ac1ca" [level=2] [ref=e16]
+        - button "Settings" [ref=e17]:
+          - img [ref=e18]
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - heading "Worktrees" [level=3] [ref=e22]
+          - generic [ref=e23]:
+            - button "Show completed" [ref=e24]
+            - button "Create Worktree" [ref=e25]:
+              - img [ref=e26]
+              - generic [ref=e29]: Create Worktree
+        - generic [ref=e30]:
+          - img [ref=e31]
+          - paragraph [ref=e37]: No platforms active. Create a worktree to lay some track.
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - heading "Tickets" [level=3] [ref=e40]
+          - button "Configure Issue Sources" [ref=e41]
+        - generic [ref=e42]:
+          - img [ref=e43]
+          - paragraph [ref=e50]: No issue sources configured. Add one in Settings to sync tickets.
+  - generic [ref=e51]:
+    - link "Home" [ref=e52] [cursor=pointer]:
       - /url: /
-      - img [ref=e34]
-      - text: Activity
-    - link "Repos" [ref=e36] [cursor=pointer]:
+      - img [ref=e53]
+      - text: Home
+    - link "Repos" [ref=e55] [cursor=pointer]:
       - /url: /repos
-      - img [ref=e37]
+      - img [ref=e56]
       - text: Repos
-    - link "Workflows" [ref=e39] [cursor=pointer]:
+    - link "Workflows" [ref=e58] [cursor=pointer]:
       - /url: /workflows
-      - img [ref=e40]
+      - img [ref=e59]
       - text: Workflows
 ```
