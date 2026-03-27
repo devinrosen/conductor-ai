@@ -1539,7 +1539,13 @@ fn test_validate_branch_name_colon() {
 // list_all_with_status() tests
 // -----------------------------------------------------------------------
 
-fn insert_agent_run(conn: &Connection, id: &str, worktree_id: &str, status: &str, started_at: &str) {
+fn insert_agent_run(
+    conn: &Connection,
+    id: &str,
+    worktree_id: &str,
+    status: &str,
+    started_at: &str,
+) {
     conn.execute(
         "INSERT INTO agent_runs (id, worktree_id, status, started_at, prompt) \
          VALUES (?1, ?2, ?3, ?4, 'test prompt')",
@@ -1584,7 +1590,13 @@ fn test_list_all_with_status_waiting_for_feedback() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
 
-    insert_agent_run(&conn, "ar1", "w1", "waiting_for_feedback", "2024-01-01T10:00:00Z");
+    insert_agent_run(
+        &conn,
+        "ar1",
+        "w1",
+        "waiting_for_feedback",
+        "2024-01-01T10:00:00Z",
+    );
 
     let mgr = WorktreeManager::new(&conn, &config);
     let results = mgr.list_all_with_status(false).unwrap();
@@ -1602,7 +1614,7 @@ fn test_list_all_with_status_latest_run_wins() {
     let config = crate::config::Config::default();
 
     insert_agent_run(&conn, "ar1", "w1", "completed", "2024-01-01T08:00:00Z");
-    insert_agent_run(&conn, "ar2", "w1", "running",   "2024-01-01T10:00:00Z");
+    insert_agent_run(&conn, "ar2", "w1", "running", "2024-01-01T10:00:00Z");
 
     let mgr = WorktreeManager::new(&conn, &config);
     let results = mgr.list_all_with_status(false).unwrap();
@@ -1647,7 +1659,7 @@ fn test_list_all_with_status_duplicate_timestamp_deduplication() {
 
     let ts = "2024-01-01T10:00:00Z";
     insert_agent_run(&conn, "ar1", "w1", "completed", ts);
-    insert_agent_run(&conn, "ar2", "w1", "failed",    ts);
+    insert_agent_run(&conn, "ar2", "w1", "failed", ts);
 
     let mgr = WorktreeManager::new(&conn, &config);
     let results = mgr.list_all_with_status(false).unwrap();

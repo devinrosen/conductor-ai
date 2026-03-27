@@ -11,7 +11,7 @@ use crate::repo::RepoManager;
 
 use super::git_helpers::*;
 use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
-use super::{WORKTREE_COLUMN_COUNT, WORKTREE_COLUMNS, WORKTREE_COLUMNS_W};
+use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W, WORKTREE_COLUMN_COUNT};
 
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
@@ -368,7 +368,8 @@ impl<'a> WorktreeManager<'a> {
         );
         query_collect(self.conn, &sql, [], |row| {
             let worktree = map_worktree_row(row)?;
-            let agent_status: Option<crate::agent::AgentRunStatus> = row.get(WORKTREE_COLUMN_COUNT)?;
+            let agent_status: Option<crate::agent::AgentRunStatus> =
+                row.get(WORKTREE_COLUMN_COUNT)?;
             Ok(WorktreeWithStatus {
                 worktree,
                 agent_status,
