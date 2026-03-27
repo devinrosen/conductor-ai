@@ -231,8 +231,8 @@ export function WorkflowRunDetailPage() {
     <div className="space-y-6">
       <TransitBreadcrumb stops={[
         { label: "Home", href: "/" },
-        { label: "Repo", href: `/repos/${repoId}` },
-        { label: "Worktree", href: `/repos/${repoId}/worktrees/${worktreeId}` },
+        { label: run.target_label?.split("/")[0] ?? "Repo", href: `/repos/${repoId}` },
+        { label: run.target_label?.split("/").slice(1).join("/") ?? "Worktree", href: `/repos/${repoId}/worktrees/${worktreeId}` },
         { label: run.workflow_name, current: true },
       ]} />
 
@@ -474,8 +474,17 @@ export function WorkflowRunDetailPage() {
 
       {/* Gate Modal */}
       {gateModalOpen && gateStep && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => { if (!gateSubmitting) { setGateModalOpen(false); setGateStep(null); } }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Gate: ${gateStep.step_name}`}
+            className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-6 py-4 border-b border-gray-200">
               <h3 className="text-lg font-semibold text-gray-900">
                 Gate: {gateStep.step_name}

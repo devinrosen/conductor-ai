@@ -235,8 +235,11 @@ function ChildRunWithSteps({ run, ctxMap, onCancel }: {
   return (
     <div className="ml-6">
       <div
-        className="flex items-center justify-between gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50/50 rounded transition-colors"
+        role="button"
+        tabIndex={0}
+        className="flex items-center justify-between gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50/50 rounded transition-colors outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-inset"
         onClick={() => setExpanded(!expanded)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
       >
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <Chevron open={expanded} />
@@ -431,11 +434,14 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
     return { repoSlugs, repoGroups };
   }, [runs, repoById, childIds]);
 
-  // Collapse everything on first data load
+  // Collapse everything on first load, but auto-expand paths to active/waiting runs
   useEffect(() => {
     if (initialized.current || runs.length === 0) return;
     initialized.current = true;
     const keys = new Set<string>();
+    const activeStatuses = new Set(["running", "waiting", "pending"]);
+
+    // First: collapse everything
     for (const slug of repoSlugs) {
       keys.add(`repo:${slug}`);
       const targets = repoGroups.get(slug);
@@ -450,6 +456,20 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
         }
       }
     }
+
+    // Then: remove keys along paths to active runs (auto-expand them)
+    for (const slug of repoSlugs) {
+      const targets = repoGroups.get(slug);
+      if (!targets) continue;
+      for (const [targetKey, targetRuns] of targets) {
+        const hasActive = targetRuns.some((r) => activeStatuses.has(r.status));
+        if (hasActive) {
+          keys.delete(`repo:${slug}`);
+          keys.delete(`target:${slug}/${targetKey}`);
+        }
+      }
+    }
+
     setCollapsed(keys);
   }, [runs.length, repoSlugs, repoGroups, childrenMap]);
 
