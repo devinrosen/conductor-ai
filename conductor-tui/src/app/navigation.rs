@@ -1462,11 +1462,26 @@ mod tests {
         app.state.view = View::Dashboard;
         app.state.column_focus = ColumnFocus::Content;
         app.state.dashboard_index = 1; // worktree row
+        // Pre-populate stale PR data to verify it is cleared on navigation
+        app.state.detail_prs = vec![conductor_core::github::GithubPr {
+            number: 99,
+            title: "stale".into(),
+            url: "https://github.com/x/y/pull/99".into(),
+            author: "user".into(),
+            head_ref_name: "old-branch".into(),
+            state: "open".into(),
+            is_draft: false,
+            review_decision: None,
+            ci_status: "pending".into(),
+        }];
+        app.state.pr_last_fetched_at = Some(std::time::Instant::now());
         app.select();
         assert_eq!(app.state.view, View::WorktreeDetail);
         assert_eq!(app.state.selected_worktree_id.as_deref(), Some("w1"));
         assert_eq!(app.state.selected_repo_id.as_deref(), Some("r1"));
         assert_eq!(app.state.previous_view, Some(View::Dashboard));
+        assert!(app.state.detail_prs.is_empty());
+        assert!(app.state.pr_last_fetched_at.is_none());
     }
 
     #[test]
