@@ -857,7 +857,10 @@ impl Parser {
                         ));
                     }
                     KvValue::Map(_) => {
-                        return Err("`options` must be an array or step field reference, not a map".to_string());
+                        return Err(
+                            "`options` must be an array or step field reference, not a map"
+                                .to_string(),
+                        );
                     }
                 };
                 Some(parsed)

@@ -1500,7 +1500,9 @@ impl App {
                     options
                         .iter()
                         .zip(selected.iter())
-                        .filter_map(|(opt, &checked)| if checked { Some(opt.clone()) } else { None })
+                        .filter_map(
+                            |(opt, &checked)| if checked { Some(opt.clone()) } else { None },
+                        )
                         .collect(),
                 )
             };
@@ -1531,9 +1533,7 @@ impl App {
                             .map(|arr| {
                                 arr.into_iter()
                                     .filter_map(|v| {
-                                        v.get("value")
-                                            .and_then(|s| s.as_str())
-                                            .map(String::from)
+                                        v.get("value").and_then(|s| s.as_str()).map(String::from)
                                     })
                                     .collect()
                             })

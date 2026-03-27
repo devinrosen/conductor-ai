@@ -169,8 +169,7 @@ impl<'a> WorkflowManager<'a> {
         selections: Option<&[String]>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let selections_json = selections
-            .map(|s| serde_json::to_string(s).unwrap_or_default());
+        let selections_json = selections.map(|s| serde_json::to_string(s).unwrap_or_default());
 
         // Build a context_out snippet when selections are present.
         let context_out = selections.filter(|s| !s.is_empty()).map(|items| {
@@ -185,7 +184,14 @@ impl<'a> WorkflowManager<'a> {
             "UPDATE workflow_run_steps SET gate_approved_at = ?1, gate_approved_by = ?2, \
              gate_feedback = ?3, gate_selections = ?4, context_out = COALESCE(?5, context_out), \
              status = 'completed', ended_at = ?1 WHERE id = ?6",
-            params![now, approved_by, feedback, selections_json, context_out, step_id],
+            params![
+                now,
+                approved_by,
+                feedback,
+                selections_json,
+                context_out,
+                step_id
+            ],
         )?;
         Ok(())
     }

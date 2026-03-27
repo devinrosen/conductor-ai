@@ -15,14 +15,14 @@ pub(super) fn tool_approve_gate(
     let feedback = get_arg(args, "feedback");
 
     // Optional selections: JSON array of strings, e.g. ["finding-1","finding-2"]
-    let selections: Option<Vec<String>> = args
-        .get("selections")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        });
+    let selections: Option<Vec<String>> =
+        args.get("selections")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            });
 
     let (conn, _config) = match open_db_and_config(db_path) {
         Ok(v) => v,

@@ -22,7 +22,9 @@ fn test_blocked_on_human_approval_roundtrip() {
     assert!(json.contains(r#""type":"human_approval""#));
     let deser: BlockedOn = serde_json::from_str(&json).unwrap();
     match deser {
-        BlockedOn::HumanApproval { gate_name, prompt, .. } => {
+        BlockedOn::HumanApproval {
+            gate_name, prompt, ..
+        } => {
             assert_eq!(gate_name, "review-gate");
             assert_eq!(prompt.as_deref(), Some("Please review"));
         }
@@ -56,7 +58,9 @@ fn test_blocked_on_human_review_roundtrip() {
     assert!(json.contains(r#""type":"human_review""#));
     let deser: BlockedOn = serde_json::from_str(&json).unwrap();
     match deser {
-        BlockedOn::HumanReview { gate_name, prompt, .. } => {
+        BlockedOn::HumanReview {
+            gate_name, prompt, ..
+        } => {
             assert_eq!(gate_name, "code-review");
             assert_eq!(prompt.as_deref(), Some("Check tests"));
         }
