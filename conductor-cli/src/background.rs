@@ -225,8 +225,8 @@ fn child_main(mut params: WorkflowExecStandalone, read_fd: i32, write_fd: i32) -
     // must mark it (and the parent agent run) as failed.
     let exec_failed = match &exec_result {
         Ok(Ok(())) => false,
-        Ok(Err(_)) => true,   // exec thread returned an error
-        Err(_) => true,        // exec thread panicked
+        Ok(Err(_)) => true, // exec thread returned an error
+        Err(_) => true,     // exec thread panicked
     };
 
     if exec_failed {
@@ -269,11 +269,8 @@ fn cleanup_failed_run(workflow_run_id: &str, error_msg: &str) -> std::result::Re
 
     // Mark the workflow run as failed.
     let wf_mgr = WorkflowManager::new(&conn);
-    let _ = wf_mgr.update_workflow_status(
-        workflow_run_id,
-        WorkflowRunStatus::Failed,
-        Some(error_msg),
-    );
+    let _ =
+        wf_mgr.update_workflow_status(workflow_run_id, WorkflowRunStatus::Failed, Some(error_msg));
 
     // Look up the parent agent run ID and mark it as failed too.
     if let Ok(Some(run)) = wf_mgr.get_workflow_run(workflow_run_id) {
