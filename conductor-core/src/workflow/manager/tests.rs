@@ -1640,3 +1640,33 @@ fn test_cancel_run_not_found() {
     let result = mgr.cancel_run("nonexistent-id", "reason");
     assert!(result.is_err(), "cancelling a nonexistent run should fail");
 }
+
+/// `fail_workflow_run_and_parent` must atomically mark both the workflow run
+/// and its parent agent run as failed.
+#[test]
+fn test_fail_workflow_run_and_parent_marks_both_failed() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let parent_run = agent_mgr
+        .create_run(Some("w1"), "workflow parent", None, None)
+        .unwrap();
+    let wf_run = wf_mgr
+        .create_workflow_run("wf", Some("w1"), &parent_run.id, false, "manual", None)
+        .unwrap();
+
+    wf_mgr
+        .fail_workflow_run_and_parent(&wf_run.id, "engine panic")
+        .unwrap();
+
+    let updated_wf = wf_mgr.get_workflow_run(&wf_run.id).unwrap().unwrap();
+    assert_eq!(updated_wf.status, WorkflowRunStatus::Failed);
+    assert_eq!(updated_wf.result_summary.as_deref(), Some("engine panic"));
+
+    let updated_parent = agent_mgr.get_run(&parent_run.id).unwrap().unwrap();
+    assert_eq!(
+        updated_parent.status,
+        crate::agent::status::AgentRunStatus::Failed
+    );
+}

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, OptionalExtension};
 
@@ -815,5 +815,11 @@ impl<'a> WorkflowManager<'a> {
             }
         }
         Ok(map)
+    }
+
+    /// Return the set of `parent_run_id` values for all non-terminal workflow
+    /// runs (`pending`, `running`, or `waiting`).
+    pub fn get_active_parent_run_ids(&self) -> Result<HashSet<String>> {
+        crate::db::active_workflow_parent_run_ids(self.conn)
     }
 }
