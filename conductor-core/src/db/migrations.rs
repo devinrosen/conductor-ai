@@ -978,7 +978,6 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 56)?;
     }
 
-
     Ok(())
 }
 
