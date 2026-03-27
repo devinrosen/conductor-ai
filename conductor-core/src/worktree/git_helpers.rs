@@ -269,9 +269,9 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
                 "view",
                 &pr_number.to_string(),
                 "--json",
-                "headRefName,baseRefName,headRepository,isCrossRepository",
+                "headRefName,baseRefName,headRepository,headRepositoryOwner,isCrossRepository",
                 "--jq",
-                ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + (.isCrossRepository | tostring)",
+                ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepositoryOwner.login + \"/\" + .headRepository.name + \"|\" + (.isCrossRepository | tostring)",
             ])
             .current_dir(repo_path),
     )?;

@@ -729,6 +729,19 @@ fn test_parse_pr_view_output_non_default_base() {
 }
 
 #[test]
+fn test_parse_pr_view_output_fork_headrepository_owner_null() {
+    // Regression test for #1597: some fork PRs have headRepository.owner == null
+    // but headRepositoryOwner.login is populated. The fixed jq uses
+    // .headRepositoryOwner.login, so the output is "fork-user/repo" not "/repo".
+    let raw = "feat/my-feature|main|fork-user/repo|true";
+    let (head, base, head_repo, is_fork) = git_helpers::parse_pr_view_output(raw).unwrap();
+    assert_eq!(head, "feat/my-feature");
+    assert_eq!(base, "main");
+    assert_eq!(head_repo, "fork-user/repo");
+    assert!(is_fork);
+}
+
+#[test]
 fn test_parse_pr_view_output_bad_format() {
     let raw = "incomplete|data";
     let result = git_helpers::parse_pr_view_output(raw);
