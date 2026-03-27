@@ -139,6 +139,28 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(ticket_line),
     ];
 
+    // PR row — index 9, only present when a PR exists for this branch
+    if let Some(pr) = state
+        .detail_prs
+        .iter()
+        .find(|pr| pr.head_ref_name == wt.branch)
+    {
+        let pr_state_color = match pr.state.as_str() {
+            "OPEN" => state.theme.status_completed,
+            "MERGED" => state.theme.label_info,
+            _ => state.theme.label_secondary,
+        };
+        lines.push(Line::from(vec![
+            Span::styled("PR: ", Style::default().fg(state.theme.label_secondary)),
+            Span::raw(format!("#{} — {}", pr.number, pr.title)),
+            Span::raw("  "),
+            Span::styled(
+                format!("[{}]", pr.state.to_lowercase()),
+                Style::default().fg(pr_state_color),
+            ),
+        ]));
+    }
+
     if let Some(ref completed) = wt.completed_at {
         lines.push(Line::from(vec![
             Span::styled(

@@ -742,9 +742,22 @@ impl App {
             View::WorktreeDetail
                 if self.state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel =>
             {
+                let wt_branch: String = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+                    .map(|wt| wt.branch.clone())
+                    .unwrap_or_default();
+                let has_pr = self
+                    .state
+                    .detail_prs
+                    .iter()
+                    .any(|pr| pr.head_ref_name == wt_branch);
+                let count = if has_pr { info_row::COUNT } else { info_row::COUNT - 1 };
                 clamp_increment(
                     &mut self.state.worktree_detail_selected_row,
-                    info_row::COUNT,
+                    count,
                 );
             }
             View::WorkflowDefDetail => {

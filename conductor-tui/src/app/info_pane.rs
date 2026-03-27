@@ -51,6 +51,21 @@ impl App {
                         }
                         url
                     }
+                    info_row::PR => {
+                        let url = self
+                            .state
+                            .detail_prs
+                            .iter()
+                            .find(|pr| pr.head_ref_name == wt.branch)
+                            .map(|pr| pr.url.clone())
+                            .unwrap_or_default();
+                        if url.is_empty() {
+                            self.state.status_message =
+                                Some("No PR linked to this worktree".to_string());
+                            return;
+                        }
+                        url
+                    }
                     _ => {
                         self.state.status_message = Some("Nothing to copy on this row".to_string());
                         return;
@@ -99,9 +114,33 @@ impl App {
                     }
                 }
             }
+            info_row::PR => {
+                let url = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+                    .and_then(|wt| {
+                        self.state
+                            .detail_prs
+                            .iter()
+                            .find(|pr| pr.head_ref_name == wt.branch)
+                    })
+                    .map(|pr| pr.url.clone());
+                match url {
+                    Some(ref u) if !u.is_empty() => {
+                        let u = u.clone();
+                        self.open_url(&u, "PR");
+                    }
+                    _ => {
+                        self.state.status_message =
+                            Some("No PR found for this worktree's branch".to_string());
+                    }
+                }
+            }
             _ => {
                 self.state.status_message =
-                    Some("No action for this row (try Path or Ticket row)".to_string());
+                    Some("No action for this row (try Path, Ticket, or PR row)".to_string());
             }
         }
     }
