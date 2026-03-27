@@ -6,7 +6,7 @@ mod types;
 mod tests;
 
 pub use manager::WorktreeManager;
-pub use types::{Worktree, WorktreeStatus};
+pub use types::{Worktree, WorktreeStatus, WorktreeWithStatus};
 
 // Column constants used by both types.rs and manager.rs — live here to avoid circular deps.
 const WORKTREE_COLUMNS: &str =

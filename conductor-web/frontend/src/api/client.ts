@@ -1,6 +1,7 @@
 import type {
   Repo,
   Worktree,
+  WorktreeWithStatus,
   Ticket,
   TicketLabel,
   TicketAgentTotals,
@@ -59,7 +60,7 @@ export const api = {
 
   // Worktrees
   listAllWorktrees: (showCompleted = false) =>
-    request<Worktree[]>(
+    request<WorktreeWithStatus[]>(
       showCompleted ? `/worktrees?show_completed=true` : `/worktrees`,
     ),
   listWorktrees: (repoId: string, showCompleted = false) =>

@@ -23,6 +23,10 @@ export interface Worktree {
   model: string | null;
 }
 
+export interface WorktreeWithStatus extends Worktree {
+  agent_status: AgentRun["status"] | null;
+}
+
 export interface Ticket {
   id: string;
   repo_id: string;

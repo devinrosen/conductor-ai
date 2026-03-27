@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
-import type { Worktree, AgentRun, FeedbackRequest } from "../api/types";
+import type { WorktreeWithStatus, FeedbackRequest } from "../api/types";
 import { RepoCard } from "../components/repos/RepoCard";
 import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
@@ -34,8 +34,7 @@ export function ActivityPage() {
   const navigate = useNavigate();
 
   const [worktreeCounts, setWorktreeCounts] = useState<Record<string, number>>({});
-  const [activeWorktrees, setActiveWorktrees] = useState<(Worktree & WorktreeContext)[]>([]);
-  const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
+  const [activeWorktrees, setActiveWorktrees] = useState<(WorktreeWithStatus & WorktreeContext)[]>([]);
   const [pendingFeedback, setPendingFeedback] = useState<{ feedback: FeedbackRequest; ctx: WorktreeContext & { branch: string; worktreeId: string } }[]>([]);
   const [wtTick, setWtTick] = useState(0);
   const [registerRepoOpen, setRegisterRepoOpen] = useState(false);
@@ -53,13 +52,10 @@ export function ActivityPage() {
       const repoSlugById: Record<string, string> = {};
       for (const r of repos) repoSlugById[r.id] = r.slug;
 
-      const [allWorktrees, runs] = await Promise.all([
-        api.listAllWorktrees(),
-        api.latestRunsByWorktree(),
-      ]);
+      const allWorktrees = await api.listAllWorktrees();
 
       const counts: Record<string, number> = {};
-      const active: (Worktree & WorktreeContext)[] = [];
+      const active: (WorktreeWithStatus & WorktreeContext)[] = [];
       for (const wt of allWorktrees) {
         const repoId = wt.repo_id;
         const slug = repoSlugById[repoId] ?? "";
@@ -70,15 +66,13 @@ export function ActivityPage() {
       }
       setWorktreeCounts(counts);
       setActiveWorktrees(active);
-      setLatestRuns(runs);
 
       const feedbackWorktrees: { worktreeId: string; ctx: WorktreeContext & { branch: string; worktreeId: string } }[] = [];
       for (const wt of allWorktrees) {
         if (wt.status !== "active") continue;
         const repoId = wt.repo_id;
         const slug = repoSlugById[repoId] ?? "";
-        const run = runs[wt.id];
-        if (run && run.status === "waiting_for_feedback") {
+        if (wt.agent_status === "waiting_for_feedback") {
           feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
         }
       }
@@ -168,7 +162,7 @@ export function ActivityPage() {
   }
 
   // Summary counts
-  const runningAgents = Object.values(latestRuns).filter((r) => r.status === "running").length;
+  const runningAgents = activeWorktrees.filter((wt) => wt.agent_status === "running").length;
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden gap-3">
@@ -248,10 +242,9 @@ export function ActivityPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {activeWorktrees.map((wt, index) => {
-                    const run = latestRuns[wt.id];
-                    const overallStatus = run?.status === "running" ? "running"
-                      : run?.status === "waiting_for_feedback" ? "waiting"
-                      : run?.status === "failed" ? "failed"
+                    const overallStatus = wt.agent_status === "running" ? "running"
+                      : wt.agent_status === "waiting_for_feedback" ? "waiting"
+                      : wt.agent_status === "failed" ? "failed"
                       : wt.status;
                     return (
                       <tr
@@ -279,9 +272,9 @@ export function ActivityPage() {
                           <StatusBadge status={wt.status} />
                         </td>
                         <td className="px-3 py-1.5">
-                          {run ? (
-                            <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(run.status)}`}>
-                              {run.status}
+                          {wt.agent_status ? (
+                            <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(wt.agent_status)}`}>
+                              {wt.agent_status}
                             </span>
                           ) : (
                             <span className="text-xs text-gray-400">idle</span>

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
-import type { Worktree, AgentRun } from "../api/types";
+import type { WorktreeWithStatus } from "../api/types";
 import { RepoCard } from "../components/repos/RepoCard";
 import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
@@ -28,9 +28,8 @@ export function DashboardPage() {
     {},
   );
   const [activeWorktrees, setActiveWorktrees] = useState<
-    (Worktree & { repoSlug: string })[]
+    (WorktreeWithStatus & { repoSlug: string })[]
   >([]);
-  const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
   const [wtTick, setWtTick] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [registerRepoOpen, setRegisterRepoOpen] = useState(false);
@@ -43,13 +42,10 @@ export function DashboardPage() {
       const repoSlugById: Record<string, string> = {};
       for (const r of repos) repoSlugById[r.id] = r.slug;
 
-      const [allWorktrees, runs] = await Promise.all([
-        api.listAllWorktrees(),
-        api.latestRunsByWorktree(),
-      ]);
+      const allWorktrees = await api.listAllWorktrees();
 
       const counts: Record<string, number> = {};
-      const active: (Worktree & { repoSlug: string })[] = [];
+      const active: (WorktreeWithStatus & { repoSlug: string })[] = [];
       for (const wt of allWorktrees) {
         counts[wt.repo_id] = (counts[wt.repo_id] ?? 0) + 1;
         if (wt.status === "active") {
@@ -58,7 +54,6 @@ export function DashboardPage() {
       }
       setWorktreeCounts(counts);
       setActiveWorktrees(active);
-      setLatestRuns(runs);
       setLoadError(null);
     };
 
@@ -175,7 +170,6 @@ export function DashboardPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {activeWorktrees.map((wt, index) => {
-                  const run = latestRuns[wt.id];
                   return (
                     <tr key={wt.id} data-list-index={index} className={selectedIndex === index ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}>
                       <td className="px-3 py-1.5">
@@ -193,11 +187,11 @@ export function DashboardPage() {
                         <StatusBadge status={wt.status} />
                       </td>
                       <td className="px-3 py-1.5">
-                        {run ? (
+                        {wt.agent_status ? (
                           <span
-                            className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(run.status)}`}
+                            className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(wt.agent_status)}`}
                           >
-                            {run.status}
+                            {wt.agent_status}
                           </span>
                         ) : (
                           <span className="text-xs text-gray-400">-</span>
