@@ -947,6 +947,7 @@ fn test_resume_workflow_repo_target() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         force: false,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -1006,6 +1007,7 @@ fn test_resume_workflow_ticket_target() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         force: false,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -1071,6 +1073,7 @@ fn test_resume_workflow_preserves_feature_id() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         force: false,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 

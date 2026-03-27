@@ -1088,6 +1088,7 @@ impl App {
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
+                extra_plugin_dirs: vec![],
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1153,6 +1154,7 @@ impl App {
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
+                extra_plugin_dirs: vec![],
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1203,6 +1205,7 @@ impl App {
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
+                extra_plugin_dirs: vec![],
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1252,6 +1255,7 @@ impl App {
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
+                extra_plugin_dirs: vec![],
             };
 
             let result = execute_workflow_standalone(&params);

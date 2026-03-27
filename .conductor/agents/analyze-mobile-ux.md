@@ -1,6 +1,6 @@
 ---
 role: actor
-can_commit: true
+can_commit: false
 model: claude-sonnet-4-6
 ---
 
@@ -42,17 +42,18 @@ Evaluate **every screenshot** against these 8 criteria:
    - Description of the issue
    - Suggested fix
 
-3. Determine today's date:
+3. Determine today's date and the conductor data directory:
    ```
    date +%Y-%m-%d
+   echo "${CONDUCTOR_DIR:-$HOME/.conductor}"
    ```
 
-4. Create the output directory:
+4. Create the output directory (outside the repo, in the Conductor data directory):
    ```
-   mkdir -p docs/ux-audits
+   mkdir -p "${CONDUCTOR_DIR:-$HOME/.conductor}/audits/conductor-ai"
    ```
 
-5. Write the report to `docs/ux-audits/mobile-ux-audit-<date>.md` with this structure:
+5. Write the report to `~/.conductor/audits/conductor-ai/mobile-ux-audit-<date>.md` with this structure:
 
    ```markdown
    # Mobile UX Audit — <date>
@@ -83,12 +84,6 @@ Evaluate **every screenshot** against these 8 criteria:
    3. <third>
    ```
 
-6. Commit the report:
-   ```
-   git add docs/ux-audits/
-   git commit -m "docs: add mobile UX audit report <date>"
-   ```
-
 ## Output
 
 Emit markers based on findings:
@@ -97,13 +92,13 @@ Emit markers based on findings:
 
 ```
 <<<CONDUCTOR_OUTPUT>>>
-{"markers": ["has_findings", "has_high_severity"], "context": "Wrote mobile UX audit report to docs/ux-audits/mobile-ux-audit-<date>.md — <count> findings (<high> high, <medium> medium, <low> low). Top issue: <one-line summary of worst finding>"}
+{"markers": ["has_findings", "has_high_severity"], "context": "Wrote mobile UX audit report to ~/.conductor/audits/conductor-ai/mobile-ux-audit-<date>.md — <count> findings (<high> high, <medium> medium, <low> low). Top issue: <one-line summary of worst finding>"}
 <<<END_CONDUCTOR_OUTPUT>>>
 ```
 
 If no findings at all:
 ```
 <<<CONDUCTOR_OUTPUT>>>
-{"markers": [], "context": "Mobile UX audit complete — no issues found. Report at docs/ux-audits/mobile-ux-audit-<date>.md"}
+{"markers": [], "context": "Mobile UX audit complete — no issues found. Report at ~/.conductor/audits/conductor-ai/mobile-ux-audit-<date>.md"}
 <<<END_CONDUCTOR_OUTPUT>>>
 ```

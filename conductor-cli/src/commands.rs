@@ -111,6 +111,9 @@ pub enum AgentCommands {
         /// Override the permission mode for this run (e.g. "plan" for read-only repo agents).
         #[arg(long)]
         permission_mode: Option<String>,
+        /// Additional plugin directories to pass to the Claude CLI
+        #[arg(long = "plugin-dir")]
+        plugin_dirs: Vec<String>,
     },
     /// Orchestrate child agents: spawn a child run for each plan step
     Orchestrate {
@@ -199,8 +202,8 @@ pub enum WorkflowCommands {
         /// Continue past step failures
         #[arg(long)]
         no_fail_fast: bool,
-        /// Step timeout in seconds (default: 1800 = 30 min)
-        #[arg(long, default_value = "1800")]
+        /// Step timeout in seconds (default: 43200 = 12 hours)
+        #[arg(long, default_value = "43200")]
         step_timeout_secs: u64,
         /// Input variables (key=value pairs)
         #[arg(long = "input", value_name = "KEY=VALUE")]
@@ -210,6 +213,12 @@ pub enum WorkflowCommands {
         /// template variables. Auto-detected from the ticket when omitted.
         #[arg(long)]
         feature: Option<String>,
+        /// Run the workflow in the background: print the run ID and exit immediately
+        #[arg(long)]
+        background: bool,
+        /// Additional plugin directories to pass to agent sessions (appended to repo-level plugin_dirs)
+        #[arg(long = "plugin-dir")]
+        plugin_dirs: Vec<String>,
     },
     /// Show details of a workflow run
     #[command(name = "run-show", alias = "show")]
@@ -491,6 +500,7 @@ pub enum WorktreeCommands {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum TicketCommands {
     /// Sync tickets from configured sources
     Sync {
@@ -501,6 +511,17 @@ pub enum TicketCommands {
     List {
         /// Filter by repo slug
         repo: Option<String>,
+    },
+    /// Get a single ticket by ID (ULID or source_id)
+    Get {
+        /// Ticket ID — internal ULID or source_id (falls back to source_id search)
+        id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Output format: "text" (default) or "json"
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// Link a ticket to a worktree
     Link {
@@ -558,6 +579,26 @@ pub enum TicketCommands {
         /// Priority
         #[arg(long)]
         priority: Option<String>,
+        /// Workflow name override (bypasses routing heuristics)
+        #[arg(long)]
+        workflow: Option<String>,
+        /// Agent map JSON (pre-resolved agent assignments)
+        #[arg(long)]
+        agent_map: Option<String>,
+    },
+    /// Update a ticket's state, workflow, or agent_map
+    Update {
+        /// Ticket ID (ULID from `conductor tickets list`)
+        id: String,
+        /// Set state: open, in_progress, or closed
+        #[arg(long)]
+        state: Option<String>,
+        /// Set workflow name (empty string clears)
+        #[arg(long)]
+        workflow: Option<String>,
+        /// Set agent map JSON (empty string clears)
+        #[arg(long)]
+        agent_map: Option<String>,
     },
 }
 

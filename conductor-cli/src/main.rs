@@ -4,6 +4,8 @@ use clap::Parser;
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 
+#[cfg(unix)]
+mod background;
 mod commands;
 mod handlers;
 mod helpers;

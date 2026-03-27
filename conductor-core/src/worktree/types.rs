@@ -1,3 +1,4 @@
+use crate::agent::AgentRunStatus;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -78,6 +79,15 @@ impl Worktree {
     pub fn effective_base<'a>(&'a self, repo_default: &'a str) -> &'a str {
         self.base_branch.as_deref().unwrap_or(repo_default)
     }
+}
+
+/// A `Worktree` augmented with the status of its latest agent run.
+/// Returned by `WorktreeManager::list_all_with_status`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeWithStatus {
+    #[serde(flatten)]
+    pub worktree: Worktree,
+    pub agent_status: Option<AgentRunStatus>,
 }
 
 pub(super) fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {

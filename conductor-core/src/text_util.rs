@@ -31,6 +31,19 @@ pub fn path_is_within_dir(dir: &Path, file: &Path) -> bool {
     }
 }
 
+/// Returns `true` if `filename` contains no path separators or `..` components.
+///
+/// This is a defense-in-depth check against path traversal. It does NOT resolve
+/// symlinks — symlinks with safe filenames are intentionally allowed, since
+/// `.conductor/workflows/` files are commonly symlinked to external sources
+/// (e.g., fsm-engine).
+fn filename_is_safe(filename: &str) -> bool {
+    !filename.contains('/')
+        && !filename.contains('\\')
+        && !filename.contains("..")
+        && !filename.is_empty()
+}
+
 /// Resolve a `.conductor/<subdir>` directory, preferring `worktree_path` over `repo_path`.
 ///
 /// Returns `Some(path)` for the first existing directory found, or `None` if neither exists.
@@ -67,14 +80,17 @@ pub fn resolve_conductor_subdir_for_file(
     subdir: &str,
     filename: &str,
 ) -> Option<PathBuf> {
+    if !filename_is_safe(filename) {
+        return None;
+    }
     if !worktree_path.is_empty() {
         let dir = PathBuf::from(worktree_path).join(".conductor").join(subdir);
-        if dir.join(filename).is_file() && path_is_within_dir(&dir, &dir.join(filename)) {
+        if dir.join(filename).exists() {
             return Some(dir);
         }
     }
     let dir = PathBuf::from(repo_path).join(".conductor").join(subdir);
-    if dir.join(filename).is_file() && path_is_within_dir(&dir, &dir.join(filename)) {
+    if dir.join(filename).exists() {
         return Some(dir);
     }
     None
@@ -270,26 +286,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_resolve_for_file_rejects_symlink_escape_via_worktree() {
+    fn test_resolve_for_file_allows_symlink_to_external_target_via_worktree() {
         let wt = TempDir::new().unwrap();
         let repo = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
         let wf_dir = wt.path().join(".conductor").join("workflows");
         fs::create_dir_all(&wf_dir).unwrap();
         // Create a target file outside the worktree.
-        fs::write(outside.path().join("evil.wf"), "pwned").unwrap();
-        // Symlink from inside worktree workflows/ to outside.
-        std::os::unix::fs::symlink(outside.path().join("evil.wf"), wf_dir.join("evil.wf")).unwrap();
+        fs::write(outside.path().join("plan.wf"), "content").unwrap();
+        // Symlink from inside worktree workflows/ to outside (standard BSG setup).
+        std::os::unix::fs::symlink(outside.path().join("plan.wf"), wf_dir.join("plan.wf")).unwrap();
 
         let result = resolve_conductor_subdir_for_file(
             wt.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
             "workflows",
-            "evil.wf",
+            "plan.wf",
         );
         assert_eq!(
-            result, None,
-            "symlink escaping the worktree directory must be rejected"
+            result,
+            Some(wf_dir),
+            "symlink with safe filename to external target must be allowed"
         );
     }
 
@@ -312,25 +329,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_resolve_for_file_rejects_symlink_escape() {
+    fn test_resolve_for_file_allows_symlink_to_external_target() {
         let repo = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
         let wf_dir = repo.path().join(".conductor").join("workflows");
         fs::create_dir_all(&wf_dir).unwrap();
         // Create a target file outside the repo.
-        fs::write(outside.path().join("evil.wf"), "pwned").unwrap();
-        // Symlink from inside workflows/ to outside.
-        std::os::unix::fs::symlink(outside.path().join("evil.wf"), wf_dir.join("evil.wf")).unwrap();
+        fs::write(outside.path().join("deploy.wf"), "content").unwrap();
+        // Symlink from inside workflows/ to outside (standard BSG setup).
+        std::os::unix::fs::symlink(outside.path().join("deploy.wf"), wf_dir.join("deploy.wf"))
+            .unwrap();
 
         let result = resolve_conductor_subdir_for_file(
             "",
             repo.path().to_str().unwrap(),
             "workflows",
-            "evil.wf",
+            "deploy.wf",
         );
         assert_eq!(
-            result, None,
-            "symlink escaping the directory must be rejected"
+            result,
+            Some(wf_dir),
+            "symlink with safe filename to external target must be allowed"
         );
     }
 

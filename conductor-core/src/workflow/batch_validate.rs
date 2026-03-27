@@ -126,11 +126,24 @@ where
     all_schema_names.sort();
     all_schema_names.dedup();
 
+    // Collect all plugin_dirs from call nodes for agent resolution.
+    let mut all_plugin_dirs: Vec<String> = workflows
+        .iter()
+        .flat_map(|wf| wf.collect_all_plugin_dirs())
+        .collect();
+    all_plugin_dirs.sort();
+    all_plugin_dirs.dedup();
+
     let global_agent_specs: Vec<AgentSpec> = all_agent_refs.iter().map(AgentSpec::from).collect();
-    let globally_missing_agents: HashSet<String> =
-        agent_config::find_missing_agents(wt_path, repo_path, &global_agent_specs, None)
-            .into_iter()
-            .collect();
+    let globally_missing_agents: HashSet<String> = agent_config::find_missing_agents(
+        wt_path,
+        repo_path,
+        &global_agent_specs,
+        None,
+        &all_plugin_dirs,
+    )
+    .into_iter()
+    .collect();
     let globally_missing_snippets: HashSet<String> =
         prompt_config::find_missing_snippets(wt_path, repo_path, &all_snippet_names, None)
             .into_iter()

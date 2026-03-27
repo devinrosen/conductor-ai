@@ -44,6 +44,7 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
             model,
             bot_name,
             permission_mode,
+            plugin_dirs,
         } => {
             let resolved_prompt = match (prompt, prompt_file) {
                 (Some(p), _) => p,
@@ -68,6 +69,7 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
                 model.as_deref(),
                 bot_name.as_deref(),
                 perm_mode.as_ref(),
+                &plugin_dirs,
             )?;
         }
         AgentCommands::Orchestrate {
@@ -167,6 +169,7 @@ pub(crate) fn run_agent(
     model: Option<&str>,
     bot_name: Option<&str>,
     permission_mode_override: Option<&conductor_core::config::AgentPermissionMode>,
+    extra_plugin_dirs: &[String],
 ) -> Result<()> {
     let mgr = AgentManager::new(conn);
 
@@ -360,6 +363,10 @@ pub(crate) fn run_agent(
 
         if let Some(m) = model {
             cmd.arg("--model").arg(m);
+        }
+
+        for dir in extra_plugin_dirs {
+            cmd.arg("--plugin-dir").arg(dir);
         }
 
         // ── open log file (create on turn 0, append on feedback resume turns) ─

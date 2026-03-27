@@ -64,6 +64,15 @@ impl WorkflowDef {
         names.dedup();
         names
     }
+
+    /// Collect all plugin_dirs from call nodes across body and always blocks, sorted and deduplicated.
+    pub fn collect_all_plugin_dirs(&self) -> Vec<String> {
+        let mut dirs = collect_plugin_dirs(&self.body);
+        dirs.extend(collect_plugin_dirs(&self.always));
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
 }
 
 /// A structured parse warning produced when a `.wf` file fails to load.
@@ -225,6 +234,11 @@ pub struct CallNode {
     pub with: Vec<String>,
     /// Named GitHub App bot identity to use for this call (matches `[github.apps.<name>]`).
     pub bot_name: Option<String>,
+    /// Per-step plugin directories from the `.wf` file. Merged with repo-level
+    /// `extra_plugin_dirs` at execution time to give this agent access to
+    /// specialist plugins (e.g. `/usr/local/bsg/agent-architecture/planner`).
+    #[serde(default)]
+    pub plugin_dirs: Vec<String>,
 }
 
 /// A sub-workflow invocation node.
@@ -609,4 +623,25 @@ pub(crate) fn collect_bot_names(nodes: &[WorkflowNode]) -> Vec<String> {
         }
     }
     names
+}
+
+/// Collect all per-step plugin_dirs from call nodes in a node tree.
+pub(crate) fn collect_plugin_dirs(nodes: &[WorkflowNode]) -> Vec<String> {
+    let mut dirs = Vec::new();
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => dirs.extend(n.plugin_dirs.iter().cloned()),
+            WorkflowNode::If(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::Unless(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::While(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::DoWhile(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::Do(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::Always(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::CallWorkflow(_)
+            | WorkflowNode::Gate(_)
+            | WorkflowNode::Parallel(_)
+            | WorkflowNode::Script(_) => {}
+        }
+    }
+    dirs
 }

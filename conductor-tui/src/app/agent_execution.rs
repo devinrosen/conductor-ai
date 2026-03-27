@@ -631,6 +631,7 @@ impl App {
                     resume_session_id.as_deref(),
                     model.as_deref(),
                     None,
+                    &[],
                 )
                 .inspect_err(|e| {
                     let _ = mgr.update_run_failed(&run.id, e);
@@ -733,6 +734,7 @@ impl App {
                     None,
                     None,
                     Some(&plan_mode),
+                    &[],
                 )
                 .inspect_err(|e| {
                     let _ = mgr.update_run_failed(&run.id, e);
@@ -811,6 +813,7 @@ impl App {
                     None,
                     new_run.model.as_deref(),
                     new_run.bot_name.as_deref(),
+                    &[],
                 )
                 .inspect_err(|e| {
                     let _ = mgr.update_run_failed(&new_run.id, e);

@@ -4,6 +4,7 @@ pub mod features;
 pub mod issue_sources;
 pub mod model_config;
 pub mod notifications;
+pub mod push;
 pub mod repos;
 pub mod stats;
 pub mod tickets;
@@ -51,6 +52,7 @@ pub fn api_router() -> Router<AppState> {
             get(repos::discover_github_repos_handler),
         )
         // Worktrees
+        .route("/api/worktrees", get(worktrees::list_all_worktrees))
         .route(
             "/api/repos/{id}/worktrees",
             get(worktrees::list_worktrees).post(worktrees::create_worktree),
@@ -239,6 +241,15 @@ pub fn api_router() -> Router<AppState> {
         )
         // Stats
         .route("/api/stats/theme-unlocks", get(stats::theme_unlock_stats))
+        // Push Notifications
+        .route(
+            "/api/push/vapid-public-key",
+            get(push::get_vapid_public_key),
+        )
+        .route(
+            "/api/push/subscribe",
+            post(push::subscribe_push).delete(push::unsubscribe_push),
+        )
         // Model Config
         .route(
             "/api/config/model",

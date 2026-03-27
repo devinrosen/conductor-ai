@@ -288,6 +288,7 @@ fn back_from_repo_detail_goes_to_dashboard() {
 fn back_from_worktree_detail_with_repo_goes_to_repo_detail() {
     let mut app = make_app();
     app.state.view = View::WorktreeDetail;
+    app.state.previous_view = Some(View::RepoDetail);
     app.state.selected_repo_id = Some("r1".into());
     app.state.selected_worktree_id = Some("w1".into());
     app.update(Action::Back);
@@ -299,7 +300,7 @@ fn back_from_worktree_detail_with_repo_goes_to_repo_detail() {
 fn back_from_worktree_detail_without_repo_goes_to_dashboard() {
     let mut app = make_app();
     app.state.view = View::WorktreeDetail;
-    app.state.selected_repo_id = None;
+    app.state.previous_view = Some(View::Dashboard);
     app.state.selected_worktree_id = Some("w1".into());
     app.update(Action::Back);
     assert_eq!(app.state.view, View::Dashboard);
@@ -916,6 +917,8 @@ fn selected_ticket_url_from_ticket_info_modal() {
             url: "https://github.com/x/y/issues/123".into(),
             synced_at: "2024-01-01T00:00:00Z".into(),
             raw_json: "{}".into(),
+            workflow: None,
+            agent_map: None,
         }),
     };
     assert_eq!(
@@ -1002,6 +1005,8 @@ fn selected_ticket_url_from_repo_detail_tickets() {
         url: "https://github.com/x/y/issues/42".into(),
         synced_at: "2024-01-01T00:00:00Z".into(),
         raw_json: "{}".into(),
+        workflow: None,
+        agent_map: None,
     }];
     app.state.detail_ticket_index = 0;
     assert_eq!(
@@ -1252,5 +1257,128 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
     assert!(
         !matches!(app.state.modal, Modal::ModelPicker { .. }),
         "ModelPicker should be dismissed after Backspace in non-custom mode"
+    );
+}
+
+// ─── workflow picker: Repo & standalone Worktree target tests ────────────────
+
+fn make_workflow_def(name: &str, target: &str) -> conductor_core::workflow::WorkflowDef {
+    conductor_core::workflow::WorkflowDef {
+        name: name.to_string(),
+        description: String::new(),
+        trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+        targets: vec![target.to_string()],
+        group: None,
+        inputs: vec![],
+        body: vec![],
+        always: vec![],
+        source_path: format!(".conductor/workflows/{name}.wf"),
+    }
+}
+
+// WorkflowPickerDefsLoaded with a Repo target should open the WorkflowPicker modal.
+// The guard `state.loading_workflow_picker_defs = true` must be set first to avoid
+// the race-condition early-return in handle_workflow_picker_defs_loaded.
+#[test]
+fn workflow_picker_defs_loaded_repo_target() {
+    let mut app = make_app();
+    app.state.loading_workflow_picker_defs = true;
+    app.update(Action::WorkflowPickerDefsLoaded {
+        target: crate::state::WorkflowPickerTarget::Repo {
+            repo_id: "r1".into(),
+            repo_path: "/tmp/repo".into(),
+            repo_name: "my-repo".into(),
+        },
+        defs: vec![make_workflow_def("deploy", "repo")],
+        error: None,
+    });
+    assert!(
+        matches!(app.state.modal, Modal::WorkflowPicker { .. }),
+        "expected WorkflowPicker modal after loading repo-target defs"
+    );
+}
+
+// PickWorkflow with view=WorktreeDetail and a seeded worktree-scoped def should
+// open the WorkflowPicker modal via the synchronous in-memory path.
+#[test]
+fn workflow_picker_defs_loaded_worktree_target() {
+    let mut app = make_app();
+    app.state.data.repos = vec![conductor_core::repo::Repo {
+        id: "r1".into(),
+        slug: "my-repo".into(),
+        local_path: "/tmp/my-repo".into(),
+        remote_url: "https://github.com/x/my-repo".into(),
+        default_branch: "main".into(),
+        workspace_dir: "/tmp".into(),
+        created_at: "2024-01-01T00:00:00Z".into(),
+        model: None,
+        allow_agent_issue_creation: false,
+    }];
+    app.state.data.worktrees = vec![conductor_core::worktree::Worktree {
+        id: "w1".into(),
+        repo_id: "r1".into(),
+        slug: "feat-a".into(),
+        branch: "feat/a".into(),
+        path: "/tmp/ws/feat-a".into(),
+        ticket_id: None,
+        status: conductor_core::worktree::WorktreeStatus::Active,
+        created_at: "2024-01-01T00:00:00Z".into(),
+        completed_at: None,
+        model: None,
+        base_branch: None,
+    }];
+    app.state.selected_worktree_id = Some("w1".into());
+    app.state.view = View::WorktreeDetail;
+    app.state.data.workflow_defs = vec![make_workflow_def("build", "worktree")];
+    app.update(Action::PickWorkflow);
+    assert!(
+        matches!(app.state.modal, Modal::WorkflowPicker { .. }),
+        "expected WorkflowPicker modal after PickWorkflow for Worktree target"
+    );
+}
+
+// Confirming a Repo-targeted workflow with no inputs should open the ModelPicker.
+#[test]
+fn workflow_picker_confirm_repo_target() {
+    let mut app = make_app();
+    let def = make_workflow_def("deploy", "repo");
+    app.state.modal = Modal::WorkflowPicker {
+        target: crate::state::WorkflowPickerTarget::Repo {
+            repo_id: "r1".into(),
+            repo_path: "/tmp/repo".into(),
+            repo_name: "my-repo".into(),
+        },
+        items: vec![crate::state::WorkflowPickerItem::Workflow(def)],
+        selected: 0,
+        scroll_offset: 0,
+    };
+    app.handle_workflow_picker_confirm();
+    assert!(
+        matches!(app.state.modal, Modal::ModelPicker { .. }),
+        "expected ModelPicker after confirming repo workflow with no inputs"
+    );
+}
+
+// Confirming a standalone Worktree-targeted workflow with no inputs and no
+// active agent run should open the ModelPicker.
+#[test]
+fn workflow_picker_confirm_worktree_target() {
+    let mut app = make_app();
+    let def = make_workflow_def("build", "worktree");
+    app.state.modal = Modal::WorkflowPicker {
+        target: crate::state::WorkflowPickerTarget::Worktree {
+            worktree_id: "w1".into(),
+            worktree_path: "/tmp/ws/w1".into(),
+            repo_path: "/tmp/repo".into(),
+        },
+        items: vec![crate::state::WorkflowPickerItem::Workflow(def)],
+        selected: 0,
+        scroll_offset: 0,
+    };
+    // Empty in-memory DB → active_run_blocks_dispatch returns false → proceeds to ModelPicker.
+    app.handle_workflow_picker_confirm();
+    assert!(
+        matches!(app.state.modal, Modal::ModelPicker { .. }),
+        "expected ModelPicker after confirming worktree workflow with no inputs"
     );
 }

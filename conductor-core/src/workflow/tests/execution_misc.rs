@@ -209,6 +209,7 @@ fn test_call_workflow_propagates_feature_id_to_child() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -299,6 +300,7 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
         run_id_notify: None,
         triggered_by_hook: true,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
     assert!(result.all_succeeded);
@@ -400,6 +402,7 @@ on_complete = "should-not-fire"
         run_id_notify: None,
         triggered_by_hook: true,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -467,6 +470,7 @@ on_complete = "nonexistent-hook-wf"
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -524,6 +528,7 @@ on_complete = "post-complete"
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let result = execute_workflow(&input).unwrap();

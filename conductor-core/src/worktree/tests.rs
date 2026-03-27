@@ -729,6 +729,39 @@ fn test_parse_pr_view_output_non_default_base() {
 }
 
 #[test]
+fn test_parse_pr_view_output_fork_headrepository_owner_null() {
+    // Regression test for #1597: when headRepository.owner is null (some fork
+    // PRs), the old jq expression `.headRepository.owner.login + "/" + .headRepository.name`
+    // produced "/repo" (empty owner before the slash).  The fix uses
+    // `.headRepositoryOwner.login` which is always populated for fork PRs.
+    //
+    // This test confirms that the broken output "/repo" (what the old jq would
+    // emit) yields an empty fork_owner string, which validate_remote_name then
+    // rejects with "fork owner name is empty".  A regression back to
+    // .headRepository.owner.login would produce this broken output in production
+    // and the downstream path would surface this specific error rather than
+    // silently building a remote URL with an empty owner.
+    let broken_output = "feat/my-feature|main|/repo|true";
+    let (_head, _base, head_repo, is_fork) =
+        git_helpers::parse_pr_view_output(broken_output).unwrap();
+    assert_eq!(head_repo, "/repo");
+    assert!(is_fork);
+
+    // Replicate what fetch_pr_branch does to extract the fork owner.
+    let fork_owner = head_repo.split('/').next().unwrap_or(&head_repo);
+    assert_eq!(
+        fork_owner, "",
+        "broken jq output yields an empty fork owner"
+    );
+
+    let err = git_helpers::validate_remote_name(fork_owner).unwrap_err();
+    assert!(
+        err.to_string().contains("fork owner name is empty"),
+        "expected 'fork owner name is empty', got: {err}"
+    );
+}
+
+#[test]
 fn test_parse_pr_view_output_bad_format() {
     let raw = "incomplete|data";
     let result = git_helpers::parse_pr_view_output(raw);
@@ -1533,4 +1566,140 @@ fn test_validate_branch_name_caret() {
 fn test_validate_branch_name_colon() {
     let err = git_helpers::validate_branch_name("a:b").unwrap_err();
     assert!(matches!(err, ConductorError::InvalidInput(_)));
+}
+
+// -----------------------------------------------------------------------
+// list_all_with_status() tests
+// -----------------------------------------------------------------------
+
+fn insert_agent_run(
+    conn: &Connection,
+    id: &str,
+    worktree_id: &str,
+    status: &str,
+    started_at: &str,
+) {
+    conn.execute(
+        "INSERT INTO agent_runs (id, worktree_id, status, started_at, prompt) \
+         VALUES (?1, ?2, ?3, ?4, 'test prompt')",
+        rusqlite::params![id, worktree_id, status, started_at],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_list_all_with_status_no_agent_runs() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    let results = mgr.list_all_with_status(false).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].worktree.id, "w1");
+    assert!(
+        results[0].agent_status.is_none(),
+        "worktree with no agent runs should have None agent_status"
+    );
+}
+
+#[test]
+fn test_list_all_with_status_running() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+
+    insert_agent_run(&conn, "ar1", "w1", "running", "2024-01-01T10:00:00Z");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let results = mgr.list_all_with_status(false).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].agent_status,
+        Some(crate::agent::AgentRunStatus::Running)
+    );
+}
+
+#[test]
+fn test_list_all_with_status_waiting_for_feedback() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+
+    insert_agent_run(
+        &conn,
+        "ar1",
+        "w1",
+        "waiting_for_feedback",
+        "2024-01-01T10:00:00Z",
+    );
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let results = mgr.list_all_with_status(false).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].agent_status,
+        Some(crate::agent::AgentRunStatus::WaitingForFeedback)
+    );
+}
+
+#[test]
+fn test_list_all_with_status_latest_run_wins() {
+    // Two runs for the same worktree — only the most recent started_at should appear.
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+
+    insert_agent_run(&conn, "ar1", "w1", "completed", "2024-01-01T08:00:00Z");
+    insert_agent_run(&conn, "ar2", "w1", "running", "2024-01-01T10:00:00Z");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let results = mgr.list_all_with_status(false).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].agent_status,
+        Some(crate::agent::AgentRunStatus::Running),
+        "latest run (running) should win over older completed run"
+    );
+}
+
+#[test]
+fn test_list_all_with_status_active_only_filter() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+
+    // Insert a completed worktree
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('w2', 'r1', 'feat-done', 'feat/done', '/tmp/ws/feat-done', 'merged', '2024-01-02T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    // active_only=true should exclude 'merged' worktree
+    let active = mgr.list_all_with_status(true).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].worktree.id, "w1");
+
+    // active_only=false should include both
+    let all = mgr.list_all_with_status(false).unwrap();
+    assert_eq!(all.len(), 2);
+}
+
+#[test]
+fn test_list_all_with_status_duplicate_timestamp_deduplication() {
+    // Two runs with identical started_at — the query must return exactly one row per worktree.
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+
+    let ts = "2024-01-01T10:00:00Z";
+    insert_agent_run(&conn, "ar1", "w1", "completed", ts);
+    insert_agent_run(&conn, "ar2", "w1", "failed", ts);
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let results = mgr.list_all_with_status(false).unwrap();
+    // Should get exactly one WorktreeWithStatus row, not two
+    assert_eq!(
+        results.len(),
+        1,
+        "duplicate started_at should not produce duplicate rows"
+    );
 }

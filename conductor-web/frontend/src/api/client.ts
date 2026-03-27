@@ -1,6 +1,7 @@
 import type {
   Repo,
   Worktree,
+  WorktreeWithStatus,
   Ticket,
   TicketLabel,
   TicketAgentTotals,
@@ -26,6 +27,9 @@ import type {
   FeedbackRequest,
   Notification,
   ThemeUnlockStats,
+  PushSubscribeRequest,
+  VapidPublicKeyResponse,
+  PushSubscribeResponse,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -57,6 +61,10 @@ export const api = {
     }),
 
   // Worktrees
+  listAllWorktrees: (showCompleted = false) =>
+    request<WorktreeWithStatus[]>(
+      showCompleted ? `/worktrees?show_completed=true` : `/worktrees`,
+    ),
   listWorktrees: (repoId: string, showCompleted = false) =>
     request<Worktree[]>(
       showCompleted
@@ -276,4 +284,21 @@ export const api = {
   // Stats
   getThemeUnlockStats: () =>
     request<ThemeUnlockStats>("/stats/theme-unlocks"),
+
+  // Push Notifications
+  getPushVapidKey: () =>
+    request<VapidPublicKeyResponse>("/push/vapid-public-key"),
+  subscribePush: (data: PushSubscribeRequest) =>
+    request<PushSubscribeResponse>("/push/subscribe", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  unsubscribePush: (data: PushSubscribeRequest) =>
+    request<PushSubscribeResponse>("/push/subscribe", {
+      method: "DELETE",
+      body: JSON.stringify(data),
+    }),
 };
+
+// Export as apiClient for consistency with hook usage
+export const apiClient = api;

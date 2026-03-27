@@ -116,6 +116,8 @@ pub fn handle_workflow(
             step_timeout_secs,
             inputs,
             feature,
+            background,
+            plugin_dirs,
         } => {
             // Parse input key=value pairs (shared by both paths)
             let mut input_map = std::collections::HashMap::new();
@@ -220,6 +222,7 @@ pub fn handle_workflow(
                     triggered_by_hook: false,
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     force: false,
+                    extra_plugin_dirs: plugin_dirs.clone(),
                 })?;
             } else if let Some(run_id) = workflow_run {
                 // Workflow-run targeted run (e.g. postmortem workflows)
@@ -264,6 +267,7 @@ pub fn handle_workflow(
                     triggered_by_hook: false,
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     force: false,
+                    extra_plugin_dirs: plugin_dirs.clone(),
                 })?;
             } else if let Some(ticket_id) = ticket {
                 let syncer = TicketSyncer::new(conn);
@@ -305,6 +309,7 @@ pub fn handle_workflow(
                     triggered_by_hook: false,
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     force: false,
+                    extra_plugin_dirs: plugin_dirs.clone(),
                 })?;
             } else {
                 // Normal registered repo/worktree run
@@ -322,12 +327,43 @@ pub fn handle_workflow(
                 conductor_core::workflow::apply_workflow_input_defaults(&workflow, &mut input_map)?;
 
                 let node_count = workflow.total_nodes();
+                let wt_label = format!("{repo_slug}/{worktree_slug}");
+
+                #[cfg(unix)]
+                if background {
+                    let params = conductor_core::workflow::WorkflowExecStandalone {
+                        config: config.clone(),
+                        workflow,
+                        worktree_id: Some(wt.id.clone()),
+                        working_dir: wt.path.clone(),
+                        repo_path: r.local_path.clone(),
+                        ticket_id: wt.ticket_id.clone(),
+                        repo_id: None,
+                        model,
+                        exec_config,
+                        inputs: input_map,
+                        target_label: Some(wt_label),
+                        feature_id: feature_id.map(|s| s.to_string()),
+                        run_id_notify: None,
+                        triggered_by_hook: false,
+                        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                        force: false,
+                        extra_plugin_dirs: plugin_dirs,
+                    };
+                    let run_id = crate::background::fork_and_run_workflow(params)?;
+                    println!("{}", run_id);
+                    return Ok(());
+                }
+                #[cfg(not(unix))]
+                if background {
+                    anyhow::bail!("--background is only supported on Unix systems");
+                }
+
                 println!(
                     "Running workflow '{}' ({} nodes) on {}/{}...",
                     workflow.name, node_count, repo_slug, worktree_slug
                 );
 
-                let wt_label = format!("{repo_slug}/{worktree_slug}");
                 run_and_report(&conductor_core::workflow::WorkflowExecInput {
                     conn,
                     config,
@@ -350,6 +386,7 @@ pub fn handle_workflow(
                     triggered_by_hook: false,
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     force: false,
+                    extra_plugin_dirs: plugin_dirs,
                 })?;
             }
         }

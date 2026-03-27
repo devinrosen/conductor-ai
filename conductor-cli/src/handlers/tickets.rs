@@ -151,6 +151,46 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                 source_type, source_id, repo
             );
         }
+        TicketCommands::Get { id, json, format } => {
+            let syncer = TicketSyncer::new(conn);
+            let ticket = syncer.get_by_id(&id).or_else(|_| {
+                // Fall back to searching by source_id across all repos
+                let all = syncer.list(None)?;
+                all.into_iter()
+                    .find(|t| t.source_id == id)
+                    .ok_or_else(|| anyhow::anyhow!("Ticket not found: {id}"))
+            })?;
+
+            if json || format == "json" {
+                println!("{}", serde_json::to_string_pretty(&ticket)?);
+            } else {
+                println!("ID:         {}", ticket.id);
+                println!("Source:     {} #{}", ticket.source_type, ticket.source_id);
+                println!("Title:      {}", ticket.title);
+                println!("State:      {}", ticket.state);
+                if !ticket.body.is_empty() {
+                    println!("Body:       {}", truncate_str(&ticket.body, 200));
+                }
+                if !ticket.url.is_empty() {
+                    println!("URL:        {}", ticket.url);
+                }
+                if let Some(ref a) = ticket.assignee {
+                    println!("Assignee:   {a}");
+                }
+                if let Some(ref p) = ticket.priority {
+                    println!("Priority:   {p}");
+                }
+                if !ticket.labels.is_empty() {
+                    println!("Labels:     {}", ticket.labels);
+                }
+                if let Some(ref wf) = ticket.workflow {
+                    println!("Workflow:   {wf}");
+                }
+                if let Some(ref am) = ticket.agent_map {
+                    println!("Agent Map:  {am}");
+                }
+            }
+        }
         TicketCommands::Upsert {
             repo,
             source_type,
@@ -162,6 +202,8 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
             labels,
             assignee,
             priority,
+            workflow,
+            agent_map,
         } => {
             let repo_obj = RepoManager::new(conn, config).get_by_slug(&repo)?;
 
@@ -188,10 +230,55 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
 
             let syncer = TicketSyncer::new(conn);
             syncer.upsert_tickets(&repo_obj.id, &[ticket_input])?;
+
+            // Apply workflow/agent_map routing if specified
+            if workflow.is_some() || agent_map.is_some() {
+                let ticket = syncer.get_by_source_id(&repo_obj.id, &source_id)?;
+                syncer.update_ticket(
+                    &ticket.id,
+                    None,
+                    workflow.as_deref(),
+                    agent_map.as_deref(),
+                )?;
+            }
             println!(
                 "Upserted ticket {}#{} into {}.",
                 source_type, source_id, repo
             );
+        }
+        TicketCommands::Update {
+            id,
+            state,
+            workflow,
+            agent_map,
+        } => {
+            let syncer = TicketSyncer::new(conn);
+            let _ticket = syncer.get_by_id(&id)?;
+
+            syncer.update_ticket(
+                &id,
+                state.as_deref(),
+                workflow.as_deref(),
+                agent_map.as_deref(),
+            )?;
+
+            if let Some(ref new_state) = state {
+                println!("Updated ticket {} state to '{}'.", id, new_state);
+            }
+            if let Some(ref w) = workflow {
+                if w.is_empty() {
+                    println!("Cleared ticket {} workflow.", id);
+                } else {
+                    println!("Set ticket {} workflow to '{}'.", id, w);
+                }
+            }
+            if let Some(ref a) = agent_map {
+                if a.is_empty() {
+                    println!("Cleared ticket {} agent_map.", id);
+                } else {
+                    println!("Set ticket {} agent_map.", id);
+                }
+            }
         }
         TicketCommands::Stats { repo } => {
             let repo_mgr = RepoManager::new(conn, config);

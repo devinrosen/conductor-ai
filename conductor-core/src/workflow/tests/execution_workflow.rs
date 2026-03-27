@@ -42,6 +42,7 @@ fn test_cannot_start_workflow_run_when_active() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -89,6 +90,7 @@ fn test_can_start_workflow_run_after_completion() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -138,6 +140,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input);
     assert!(
@@ -181,6 +184,7 @@ fn test_run_id_notify_slot_is_populated() {
         run_id_notify: Some(std::sync::Arc::clone(&slot)),
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -232,6 +236,7 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let result = execute_workflow(&input).expect(
@@ -272,6 +277,7 @@ fn test_execute_workflow_injects_repo_variables() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -325,6 +331,7 @@ fn test_execute_workflow_injects_ticket_variables() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -382,6 +389,7 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -426,6 +434,7 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -461,6 +470,7 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -501,6 +511,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result1 = execute_workflow(&input1);
     assert!(
@@ -535,6 +546,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result2 = execute_workflow(&input2);
     assert!(
@@ -580,6 +592,7 @@ fn test_execute_workflow_iteration_persisted() {
         run_id_notify: Some(slot.clone()),
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let result = execute_workflow(&input);
@@ -632,6 +645,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         output: Some("broken".into()),
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     }));
 
     let input = WorkflowExecInput {
@@ -655,6 +669,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -707,6 +722,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         output: Some("bad-schema".into()),
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     }));
 
     let input = WorkflowExecInput {
@@ -730,6 +746,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -786,6 +803,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         output: Some("good-schema".into()),
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     }));
 
     let input = WorkflowExecInput {
@@ -809,6 +827,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
@@ -863,6 +882,7 @@ fn test_execute_workflow_injects_feature_variables() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -914,6 +934,7 @@ fn test_execute_workflow_invalid_feature_id_returns_error() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -962,6 +983,7 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let result = crate::workflow::engine::execute_workflow(&input).unwrap();
@@ -1009,6 +1031,7 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
     };
 
     let result = execute_workflow(&input).unwrap();

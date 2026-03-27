@@ -101,6 +101,7 @@ pub struct WorkflowDefSummary {
     pub trigger: String,
     pub inputs: Vec<InputDeclSummary>,
     pub node_count: usize,
+    pub group: Option<String>,
 }
 
 impl From<&WorkflowDef> for WorkflowDefSummary {
@@ -111,6 +112,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
             node_count: def.body.len(),
+            group: def.group.clone(),
         }
     }
 }
@@ -304,6 +306,7 @@ pub async fn run_workflow(
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
+                extra_plugin_dirs: vec![],
             };
 
             execute_workflow(&input)

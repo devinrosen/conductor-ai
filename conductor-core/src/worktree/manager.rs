@@ -10,8 +10,8 @@ use crate::git::{check_gh_output, check_output, git_in};
 use crate::repo::RepoManager;
 
 use super::git_helpers::*;
-use super::types::{map_worktree_row, Worktree, WorktreeStatus};
-use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W};
+use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
+use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W, WORKTREE_COLUMN_COUNT};
 
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
@@ -334,6 +334,47 @@ impl<'a> WorktreeManager<'a> {
             query_collect(self.conn, &query, [], map_worktree_row)?
         };
         Ok(worktrees)
+    }
+
+    /// List all worktrees joined with the status of each worktree's latest agent run.
+    ///
+    /// Uses a LEFT JOIN so worktrees with no agent runs still appear (with `agent_status = None`).
+    /// Uses the INNER JOIN subquery pattern to avoid duplicate rows when two runs share
+    /// the same MAX(started_at) timestamp.
+    pub fn list_all_with_status(&self, active_only: bool) -> Result<Vec<WorktreeWithStatus>> {
+        let status_filter = if active_only {
+            " AND w.status = 'active'"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT {cols}, latest.status AS agent_status
+             FROM worktrees w
+             LEFT JOIN (
+                 SELECT a.worktree_id, a.status
+                 FROM agent_runs a
+                 INNER JOIN (
+                     SELECT worktree_id, MAX(started_at) AS max_started
+                     FROM agent_runs
+                     WHERE worktree_id IS NOT NULL
+                     GROUP BY worktree_id
+                 ) top ON a.worktree_id = top.worktree_id AND a.started_at = top.max_started
+                 GROUP BY a.worktree_id
+             ) latest ON latest.worktree_id = w.id
+             WHERE 1=1{status_filter}
+             ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+            cols = &*WORKTREE_COLUMNS_W,
+            status_filter = status_filter,
+        );
+        query_collect(self.conn, &sql, [], |row| {
+            let worktree = map_worktree_row(row)?;
+            let agent_status: Option<crate::agent::AgentRunStatus> =
+                row.get(WORKTREE_COLUMN_COUNT)?;
+            Ok(WorktreeWithStatus {
+                worktree,
+                agent_status,
+            })
+        })
     }
 
     /// Walk up from `cwd` and return the worktree whose `path` is a prefix of (or equals) `cwd`.

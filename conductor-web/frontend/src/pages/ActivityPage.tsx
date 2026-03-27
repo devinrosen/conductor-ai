@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
-import type { Worktree, AgentRun, FeedbackRequest } from "../api/types";
+import type { WorktreeWithStatus, FeedbackRequest } from "../api/types";
 import { RepoCard } from "../components/repos/RepoCard";
 import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
@@ -14,6 +14,7 @@ import { StationHeader } from "../components/shared/StationHeader";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { WelcomeAboard } from "../components/shared/WelcomeAboard";
+import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { agentStatusColor } from "../utils/agentStats";
 import {
   useConductorEvents,
@@ -33,59 +34,65 @@ export function ActivityPage() {
   const navigate = useNavigate();
 
   const [worktreeCounts, setWorktreeCounts] = useState<Record<string, number>>({});
-  const [activeWorktrees, setActiveWorktrees] = useState<(Worktree & WorktreeContext)[]>([]);
-  const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
+  const [activeWorktrees, setActiveWorktrees] = useState<(WorktreeWithStatus & WorktreeContext)[]>([]);
   const [pendingFeedback, setPendingFeedback] = useState<{ feedback: FeedbackRequest; ctx: WorktreeContext & { branch: string; worktreeId: string } }[]>([]);
   const [wtTick, setWtTick] = useState(0);
   const [registerRepoOpen, setRegisterRepoOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refreshWorktrees = useCallback(() => setWtTick((n) => n + 1), []);
 
   useEffect(() => {
     if (repos.length === 0) return;
-    Promise.all([
-      Promise.all(
-        repos.map((r) =>
-          api.listWorktrees(r.id).then((wts) => ({ repoId: r.id, slug: r.slug, wts })),
-        ),
-      ),
-      api.latestRunsByWorktree(),
-    ]).then(([results, runs]) => {
-      const counts: Record<string, number> = {};
-      const active: (Worktree & WorktreeContext)[] = [];
-      const feedbackWorktrees: { worktreeId: string; ctx: WorktreeContext & { branch: string; worktreeId: string } }[] = [];
 
-      for (const { repoId, slug, wts } of results) {
-        counts[repoId] = wts.length;
-        for (const wt of wts) {
-          if (wt.status === "active") {
-            active.push({ ...wt, repoId, repoSlug: slug });
-            const run = (runs as Record<string, AgentRun>)[wt.id];
-            if (run && run.status === "waiting_for_feedback") {
-              feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
-            }
-          }
+    const fetchData = async () => {
+      const repoSlugById: Record<string, string> = {};
+      for (const r of repos) repoSlugById[r.id] = r.slug;
+
+      const allWorktrees = await api.listAllWorktrees();
+
+      const counts: Record<string, number> = {};
+      const active: (WorktreeWithStatus & WorktreeContext)[] = [];
+      for (const wt of allWorktrees) {
+        const repoId = wt.repo_id;
+        const slug = repoSlugById[repoId] ?? "";
+        counts[repoId] = (counts[repoId] ?? 0) + 1;
+        if (wt.status === "active") {
+          active.push({ ...wt, repoId, repoSlug: slug });
         }
       }
       setWorktreeCounts(counts);
       setActiveWorktrees(active);
-      setLatestRuns(runs);
 
-      // Fetch pending feedback
+      const feedbackWorktrees: { worktreeId: string; ctx: WorktreeContext & { branch: string; worktreeId: string } }[] = [];
+      for (const wt of allWorktrees) {
+        if (wt.status !== "active") continue;
+        const repoId = wt.repo_id;
+        const slug = repoSlugById[repoId] ?? "";
+        if (wt.agent_status === "waiting_for_feedback") {
+          feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
+        }
+      }
+
       if (feedbackWorktrees.length > 0) {
-        Promise.all(
+        const results = await Promise.all(
           feedbackWorktrees.map(({ worktreeId, ctx }) =>
             api.getPendingFeedback(worktreeId).then((fb) => fb ? { feedback: fb, ctx } : null).catch(() => null)
           )
-        ).then((results) => {
-          setPendingFeedback(results.filter(Boolean) as typeof pendingFeedback);
-        });
+        );
+        setPendingFeedback(results.filter(Boolean) as typeof pendingFeedback);
       } else {
         setPendingFeedback([]);
       }
+
+      setLoadError(null);
+    };
+
+    fetchData().catch((err: unknown) => {
+      setLoadError(err instanceof Error ? err.message : "Failed to load activity data");
     });
   }, [repos, wtTick]);
 
@@ -155,7 +162,7 @@ export function ActivityPage() {
   }
 
   // Summary counts
-  const runningAgents = Object.values(latestRuns).filter((r) => r.status === "running").length;
+  const runningAgents = activeWorktrees.filter((wt) => wt.agent_status === "running").length;
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden gap-3">
@@ -176,9 +183,8 @@ export function ActivityPage() {
         </div>
       </div>
 
-      {actionError && (
-        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{actionError}</div>
-      )}
+      <ErrorBanner error={loadError} />
+      <ErrorBanner error={actionError} />
 
       {/* Attention Required — pending feedback */}
       {pendingFeedback.length > 0 && (
@@ -213,16 +219,16 @@ export function ActivityPage() {
       )}
 
       {/* Main content area */}
-      <div className="flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
+      <div className="flex-1 flex flex-col gap-3 min-h-0 overflow-y-auto">
         {/* Active Worktrees */}
-        <section className="flex flex-col flex-1 min-h-0">
+        <section className="flex flex-col shrink-0">
           <StationHeader count={activeWorktrees.length}>Active Worktrees</StationHeader>
           {activeWorktrees.length === 0 ? (
             <div className="text-center py-8 text-gray-400 text-sm">
               No platforms active. Create a worktree from a repo to lay some track.
             </div>
           ) : (
-            <div className="rounded-lg border border-gray-200 bg-white overflow-y-auto overflow-x-auto flex-1 min-h-0">
+            <div className="rounded-lg border border-gray-200 bg-white overflow-x-auto">
               <table className="w-full text-sm min-w-[540px]">
                 <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase sticky top-0 z-10">
                   <tr>
@@ -236,10 +242,9 @@ export function ActivityPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {activeWorktrees.map((wt, index) => {
-                    const run = latestRuns[wt.id];
-                    const overallStatus = run?.status === "running" ? "running"
-                      : run?.status === "waiting_for_feedback" ? "waiting"
-                      : run?.status === "failed" ? "failed"
+                    const overallStatus = wt.agent_status === "running" ? "running"
+                      : wt.agent_status === "waiting_for_feedback" ? "waiting"
+                      : wt.agent_status === "failed" ? "failed"
                       : wt.status;
                     return (
                       <tr
@@ -267,9 +272,9 @@ export function ActivityPage() {
                           <StatusBadge status={wt.status} />
                         </td>
                         <td className="px-3 py-1.5">
-                          {run ? (
-                            <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(run.status)}`}>
-                              {run.status}
+                          {wt.agent_status ? (
+                            <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(wt.agent_status)}`}>
+                              {wt.agent_status}
                             </span>
                           ) : (
                             <span className="text-xs text-gray-400">idle</span>

@@ -38,8 +38,8 @@ pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&
     vars.insert("prior_context", prior_context);
     let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
     vars.insert("prior_contexts", prior_contexts_json);
-    if let Some(ref feedback) = state.last_gate_feedback {
-        vars.insert("gate_feedback", feedback.clone());
+    if let Some(ref gf) = state.last_gate_feedback {
+        vars.insert("gate_feedback", gf.clone());
     }
     // prior_output: raw JSON from the last step's structured output (if any)
     if let Some(last_output) = state
@@ -83,8 +83,38 @@ pub(super) fn build_agent_prompt(
     let vars = build_variable_map(state);
     let mut prompt = substitute_variables(&agent_def.prompt, &vars);
 
+    // Task reinforcement directive
+    prompt = format!(
+        "Your task below is your ONLY priority. Complete it fully before considering anything else.\n\n{prompt}"
+    );
+
     if agent_def.can_commit && state.exec_config.dry_run {
         prompt = format!("DO NOT commit or push any changes. This is a dry run.\n\n{prompt}");
+    }
+
+    // FSM mandatory first action: when an FSM path is provided, tell the
+    // agent to read it before doing anything else.
+    if let Some(fsm_path) = state.inputs.get("fsm_path") {
+        if !fsm_path.is_empty() {
+            prompt = format!(
+                "{prompt}\n\n## Mandatory First Action\n\n\
+                 Before doing ANYTHING else, read the FSM definition file at:\n\
+                 `{fsm_path}`\n\n\
+                 This file defines the state machine that governs your behavior in this workflow. \
+                 You MUST read and understand it before proceeding with any other work."
+            );
+        }
+    }
+
+    // Template variables section — list ALL substituted variables, not just inputs
+    if !vars.is_empty() {
+        prompt.push_str("\n\n## Template Variables\n\n");
+        prompt.push_str(
+            "The following template placeholders are available and have been substituted in this prompt:\n\n",
+        );
+        for (key, value) in &vars {
+            prompt.push_str(&format!("- `{{{{{key}}}}}` = `{value}`\n"));
+        }
     }
 
     // Append prompt snippets (already concatenated by caller)
@@ -151,6 +181,7 @@ mod tests {
             feature_id: None,
             triggered_by_hook: false,
             conductor_bin_dir: None,
+            extra_plugin_dirs: vec![],
         }
     }
 

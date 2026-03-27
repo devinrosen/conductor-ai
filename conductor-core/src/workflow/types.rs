@@ -242,7 +242,7 @@ impl Default for WorkflowExecConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(5),
-            step_timeout: Duration::from_secs(30 * 60),
+            step_timeout: Duration::from_secs(12 * 60 * 60),
             fail_fast: true,
             dry_run: false,
             shutdown: None,
@@ -362,6 +362,9 @@ pub struct WorkflowExecInput<'a> {
     /// (depth == 0); not propagated to child workflows or hook-triggered runs.
     /// Part of: process-escape-hatch@1.0.0
     pub force: bool,
+    /// Additional plugin directories passed via `--plugin-dir` CLI flag.
+    /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
+    pub extra_plugin_dirs: Vec<String>,
 }
 
 /// Owned inputs for [`execute_workflow_standalone`], avoiding lifetime issues
@@ -391,6 +394,9 @@ pub struct WorkflowExecStandalone {
     pub conductor_bin_dir: Option<std::path::PathBuf>,
     /// When true, bypass the WorkflowRunAlreadyActive guard. Part of: process-escape-hatch@1.0.0
     pub force: bool,
+    /// Additional plugin directories passed via `--plugin-dir` CLI flag.
+    /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
+    pub extra_plugin_dirs: Vec<String>,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues

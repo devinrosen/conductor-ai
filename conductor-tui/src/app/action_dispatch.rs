@@ -22,8 +22,8 @@ impl App {
                 // status bar (and workflow views) stay current regardless of which
                 // view is active.
                 self.poll_workflow_data_async();
-                // Periodically refresh the PR list when the RepoDetail view is active.
-                if self.state.view == View::RepoDetail {
+                // Periodically refresh the PR list when the RepoDetail or WorktreeDetail view is active.
+                if self.state.view == View::RepoDetail || self.state.view == View::WorktreeDetail {
                     let needs_refresh = self
                         .state
                         .pr_last_fetched_at
