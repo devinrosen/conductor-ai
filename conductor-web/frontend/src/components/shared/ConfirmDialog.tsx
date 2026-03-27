@@ -44,7 +44,7 @@ export function ConfirmDialog({
           <button
             onClick={onConfirm}
             disabled={loading}
-            className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+            className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 hazard-stripe"
           >
             {loading ? "Deleting..." : "Confirm"}
           </button>

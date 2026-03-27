@@ -106,6 +106,44 @@
   ) 4;
 }
 
+/* ── Theme-aware label case for section headers ── */
+.uppercase.tracking-wider {
+  text-transform: var(--cd-label-case, uppercase);
+  letter-spacing: var(--cd-label-letter-spacing, 0.05em);
+}
+
+/* ── Theme-aware spacing ── */
+.space-y-8 > * + *, .space-y-6 > * + * {
+  --tw-space-y-reverse: 0;
+}
+
+/* ── Hazard stripe for destructive actions ── */
+.hazard-stripe {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 4px,
+    var(--color-red-500, #D73020) 4px,
+    var(--color-red-500, #D73020) 5px
+  );
+  background-size: 100% 3px;
+  background-position: bottom;
+  background-repeat: no-repeat;
+}
+
+/* ── Expand/collapse transition ── */
+.expand-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 150ms ease-out;
+}
+.expand-collapse[data-collapsed="true"] {
+  grid-template-rows: 0fr;
+}
+.expand-collapse > * {
+  overflow: hidden;
+}
+
 /* ── Focus ring ── */
 *:focus-visible { outline-color: var(--color-indigo-500, #2B5EA7); }
 
