@@ -6,6 +6,30 @@ import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { RunWorkflowModal } from "./RunWorkflowModal";
 
+function GroupSection({
+  title,
+  defs,
+  onRun,
+}: {
+  title: string;
+  defs: WorkflowDefSummary[];
+  onRun: (def: WorkflowDefSummary) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">{title}</h4>
+        <div className="flex-1 h-px bg-gray-700" />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {defs.map((def) => (
+          <WorkflowCard key={def.name} def={def} onRun={onRun} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function WorkflowCard({
   def,
   onRun,
@@ -125,34 +149,15 @@ export function WorkflowPanel({ repoId, worktreeId, ticketId }: WorkflowPanelPro
           return (
             <div className="space-y-5">
               {sortedGroups.map(([groupName, groupDefs]) => (
-                <div key={groupName}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">
-                      {groupName}
-                    </h4>
-                    <div className="flex-1 h-px bg-gray-700" />
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {groupDefs.map((def) => (
-                      <WorkflowCard key={def.name} def={def} onRun={setRunModalDef} />
-                    ))}
-                  </div>
-                </div>
+                <GroupSection
+                  key={groupName}
+                  title={groupName}
+                  defs={groupDefs}
+                  onRun={setRunModalDef}
+                />
               ))}
               {ungrouped.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">
-                      Other
-                    </h4>
-                    <div className="flex-1 h-px bg-gray-700" />
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {ungrouped.map((def) => (
-                      <WorkflowCard key={def.name} def={def} onRun={setRunModalDef} />
-                    ))}
-                  </div>
-                </div>
+                <GroupSection title="Other" defs={ungrouped} onRun={setRunModalDef} />
               )}
             </div>
           );
