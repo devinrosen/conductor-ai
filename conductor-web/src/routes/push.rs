@@ -149,21 +149,9 @@ mod tests {
     };
 
     async fn setup_test_state() -> AppState {
+        // create_test_conn() runs all migrations, including the one that creates
+        // push_subscriptions (migration 052).
         let db = create_test_conn();
-
-        // Apply the push_subscriptions migration
-        db.execute(
-            "CREATE TABLE push_subscriptions (
-                id TEXT NOT NULL PRIMARY KEY,
-                endpoint TEXT NOT NULL UNIQUE,
-                p256dh TEXT NOT NULL,
-                auth TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )",
-            [],
-        )
-        .unwrap();
 
         let config = Config {
             web_push: WebPushConfig {

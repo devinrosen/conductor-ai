@@ -28,16 +28,12 @@ pub struct WorktreeListQuery {
     /// When true, include merged/abandoned worktrees. Defaults to false (completed worktrees hidden).
     #[serde(default)]
     pub show_completed: bool,
-    /// Accepted for documentation purposes; the agent status JOIN runs unconditionally.
-    #[serde(default)]
-    pub include_agent_status: bool,
 }
 
 pub async fn list_all_worktrees(
     State(state): State<AppState>,
     Query(params): Query<WorktreeListQuery>,
 ) -> Result<Json<Vec<WorktreeWithStatus>>, ApiError> {
-    let _ = params.include_agent_status; // JOIN runs unconditionally
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let mgr = WorktreeManager::new(&db, &config);

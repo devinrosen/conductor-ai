@@ -150,23 +150,9 @@ mod tests {
     use conductor_core::test_helpers::create_test_conn;
 
     async fn setup_test_db() -> Connection {
-        let db = create_test_conn();
-
-        // Apply the push_subscriptions migration
-        db.execute(
-            "CREATE TABLE push_subscriptions (
-                id TEXT NOT NULL PRIMARY KEY,
-                endpoint TEXT NOT NULL UNIQUE,
-                p256dh TEXT NOT NULL,
-                auth TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )",
-            [],
-        )
-        .unwrap();
-
-        db
+        // create_test_conn() runs all migrations, including the one that creates
+        // push_subscriptions (migration 052).
+        create_test_conn()
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ use crate::repo::RepoManager;
 
 use super::git_helpers::*;
 use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
-use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W};
+use super::{WORKTREE_COLUMN_COUNT, WORKTREE_COLUMNS, WORKTREE_COLUMNS_W};
 
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
@@ -359,6 +359,7 @@ impl<'a> WorktreeManager<'a> {
                      WHERE worktree_id IS NOT NULL
                      GROUP BY worktree_id
                  ) top ON a.worktree_id = top.worktree_id AND a.started_at = top.max_started
+                 GROUP BY a.worktree_id
              ) latest ON latest.worktree_id = w.id
              WHERE 1=1{status_filter}
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
@@ -367,7 +368,7 @@ impl<'a> WorktreeManager<'a> {
         );
         query_collect(self.conn, &sql, [], |row| {
             let worktree = map_worktree_row(row)?;
-            let agent_status: Option<crate::agent::AgentRunStatus> = row.get(11)?;
+            let agent_status: Option<crate::agent::AgentRunStatus> = row.get(WORKTREE_COLUMN_COUNT)?;
             Ok(WorktreeWithStatus {
                 worktree,
                 agent_status,

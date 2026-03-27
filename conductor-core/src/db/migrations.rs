@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 51;
+pub const LATEST_SCHEMA_VERSION: u32 = 53;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -917,6 +917,26 @@ pub fn run(conn: &Connection) -> Result<()> {
             conn.execute_batch(include_str!("migrations/051_agent_run_repo_id.sql"))?;
         }
         bump_version(conn, 51)?;
+    }
+
+    // Migration 052: create push_subscriptions table for PWA push notifications.
+    if version < 52 {
+        let has_table: bool = conn
+            .prepare("SELECT 1 FROM push_subscriptions LIMIT 0")
+            .is_ok();
+        if !has_table {
+            conn.execute_batch(include_str!("migrations/052_push_subscriptions.sql"))?;
+        }
+        bump_version(conn, 52)?;
+    }
+
+    // Migration 053: covering index on agent_runs(worktree_id, started_at) to
+    // speed up the latest-run-per-worktree subquery in list_all_with_status().
+    if version < 53 {
+        conn.execute_batch(include_str!(
+            "migrations/053_idx_agent_runs_worktree_started.sql"
+        ))?;
+        bump_version(conn, 53)?;
     }
 
     Ok(())
