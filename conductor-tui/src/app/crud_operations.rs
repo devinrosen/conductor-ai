@@ -659,6 +659,8 @@ mod tests {
             url: "".into(),
             synced_at: "2024-01-01T00:00:00Z".into(),
             raw_json: "{}".into(),
+            workflow: None,
+            agent_map: None,
         };
         app.state.filtered_detail_tickets = vec![ticket];
         app.state.detail_ticket_index = 0;

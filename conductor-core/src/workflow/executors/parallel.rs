@@ -67,6 +67,7 @@ pub fn execute_parallel(
             &state.repo_path,
             &AgentSpec::from(agent_ref),
             Some(&state.workflow_name),
+            &state.extra_plugin_dirs,
         )?;
 
         // Check per-call `if` condition: skip this call unless the named prior step
@@ -170,6 +171,7 @@ pub fn execute_parallel(
             step_model,
             &window_name,
             state.default_bot_name.as_deref(),
+            &state.extra_plugin_dirs,
         ) {
             tracing::warn!("Failed to spawn parallel agent '{agent_label}': {e}");
             let _ = state

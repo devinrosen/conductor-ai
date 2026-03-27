@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 53;
+pub const LATEST_SCHEMA_VERSION: u32 = 55;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -734,24 +734,36 @@ pub fn run(conn: &Connection) -> Result<()> {
     }
 
     // Migration 037: add 'script' to the role CHECK constraint and add output_file column.
-    // Requires a table swap (FK constraint). Guarded by output_file column existence
-    // to be idempotent and to skip gracefully on partial test schemas.
+    // Requires a table swap (FK constraint). The table swap serves two purposes:
+    // (1) add output_file column, (2) update role CHECK to include 'script'.
+    // We must run the swap if EITHER is missing (column absent OR constraint stale).
     if version < 37 {
         let has_output_file: bool = conn
             .prepare("SELECT output_file FROM workflow_run_steps LIMIT 0")
             .is_ok();
-        if !has_output_file {
-            let steps_table_exists = conn
-                .prepare("SELECT 1 FROM workflow_run_steps LIMIT 0")
-                .is_ok();
-            if steps_table_exists {
-                with_foreign_keys_off(conn, || {
-                    conn.execute_batch(include_str!(
-                        "migrations/037_workflow_step_output_file.sql"
-                    ))?;
-                    Ok(())
-                })?;
-            }
+        let needs_swap = if !has_output_file {
+            // Column missing — need the swap if the table exists at all.
+            conn.prepare("SELECT 1 FROM workflow_run_steps LIMIT 0")
+                .is_ok()
+        } else {
+            // Column exists — check if the CHECK constraint includes 'script'.
+            let has_script_role: bool = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_run_steps'",
+                    [],
+                    |row| {
+                        let ddl: String = row.get(0)?;
+                        Ok(ddl.contains("'script'"))
+                    },
+                )
+                .unwrap_or(false);
+            !has_script_role
+        };
+        if needs_swap {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!("migrations/037_workflow_step_output_file.sql"))?;
+                Ok(())
+            })?;
         }
         bump_version(conn, 37)?;
     }
@@ -937,6 +949,18 @@ pub fn run(conn: &Connection) -> Result<()> {
             "migrations/053_idx_agent_runs_worktree_started.sql"
         ))?;
         bump_version(conn, 53)?;
+    }
+
+    // Migration 054: add workflow column to tickets table for routing overrides.
+    if version < 54 {
+        conn.execute_batch(include_str!("migrations/054_ticket_workflow.sql"))?;
+        bump_version(conn, 54)?;
+    }
+
+    // Migration 055: add agent_map column to tickets table for pre-resolved agent assignments.
+    if version < 55 {
+        conn.execute_batch(include_str!("migrations/055_ticket_agent_map.sql"))?;
+        bump_version(conn, 55)?;
     }
 
     Ok(())

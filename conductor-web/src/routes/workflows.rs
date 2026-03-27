@@ -278,6 +278,7 @@ pub async fn run_workflow(
                 run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                extra_plugin_dirs: vec![],
             };
 
             execute_workflow(&input)

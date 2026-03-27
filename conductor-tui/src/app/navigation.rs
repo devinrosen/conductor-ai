@@ -1119,6 +1119,8 @@ mod tests {
             url: "".into(),
             synced_at: "2024-01-01T00:00:00Z".into(),
             raw_json: "{}".into(),
+            workflow: None,
+            agent_map: None,
         }];
         app.state.ticket_index = 5;
         app.clamp_indices();

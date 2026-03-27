@@ -267,6 +267,7 @@ pub fn execute_call_workflow(
             run_id_notify: None,
             triggered_by_hook: state.triggered_by_hook,
             conductor_bin_dir: state.conductor_bin_dir.clone(),
+            extra_plugin_dirs: state.extra_plugin_dirs.clone(),
         };
 
         match crate::workflow::engine::execute_workflow(&child_input) {

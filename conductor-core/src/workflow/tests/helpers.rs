@@ -52,6 +52,7 @@ fn make_call_node(name: &str) -> WorkflowNode {
         output: None,
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     })
 }
 

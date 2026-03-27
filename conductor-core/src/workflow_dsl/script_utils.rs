@@ -9,8 +9,12 @@ use crate::text_util::path_is_within_dir;
 /// script name.
 ///
 /// For absolute paths the root is the same as the candidate (no boundary check
-/// applies).  For relative paths the order is
-/// `working_dir → repo_path → skills_dir`.
+/// applies).  For relative paths the order is:
+/// 1. `working_dir/{run}`
+/// 2. `working_dir/.conductor/scripts/{run}`
+/// 3. `repo_path/{run}`
+/// 4. `repo_path/.conductor/scripts/{run}`
+/// 5. `skills_dir/{run}` (if set)
 pub(crate) fn script_search_paths(
     run: &str,
     working_dir: &str,
@@ -25,7 +29,9 @@ pub(crate) fn script_search_paths(
     let rp = std::path::Path::new(repo_path);
     let mut pairs = vec![
         (wd.to_path_buf(), wd.join(run)),
+        (wd.to_path_buf(), wd.join(".conductor/scripts").join(run)),
         (rp.to_path_buf(), rp.join(run)),
+        (rp.to_path_buf(), rp.join(".conductor/scripts").join(run)),
     ];
     if let Some(skills) = skills_dir {
         pairs.push((skills.to_path_buf(), skills.join(run)));
@@ -61,6 +67,24 @@ pub fn resolve_script_path(
             if is_absolute {
                 return Some(candidate.clone());
             }
+            // Reject path traversal attempts.
+            if run.contains("..") {
+                continue;
+            }
+            // For paths under .conductor/ (the standard script location),
+            // allow symlinks that point outside the search root. This is
+            // intentional: .conductor/scripts/ entries are commonly symlinked
+            // to external sources (e.g., fsm-engine/scripts/). We skip
+            // canonicalization to avoid rejecting these valid symlinks.
+            // Check the candidate path (which includes the search prefix),
+            // not `run` (which may be a bare filename resolved via .conductor/scripts/).
+            let relative = candidate.strip_prefix(root).unwrap_or(candidate.as_path());
+            if relative.starts_with(".conductor") {
+                return Some(candidate.clone());
+            }
+            // For other relative paths (bare filenames in working_dir, repo,
+            // or skills), apply the strict canonicalize-based containment
+            // check to block symlink escapes.
             if path_is_within_dir(root, candidate) {
                 return Some(candidate.clone());
             }
@@ -190,8 +214,16 @@ mod tests {
             "should include working_dir path, got: {err}"
         );
         assert!(
+            err.contains("/tmp/wd/.conductor/scripts/missing.sh"),
+            "should include working_dir .conductor/scripts path, got: {err}"
+        );
+        assert!(
             err.contains("/tmp/repo/missing.sh"),
             "should include repo_path path, got: {err}"
+        );
+        assert!(
+            err.contains("/tmp/repo/.conductor/scripts/missing.sh"),
+            "should include repo_path .conductor/scripts path, got: {err}"
         );
         assert!(
             err.contains("~/.claude/skills/missing.sh"),
@@ -241,7 +273,9 @@ mod tests {
             candidates,
             vec![
                 std::path::PathBuf::from("/wd/run.sh"),
+                std::path::PathBuf::from("/wd/.conductor/scripts/run.sh"),
                 std::path::PathBuf::from("/repo/run.sh"),
+                std::path::PathBuf::from("/repo/.conductor/scripts/run.sh"),
             ]
         );
     }
@@ -255,7 +289,9 @@ mod tests {
             candidates,
             vec![
                 std::path::PathBuf::from("/wd/my-skill.sh"),
+                std::path::PathBuf::from("/wd/.conductor/scripts/my-skill.sh"),
                 std::path::PathBuf::from("/repo/my-skill.sh"),
+                std::path::PathBuf::from("/repo/.conductor/scripts/my-skill.sh"),
                 std::path::PathBuf::from("/home/user/.claude/skills/my-skill.sh"),
             ]
         );
@@ -268,9 +304,17 @@ mod tests {
         assert_eq!(pairs[0].1, std::path::PathBuf::from("/working/script.sh"));
         assert_eq!(
             pairs[1].1,
+            std::path::PathBuf::from("/working/.conductor/scripts/script.sh")
+        );
+        assert_eq!(
+            pairs[2].1,
             std::path::PathBuf::from("/repository/script.sh")
         );
-        assert_eq!(pairs[2].1, std::path::PathBuf::from("/skills/script.sh"));
+        assert_eq!(
+            pairs[3].1,
+            std::path::PathBuf::from("/repository/.conductor/scripts/script.sh")
+        );
+        assert_eq!(pairs[4].1, std::path::PathBuf::from("/skills/script.sh"));
     }
 
     #[test]
@@ -278,8 +322,10 @@ mod tests {
         let skills = std::path::Path::new("/skills");
         let pairs = script_search_paths("script.sh", "/working", "/repository", Some(skills));
         assert_eq!(pairs[0].0, std::path::PathBuf::from("/working"));
-        assert_eq!(pairs[1].0, std::path::PathBuf::from("/repository"));
-        assert_eq!(pairs[2].0, std::path::PathBuf::from("/skills"));
+        assert_eq!(pairs[1].0, std::path::PathBuf::from("/working"));
+        assert_eq!(pairs[2].0, std::path::PathBuf::from("/repository"));
+        assert_eq!(pairs[3].0, std::path::PathBuf::from("/repository"));
+        assert_eq!(pairs[4].0, std::path::PathBuf::from("/skills"));
     }
 
     #[test]
@@ -323,10 +369,27 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_script_path_in_conductor_scripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let scripts_dir = dir.path().join(".conductor").join("scripts");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+        let script = scripts_dir.join("doc-context-assembler.sh");
+        std::fs::write(&script, "#!/bin/sh\necho docs").unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+        let result =
+            resolve_script_path("doc-context-assembler.sh", "/nonexistent", repo_path, None);
+        assert!(
+            result.is_some(),
+            "bare script name should resolve via .conductor/scripts/"
+        );
+        assert_eq!(result.unwrap(), script);
+    }
+
+    #[test]
     fn test_script_search_paths_no_filesystem_access() {
         // Paths are returned even when files do not exist — pure construction
         let pairs = script_search_paths("nonexistent.sh", "/no/such/dir", "/also/missing", None);
-        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs.len(), 4);
         assert!(pairs[0].1.ends_with("nonexistent.sh"));
         assert!(pairs[1].1.ends_with("nonexistent.sh"));
     }

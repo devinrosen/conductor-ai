@@ -104,6 +104,8 @@ fn make_tickets(repos: &[Repo]) -> Vec<Ticket> {
             url: "https://github.com/user/my-app/issues/123".into(),
             synced_at: "2024-01-10T00:00:00Z".into(),
             raw_json: "{}".into(),
+            workflow: None,
+            agent_map: None,
         },
         Ticket {
             id: "01TKT0000000000000000000B1".into(),
@@ -119,6 +121,8 @@ fn make_tickets(repos: &[Repo]) -> Vec<Ticket> {
             url: "https://github.com/user/backend-api/issues/456".into(),
             synced_at: "2024-01-10T00:00:00Z".into(),
             raw_json: "{}".into(),
+            workflow: None,
+            agent_map: None,
         },
     ]
 }
@@ -464,6 +468,8 @@ fn snap_modal_ticket_info() {
             url: "https://github.com/user/my-app/issues/42".into(),
             synced_at: "2024-01-15T00:00:00Z".into(),
             raw_json: "{}".into(),
+            workflow: None,
+            agent_map: None,
         }),
     };
     insta::assert_snapshot!(render_to_string(&state));

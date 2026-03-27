@@ -296,31 +296,27 @@ pub fn conductor_dir() -> &'static PathBuf {
 
 /// Returns the path to the SQLite database.
 ///
-/// If the current working directory is inside a conductor worktree
-/// (`<workspace_root>/<repo>/<worktree>/…`), returns a worktree-local
-/// database at `<workspace_root>/<repo>/<worktree>/.conductor.db`.
-/// Otherwise returns the global `~/.conductor/conductor.db`.
+/// When the `CONDUCTOR_DB_PATH` environment variable is set to a non-empty
+/// value, uses that path directly. Otherwise returns the global
+/// `~/.conductor/conductor.db`.
+///
+/// The default global path ensures that repos, tickets, and workflow runs
+/// are accessible regardless of the current working directory (including
+/// from within worktrees where workflow script steps execute).
+///
+/// Use `CONDUCTOR_DB_PATH` for isolated migration testing against a local
+/// database with seed data, without affecting the production DB:
+///
+/// ```sh
+/// CONDUCTOR_DB_PATH=/tmp/test.db conductor tickets list
+/// ```
 pub fn db_path() -> PathBuf {
-    if let Some(wt_db) = worktree_db_path() {
-        return wt_db;
+    if let Ok(custom) = std::env::var("CONDUCTOR_DB_PATH") {
+        if !custom.is_empty() {
+            return PathBuf::from(custom);
+        }
     }
     conductor_dir().join("conductor.db")
-}
-
-/// Detect whether the CWD is inside a conductor worktree and, if so,
-/// return the path to the worktree-local database file.
-fn worktree_db_path() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let ws_root = default_workspace_root();
-    let relative = cwd.strip_prefix(&ws_root).ok()?;
-
-    // We need at least two components: <repo-slug>/<worktree-slug>
-    let mut components = relative.components();
-    let repo = components.next()?;
-    let worktree = components.next()?;
-
-    let wt_dir = ws_root.join(repo.as_os_str()).join(worktree.as_os_str());
-    Some(wt_dir.join(".conductor.db"))
 }
 
 /// Returns the path to the config file.
@@ -1127,5 +1123,32 @@ bot_name = "my-bot"
             "model should be cleared after saving with None"
         );
         assert_eq!(loaded2.defaults.default_branch.as_deref(), Some("develop"));
+    }
+
+    #[test]
+    fn test_db_path_env_override() {
+        let custom = "/tmp/conductor-test-db-path-override.db";
+        // Safety: no other test touches CONDUCTOR_DB_PATH
+        unsafe {
+            std::env::set_var("CONDUCTOR_DB_PATH", custom);
+        }
+        let result = db_path();
+        unsafe {
+            std::env::remove_var("CONDUCTOR_DB_PATH");
+        }
+        assert_eq!(result, PathBuf::from(custom));
+    }
+
+    #[test]
+    fn test_db_path_empty_env_falls_back_to_default() {
+        unsafe {
+            std::env::set_var("CONDUCTOR_DB_PATH", "");
+        }
+        let result = db_path();
+        unsafe {
+            std::env::remove_var("CONDUCTOR_DB_PATH");
+        }
+        // Should fall back to conductor_dir()/conductor.db
+        assert_eq!(result, conductor_dir().join("conductor.db"));
     }
 }

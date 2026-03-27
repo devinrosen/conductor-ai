@@ -156,6 +156,7 @@ pub fn orchestrate_run(
             model,
             &child_window,
             None,
+            &[],
         );
 
         if let Err(e) = spawn_result {

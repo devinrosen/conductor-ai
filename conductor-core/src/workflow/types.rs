@@ -242,7 +242,7 @@ impl Default for WorkflowExecConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(5),
-            step_timeout: Duration::from_secs(30 * 60),
+            step_timeout: Duration::from_secs(12 * 60 * 60),
             fail_fast: true,
             dry_run: false,
             shutdown: None,
@@ -357,6 +357,9 @@ pub struct WorkflowExecInput<'a> {
     /// Directory containing the conductor binary, injected into script step PATH.
     /// Resolved by the caller (binary crate) so the library doesn't call `current_exe()`.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// Additional plugin directories passed via `--plugin-dir` CLI flag.
+    /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
+    pub extra_plugin_dirs: Vec<String>,
 }
 
 /// Owned inputs for [`execute_workflow_standalone`], avoiding lifetime issues
@@ -384,6 +387,9 @@ pub struct WorkflowExecStandalone {
     pub triggered_by_hook: bool,
     /// Directory containing the conductor binary, injected into script step PATH.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// Additional plugin directories passed via `--plugin-dir` CLI flag.
+    /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
+    pub extra_plugin_dirs: Vec<String>,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues

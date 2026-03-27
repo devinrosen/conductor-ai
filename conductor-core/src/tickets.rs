@@ -25,6 +25,8 @@ pub struct Ticket {
     pub url: String,
     pub synced_at: String,
     pub raw_json: String,
+    pub workflow: Option<String>,
+    pub agent_map: Option<String>,
 }
 
 /// A normalized ticket from any source, ready to be upserted into the database.
@@ -229,11 +231,11 @@ impl<'a> TicketSyncer<'a> {
     pub fn list(&self, repo_id: Option<&str>) -> Result<Vec<Ticket>> {
         let query = match repo_id {
             Some(_) => {
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
                  FROM tickets WHERE repo_id = ?1 ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
             None => {
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
                  FROM tickets ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
         };
@@ -259,7 +261,7 @@ impl<'a> TicketSyncer<'a> {
         filter: &TicketFilter,
     ) -> Result<Vec<Ticket>> {
         let select = "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
-                      t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json \
+                      t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
                       FROM tickets t";
 
         let mut conditions: Vec<String> = Vec::new();
@@ -328,9 +330,27 @@ impl<'a> TicketSyncer<'a> {
     pub fn get_by_source_id(&self, repo_id: &str, source_id: &str) -> Result<Ticket> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
                  FROM tickets WHERE repo_id = ?1 AND source_id = ?2",
                 params![repo_id, source_id],
+                map_ticket_row,
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound {
+                    id: source_id.to_string(),
+                },
+                _ => ConductorError::Database(e),
+            })
+    }
+
+    /// Fetch a single ticket by source_id across all repos.
+    /// Returns the first match. Use when the caller does not know the repo_id.
+    pub fn get_by_source_id_any_repo(&self, source_id: &str) -> Result<Ticket> {
+        self.conn
+            .query_row(
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
+                 FROM tickets WHERE source_id = ?1 LIMIT 1",
+                params![source_id],
                 map_ticket_row,
             )
             .map_err(|e| match e {
@@ -345,7 +365,7 @@ impl<'a> TicketSyncer<'a> {
     pub fn get_by_id(&self, ticket_id: &str) -> Result<Ticket> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
                  FROM tickets WHERE id = ?1",
                 params![ticket_id],
                 map_ticket_row,
@@ -356,6 +376,56 @@ impl<'a> TicketSyncer<'a> {
                 },
                 _ => ConductorError::Database(e),
             })
+    }
+
+    /// Update the `state`, `workflow`, and/or `agent_map` columns on a ticket.
+    ///
+    /// For `workflow` and `agent_map`:
+    /// - `Some("")` clears the column to NULL.
+    /// - `Some(value)` sets the column to `value`.
+    /// - `None` leaves the column unchanged.
+    ///
+    /// For `state`:
+    /// - `Some(value)` sets the state (must be one of: open, in_progress, closed).
+    /// - `None` leaves the state unchanged.
+    /// - Empty string is NOT valid for state (state is NOT NULL).
+    pub fn update_ticket(
+        &self,
+        ticket_id: &str,
+        state: Option<&str>,
+        workflow: Option<&str>,
+        agent_map: Option<&str>,
+    ) -> Result<()> {
+        // Verify ticket exists
+        let _ = self.get_by_id(ticket_id)?;
+
+        if let Some(s) = state {
+            if !VALID_TICKET_STATES.contains(&s) {
+                return Err(crate::error::ConductorError::InvalidInput(format!(
+                    "Invalid ticket state '{}'. Must be one of: open, in_progress, closed.",
+                    s
+                )));
+            }
+            self.conn.execute(
+                "UPDATE tickets SET state = ?1 WHERE id = ?2",
+                rusqlite::params![s, ticket_id],
+            )?;
+        }
+        if let Some(w) = workflow {
+            let val: Option<&str> = if w.is_empty() { None } else { Some(w) };
+            self.conn.execute(
+                "UPDATE tickets SET workflow = ?1 WHERE id = ?2",
+                rusqlite::params![val, ticket_id],
+            )?;
+        }
+        if let Some(a) = agent_map {
+            let val: Option<&str> = if a.is_empty() { None } else { Some(a) };
+            self.conn.execute(
+                "UPDATE tickets SET agent_map = ?1 WHERE id = ?2",
+                rusqlite::params![val, ticket_id],
+            )?;
+        }
+        Ok(())
     }
 
     /// Delete a ticket by its `(repo_id, source_type, source_id)` key.
@@ -602,6 +672,8 @@ fn map_ticket_row(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
         url: row.get(10)?,
         synced_at: row.get(11)?,
         raw_json: row.get(12)?,
+        workflow: row.get(13)?,
+        agent_map: row.get(14)?,
     })
 }
 
@@ -1403,6 +1475,8 @@ mod tests {
             url: "https://github.com/org/repo/issues/42".to_string(),
             synced_at: "2026-01-01T00:00:00Z".to_string(),
             raw_json: "{}".to_string(),
+            workflow: None,
+            agent_map: None,
         };
 
         let prompt = build_agent_prompt(&ticket);
@@ -1429,6 +1503,8 @@ mod tests {
             url: String::new(),
             synced_at: "2026-01-01T00:00:00Z".to_string(),
             raw_json: "{}".to_string(),
+            workflow: None,
+            agent_map: None,
         };
 
         let prompt = build_agent_prompt(&ticket);

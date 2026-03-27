@@ -80,7 +80,17 @@ pub fn handle_worktree(
                                 Some(&wt.slug),
                                 model,
                             )?;
-                            run_agent(conn, &run.id, &wt.path, &prompt, None, model, None, None)?;
+                            run_agent(
+                                conn,
+                                &run.id,
+                                &wt.path,
+                                &prompt,
+                                None,
+                                model,
+                                None,
+                                None,
+                                &[],
+                            )?;
                         }
                         Err(e) => {
                             eprintln!("Warning: could not load ticket for agent prompt: {e}");

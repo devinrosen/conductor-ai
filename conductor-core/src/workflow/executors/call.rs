@@ -72,12 +72,21 @@ fn execute_call_with_schema(
         return Ok(());
     }
 
+    // Merge per-step plugin_dirs (from .wf) with repo-level extra_plugin_dirs.
+    let mut merged_plugin_dirs = state.extra_plugin_dirs.clone();
+    for dir in &node.plugin_dirs {
+        if !merged_plugin_dirs.contains(dir) {
+            merged_plugin_dirs.push(dir.clone());
+        }
+    }
+
     // Load agent definition
     let agent_def = crate::agent_config::load_agent(
         &state.working_dir,
         &state.repo_path,
         &AgentSpec::from(&node.agent),
         Some(&state.workflow_name),
+        &merged_plugin_dirs,
     )?;
     let agent_label = node.agent.label();
     let step_key = node.agent.step_key();
@@ -153,6 +162,7 @@ fn execute_call_with_schema(
             step_model,
             &child_window,
             effective_bot_name,
+            &merged_plugin_dirs,
         ) {
             tracing::warn!("Failed to spawn child: {e}");
             let _ = state

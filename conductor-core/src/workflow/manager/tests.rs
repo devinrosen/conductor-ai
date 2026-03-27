@@ -1183,6 +1183,7 @@ fn test_validate_single_surfaces_warnings_for_unknown_bot() {
         output: None,
         with: vec![],
         bot_name: Some("unknown-bot".to_string()),
+        plugin_dirs: vec![],
     }));
     // known_bots is empty, so "unknown-bot" should produce a warning
     let known_bots = std::collections::HashSet::new();
@@ -1218,6 +1219,7 @@ fn test_validate_single_reports_errors_for_missing_agent() {
         output: None,
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     }));
     let known_bots = std::collections::HashSet::new();
     let path = tmp.path().to_str().unwrap();
