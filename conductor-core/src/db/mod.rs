@@ -84,7 +84,7 @@ pub(crate) fn with_in_clause<T>(
 /// A free DB helper — intentionally not on `WorkflowManager` — so that the
 /// agent orphan reaper can call it without creating a mutual module dependency
 /// between the `agent` and `workflow` modules.
-pub fn active_workflow_parent_run_ids(conn: &Connection) -> Result<HashSet<String>> {
+pub(crate) fn active_workflow_parent_run_ids(conn: &Connection) -> Result<HashSet<String>> {
     let ids: Vec<String> = query_collect(
         conn,
         "SELECT parent_run_id FROM workflow_runs \
