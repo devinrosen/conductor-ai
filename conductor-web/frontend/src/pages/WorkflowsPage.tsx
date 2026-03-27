@@ -341,13 +341,13 @@ export function WorkflowsPage() {
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           placeholder="Search runs..."
-          className="flex-1 sm:max-w-xs px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="flex-1 sm:max-w-xs px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-gray-50 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
         {uniqueNames.length > 1 && (
           <select
             value={nameFilter}
             onChange={(e) => setNameFilter(e.target.value)}
-            className="px-2 py-1.5 text-sm rounded-md border border-gray-200 bg-white text-gray-700"
+            className="px-2 py-1.5 text-sm rounded-md border border-gray-200 bg-gray-50 text-gray-700"
           >
             <option value="">All workflows</option>
             {uniqueNames.map((n) => <option key={n} value={n}>{n}</option>)}

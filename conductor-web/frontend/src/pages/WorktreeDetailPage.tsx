@@ -61,6 +61,7 @@ export function WorktreeDetailPage() {
   });
   const [agentLoading, setAgentLoading] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [orchestrateModalOpen, setOrchestrateModalOpen] = useState(false);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
 
@@ -191,7 +192,7 @@ export function WorktreeDetailPage() {
       await api.startAgent(worktreeId, prompt, resumeSessionId);
       await refreshAgent();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to start agent");
+      setActionError(e instanceof Error ? e.message : "Failed to start agent");
     } finally {
       setAgentLoading(false);
     }
@@ -217,7 +218,7 @@ export function WorktreeDetailPage() {
       await api.orchestrateAgent(worktreeId, prompt);
       await refreshAgent();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to start orchestration");
+      setActionError(e instanceof Error ? e.message : "Failed to start orchestration");
     } finally {
       setAgentLoading(false);
     }
@@ -231,7 +232,7 @@ export function WorktreeDetailPage() {
       await api.stopAgent(worktreeId);
       await refreshAgent();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to stop agent");
+      setActionError(e instanceof Error ? e.message : "Failed to stop agent");
     } finally {
       setAgentLoading(false);
     }
@@ -250,7 +251,7 @@ export function WorktreeDetailPage() {
       setSelectedTicketId("");
       refetchWorktrees();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Link failed");
+      setActionError(err instanceof Error ? err.message : "Link failed");
     } finally {
       setLinkingTicket(false);
     }
@@ -261,7 +262,7 @@ export function WorktreeDetailPage() {
       await api.setWorktreeModel(worktreeId!, model);
       refetchWorktrees();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save model");
+      setActionError(err instanceof Error ? err.message : "Failed to save model");
     }
   }
 
@@ -288,6 +289,13 @@ export function WorktreeDetailPage() {
         { label: "Repo", href: `/repos/${repoId}` },
         { label: worktree.branch, current: true },
       ]} />
+
+      {actionError && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-600 ml-2">&times;</button>
+        </div>
+      )}
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>

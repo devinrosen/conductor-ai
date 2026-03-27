@@ -65,7 +65,9 @@ export function WorkflowRunDetailPage() {
   const [gateError, setGateError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [childSteps, setChildSteps] = useState<Map<string, WorkflowRunStep[]>>(new Map());
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  // Map from step name (e.g. "workflow:review-pr") to that child workflow's steps
+  const [childStepsByName, setChildStepsByName] = useState<Map<string, WorkflowRunStep[]>>(new Map());
   const [expandedChildren, setExpandedChildren] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
@@ -80,19 +82,19 @@ export function WorkflowRunDetailPage() {
       setSteps(sorted);
       setFetchError(null);
 
-      // Fetch child workflow steps for any step that spawned a sub-workflow
-      const childRunIds = sorted
-        .filter((s) => s.child_run_id)
-        .map((s) => s.child_run_id!);
-      if (childRunIds.length > 0) {
-        const childResults = await Promise.all(
-          childRunIds.map((id) => api.getWorkflowSteps(id).catch(() => [] as WorkflowRunStep[])),
+      // Fetch child workflow runs and their steps
+      const childRuns = await api.getChildWorkflowRuns(runId).catch(() => [] as WorkflowRun[]);
+      if (childRuns.length > 0) {
+        const childStepResults = await Promise.all(
+          childRuns.map((cr) => api.getWorkflowSteps(cr.id).catch(() => [] as WorkflowRunStep[])),
         );
         const map = new Map<string, WorkflowRunStep[]>();
-        for (let i = 0; i < childRunIds.length; i++) {
-          map.set(childRunIds[i], childResults[i].slice().sort((a, b) => a.position - b.position));
+        for (let i = 0; i < childRuns.length; i++) {
+          // Key by "workflow:<name>" to match the parent step's step_name
+          const key = `workflow:${childRuns[i].workflow_name}`;
+          map.set(key, childStepResults[i].slice().sort((a, b) => a.position - b.position));
         }
-        setChildSteps(map);
+        setChildStepsByName(map);
       }
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : "Failed to load workflow run");
@@ -136,6 +138,8 @@ export function WorkflowRunDetailPage() {
       setGateModalOpen(false);
       setGateStep(null);
       setGateFeedback("");
+      setStatusMessage("Gate approved — workflow resuming");
+      setTimeout(() => setStatusMessage(null), 4000);
       await fetchData();
     } catch (err) {
       setGateError(err instanceof Error ? err.message : "Failed to approve");
@@ -265,6 +269,11 @@ export function WorkflowRunDetailPage() {
           {cancelError}
         </div>
       )}
+      {statusMessage && (
+        <div className="rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">
+          {statusMessage}
+        </div>
+      )}
 
       <div className="text-sm text-gray-500">
         Started <TimeAgo date={run.started_at} />
@@ -284,7 +293,7 @@ export function WorkflowRunDetailPage() {
       )}
 
       {/* Steps + Detail panel split */}
-      <div className={`flex gap-4 ${selectedStepId ? "flex-col lg:flex-row" : ""}`}>
+      <div className="flex gap-4 flex-col lg:flex-row">
       <section className={selectedStepId ? "lg:w-1/2 lg:min-w-0" : "w-full"}>
         <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
           Steps
@@ -377,16 +386,16 @@ export function WorkflowRunDetailPage() {
                   )}
 
                   {/* Child workflow steps — expandable */}
-                  {step.child_run_id && childSteps.has(step.child_run_id) && (() => {
-                    const children = childSteps.get(step.child_run_id!)!;
+                  {childStepsByName.has(step.step_name) && (() => {
+                    const children = childStepsByName.get(step.step_name)!;
                     if (children.length === 0) return null;
-                    const isOpen = expandedChildren.has(step.child_run_id!);
+                    const isOpen = expandedChildren.has(step.step_name);
                     const childRoles = new Set(children.map((s) => s.role).filter(Boolean));
                     const showChildRole = childRoles.size > 1;
                     return (
                       <div className="ml-6 mt-2">
                         <button
-                          onClick={(e) => { e.stopPropagation(); toggleChildExpand(step.child_run_id!); }}
+                          onClick={(e) => { e.stopPropagation(); toggleChildExpand(step.step_name); }}
                           className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 py-0.5"
                         >
                           <svg
@@ -398,7 +407,7 @@ export function WorkflowRunDetailPage() {
                           <span>{children.length} steps</span>
                         </button>
                         {isOpen && (
-                          <div className="mt-1 space-y-0.5 border-l-2 border-gray-200 ml-1.5 pl-3">
+                          <div className="mt-1 space-y-0.5 border-l border-gray-600/30 ml-1.5 pl-3">
                             {children.map((child) => {
                               const childMs = child.ended_at && child.started_at
                                 ? new Date(child.ended_at).getTime() - new Date(child.started_at).getTime()

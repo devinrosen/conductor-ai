@@ -23,6 +23,7 @@ const statusToLight: Record<string, "green" | "amber" | "red"> = {
   closed: "red",
 };
 
+// Signal housing is always dark metal — intentionally hardcoded, not theme-variable
 const colors = {
   green: { on: "#39B54A", glow: "rgba(57, 181, 74, 0.4)" },
   amber: { on: "#FF9500", glow: "rgba(255, 149, 0, 0.4)" },

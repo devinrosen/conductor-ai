@@ -316,3 +316,12 @@ export interface Notification {
   created_at: string;
   read_at: string | null;
 }
+
+export interface ThemeUnlockStats {
+  repos_registered: number;
+  prs_merged: number;
+  workflow_streak: number;
+  max_workflow_steps: number;
+  max_parallel_agents: number;
+  usage_days: number;
+}

@@ -5,6 +5,7 @@ pub mod issue_sources;
 pub mod model_config;
 pub mod notifications;
 pub mod repos;
+pub mod stats;
 pub mod tickets;
 pub mod workflows;
 pub mod worktrees;
@@ -188,6 +189,10 @@ pub fn api_router() -> Router<AppState> {
             get(workflows::get_workflow_steps),
         )
         .route(
+            "/api/workflows/runs/{id}/children",
+            get(workflows::get_child_workflow_runs),
+        )
+        .route(
             "/api/workflows/runs/{id}/cancel",
             post(workflows::cancel_workflow),
         )
@@ -232,6 +237,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/notifications/{id}/read",
             post(notifications::mark_read),
         )
+        // Stats
+        .route("/api/stats/theme-unlocks", get(stats::theme_unlock_stats))
         // Model Config
         .route(
             "/api/config/model",

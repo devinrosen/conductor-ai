@@ -4,9 +4,9 @@
   "identifier": "ai.conductor.desktop",
   "build": {
     "frontendDist": "../conductor-web/frontend/dist",
-    "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "cd conductor-web/frontend && bun run dev",
-    "beforeBuildCommand": "cd conductor-web/frontend && bun run build"
+    "devUrl": "http://localhost:8675",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "bun --cwd conductor-web/frontend run build"
   },
   "app": {
     "windows": [

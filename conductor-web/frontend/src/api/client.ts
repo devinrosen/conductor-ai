@@ -25,6 +25,7 @@ import type {
   RunWorkflowRequest,
   FeedbackRequest,
   Notification,
+  ThemeUnlockStats,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -248,6 +249,8 @@ export const api = {
     request<WorkflowRun | null>(`/workflows/runs/${runId}`),
   getWorkflowSteps: (runId: string) =>
     request<WorkflowRunStep[]>(`/workflows/runs/${runId}/steps`),
+  getChildWorkflowRuns: (runId: string) =>
+    request<WorkflowRun[]>(`/workflows/runs/${runId}/children`),
   cancelWorkflow: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/cancel`, { method: "POST" }),
   approveGate: (runId: string, feedback?: string) =>
@@ -269,4 +272,8 @@ export const api = {
     request<void>(`/notifications/${id}/read`, { method: "POST" }),
   markAllNotificationsRead: () =>
     request<void>("/notifications/read-all", { method: "POST" }),
+
+  // Stats
+  getThemeUnlockStats: () =>
+    request<ThemeUnlockStats>("/stats/theme-unlocks"),
 };

@@ -87,9 +87,12 @@ export function WelcomeAboard({ onRepoCreated }: WelcomeAboardProps) {
           </div>
         </div>
 
-        <p className="text-xs text-gray-400">
-          You&rsquo;re the conductor. Keep the trains on time.
-        </p>
+        <a
+          href="/getting-started"
+          className="text-xs text-indigo-500 hover:text-indigo-700 hover:underline"
+        >
+          Read the full Getting Started guide →
+        </a>
       </div>
 
       <GitHubDiscoverModal

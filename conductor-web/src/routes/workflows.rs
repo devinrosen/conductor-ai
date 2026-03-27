@@ -483,6 +483,17 @@ pub async fn get_workflow_steps(
     Ok(Json(steps))
 }
 
+/// GET /api/workflows/runs/{id}/children
+pub async fn get_child_workflow_runs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<WorkflowRun>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let children = mgr.list_child_workflow_runs(&id)?;
+    Ok(Json(children))
+}
+
 /// POST /api/workflows/runs/{id}/cancel
 pub async fn cancel_workflow(
     State(state): State<AppState>,

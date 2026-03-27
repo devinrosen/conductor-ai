@@ -63,6 +63,17 @@ impl<'a> WorkflowManager<'a> {
             .optional()?)
     }
 
+    /// List child workflow runs for a given parent run, ordered by start time.
+    pub fn list_child_workflow_runs(&self, parent_run_id: &str) -> Result<Vec<WorkflowRun>> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {RUN_COLUMNS} FROM workflow_runs \
+             WHERE parent_workflow_run_id = ?1 \
+             ORDER BY started_at ASC"
+        ))?;
+        let rows = stmt.query_map(params![parent_run_id], row_to_workflow_run)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Resolve the execution context (working directory, repo path, and IDs) for
     /// a workflow that targets a prior workflow run.
     ///

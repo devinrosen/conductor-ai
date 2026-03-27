@@ -107,7 +107,29 @@
 }
 
 /* ── Focus ring ── */
-*:focus-visible { outline-color: #2B5EA7; }
+*:focus-visible { outline-color: var(--color-indigo-500, #2B5EA7); }
+
+/* WCAG 2.1 SC 2.3.3 — respect OS-level reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Railway track connector (dashed border that looks like railroad ties) ── */
+.track-connector {
+  border-left: 2px dashed var(--color-gray-600, #4A5568);
+  border-image: repeating-linear-gradient(
+    to bottom,
+    var(--color-gray-500, #4A5568) 0px,
+    var(--color-gray-500, #4A5568) 4px,
+    transparent 4px,
+    transparent 8px
+  ) 1;
+}
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

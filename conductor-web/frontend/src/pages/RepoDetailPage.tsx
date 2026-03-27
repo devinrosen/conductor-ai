@@ -83,7 +83,7 @@ export function RepoDetailPage() {
       setNewRepoAgentSession(false);
       refetchRepoAgentRuns();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to start agent");
+      setActionError(err instanceof Error ? err.message : "Failed to start agent");
     } finally {
       setStartingRepoAgent(false);
     }
@@ -94,7 +94,7 @@ export function RepoDetailPage() {
       await api.stopRepoAgent(repoId!, runId);
       refetchRepoAgentRuns();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to stop agent");
+      setActionError(err instanceof Error ? err.message : "Failed to stop agent");
     }
   }
 
@@ -142,6 +142,8 @@ export function RepoDetailPage() {
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [createWtOpen, setCreateWtOpen] = useState(false);
   const [editingModel, setEditingModel] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function handleSyncTickets() {
     setSyncing(true);
@@ -185,7 +187,7 @@ export function RepoDetailPage() {
       await api.setRepoModel(repoId!, model);
       refreshRepos();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save model");
+      setActionError(err instanceof Error ? err.message : "Failed to save model");
     }
   }
 
@@ -198,7 +200,7 @@ export function RepoDetailPage() {
       });
       refreshRepos();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update setting");
+      setActionError(err instanceof Error ? err.message : "Failed to update setting");
     } finally {
       setTogglingAgentIssues(false);
     }
@@ -252,11 +254,30 @@ export function RepoDetailPage() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div>
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <h2 className="text-xl font-bold text-gray-900">{repo.slug}</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold text-gray-900">{repo.slug}</h2>
+        <button
+          onClick={() => setSettingsOpen(!settingsOpen)}
+          className={`p-2 rounded-md transition-colors ${settingsOpen ? "bg-gray-100 text-gray-700" : "text-gray-400 hover:text-gray-600 hover:bg-gray-50"}`}
+          title="Settings"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M7.84 1.804A1 1 0 0 1 8.82 1h2.36a1 1 0 0 1 .98.804l.331 1.652a6.993 6.993 0 0 1 1.929 1.115l1.598-.54a1 1 0 0 1 1.186.447l1.18 2.044a1 1 0 0 1-.205 1.251l-1.267 1.113a7.047 7.047 0 0 1 0 2.228l1.267 1.113a1 1 0 0 1 .206 1.25l-1.18 2.045a1 1 0 0 1-1.187.447l-1.598-.54a6.993 6.993 0 0 1-1.929 1.115l-.33 1.652a1 1 0 0 1-.98.804H8.82a1 1 0 0 1-.98-.804l-.331-1.652a6.993 6.993 0 0 1-1.929-1.115l-1.598.54a1 1 0 0 1-1.186-.447l-1.18-2.044a1 1 0 0 1 .205-1.251l1.267-1.114a7.05 7.05 0 0 1 0-2.227L1.821 7.773a1 1 0 0 1-.206-1.25l1.18-2.045a1 1 0 0 1 1.187-.447l1.598.54A6.993 6.993 0 0 1 7.51 3.456l.33-1.652ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clipRule="evenodd" />
+          </svg>
+        </button>
+      </div>
+
+      {actionError && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-600 ml-2">&times;</button>
         </div>
-        <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
+      )}
+
+      {/* Settings (collapsible) */}
+      {settingsOpen && (
+      <div className="rounded-lg border border-gray-200 p-5 space-y-5">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
           <dt className="font-medium text-gray-500">Remote</dt>
           <dd className="truncate">{repo.remote_url}</dd>
           <dt className="font-medium text-gray-500">Local Path</dt>
@@ -309,7 +330,8 @@ export function RepoDetailPage() {
             </button>
           </dd>
         </dl>
-      </div>
+
+      <hr className="border-gray-200" />
 
       {/* Repo Agent */}
       <section>
@@ -434,6 +456,8 @@ export function RepoDetailPage() {
         </div>
       )}
 
+      <hr className="border-gray-200" />
+
       {/* Issue Sources */}
       <IssueSourcesSection
         repoId={repoId!}
@@ -442,6 +466,29 @@ export function RepoDetailPage() {
         loading={sourcesLoading}
         onChanged={refetchSources}
       />
+
+      <hr className="border-gray-200" />
+
+      {/* Danger Zone */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-red-400 mb-3">
+          Danger Zone
+        </h3>
+        <div className="rounded-lg border border-red-200 bg-white p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Delete this repo</p>
+            <p className="text-xs text-gray-500 mt-0.5">Unregister this repo from Conductor. This cannot be undone.</p>
+          </div>
+          <button
+            onClick={() => setUnregisterRepoConfirm(true)}
+            className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+          >
+            Delete Repo
+          </button>
+        </div>
+      </section>
+      </div>
+      )}
 
       {/* Worktrees */}
       <section>
@@ -503,31 +550,42 @@ export function RepoDetailPage() {
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
             Tickets
           </h3>
-          <div className="flex items-center gap-3">
-            {syncResult && (
-              <span className="text-xs text-gray-500">{syncResult}</span>
-            )}
+          {issueSources && issueSources.length > 0 ? (
+            <div className="flex items-center gap-3">
+              {syncResult && (
+                <span className="text-xs text-gray-500">{syncResult}</span>
+              )}
+              <button
+                onClick={() => setShowClosedTickets((v) => !v)}
+                className={`px-3 py-1.5 text-sm rounded-md border ${
+                  showClosedTickets
+                    ? "border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                    : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {showClosedTickets ? "Hiding open only" : "Show closed"}
+              </button>
+              <button
+                onClick={handleSyncTickets}
+                disabled={syncing}
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {syncing ? "Syncing..." : "Sync Tickets"}
+              </button>
+            </div>
+          ) : (
             <button
-              onClick={() => setShowClosedTickets((v) => !v)}
-              className={`px-3 py-1.5 text-sm rounded-md border ${
-                showClosedTickets
-                  ? "border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
-                  : "border-gray-300 text-gray-600 hover:bg-gray-50"
-              }`}
+              onClick={() => setSettingsOpen(true)}
+              className="px-3 py-1.5 text-sm rounded-md border border-indigo-300 text-indigo-600 hover:bg-indigo-50"
             >
-              {showClosedTickets ? "Hiding open only" : "Show closed"}
+              Configure Issue Sources
             </button>
-            <button
-              onClick={handleSyncTickets}
-              disabled={syncing}
-              className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-            >
-              {syncing ? "Syncing..." : "Sync Tickets"}
-            </button>
-          </div>
+          )}
         </div>
         {ticketsLoading ? (
           <LoadingSpinner />
+        ) : !issueSources || issueSources.length === 0 ? (
+          <EmptyState message="No issue sources configured. Add one in Settings to sync tickets." />
         ) : !tickets || tickets.length === 0 ? (
           <EmptyState message="No tickets issued. Sync your issues to start the journey." />
         ) : (
@@ -568,25 +626,6 @@ export function RepoDetailPage() {
             </div>
           </>
         )}
-      </section>
-
-      {/* Danger Zone */}
-      <section>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-red-400 mb-3">
-          Danger Zone
-        </h3>
-        <div className="rounded-lg border border-red-200 bg-white p-4 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-gray-900">Delete this repo</p>
-            <p className="text-xs text-gray-500 mt-0.5">Unregister this repo from Conductor. This cannot be undone.</p>
-          </div>
-          <button
-            onClick={() => setUnregisterRepoConfirm(true)}
-            className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
-          >
-            Delete Repo
-          </button>
-        </div>
       </section>
 
       {/* Dialogs */}

@@ -12,15 +12,15 @@ interface StepInfo {
 }
 
 const statusColor: Record<string, string> = {
-  completed: "#39B54A",
-  running: "#2B5EA7",
-  waiting: "#FF9500",
-  failed: "#D73020",
-  skipped: "#4A5568",
-  pending: "#4A5568",
+  completed: "var(--color-green-500, #39B54A)",
+  running: "var(--color-indigo-500, #2B5EA7)",
+  waiting: "var(--color-amber-500, #FF9500)",
+  failed: "var(--color-red-500, #D73020)",
+  skipped: "var(--color-gray-500, #4A5568)",
+  pending: "var(--color-gray-500, #4A5568)",
 };
 
-const trackColor = "#232D42";
+const trackColor = "var(--color-gray-700, #232D42)";
 
 /** Strip common prefixes like "workflow:" from step names for display */
 function displayName(name: string): string {

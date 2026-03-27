@@ -10,6 +10,7 @@ import { WorkflowRunDetailPage } from "./pages/WorkflowRunDetailPage";
 import { WorkflowDefDetailPage } from "./pages/WorkflowDefDetailPage";
 import { TicketsPage } from "./pages/TicketsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { GettingStartedPage } from "./pages/GettingStartedPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 const router = createBrowserRouter([
@@ -34,6 +35,7 @@ const router = createBrowserRouter([
         element: <WorkflowDefDetailPage />,
       },
       { path: "settings", element: <SettingsPage /> },
+      { path: "getting-started", element: <GettingStartedPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],
   },

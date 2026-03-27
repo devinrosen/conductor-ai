@@ -1,9 +1,16 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { WorkflowRun, WorkflowRunStep, Repo } from "../../api/types";
+import { api } from "../../api/client";
 import { StatusPulseBadge, PULSE_STATUSES } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { formatDuration, liveElapsedMs } from "../../utils/agentStats";
+
+// Same palette as Sidebar RepoIndicator — keeps repo colors consistent
+const REPO_COLORS = [
+  "#2B5EA7", "#39B54A", "#FF9500", "#D73020", "#CD853F",
+  "#00B5AD", "#9B0056", "#6CBE45", "#B36305", "#0098D4",
+];
 
 interface WorktreeCtx {
   repoId: string;
@@ -44,49 +51,48 @@ function parseTargetLabel(label: string): ParsedTarget {
 
 // --- Icons ---
 
-function RepoIcon() {
+function RepoIcon({ color }: { color: string }) {
   return (
-    <svg className="w-4 h-4 text-gray-400" viewBox="0 0 16 16" fill="currentColor">
+    <svg className="w-4 h-4 shrink-0" style={{ color }} viewBox="0 0 16 16" fill="currentColor">
       <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z" />
     </svg>
   );
 }
 
-function BranchIcon() {
+function BranchIcon({ color }: { color?: string }) {
   return (
-    <svg className="w-4 h-4 text-gray-400" viewBox="0 0 16 16" fill="currentColor">
+    <svg className="w-4 h-4 shrink-0" style={{ color: color ?? "currentColor" }} viewBox="0 0 16 16" fill="currentColor">
       <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z" />
     </svg>
   );
 }
 
-function WorkflowIcon() {
+function WorkflowIcon({ color }: { color?: string }) {
   return (
-    <svg className="w-3.5 h-3.5 text-gray-400" viewBox="0 0 16 16" fill="currentColor">
+    <svg className="w-3.5 h-3.5 shrink-0" style={{ color: color ?? "currentColor" }} viewBox="0 0 16 16" fill="currentColor">
       <path d="M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25V13H5a2.5 2.5 0 0 1-2.5-2.5V7H1.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9.5a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z" />
     </svg>
   );
 }
 
-/** Status icon — checkmark, X, or spinning gear */
 function StatusIcon({ status }: { status: string }) {
   if (status === "completed") {
     return (
-      <svg className="w-4 h-4 text-green-500" viewBox="0 0 16 16" fill="currentColor">
+      <svg className="w-4 h-4 text-green-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
         <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
       </svg>
     );
   }
   if (status === "failed" || status === "cancelled") {
     return (
-      <svg className="w-4 h-4 text-red-500" viewBox="0 0 16 16" fill="currentColor">
+      <svg className="w-4 h-4 text-red-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
         <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
       </svg>
     );
   }
   if (status === "running" || status === "waiting" || status === "pending") {
     return (
-      <span className="relative flex w-4 h-4">
+      <span className="relative flex w-4 h-4 shrink-0">
         <span className="absolute inset-0.5 rounded-full bg-amber-400/30 animate-ping" style={{ animationDuration: "2s" }} />
         <span className="relative inline-flex w-4 h-4 items-center justify-center">
           <span className="w-2 h-2 rounded-full bg-amber-500" />
@@ -94,12 +100,14 @@ function StatusIcon({ status }: { status: string }) {
       </span>
     );
   }
-  // skipped or unknown
-  return (
-    <svg className="w-4 h-4 text-gray-400" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z" />
-    </svg>
-  );
+  if (status === "skipped") {
+    return (
+      <svg className="w-4 h-4 text-gray-400 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M1.5 4.5a.75.75 0 0 1 1.28-.53l4.72 4.72 4.72-4.72a.75.75 0 1 1 1.06 1.06l-5.25 5.25a.75.75 0 0 1-1.06 0L1.72 5.03a.75.75 0 0 1-.22-.53Z" />
+      </svg>
+    );
+  }
+  return <span className="w-4 h-4 rounded-full border-2 border-gray-300 shrink-0" />;
 }
 
 function Chevron({ open }: { open: boolean }) {
@@ -148,7 +156,6 @@ function runDurationMs(run: WorkflowRun): number | null {
   return null;
 }
 
-/** Run row — uses status icons instead of badge pills */
 const RunRow = memo(function RunRow({
   run,
   ctxMap,
@@ -203,13 +210,110 @@ const RunRow = memo(function RunRow({
   );
 });
 
-/** Collapsible child workflows — vertical list, execution order */
-function ChildRuns({ children, ctxMap, toggle, isOpen, onCancel }: {
+/** A single child workflow run with lazy-loaded expandable steps */
+function ChildRunWithSteps({ run, ctxMap, onCancel }: {
+  run: WorkflowRun;
+  ctxMap: Map<string, WorktreeCtx>;
+  onCancel?: (runId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [steps, setSteps] = useState<WorkflowRunStep[] | null>(null);
+  const [stepError, setStepError] = useState(false);
+
+  useEffect(() => {
+    if (!expanded || steps !== null) return;
+    setStepError(false);
+    api.getWorkflowSteps(run.id)
+      .then((data) => setSteps(data.slice().sort((a, b) => a.position - b.position)))
+      .catch(() => setStepError(true));
+  }, [expanded, steps, run.id]);
+
+  const isActive = run.status === "running" || run.status === "waiting";
+  const ms = runDurationMs(run);
+  const ctx = run.worktree_id ? ctxMap.get(run.worktree_id) : undefined;
+
+  return (
+    <div className="ml-6">
+      <div
+        className="flex items-center justify-between gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50/50 rounded transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <Chevron open={expanded} />
+          <StatusIcon status={run.status} />
+          {ctx ? (
+            <Link
+              to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
+              className="text-xs truncate hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {run.workflow_name}
+            </Link>
+          ) : (
+            <span className="text-xs truncate">{run.workflow_name}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0 text-xs text-gray-400">
+          {ms != null && (
+            <span className="font-mono tabular-nums">{formatDuration(ms)}</span>
+          )}
+          {isActive && onCancel && (
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onCancel(run.id); }}
+              className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+      {expanded && (
+        <div className="ml-8 border-l border-gray-600/30 pl-3 mb-1">
+          {stepError ? (
+            <p className="text-xs text-red-400 py-1">
+              Failed to load steps —{" "}
+              <button onClick={() => { setStepError(false); setSteps(null); }} className="underline hover:text-red-600">retry</button>
+            </p>
+          ) : steps === null ? (
+            <p className="text-xs text-gray-400 py-1">Loading steps...</p>
+          ) : steps.length === 0 ? (
+            <p className="text-xs text-gray-400 py-1">No steps</p>
+          ) : (
+            steps.map((step) => {
+              const stepMs = step.ended_at && step.started_at
+                ? new Date(step.ended_at).getTime() - new Date(step.started_at).getTime()
+                : (step.status === "running" || step.status === "waiting") && step.started_at
+                  ? liveElapsedMs(step.started_at) : null;
+              return (
+                <div key={step.id} className="flex items-center justify-between gap-2 py-0.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <StatusIcon status={step.status} />
+                    <span className="text-xs">{step.step_name}</span>
+                    {step.role && step.role !== "workflow" && (
+                      <span className="text-[10px] px-1 py-0.5 bg-gray-100 text-gray-500 rounded">{step.role}</span>
+                    )}
+                  </div>
+                  {stepMs != null && (
+                    <span className="text-xs text-gray-400 font-mono tabular-nums shrink-0">{formatDuration(stepMs)}</span>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Collapsible child workflows with lazy step loading */
+function ChildRuns({ children, ctxMap, toggle, isOpen, onCancel, color }: {
   children: WorkflowRun[];
   ctxMap: Map<string, WorktreeCtx>;
   toggle: () => void;
   isOpen: boolean;
   onCancel?: (runId: string) => void;
+  color?: string;
 }) {
   if (children.length === 0) return null;
 
@@ -224,7 +328,7 @@ function ChildRuns({ children, ctxMap, toggle, isOpen, onCancel }: {
         className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-500 hover:text-gray-700 rounded hover:bg-gray-50/50 transition-colors"
       >
         <Chevron open={isOpen} />
-        <WorkflowIcon />
+        <WorkflowIcon color={color} />
         <span>
           {children.length} sub-workflow{children.length !== 1 ? "s" : ""}
         </span>
@@ -235,13 +339,12 @@ function ChildRuns({ children, ctxMap, toggle, isOpen, onCancel }: {
         )}
       </button>
       {isOpen && (
-        <div className="ml-5 mt-0.5">
+        <div className="mt-0.5">
           {children.map((child) => (
-            <RunRow
+            <ChildRunWithSteps
               key={child.id}
               run={child}
               ctxMap={ctxMap}
-              indent={false}
               onCancel={onCancel}
             />
           ))}
@@ -286,6 +389,12 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
   }, [runs]);
 
   const repoById = useMemo(() => new Map(repos.map((r) => [r.id, r])), [repos]);
+  // Map repo slugs to their sidebar color (same index order as repos array)
+  const repoColorMap = useMemo(() => {
+    const m = new Map<string, string>();
+    repos.forEach((r, i) => m.set(r.slug, REPO_COLORS[i % REPO_COLORS.length]));
+    return m;
+  }, [repos]);
 
   const { repoSlugs, repoGroups } = useMemo(() => {
     const repoSlugs: string[] = [];
@@ -356,6 +465,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
         const repoKey = `repo:${repoSlug}`;
         const isRepoOpen = !collapsed.has(repoKey);
         const targetGroups = repoGroups.get(repoSlug)!;
+        const repoColor = repoColorMap.get(repoSlug) ?? REPO_COLORS[0];
 
         return (
           <div key={repoSlug} className="mb-1">
@@ -364,7 +474,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
               className="w-full flex items-center gap-1.5 py-1.5 px-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 rounded transition-colors"
             >
               <Chevron open={isRepoOpen} />
-              <RepoIcon />
+              <RepoIcon color={repoColor} />
               <span>{repoSlug}</span>
             </button>
 
@@ -375,13 +485,13 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
                 const targetRuns = targetGroups.get(targetKey)!;
 
                 return (
-                  <div key={targetKey} className={`ml-4 mb-1 ${isTargetOpen ? "rounded-lg border border-gray-200/50 p-2" : ""}`}>
+                  <div key={targetKey} className={`ml-4 mb-1 ${isTargetOpen ? "rounded-lg p-2 border-l-2" : ""}`} style={isTargetOpen ? { borderLeftColor: repoColor } : undefined}>
                     <button
                       onClick={() => toggle(targetGroupKey)}
                       className="w-full flex items-center gap-1.5 py-1 px-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
                     >
                       <Chevron open={isTargetOpen} />
-                      <BranchIcon />
+                      <BranchIcon color={repoColor} />
                       <span>{targetKey}</span>
                     </button>
 
@@ -400,6 +510,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
                             isOpen={isChildrenOpen}
                             toggle={() => toggle(childKey)}
                             onCancel={onCancel}
+                            color={repoColor}
                           />
                         </div>
                         );
