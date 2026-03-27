@@ -963,10 +963,7 @@ fn test_stepref_gate_missing_dot_format_error() {
     let result = execute_gate(&mut state, &node, 0);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("must be in 'step.field' format"),
-        "got: {err}"
-    );
+    assert!(err.contains("must be in 'step.field' format"), "got: {err}");
 }
 
 #[test]
