@@ -729,6 +729,39 @@ fn test_parse_pr_view_output_non_default_base() {
 }
 
 #[test]
+fn test_parse_pr_view_output_fork_headrepository_owner_null() {
+    // Regression test for #1597: when headRepository.owner is null (some fork
+    // PRs), the old jq expression `.headRepository.owner.login + "/" + .headRepository.name`
+    // produced "/repo" (empty owner before the slash).  The fix uses
+    // `.headRepositoryOwner.login` which is always populated for fork PRs.
+    //
+    // This test confirms that the broken output "/repo" (what the old jq would
+    // emit) yields an empty fork_owner string, which validate_remote_name then
+    // rejects with "fork owner name is empty".  A regression back to
+    // .headRepository.owner.login would produce this broken output in production
+    // and the downstream path would surface this specific error rather than
+    // silently building a remote URL with an empty owner.
+    let broken_output = "feat/my-feature|main|/repo|true";
+    let (_head, _base, head_repo, is_fork) =
+        git_helpers::parse_pr_view_output(broken_output).unwrap();
+    assert_eq!(head_repo, "/repo");
+    assert!(is_fork);
+
+    // Replicate what fetch_pr_branch does to extract the fork owner.
+    let fork_owner = head_repo.split('/').next().unwrap_or(&head_repo);
+    assert_eq!(
+        fork_owner, "",
+        "broken jq output yields an empty fork owner"
+    );
+
+    let err = git_helpers::validate_remote_name(fork_owner).unwrap_err();
+    assert!(
+        err.to_string().contains("fork owner name is empty"),
+        "expected 'fork owner name is empty', got: {err}"
+    );
+}
+
+#[test]
 fn test_parse_pr_view_output_bad_format() {
     let raw = "incomplete|data";
     let result = git_helpers::parse_pr_view_output(raw);
