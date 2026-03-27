@@ -195,6 +195,7 @@ export interface WorkflowDefSummary {
   trigger: string;
   inputs: { name: string; required: boolean; input_type: string; default: string | null }[];
   node_count: number;
+  group: string | null;
 }
 
 export interface WorkflowRun {

@@ -6,6 +6,39 @@ import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { RunWorkflowModal } from "./RunWorkflowModal";
 
+function WorkflowCard({
+  def,
+  onRun,
+}: {
+  def: WorkflowDefSummary;
+  onRun: (def: WorkflowDefSummary) => void;
+}) {
+  return (
+    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="font-medium text-gray-200">{def.name}</h4>
+        <span className="text-xs px-2 py-0.5 bg-gray-700 rounded text-gray-400">
+          {def.trigger}
+        </span>
+      </div>
+      <p className="text-sm text-gray-400 mb-3">{def.description || "No description"}</p>
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-gray-500">
+          {def.node_count} step{def.node_count !== 1 ? "s" : ""}
+          {def.inputs.length > 0 &&
+            ` · ${def.inputs.length} input${def.inputs.length !== 1 ? "s" : ""}`}
+        </span>
+        <button
+          onClick={() => onRun(def)}
+          className="px-3 py-1 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded"
+        >
+          Run
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface WorkflowPanelProps {
   repoId: string;
   worktreeId: string;
@@ -61,38 +94,69 @@ export function WorkflowPanel({ repoId, worktreeId, ticketId }: WorkflowPanelPro
           <p className="text-gray-500 text-sm">
             No workflow definitions found. Add .wf files to .conductor/workflows/
           </p>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {defs.map((def) => (
-              <div
-                key={def.name}
-                className="bg-gray-800 rounded-lg p-4 border border-gray-700"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="font-medium text-gray-200">{def.name}</h4>
-                  <span className="text-xs px-2 py-0.5 bg-gray-700 rounded text-gray-400">
-                    {def.trigger}
-                  </span>
-                </div>
-                <p className="text-sm text-gray-400 mb-3">
-                  {def.description || "No description"}
-                </p>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">
-                    {def.node_count} step{def.node_count !== 1 ? "s" : ""}
-                    {def.inputs.length > 0 && ` · ${def.inputs.length} input${def.inputs.length !== 1 ? "s" : ""}`}
-                  </span>
-                  <button
-                    onClick={() => setRunModalDef(def)}
-                    className="px-3 py-1 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded"
-                  >
-                    Run
-                  </button>
-                </div>
+        ) : (() => {
+          const hasGroups = defs.some((d) => d.group !== null);
+          if (!hasGroups) {
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {defs.map((def) => (
+                  <WorkflowCard key={def.name} def={def} onRun={setRunModalDef} />
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            );
+          }
+          const groupMap = new Map<string, WorkflowDefSummary[]>();
+          const ungrouped: WorkflowDefSummary[] = [];
+          for (const def of defs) {
+            if (def.group === null) {
+              ungrouped.push(def);
+            } else {
+              const existing = groupMap.get(def.group);
+              if (existing) {
+                existing.push(def);
+              } else {
+                groupMap.set(def.group, [def]);
+              }
+            }
+          }
+          const sortedGroups = Array.from(groupMap.entries()).sort(([a], [b]) =>
+            a.localeCompare(b)
+          );
+          return (
+            <div className="space-y-5">
+              {sortedGroups.map(([groupName, groupDefs]) => (
+                <div key={groupName}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">
+                      {groupName}
+                    </h4>
+                    <div className="flex-1 h-px bg-gray-700" />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {groupDefs.map((def) => (
+                      <WorkflowCard key={def.name} def={def} onRun={setRunModalDef} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {ungrouped.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">
+                      Other
+                    </h4>
+                    <div className="flex-1 h-px bg-gray-700" />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {ungrouped.map((def) => (
+                      <WorkflowCard key={def.name} def={def} onRun={setRunModalDef} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Run Modal */}

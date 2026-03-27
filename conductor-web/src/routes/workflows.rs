@@ -101,6 +101,7 @@ pub struct WorkflowDefSummary {
     pub trigger: String,
     pub inputs: Vec<InputDeclSummary>,
     pub node_count: usize,
+    pub group: Option<String>,
 }
 
 impl From<&WorkflowDef> for WorkflowDefSummary {
@@ -111,6 +112,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
             node_count: def.body.len(),
+            group: def.group.clone(),
         }
     }
 }
