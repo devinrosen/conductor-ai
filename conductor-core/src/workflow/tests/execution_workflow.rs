@@ -43,6 +43,7 @@ fn test_cannot_start_workflow_run_when_active() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -91,6 +92,7 @@ fn test_can_start_workflow_run_after_completion() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -141,6 +143,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input);
     assert!(
@@ -185,6 +188,7 @@ fn test_run_id_notify_slot_is_populated() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -237,6 +241,7 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input).expect(
@@ -278,6 +283,7 @@ fn test_execute_workflow_injects_repo_variables() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -332,6 +338,7 @@ fn test_execute_workflow_injects_ticket_variables() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -390,6 +397,7 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -435,6 +443,7 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -471,6 +480,7 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -512,6 +522,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result1 = execute_workflow(&input1);
     assert!(
@@ -547,6 +558,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result2 = execute_workflow(&input2);
     assert!(
@@ -593,6 +605,7 @@ fn test_execute_workflow_iteration_persisted() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input);
@@ -670,6 +683,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -747,6 +761,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -828,6 +843,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
@@ -883,6 +899,7 @@ fn test_execute_workflow_injects_feature_variables() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -935,6 +952,7 @@ fn test_execute_workflow_invalid_feature_id_returns_error() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -984,6 +1002,7 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = crate::workflow::engine::execute_workflow(&input).unwrap();
@@ -1032,6 +1051,7 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input).unwrap();

@@ -1,6 +1,5 @@
 use axum::extract::State;
 use axum::Json;
-use rusqlite::params;
 use serde::Serialize;
 
 use crate::error::ApiError;

@@ -506,8 +506,7 @@ mod tests {
     use super::*;
 
     fn setup_db() -> Connection {
-        let conn = crate::test_helpers::setup_db();
-        conn
+        crate::test_helpers::setup_db()
     }
 
     #[test]

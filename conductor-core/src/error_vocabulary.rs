@@ -323,7 +323,7 @@ mod tests {
             ConductorError::Git(SubprocessFailure::from_message("git", "err".to_string())),
             ConductorError::GhCli(SubprocessFailure::from_message("gh", "err".to_string())),
             ConductorError::Config("x".to_string()),
-            ConductorError::Io(std::io::Error::new(std::io::ErrorKind::Other, "x")),
+            ConductorError::Io(std::io::Error::other("x")),
             ConductorError::TicketSync("x".to_string()),
             ConductorError::IssueSourceAlreadyExists {
                 repo_slug: "x".to_string(),
