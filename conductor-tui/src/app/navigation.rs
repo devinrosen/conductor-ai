@@ -131,12 +131,11 @@ impl App {
                 self.state.selected_repo_id = None;
             }
             View::WorktreeDetail => {
-                if self.state.selected_repo_id.is_some() {
-                    self.state.view = View::RepoDetail;
-                } else {
-                    self.state.view = View::Dashboard;
-                }
+                self.state.view = self.state.previous_view.take().unwrap_or(View::RepoDetail);
                 self.state.selected_worktree_id = None;
+                if self.state.view == View::Dashboard {
+                    self.state.selected_repo_id = None;
+                }
             }
             View::WorkflowRunDetail => {
                 self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
@@ -827,10 +826,26 @@ impl App {
                     Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {
                         if let Some(wt) = self.state.data.worktrees.get(wt_idx).cloned() {
                             self.state.selected_worktree_id = Some(wt.id.clone());
-                            self.state.selected_repo_id = None;
+                            self.state.selected_repo_id = Some(wt.repo_id.clone());
+                            self.state.previous_view = Some(View::Dashboard);
+                            self.state.detail_prs = Vec::new();
+                            self.state.pr_last_fetched_at = None;
                             self.state.view = View::WorktreeDetail;
                             *self.state.agent_list_state.borrow_mut() = ListState::default();
                             self.reload_agent_events();
+                            if let Some(repo) =
+                                self.state.data.repos.iter().find(|r| r.id == wt.repo_id)
+                            {
+                                let remote_url = repo.remote_url.clone();
+                                let repo_id = wt.repo_id.clone();
+                                if let Some(ref tx) = self.bg_tx {
+                                    crate::background::spawn_pr_fetch_once(
+                                        tx.clone(),
+                                        remote_url,
+                                        repo_id,
+                                    );
+                                }
+                            }
                         }
                     }
                     None => {}
@@ -845,6 +860,7 @@ impl App {
                     if let Some(wt) = self.state.detail_worktrees.get(self.state.detail_wt_index) {
                         let wt_id = wt.id.clone();
                         self.state.selected_worktree_id = Some(wt_id);
+                        self.state.previous_view = Some(View::RepoDetail);
                         self.state.view = View::WorktreeDetail;
                         *self.state.agent_list_state.borrow_mut() = ListState::default();
                         self.reload_agent_events();
@@ -1144,11 +1160,24 @@ mod tests {
     fn go_back_worktree_detail_without_repo_goes_to_dashboard() {
         let mut app = make_test_app();
         app.state.view = View::WorktreeDetail;
-        app.state.selected_repo_id = None;
+        app.state.previous_view = Some(View::Dashboard);
         app.state.selected_worktree_id = Some("w1".into());
         app.go_back();
         assert_eq!(app.state.view, View::Dashboard);
         assert!(app.state.selected_worktree_id.is_none());
+    }
+
+    #[test]
+    fn go_back_worktree_detail_from_dashboard_clears_repo_id() {
+        let mut app = make_test_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.previous_view = Some(View::Dashboard);
+        app.state.selected_repo_id = Some("r1".into());
+        app.state.selected_worktree_id = Some("w1".into());
+        app.go_back();
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_worktree_id.is_none());
+        assert!(app.state.selected_repo_id.is_none());
     }
 
     #[test]
@@ -1436,6 +1465,8 @@ mod tests {
         app.select();
         assert_eq!(app.state.view, View::WorktreeDetail);
         assert_eq!(app.state.selected_worktree_id.as_deref(), Some("w1"));
+        assert_eq!(app.state.selected_repo_id.as_deref(), Some("r1"));
+        assert_eq!(app.state.previous_view, Some(View::Dashboard));
     }
 
     #[test]
