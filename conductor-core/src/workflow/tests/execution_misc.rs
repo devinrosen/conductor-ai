@@ -1,5 +1,5 @@
 use super::*;
-use crate::workflow_dsl::{CallWorkflowNode, GateType, WorkflowNode};
+use crate::workflow_dsl::{CallWorkflowNode, Condition, GateType, IfNode, WorkflowNode};
 
 #[test]
 fn test_metadata_fields_basic() {
@@ -557,5 +557,34 @@ on_complete = "post-complete"
         hook_run.parent_workflow_run_id.as_deref(),
         Some(result.workflow_run_id.as_str()),
         "hook run should link to parent"
+    );
+}
+
+/// Regression test: execute_nodes must stop immediately when the workflow run
+/// has been externally cancelled (e.g. via the TUI or web cancel button).
+/// Before the fix, a cancelled run would continue executing until it finished
+/// naturally, leaving it stuck in `pending` or `running` status.
+#[test]
+fn test_execute_nodes_stops_on_external_cancel() {
+    let conn = setup_db();
+    let config: &'static Config = Box::leak(Box::new(Config::default()));
+    let mut state = make_loop_test_state(&conn, config);
+
+    // Mark the run as cancelled before any nodes execute.
+    WorkflowManager::new(&conn)
+        .update_workflow_status(&state.workflow_run_id, WorkflowRunStatus::Cancelled, None)
+        .unwrap();
+
+    // Any node will do — cancellation is detected before execute_single_node is called.
+    let nodes = vec![WorkflowNode::If(IfNode {
+        condition: Condition::BoolInput { input: "x".into() },
+        body: vec![],
+    })];
+
+    let result = execute_nodes(&mut state, &nodes);
+    assert!(result.is_err(), "cancelled run should return Err");
+    assert!(
+        result.unwrap_err().to_string().contains("cancelled"),
+        "error message should mention cancellation"
     );
 }
