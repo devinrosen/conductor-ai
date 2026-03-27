@@ -1000,6 +1000,18 @@ pub(super) fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNod
         if !state.all_succeeded && state.exec_config.fail_fast {
             break;
         }
+        // Check if the run has been externally cancelled before each step.
+        if let Ok(Some(run)) = state.wf_mgr.get_workflow_run(&state.workflow_run_id) {
+            if matches!(run.status, WorkflowRunStatus::Cancelled) {
+                tracing::info!(
+                    "Workflow run {} cancelled externally, stopping execution",
+                    state.workflow_run_id
+                );
+                return Err(ConductorError::Workflow(
+                    "Workflow run cancelled".to_string(),
+                ));
+            }
+        }
         execute_single_node(state, node, 0)?;
     }
     Ok(())

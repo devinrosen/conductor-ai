@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 
 use crate::db::query_collect;
@@ -58,11 +59,27 @@ impl<'a> AgentManager<'a> {
             row_to_agent_run,
         )?;
 
+        // Fetch parent_run_ids of active (non-terminal) workflow runs.
+        // Workflow parent runs are created with tmux_window = None by design
+        // and must not be reaped while their workflow is still active.
+        let active_wf_parent_ids: HashSet<String> = query_collect(
+            self.conn,
+            "SELECT parent_run_id FROM workflow_runs WHERE status IN ('pending', 'running', 'waiting')",
+            [],
+            |row| row.get(0),
+        )?
+        .into_iter()
+        .collect();
+
         // Fetch all live tmux window names once (avoids N+1 subprocess spawns).
         let live_windows = list_live_tmux_windows();
 
         let mut reaped = 0;
         for run in &active_runs {
+            // Skip runs that are parent runs of active workflows.
+            if active_wf_parent_ids.contains(&run.id) {
+                continue;
+            }
             if let Some(ref name) = run.tmux_window {
                 if live_windows.contains(name.as_str()) {
                     continue;

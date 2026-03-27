@@ -22,7 +22,10 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use anyhow::{Context, Result};
 
-use conductor_core::workflow::{execute_workflow_standalone, WorkflowExecStandalone};
+use conductor_core::agent::AgentManager;
+use conductor_core::workflow::{
+    execute_workflow_standalone, WorkflowExecStandalone, WorkflowManager, WorkflowRunStatus,
+};
 
 /// Fork the current process. The child detaches and runs the workflow in the
 /// background. The parent blocks until the child signals the run ID (or an
@@ -117,6 +120,19 @@ fn child_main(mut params: WorkflowExecStandalone, read_fd: i32, write_fd: i32) -
         libc::close(read_fd);
     }
 
+    // Close all inherited file descriptors except stdin (0), stdout (1),
+    // stderr (2), and the pipe write end (write_fd). This prevents the
+    // child from inheriting the parent's SQLite WAL/SHM FDs, which would
+    // cause coordination issues when the child opens its own DB connection.
+    // SAFETY: close() on an invalid FD is harmless (returns EBADF, ignored).
+    unsafe {
+        for fd in 3..1024 {
+            if fd != write_fd {
+                libc::close(fd);
+            }
+        }
+    }
+
     // Set up the run_id_notify mechanism. When execute_workflow creates the run
     // record, it writes the ID into the Mutex and signals the Condvar -- all
     // synchronously within execute_workflow before any steps execute. We use a
@@ -134,11 +150,19 @@ fn child_main(mut params: WorkflowExecStandalone, read_fd: i32, write_fd: i32) -
     // Spawn the workflow execution in a background thread. WorkflowExecStandalone
     // is Send (all owned types + Arc), and execute_workflow_standalone opens its
     // own DB connection.
-    let exec_handle = std::thread::spawn(move || {
-        if let Err(e) = execute_workflow_standalone(&params) {
-            *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
-            // Wake the main thread so it can surface the error.
-            notify_pair_bg.1.notify_one();
+    //
+    // Returns Ok(()) on success or Err(error_string) so the main thread can
+    // detect post-notification failures and clean up the DB.
+    let exec_handle = std::thread::spawn(move || -> std::result::Result<(), String> {
+        match execute_workflow_standalone(&params) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg.clone());
+                // Wake the main thread so it can surface the error.
+                notify_pair_bg.1.notify_one();
+                Err(msg)
+            }
         }
     });
 
@@ -193,9 +217,71 @@ fn child_main(mut params: WorkflowExecStandalone, read_fd: i32, write_fd: i32) -
     redirect_stdio_to_devnull();
 
     // Wait for the workflow execution thread to finish.
-    let _ = exec_handle.join();
+    let exec_result = exec_handle.join();
+
+    // Check if the exec thread returned an error (or panicked) AFTER we
+    // already sent the run ID to the parent. In that case the workflow_run
+    // row exists in the DB but may still be in pending/running status. We
+    // must mark it (and the parent agent run) as failed.
+    let exec_failed = match &exec_result {
+        Ok(Ok(())) => false,
+        Ok(Err(_)) => true,   // exec thread returned an error
+        Err(_) => true,        // exec thread panicked
+    };
+
+    if exec_failed {
+        let error_msg = match &exec_result {
+            Ok(Err(e)) => e.clone(),
+            Err(_) => "Background workflow thread panicked".to_string(),
+            _ => unreachable!(),
+        };
+
+        // Extract the run ID from the notify pair (it was set before notification).
+        let run_id = notify_pair
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+
+        if let Some(run_id) = run_id {
+            // Best-effort cleanup: open a fresh DB connection and mark the
+            // workflow run + parent agent run as failed. Errors here are
+            // silently ignored -- we cannot do anything useful with them in
+            // a detached background process.
+            let _ = cleanup_failed_run(&run_id, &error_msg);
+        }
+
+        std::process::exit(1);
+    }
 
     std::process::exit(0);
+}
+
+/// Best-effort cleanup when a background workflow fails after the run ID
+/// was already sent to the parent process.
+///
+/// Opens a fresh DB connection (the exec thread's connection may be in an
+/// inconsistent state) and marks both the workflow run and its parent agent
+/// run as failed.
+fn cleanup_failed_run(workflow_run_id: &str, error_msg: &str) -> std::result::Result<(), ()> {
+    let db_path = conductor_core::config::db_path();
+    let conn = conductor_core::db::open_database(&db_path).map_err(|_| ())?;
+
+    // Mark the workflow run as failed.
+    let wf_mgr = WorkflowManager::new(&conn);
+    let _ = wf_mgr.update_workflow_status(
+        workflow_run_id,
+        WorkflowRunStatus::Failed,
+        Some(error_msg),
+    );
+
+    // Look up the parent agent run ID and mark it as failed too.
+    if let Ok(Some(run)) = wf_mgr.get_workflow_run(workflow_run_id) {
+        let agent_mgr = AgentManager::new(&conn);
+        let _ = agent_mgr.update_run_failed(&run.parent_run_id, error_msg);
+    }
+
+    Ok(())
 }
 
 /// Redirect stdin, stdout, and stderr to `/dev/null`.
