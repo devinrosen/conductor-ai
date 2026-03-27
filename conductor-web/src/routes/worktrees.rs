@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
-use conductor_core::worktree::{Worktree, WorktreeManager};
+use conductor_core::worktree::{Worktree, WorktreeManager, WorktreeWithStatus};
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -28,6 +28,18 @@ pub struct WorktreeListQuery {
     /// When true, include merged/abandoned worktrees. Defaults to false (completed worktrees hidden).
     #[serde(default)]
     pub show_completed: bool,
+}
+
+pub async fn list_all_worktrees(
+    State(state): State<AppState>,
+    Query(params): Query<WorktreeListQuery>,
+) -> Result<Json<Vec<WorktreeWithStatus>>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let mgr = WorktreeManager::new(&db, &config);
+    let active_only = !params.show_completed;
+    let worktrees = mgr.list_all_with_status(active_only)?;
+    Ok(Json(worktrees))
 }
 
 pub async fn list_worktrees(

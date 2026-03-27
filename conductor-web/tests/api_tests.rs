@@ -300,6 +300,101 @@ async fn test_list_worktrees_show_completed_false_explicit_hides_completed() {
     assert_eq!(body[0]["slug"], "feat-active");
 }
 
+// --- Flat GET /api/worktrees tests ---
+
+fn seed_two_repos_with_worktrees(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('ra', 'repo-a', '/tmp/a', 'https://github.com/test/a.git', '/tmp/ws-a', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('rb', 'repo-b', '/tmp/b', 'https://github.com/test/b.git', '/tmp/ws-b', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('wa1', 'ra', 'feat-one', 'feat/one', '/tmp/ws-a/feat-one', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('wb1', 'rb', 'feat-two', 'feat/two', '/tmp/ws-b/feat-two', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, completed_at) \
+         VALUES ('wb2', 'rb', 'feat-done', 'feat/done', '/tmp/ws-b/feat-done', 'merged', '2024-01-01T00:00:00Z', '2024-02-01T00:00:00Z')",
+        [],
+    ).unwrap();
+}
+
+#[tokio::test]
+async fn test_flat_list_worktrees_empty() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/worktrees")).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_flat_list_worktrees_with_data() {
+    let base = spawn_test_server_with_setup(seed_two_repos_with_worktrees).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/worktrees"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    // Only active worktrees by default (2 active, 1 merged)
+    assert_eq!(body.len(), 2);
+    let slugs: Vec<&str> = body.iter().map(|w| w["slug"].as_str().unwrap()).collect();
+    assert!(slugs.contains(&"feat-one"));
+    assert!(slugs.contains(&"feat-two"));
+    // repo_ids should differ — worktrees come from two different repos
+    let repo_ids: std::collections::HashSet<&str> = body
+        .iter()
+        .map(|w| w["repo_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(repo_ids.len(), 2);
+}
+
+#[tokio::test]
+async fn test_flat_list_worktrees_default_hides_completed() {
+    let base = spawn_test_server_with_setup(seed_worktrees_with_completed).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/worktrees"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0]["slug"], "feat-active");
+}
+
+#[tokio::test]
+async fn test_flat_list_worktrees_show_completed_true() {
+    let base = spawn_test_server_with_setup(seed_worktrees_with_completed).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/worktrees?show_completed=true"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 3);
+}
+
 #[tokio::test]
 async fn test_list_tickets_empty() {
     let base = spawn_test_server().await;
@@ -1047,6 +1142,67 @@ async fn test_list_run_feedback_empty() {
     assert!(body.is_empty());
 }
 
+// ── Restart agent route tests ────────────────────────────────────────
+
+fn seed_failed_agent_run(conn: &Connection) {
+    seed_repo_and_worktree(conn);
+    let mgr = AgentManager::new(conn);
+    let run = mgr
+        .create_run(Some("w1"), "test prompt", Some("feat-test"), None)
+        .unwrap();
+    mgr.update_run_failed(&run.id, "crashed").unwrap();
+}
+
+#[tokio::test]
+async fn test_restart_agent_unknown_run() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/w1/agent/runs/nonexistent-id/restart"
+        ))
+        .send()
+        .await
+        .unwrap();
+    // Unknown run_id → error from restart_run
+    assert!(resp.status().is_client_error() || resp.status().is_server_error());
+}
+
+#[tokio::test]
+async fn test_restart_agent_rejects_active_run() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let client = reqwest::Client::new();
+    let run_id = fetch_run_id(&base).await;
+
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/w1/agent/runs/{run_id}/restart"
+        ))
+        .send()
+        .await
+        .unwrap();
+    // Active run → cannot restart
+    assert!(resp.status().is_client_error() || resp.status().is_server_error());
+}
+
+#[tokio::test]
+async fn test_restart_agent_wrong_worktree_id() {
+    let base = spawn_test_server_with_setup(seed_failed_agent_run).await;
+    let client = reqwest::Client::new();
+    let run_id = fetch_run_id(&base).await;
+
+    // Use a different worktree_id than the one the run belongs to
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/wrong-wt/agent/runs/{run_id}/restart"
+        ))
+        .send()
+        .await
+        .unwrap();
+    // IDOR guard → error
+    assert!(resp.status().is_client_error() || resp.status().is_server_error());
+}
+
 // ── Notification route tests ─────────────────────────────────────────
 
 #[tokio::test]
@@ -1280,4 +1436,143 @@ async fn test_list_features_nonexistent_repo() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
+}
+
+// ── Stop agent (worktree-scoped) tests ──────────────────────────────
+
+#[tokio::test]
+async fn test_stop_agent_happy_path() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let client = reqwest::Client::new();
+    let run_id = fetch_run_id(&base).await;
+
+    // Verify the run is active before stopping
+    let runs: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/worktrees/w1/agent-runs"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(runs[0]["status"], "running");
+
+    // Stop the agent
+    let resp = client
+        .post(format!("{base}/api/worktrees/w1/agent/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "stop_agent should succeed for active run"
+    );
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["id"], run_id);
+    assert_eq!(
+        body["status"], "cancelled",
+        "run should be marked cancelled"
+    );
+}
+
+#[tokio::test]
+async fn test_stop_agent_already_stopped() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let client = reqwest::Client::new();
+
+    // First stop succeeds
+    let resp = client
+        .post(format!("{base}/api/worktrees/w1/agent/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Second stop should fail (not running)
+    let resp = client
+        .post(format!("{base}/api/worktrees/w1/agent/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error() || resp.status().is_server_error(),
+        "stopping an already-cancelled run should error"
+    );
+}
+
+// ── Stop repo agent helpers ─────────────────────────────────────────
+
+/// Fetch the first repo ID and its first agent run ID from the API.
+async fn fetch_repo_and_run_id(base: &str) -> (String, String) {
+    let repos: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/repos"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repo_id = repos[0]["id"].as_str().unwrap().to_string();
+
+    let runs: Vec<serde_json::Value> =
+        reqwest::get(format!("{base}/api/repos/{repo_id}/agent/runs"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let run_id = runs[0]["id"].as_str().unwrap().to_string();
+    (repo_id, run_id)
+}
+
+// ── Stop repo agent happy-path tests ────────────────────────────────
+
+#[tokio::test]
+async fn test_stop_repo_agent_happy_path() {
+    let base = spawn_test_server_with_setup(seed_repo_agent_run).await;
+    let client = reqwest::Client::new();
+    let (repo_id, run_id) = fetch_repo_and_run_id(&base).await;
+
+    // Stop the repo agent
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/agent/{run_id}/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "stop_repo_agent should succeed for active run"
+    );
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["id"], run_id);
+    assert_eq!(
+        body["status"], "cancelled",
+        "run should be marked cancelled"
+    );
+}
+
+#[tokio::test]
+async fn test_stop_repo_agent_already_stopped() {
+    let base = spawn_test_server_with_setup(seed_repo_agent_run).await;
+    let client = reqwest::Client::new();
+    let (repo_id, run_id) = fetch_repo_and_run_id(&base).await;
+
+    // First stop succeeds
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/agent/{run_id}/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Second stop should fail
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/agent/{run_id}/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error() || resp.status().is_server_error(),
+        "stopping an already-cancelled run should error"
+    );
 }

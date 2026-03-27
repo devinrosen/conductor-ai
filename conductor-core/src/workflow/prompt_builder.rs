@@ -38,7 +38,9 @@ pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&
     vars.insert("prior_context", prior_context);
     let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
     vars.insert("prior_contexts", prior_contexts_json);
-    vars.insert("gate_feedback", state.last_gate_feedback.clone().unwrap_or_default());
+    if let Some(ref gf) = state.last_gate_feedback {
+        vars.insert("gate_feedback", gf.clone());
+    }
     // prior_output: raw JSON from the last step's structured output (if any)
     if let Some(last_output) = state
         .contexts

@@ -15,6 +15,7 @@ import { KeyboardShortcutHelp } from "../shared/KeyboardShortcutHelp";
 import { NotificationBell } from "../notifications/NotificationBell";
 import { ToastContainer } from "../notifications/ToastContainer";
 import { useToast } from "../../hooks/useToast";
+import { CommandPalette } from "../shared/CommandPalette";
 
 interface ReposContextValue {
   repos: Repo[];
@@ -36,6 +37,7 @@ export function AppShell() {
   const { data: repos, loading, error, refetch } = useApi(() => api.listRepos(), []);
   const [helpOpen, setHelpOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const { toasts, addToast, dismissToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -57,6 +59,18 @@ export function AppShell() {
     { key: "g t", handler: goToTickets, description: "Go to Tickets" },
     { key: "g s", handler: goToSettings, description: "Go to Settings" },
   ]);
+
+  // Cmd+K / Ctrl+K for command palette (separate from useHotkeys which ignores meta)
+  useEffect(() => {
+    const handleCmdK = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+    };
+    document.addEventListener("keydown", handleCmdK);
+    return () => document.removeEventListener("keydown", handleCmdK);
+  }, []);
 
   const handlers = useMemo(() => {
     const refetchRepos = (_data: ConductorEventData) => refetch();
@@ -87,14 +101,16 @@ export function AppShell() {
       <div className="flex h-screen items-center justify-center bg-gray-50">
         <div className="max-w-md text-center p-8">
           <h1 className="text-xl font-semibold text-gray-900 mb-2">
-            Unable to connect
+            Signal lost
           </h1>
-          <p className="text-gray-600 mb-4">{error}</p>
+          <p className="text-gray-600 mb-4">
+            Couldn&rsquo;t reach the station. {error}
+          </p>
           <button
             onClick={refetch}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
-            Retry
+            Try again
           </button>
         </div>
       </div>
@@ -130,13 +146,14 @@ export function AppShell() {
               <NotificationBell />
             </div>
           </div>
-          <div className="p-4 md:p-6 pb-20 md:pb-6">
+          <div className="p-3 md:p-4 pb-20 md:pb-4">
             <Outlet />
           </div>
         </main>
         <BottomTabBar />
       </div>
       <KeyboardShortcutHelp open={helpOpen} onClose={closeHelp} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </ReposContext.Provider>
   );

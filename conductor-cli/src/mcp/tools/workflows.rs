@@ -328,6 +328,96 @@ pub(super) fn tool_run_workflow(
     ))
 }
 
+pub(super) fn tool_list_templates(
+    _db_path: &Path,
+    _args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::workflow_template::list_embedded_templates;
+
+    let templates = list_embedded_templates();
+    if templates.is_empty() {
+        return tool_ok("No workflow templates available.");
+    }
+
+    let mut out = String::new();
+    for t in &templates {
+        let targets = if t.metadata.target_types.is_empty() {
+            "any".to_string()
+        } else {
+            t.metadata.target_types.join(", ")
+        };
+        out.push_str(&format!(
+            "name: {}\nversion: {}\ndescription: {}\ntargets: {}\n",
+            t.metadata.name, t.metadata.version, t.metadata.description, targets
+        ));
+        if !t.metadata.hints.is_empty() {
+            out.push_str("hints:\n");
+            for h in &t.metadata.hints {
+                out.push_str(&format!("  - {h}\n"));
+            }
+        }
+        out.push('\n');
+    }
+    tool_ok(out)
+}
+
+pub(super) fn tool_instantiate_template(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::workflow_template::{
+        build_instantiation_prompt, collect_existing_workflow_names, get_embedded_template,
+    };
+    use conductor_core::worktree::WorktreeManager;
+
+    let template_name = require_arg!(args, "template");
+    let repo_slug = require_arg!(args, "repo");
+    let worktree_slug = get_arg(args, "worktree");
+
+    let tmpl = match get_embedded_template(template_name) {
+        Some(t) => t,
+        None => {
+            return tool_err(format!(
+                "Template '{template_name}' not found. Use conductor_list_templates to see available templates."
+            ))
+        }
+    };
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    let working_dir = if let Some(wt_slug) = worktree_slug {
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
+            Ok(wt) => wt.path,
+            Err(e) => return tool_err(e),
+        }
+    } else {
+        repo.local_path.clone()
+    };
+
+    let existing_names = collect_existing_workflow_names(&working_dir, &repo.local_path);
+
+    let prompt_result = build_instantiation_prompt(&tmpl, &working_dir, &existing_names);
+
+    tool_ok(format!(
+        "template: {} v{}\nsuggested_filename: {}\nprompt_length: {}\n\n--- Agent Prompt ---\n\n{}",
+        tmpl.metadata.name,
+        tmpl.metadata.version,
+        prompt_result.suggested_filename,
+        prompt_result.prompt.len(),
+        prompt_result.prompt,
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -844,5 +934,65 @@ workflow w {
         assert!(text.contains("missing agent 'deployer'"), "got: {text}");
         assert!(text.contains("Warnings"), "got: {text}");
         assert!(text.contains("unknown bot name 'foo-bot'"), "got: {text}");
+    }
+
+    // ── Template tool tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_tool_list_templates_returns_content() {
+        let (_f, db) = make_test_db();
+        let result = tool_list_templates(&db, &empty_args());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // Should either list templates or report none available
+        assert!(
+            text.contains("name:") || text.contains("No workflow templates"),
+            "unexpected output: {text}"
+        );
+    }
+
+    #[test]
+    fn test_tool_instantiate_template_unknown_template() {
+        let (_f, db) = make_test_db();
+        let args = args_with("template", "nonexistent-xyz");
+        let mut args = args;
+        args.insert("repo".to_string(), Value::String("my-repo".to_string()));
+        let result = tool_instantiate_template(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("not found"),
+            "expected 'not found'; got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_tool_instantiate_template_unknown_repo() {
+        let (_f, db) = make_test_db();
+        // Use the first embedded template name if available, else a placeholder
+        let template_name = {
+            use conductor_core::workflow_template::list_embedded_templates;
+            let ts = list_embedded_templates();
+            if ts.is_empty() {
+                "any-template".to_string()
+            } else {
+                ts[0].metadata.name.clone()
+            }
+        };
+        let mut args = serde_json::Map::new();
+        args.insert("template".to_string(), Value::String(template_name));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        let result = tool_instantiate_template(&db, &args);
+        assert_eq!(result.is_error, Some(true));
     }
 }

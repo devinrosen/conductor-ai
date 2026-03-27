@@ -263,6 +263,33 @@ fn query_if_enabled<T>(enabled: bool, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
     }
 }
 
+/// Build fallback `AgentRunEvent`s by parsing log files for runs that lack DB event records.
+/// Called on the background thread so file I/O never blocks the TUI main thread.
+fn build_fallback_events(
+    runs: &[conductor_core::agent::AgentRun],
+) -> Vec<conductor_core::agent::AgentRunEvent> {
+    use conductor_core::agent::{parse_agent_log, AgentRunEvent};
+
+    let mut fallback = Vec::new();
+    for run in runs {
+        if let Some(ref path) = run.log_file {
+            let events = parse_agent_log(path);
+            for ev in events {
+                fallback.push(AgentRunEvent {
+                    id: conductor_core::new_id(),
+                    run_id: run.id.clone(),
+                    kind: ev.kind,
+                    summary: ev.summary,
+                    started_at: run.started_at.clone(),
+                    ended_at: None,
+                    metadata: None,
+                });
+            }
+        }
+    }
+    fallback
+}
+
 /// Poll all data from the database. Returns a DataRefreshed action, the loaded config, and the
 /// open DB connection so the caller can reuse it (e.g. for notification claims) without opening
 /// a second connection on the same tick.
@@ -322,6 +349,36 @@ pub fn poll_data() -> Option<PollResult> {
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
+
+    // Fetch all worktree-scoped agent events in a single batch query; fall back to log-file
+    // parsing for worktrees whose runs pre-date DB-backed event storage.
+    let mut worktree_agent_events = agent_mgr.list_all_events_by_worktree().unwrap_or_default();
+    for wt_id in latest_agent_runs.keys() {
+        if worktree_agent_events
+            .get(wt_id)
+            .is_none_or(|v| v.is_empty())
+        {
+            let mut runs = agent_mgr.list_for_worktree(wt_id).unwrap_or_default();
+            runs.reverse();
+            let fallback = build_fallback_events(&runs);
+            if !fallback.is_empty() {
+                worktree_agent_events.insert(wt_id.clone(), fallback);
+            }
+        }
+    }
+
+    // Same pattern for repo-scoped events.
+    let mut repo_agent_events = agent_mgr.list_all_repo_events_by_repo().unwrap_or_default();
+    for repo_id in latest_repo_agent_runs.keys() {
+        if repo_agent_events.get(repo_id).is_none_or(|v| v.is_empty()) {
+            let mut runs = agent_mgr.list_repo_scoped(repo_id).unwrap_or_default();
+            runs.reverse();
+            let fallback = build_fallback_events(&runs);
+            if !fallback.is_empty() {
+                repo_agent_events.insert(repo_id.clone(), fallback);
+            }
+        }
+    }
 
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     let wf_mgr = WorkflowManager::new(&conn);
@@ -434,6 +491,8 @@ pub fn poll_data() -> Option<PollResult> {
         features_by_repo,
         unread_notification_count,
         latest_repo_agent_runs,
+        worktree_agent_events,
+        repo_agent_events,
     }));
     Some(PollResult {
         action,
@@ -716,8 +775,21 @@ fn poll_workflow_data(
         (None, None, Vec::new())
     } else if let Some(wt_path) = worktree_path {
         // Worktree-scoped: load defs from this worktree's filesystem path.
-        let (defs, warnings) =
+        let (mut defs, warnings) =
             WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default();
+        defs.sort_by(|a, b| {
+            let ka = (
+                if a.group.is_none() { 1u8 } else { 0u8 },
+                a.group.as_deref().unwrap_or(""),
+                a.name.as_str(),
+            );
+            let kb = (
+                if b.group.is_none() { 1u8 } else { 0u8 },
+                b.group.as_deref().unwrap_or(""),
+                b.name.as_str(),
+            );
+            ka.cmp(&kb)
+        });
         (Some(defs), Some(Vec::new()), warnings)
     } else if let Some(rid) = repo_id {
         // Repo-scoped: scan all active worktrees of this repo, deduplicate by name.
@@ -752,6 +824,19 @@ fn poll_workflow_data(
                 all_defs.extend(repo_defs);
             }
         }
+        all_defs.sort_by(|a, b| {
+            let ka = (
+                if a.group.is_none() { 1u8 } else { 0u8 },
+                a.group.as_deref().unwrap_or(""),
+                a.name.as_str(),
+            );
+            let kb = (
+                if b.group.is_none() { 1u8 } else { 0u8 },
+                b.group.as_deref().unwrap_or(""),
+                b.name.as_str(),
+            );
+            ka.cmp(&kb)
+        });
         // def_slugs empty: all defs belong to the same repo, no slug labels needed.
         (Some(all_defs), Some(Vec::new()), all_warnings)
     } else {
@@ -803,8 +888,18 @@ fn poll_workflow_data(
                     tagged.push((repo_id.clone(), repo_slug.clone(), d));
                 }
             }
-            // Sort by repo_id so defs are contiguous per repo for grouping in the renderer.
-            tagged.sort_by(|a, b| a.0.cmp(&b.0));
+            // Sort by repo_id, then group (named first, ungrouped last), then name.
+            tagged.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| {
+                        let ga = a.2.group.as_deref().unwrap_or("");
+                        let gb = b.2.group.as_deref().unwrap_or("");
+                        let ka: (u8, &str) = (if a.2.group.is_none() { 1 } else { 0 }, ga);
+                        let kb: (u8, &str) = (if b.2.group.is_none() { 1 } else { 0 }, gb);
+                        ka.cmp(&kb)
+                    })
+                    .then_with(|| a.2.name.cmp(&b.2.name))
+            });
             for (_, slug, d) in tagged {
                 all_slugs.push(slug);
                 all_defs.push(d);

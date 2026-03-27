@@ -7,8 +7,11 @@ import type { AgentRun, Ticket } from "../api/types";
 import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
+import { TicketCard } from "../components/tickets/TicketCard";
+import { RepoAgentRunCard } from "../components/agents/RepoAgentRunCard";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
+import { StatusBadge } from "../components/shared/StatusBadge";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -244,12 +247,6 @@ export function RepoDetailPage() {
       <div>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h2 className="text-xl font-bold text-gray-900">{repo.slug}</h2>
-          <button
-            onClick={() => setUnregisterRepoConfirm(true)}
-            className="sm:self-auto px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
-          >
-            Delete Repo
-          </button>
         </div>
         <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
           <dt className="font-medium text-gray-500">Remote</dt>
@@ -340,37 +337,37 @@ export function RepoDetailPage() {
           </div>
         )}
         {repoAgentRuns && repoAgentRuns.length > 0 && !activeRepoAgent && (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
-                <tr>
-                  <th className="px-4 py-2">Prompt</th>
-                  <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2">Cost</th>
-                  <th className="px-4 py-2">Started</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {repoAgentRuns.slice(0, 5).map((run) => (
-                  <tr key={run.id}>
-                    <td className="px-4 py-2 truncate max-w-xs">{run.prompt.slice(0, 80)}</td>
-                    <td className="px-4 py-2">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        run.status === "completed" ? "bg-green-100 text-green-800" :
-                        run.status === "failed" ? "bg-red-100 text-red-800" :
-                        run.status === "cancelled" ? "bg-gray-100 text-gray-800" :
-                        "bg-yellow-100 text-yellow-800"
-                      }`}>
-                        {run.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-gray-500">{run.cost_usd != null ? `$${run.cost_usd.toFixed(2)}` : "-"}</td>
-                    <td className="px-4 py-2 text-gray-500">{new Date(run.started_at).toLocaleString()}</td>
+          <>
+            <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                  <tr>
+                    <th className="px-4 py-2">Prompt</th>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2">Cost</th>
+                    <th className="px-4 py-2">Started</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {repoAgentRuns.slice(0, 5).map((run) => (
+                    <tr key={run.id}>
+                      <td className="px-4 py-2 truncate max-w-xs">{run.prompt.slice(0, 80)}</td>
+                      <td className="px-4 py-2">
+                        <StatusBadge status={run.status} />
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">{run.cost_usd != null ? `$${run.cost_usd.toFixed(2)}` : "-"}</td>
+                      <td className="px-4 py-2 text-gray-500">{new Date(run.started_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="md:hidden space-y-2">
+              {repoAgentRuns.slice(0, 5).map((run) => (
+                <RepoAgentRunCard key={run.id} run={run} />
+              ))}
+            </div>
+          </>
         )}
       </section>
 
@@ -461,7 +458,7 @@ export function RepoDetailPage() {
         {wtLoading ? (
           <LoadingSpinner />
         ) : !worktrees || worktrees.length === 0 ? (
-          <EmptyState message="No worktrees yet" />
+          <EmptyState message="No platforms active. Create a worktree to lay some track." />
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[520px]">
@@ -524,33 +521,64 @@ export function RepoDetailPage() {
         {ticketsLoading ? (
           <LoadingSpinner />
         ) : !tickets || tickets.length === 0 ? (
-          <EmptyState message="No tickets synced yet" />
+          <EmptyState message="No tickets issued. Sync your issues to start the journey." />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
-            <table className="w-full text-sm min-w-[480px]">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
-                <tr>
-                  <th className="px-4 py-2">#</th>
-                  <th className="px-4 py-2">Title</th>
-                  <th className="px-4 py-2">State</th>
-                  <th className="px-4 py-2">Labels</th>
-                  <th className="px-4 py-2">Assignee</th>
-                  <th className="px-4 py-2">Agent</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {tickets.map((t) => (
-                  <TicketRow
-                    key={t.id}
-                    ticket={t}
-                    agentTotals={ticketTotals?.[t.id]}
-                    onClick={setSelectedTicket}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+              <table className="w-full text-sm min-w-[480px]">
+                <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                  <tr>
+                    <th className="px-4 py-2">#</th>
+                    <th className="px-4 py-2">Title</th>
+                    <th className="px-4 py-2">State</th>
+                    <th className="px-4 py-2">Labels</th>
+                    <th className="px-4 py-2">Assignee</th>
+                    <th className="px-4 py-2">Agent</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {tickets.map((t) => (
+                    <TicketRow
+                      key={t.id}
+                      ticket={t}
+                      agentTotals={ticketTotals?.[t.id]}
+                      onClick={setSelectedTicket}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="md:hidden space-y-2">
+              {tickets.map((t) => (
+                <TicketCard
+                  key={t.id}
+                  ticket={t}
+                  agentTotals={ticketTotals?.[t.id]}
+                  onClick={setSelectedTicket}
+                />
+              ))}
+            </div>
+          </>
         )}
+      </section>
+
+      {/* Danger Zone */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-red-400 mb-3">
+          Danger Zone
+        </h3>
+        <div className="rounded-lg border border-red-200 bg-white p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Delete this repo</p>
+            <p className="text-xs text-gray-500 mt-0.5">Unregister this repo from Conductor. This cannot be undone.</p>
+          </div>
+          <button
+            onClick={() => setUnregisterRepoConfirm(true)}
+            className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+          >
+            Delete Repo
+          </button>
+        </div>
       </section>
 
       {/* Dialogs */}

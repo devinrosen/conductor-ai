@@ -102,6 +102,14 @@ if [ "${FINDING_COUNT}" -gt 0 ]; then
       continue
     fi
 
+    # Extract finding-specific labels and ensure they exist
+    LABEL_ARGS=(--label "conductor-off-diff")
+    while IFS= read -r label; do
+      [ -z "${label}" ] && continue
+      gh label create "${label}" --color "ededed" 2>/dev/null || true
+      LABEL_ARGS+=(--label "${label}")
+    done < <(echo "${finding}" | jq -r '(.labels // []) | .[]')
+
     ISSUE_BODY="**Severity:** ${SEVERITY}
 **Location:** ${FILE_LINE_REF}
 **Found by:** ${REVIEWER}
@@ -110,7 +118,7 @@ ${MESSAGE}"
 
     ISSUE_URL=$(gh issue create \
       --title "${TITLE} (${FILE_LINE_REF})" \
-      --label "conductor-off-diff" \
+      "${LABEL_ARGS[@]}" \
       --body "${ISSUE_BODY}" \
       2>/dev/null)
 

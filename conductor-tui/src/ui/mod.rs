@@ -207,6 +207,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             target,
             items,
             selected,
+            scroll_offset,
         } => {
             let ticket_source_id = if let crate::state::WorkflowPickerTarget::PostCreate {
                 ref ticket_id,
@@ -227,10 +228,17 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 target,
                 items,
                 *selected,
+                *scroll_offset,
                 ticket_source_id,
                 &state.theme,
             )
         }
+        Modal::TemplatePicker {
+            items,
+            selected,
+            repo_slug,
+            ..
+        } => modal::render_template_picker(frame, area, items, *selected, repo_slug, &state.theme),
         Modal::Progress { message } => modal::render_progress(frame, area, message, &state.theme),
         Modal::ThemePicker {
             themes,

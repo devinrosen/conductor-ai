@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
+import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
 import type { AgentRun, AgentEvent, AgentCreatedIssue, Ticket } from "../api/types";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
@@ -282,14 +283,11 @@ export function WorktreeDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          to={`/repos/${repoId}`}
-          className="text-sm text-indigo-600 hover:underline"
-        >
-          Back to repo
-        </Link>
-      </div>
+      <TransitBreadcrumb stops={[
+        { label: "Home", href: "/" },
+        { label: "Repo", href: `/repos/${repoId}` },
+        { label: worktree.branch, current: true },
+      ]} />
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -298,12 +296,6 @@ export function WorktreeDetailPage() {
           </h2>
           <p className="text-sm text-gray-500 mt-1">{worktree.slug}</p>
         </div>
-        <button
-          onClick={() => setDeleteConfirm(true)}
-          className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50 sm:self-auto"
-        >
-          Delete Worktree
-        </button>
       </div>
 
       <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -565,6 +557,25 @@ export function WorktreeDetailPage() {
           )}
         </>
       )}
+
+      {/* Danger Zone */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-red-400 mb-3">
+          Danger Zone
+        </h3>
+        <div className="rounded-lg border border-red-200 bg-white p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Delete this worktree</p>
+            <p className="text-xs text-gray-500 mt-0.5">Remove the worktree and its git branch. This cannot be undone.</p>
+          </div>
+          <button
+            onClick={() => setDeleteConfirm(true)}
+            className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+          >
+            Delete Worktree
+          </button>
+        </div>
+      </section>
 
       <AgentPromptModal
         open={promptModalOpen}

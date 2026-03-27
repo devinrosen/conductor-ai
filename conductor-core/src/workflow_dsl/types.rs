@@ -15,6 +15,8 @@ pub struct WorkflowDef {
     pub trigger: WorkflowTrigger,
     #[serde(default)]
     pub targets: Vec<String>,
+    #[serde(default)]
+    pub group: Option<String>,
     pub inputs: Vec<InputDecl>,
     pub body: Vec<WorkflowNode>,
     pub always: Vec<WorkflowNode>,

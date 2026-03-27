@@ -22,16 +22,20 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
       data-list-index={index}
     >
       {repoSlug !== undefined && (
-        <td className="px-4 py-2 text-gray-500">{repoSlug}</td>
+        <td className="px-3 py-1.5">
+          <span className="inline-block px-1.5 py-0.5 text-[11px] font-mono rounded bg-gray-100 text-gray-600 truncate max-w-[100px]">
+            {repoSlug}
+          </span>
+        </td>
       )}
-      <td className="px-4 py-2">
+      <td className="px-3 py-1.5">
         <span className="text-indigo-600">{ticket.source_id}</span>
       </td>
-      <td className="px-4 py-2 text-gray-900">{ticket.title}</td>
-      <td className="px-4 py-2">
+      <td className="px-3 py-1.5 text-gray-900">{ticket.title}</td>
+      <td className="px-3 py-1.5">
         <StatusBadge status={ticket.state} />
       </td>
-      <td className="px-4 py-2">
+      <td className="px-3 py-1.5">
         <div className="flex flex-wrap gap-1">
           {labels.map((l) => {
             const bg = labelColorMap?.[l];
@@ -54,10 +58,10 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
           })}
         </div>
       </td>
-      <td className="px-4 py-2 text-xs text-gray-500">
+      <td className="px-3 py-1.5 text-xs text-gray-500">
         {ticket.assignee ?? "-"}
       </td>
-      <td className="px-4 py-2 text-xs text-purple-600 whitespace-nowrap">
+      <td className="px-3 py-1.5 text-xs text-purple-600 whitespace-nowrap">
         {agentTotals ? formatTicketTotalsFull(agentTotals) : ""}
       </td>
     </tr>

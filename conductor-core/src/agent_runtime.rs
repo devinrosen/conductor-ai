@@ -25,7 +25,7 @@ pub fn repo_agent_window_name(slug: &str, run_id: &str) -> String {
 /// Looks for a sibling `conductor` next to the current executable first,
 /// then falls back to the bare name (relying on `$PATH`).
 fn resolve_conductor_bin() -> String {
-    std::env::current_exe()
+    let resolved = std::env::current_exe()
         .ok()
         .and_then(|p| {
             let sibling = p.parent()?.join("conductor");
@@ -33,7 +33,27 @@ fn resolve_conductor_bin() -> String {
                 .exists()
                 .then(|| sibling.to_string_lossy().into_owned())
         })
-        .unwrap_or_else(|| "conductor".to_string())
+        .unwrap_or_else(|| "conductor".to_string());
+    tracing::debug!("[conductor] resolved binary: {resolved}");
+    resolved
+}
+
+/// Build the path for the stderr capture file for a given tmux window name.
+///
+/// The window name is sanitized to replace path separators and other
+/// potentially dangerous characters, ensuring the file always lands in `/tmp`.
+fn stderr_file_path(window_name: &str) -> String {
+    let sanitized: String = window_name
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c == '\0' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("/tmp/conductor-agent-{sanitized}.err")
 }
 
 /// Spawn a new tmux window running `conductor <args>`, then verify it is alive.
@@ -44,21 +64,30 @@ fn resolve_conductor_bin() -> String {
 ///
 /// If no tmux server is running, a detached session named `conductor` is
 /// created automatically so agents can run without a pre-existing tmux session.
+///
+/// The spawned process's stderr is redirected to a temp file so that crash
+/// output is available if the process exits immediately. The file is cleaned
+/// up on success; on failure its contents are included in the error message.
 pub fn spawn_tmux_window(
     args: &[Cow<'static, str>],
     window_name: &str,
 ) -> std::result::Result<(), String> {
     let conductor_bin = resolve_conductor_bin();
+    let err_file = stderr_file_path(window_name);
 
-    let mut tmux_args: Vec<Cow<'static, str>> = vec![
+    // Build the shell command: conductor <args> 2>/tmp/conductor-agent-<name>.err
+    let shell_cmd = build_shell_command(&conductor_bin, args, &err_file);
+
+    let tmux_args: Vec<Cow<'static, str>> = vec![
         Cow::Borrowed("new-window"),
         Cow::Borrowed("-d"),
         Cow::Borrowed("-n"),
         Cow::Owned(window_name.to_string()),
         Cow::Borrowed("--"),
-        Cow::Owned(conductor_bin.clone()),
+        Cow::Borrowed("bash"),
+        Cow::Borrowed("-c"),
+        Cow::Owned(shell_cmd.clone()),
     ];
-    tmux_args.extend_from_slice(args);
 
     let result = Command::new("tmux")
         .args(tmux_args.iter().map(|a| a.as_ref()))
@@ -66,14 +95,14 @@ pub fn spawn_tmux_window(
         .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
 
     if result.status.success() {
-        return verify_tmux_window(window_name);
+        return verify_tmux_window(window_name, &err_file);
     }
 
     // No tmux server running — create a detached session and retry.
     // tmux error messages for a missing server vary across versions and platforms
     // ("no server running on …", "error connecting to …", "No such file or directory"),
     // so we attempt the session fallback on any new-window failure.
-    let mut session_args: Vec<Cow<'static, str>> = vec![
+    let session_args: Vec<Cow<'static, str>> = vec![
         Cow::Borrowed("new-session"),
         Cow::Borrowed("-d"),
         Cow::Borrowed("-s"),
@@ -81,9 +110,10 @@ pub fn spawn_tmux_window(
         Cow::Borrowed("-n"),
         Cow::Owned(window_name.to_string()),
         Cow::Borrowed("--"),
-        Cow::Owned(conductor_bin),
+        Cow::Borrowed("bash"),
+        Cow::Borrowed("-c"),
+        Cow::Owned(shell_cmd),
     ];
-    session_args.extend_from_slice(args);
 
     let retry = Command::new("tmux")
         .args(session_args.iter().map(|a| a.as_ref()))
@@ -91,27 +121,66 @@ pub fn spawn_tmux_window(
         .map_err(|e| format!("Failed to start tmux session: {e}"))?;
 
     if retry.status.success() {
-        return verify_tmux_window(window_name);
+        return verify_tmux_window(window_name, &err_file);
     }
     let retry_stderr = String::from_utf8_lossy(&retry.stderr);
     Err(format!("Failed to start tmux session: {retry_stderr}"))
 }
 
+/// Build a shell command string that runs conductor with stderr redirected.
+///
+/// Each argument is single-quoted with internal single quotes escaped as `'\''`.
+fn build_shell_command(conductor_bin: &str, args: &[Cow<'static, str>], err_file: &str) -> String {
+    let mut parts = Vec::with_capacity(args.len() + 3);
+    parts.push(shell_escape(conductor_bin));
+    for arg in args {
+        parts.push(shell_escape(arg.as_ref()));
+    }
+    format!("{} 2>{}", parts.join(" "), shell_escape(err_file))
+}
+
+/// Shell-escape a string by wrapping it in single quotes.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// After a successful `tmux new-window`, wait briefly and verify the window
-/// actually exists. Returns `Ok(())` if the window is alive, or an `Err`
-/// describing the failure.
-fn verify_tmux_window(window_name: &str) -> std::result::Result<(), String> {
-    // Give tmux a moment to register the window.
-    thread::sleep(Duration::from_millis(100));
+/// actually exists. Retries once with a longer delay before declaring failure.
+///
+/// On success, cleans up the stderr capture file. On failure, reads the
+/// stderr file contents and includes them in the error message.
+fn verify_tmux_window(window_name: &str, err_file: &str) -> std::result::Result<(), String> {
+    // First check: 300ms after spawn.
+    thread::sleep(Duration::from_millis(300));
 
     let live = list_live_tmux_windows();
     if live.contains(window_name) {
-        Ok(())
-    } else {
-        Err(format!(
-            "tmux window '{window_name}' not found after spawn — agent process may have exited immediately"
-        ))
+        let _ = std::fs::remove_file(err_file);
+        return Ok(());
     }
+
+    // Retry: wait another 500ms (800ms total) before declaring failure.
+    thread::sleep(Duration::from_millis(500));
+
+    let live = list_live_tmux_windows();
+    if live.contains(window_name) {
+        let _ = std::fs::remove_file(err_file);
+        return Ok(());
+    }
+
+    // Window never appeared — read stderr capture for diagnostics.
+    let stderr_output = std::fs::read_to_string(err_file).unwrap_or_default();
+    let _ = std::fs::remove_file(err_file);
+
+    let detail = if stderr_output.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\nCaptured stderr:\n{stderr_output}")
+    };
+
+    Err(format!(
+        "tmux window '{window_name}' not found after spawn — agent process may have exited immediately{detail}"
+    ))
 }
 
 /// Typed error returned by [`poll_child_completion`].
@@ -313,10 +382,9 @@ pub fn build_agent_args_with_mode(
         }
     }
 
-    if let Some(pattern) = permission_mode.and_then(|m| m.allowed_tools()) {
-        args.push(Cow::Borrowed("--allowedTools"));
-        args.push(Cow::Borrowed(pattern));
-    }
+    // NOTE: --allowedTools is NOT passed to the conductor binary here.
+    // It is derived from --permission-mode and passed to the `claude` CLI
+    // subprocess inside run_agent() (conductor-cli/src/main.rs).
 
     for dir in extra_plugin_dirs {
         args.push(Cow::Borrowed("--plugin-dir"));
@@ -443,8 +511,82 @@ mod tests {
     #[test]
     fn verify_tmux_window_rejects_nonexistent_window() {
         // Whether or not tmux is running, a bogus window name should fail.
-        let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99999");
+        let err_file = "/tmp/conductor-agent-test-nonexistent.err";
+        let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99999", err_file);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn stderr_file_path_format() {
+        let path = super::stderr_file_path("my-window-123");
+        assert_eq!(path, "/tmp/conductor-agent-my-window-123.err");
+    }
+
+    #[test]
+    fn stderr_file_path_sanitizes_slashes() {
+        let path = super::stderr_file_path("../../etc/passwd");
+        assert_eq!(path, "/tmp/conductor-agent-.._.._etc_passwd.err");
+        assert!(!path.contains('/') || path.starts_with("/tmp/conductor-agent-"));
+    }
+
+    #[test]
+    fn stderr_file_path_sanitizes_backslashes() {
+        let path = super::stderr_file_path("foo\\bar");
+        assert_eq!(path, "/tmp/conductor-agent-foo_bar.err");
+    }
+
+    #[test]
+    fn stderr_file_path_sanitizes_null_bytes() {
+        let path = super::stderr_file_path("foo\0bar");
+        assert_eq!(path, "/tmp/conductor-agent-foo_bar.err");
+    }
+
+    #[test]
+    fn build_shell_command_basic() {
+        use std::borrow::Cow;
+        let args = vec![
+            Cow::Borrowed("agent"),
+            Cow::Borrowed("run"),
+            Cow::Borrowed("--run-id"),
+            Cow::Owned("abc123".to_string()),
+        ];
+        let cmd = super::build_shell_command("/usr/local/bin/conductor", &args, "/tmp/test.err");
+        assert!(cmd.starts_with("'/usr/local/bin/conductor'"));
+        assert!(cmd.contains("'agent'"));
+        assert!(cmd.contains("'run'"));
+        assert!(cmd.contains("'--run-id'"));
+        assert!(cmd.contains("'abc123'"));
+        assert!(cmd.ends_with("2>'/tmp/test.err'"));
+    }
+
+    #[test]
+    fn shell_escape_handles_single_quotes() {
+        let escaped = super::shell_escape("it's a test");
+        assert_eq!(escaped, "'it'\\''s a test'");
+    }
+
+    #[test]
+    fn verify_tmux_window_includes_stderr_on_failure() {
+        // Write a fake stderr file, then verify it's included in the error message.
+        let err_file = format!(
+            "/tmp/conductor-agent-verify-test-{}.err",
+            std::process::id()
+        );
+        std::fs::write(&err_file, "Error: something broke\n").unwrap();
+
+        let result =
+            super::verify_tmux_window("conductor-test-nonexistent-stderr-99999", &err_file);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("Error: something broke"),
+            "error should include stderr contents: {msg}"
+        );
+        // File should have been cleaned up
+        assert!(
+            !std::path::Path::new(&err_file).exists(),
+            "stderr file should be cleaned up after read"
+        );
     }
 
     #[test]
@@ -609,14 +751,11 @@ mod tests {
             .expect("expected --permission-mode flag");
         assert_eq!(args[idx + 1], "plan", "expected 'plan' value after flag");
 
-        let at_idx = args
-            .iter()
-            .position(|a| a == "--allowedTools")
-            .expect("expected --allowedTools flag for plan mode");
-        assert_eq!(
-            args[at_idx + 1],
-            "mcp__conductor__*",
-            "expected conductor MCP wildcard"
+        // --allowedTools must NOT appear in conductor args — it is passed
+        // to the claude CLI subprocess inside run_agent(), not here.
+        assert!(
+            !args.iter().any(|a| a == "--allowedTools"),
+            "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
         );
     }
 

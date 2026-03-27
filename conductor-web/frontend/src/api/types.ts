@@ -23,6 +23,10 @@ export interface Worktree {
   model: string | null;
 }
 
+export interface WorktreeWithStatus extends Worktree {
+  agent_status: AgentRun["status"] | null;
+}
+
 export interface Ticket {
   id: string;
   repo_id: string;
@@ -191,6 +195,7 @@ export interface WorkflowDefSummary {
   trigger: string;
   inputs: { name: string; required: boolean; input_type: string; default: string | null }[];
   node_count: number;
+  group: string | null;
 }
 
 export interface WorkflowRun {
@@ -268,4 +273,24 @@ export interface Notification {
   read: boolean;
   created_at: string;
   read_at: string | null;
+}
+
+// Push Notifications
+export interface PushSubscriptionKeys {
+  p256dh: string;
+  auth: string;
+}
+
+export interface PushSubscribeRequest {
+  endpoint: string;
+  keys: PushSubscriptionKeys;
+}
+
+export interface VapidPublicKeyResponse {
+  public_key: string;
+}
+
+export interface PushSubscribeResponse {
+  success: boolean;
+  message: string;
 }

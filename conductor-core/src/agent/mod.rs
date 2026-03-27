@@ -16,6 +16,7 @@ pub use log_parsing::{
 };
 
 pub use manager::feedback::normalize_feedback_response;
+pub use manager::tmux::{capture_and_kill_tmux_window, capture_tmux_scrollback, kill_tmux_window};
 pub use manager::AgentManager;
 
 pub use status::{

@@ -3,6 +3,7 @@ workflow lint-fix {
     description = "Analyze lint errors and apply fixes, re-verifying until clean"
     trigger     = "manual"
     targets     = ["worktree"]
+    group       = "Development"
   }
 
   do {

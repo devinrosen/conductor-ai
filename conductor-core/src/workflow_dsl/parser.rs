@@ -258,6 +258,7 @@ impl Parser {
         let mut description = String::new();
         let mut trigger = WorkflowTrigger::Manual;
         let mut targets: Vec<String> = Vec::new();
+        let mut group: Option<String> = None;
         let mut inputs = Vec::new();
         let mut body = Vec::new();
         let mut always = Vec::new();
@@ -288,6 +289,9 @@ impl Parser {
                     }
                     if let Some(tgts) = kvs.get("targets") {
                         targets = tgts.clone().into_string_array();
+                    }
+                    if let Some(grp) = kvs.get("group") {
+                        group = Some(grp.as_str().to_string());
                     }
                 }
                 Token::Inputs => {
@@ -366,6 +370,7 @@ impl Parser {
             description,
             trigger,
             targets,
+            group,
             inputs,
             body,
             always,

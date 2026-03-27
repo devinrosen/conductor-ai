@@ -102,6 +102,20 @@ pub(super) struct ExecutionState<'a> {
     pub extra_plugin_dirs: Vec<String>,
 }
 
+impl ExecutionState<'_> {
+    /// Returns the prefix used for tmux window names: the worktree slug when
+    /// available, or the first 8 characters of the workflow run ID otherwise.
+    pub(super) fn window_prefix(&self) -> &str {
+        if self.worktree_slug.is_empty() {
+            self.workflow_run_id
+                .get(..8)
+                .unwrap_or(&self.workflow_run_id)
+        } else {
+            self.worktree_slug.as_str()
+        }
+    }
+}
+
 /// Resolve a schema by name using the standard search order.
 pub(super) fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<OutputSchema> {
     let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
@@ -304,11 +318,25 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     } else {
         workflow.trigger.to_string()
     };
+
+    // Derive repo_id from worktree if not provided (#1539)
+    let derived_repo_id = match (&input.repo_id, &input.worktree_id) {
+        (None, Some(wt_id)) => match WorktreeManager::new(conn, config).get_by_id(wt_id) {
+            Ok(wt) => Some(wt.repo_id),
+            Err(e) => {
+                tracing::warn!("Failed to look up worktree '{wt_id}' for repo_id derivation: {e}");
+                None
+            }
+        },
+        _ => None,
+    };
+    let effective_repo_id = input.repo_id.or(derived_repo_id.as_deref());
+
     let wf_run = wf_mgr.create_workflow_run_with_targets(
         &workflow.name,
         input.worktree_id,
         input.ticket_id,
-        input.repo_id,
+        effective_repo_id,
         &parent_run.id,
         input.exec_config.dry_run,
         &trigger_str,
@@ -1517,6 +1545,7 @@ mod tests {
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![InputDecl {
                 name: input_name.to_string(),
                 input_type: InputType::Boolean,

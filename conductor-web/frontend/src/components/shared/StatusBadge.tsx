@@ -4,6 +4,11 @@ const colors: Record<string, string> = {
   abandoned: "bg-gray-100 text-gray-600",
   open: "bg-green-100 text-green-700",
   closed: "bg-red-100 text-red-700",
+  completed: "bg-green-100 text-green-800",
+  failed: "bg-red-100 text-red-800",
+  cancelled: "bg-gray-100 text-gray-800",
+  running: "bg-yellow-100 text-yellow-800",
+  waiting_for_feedback: "bg-yellow-100 text-yellow-800",
 };
 
 export function StatusBadge({ status }: { status: string }) {

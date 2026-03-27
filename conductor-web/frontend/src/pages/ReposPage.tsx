@@ -6,6 +6,7 @@ import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
 import { EmptyState } from "../components/shared/EmptyState";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
+import { ErrorBanner } from "../components/shared/ErrorBanner";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -16,23 +17,25 @@ export function ReposPage() {
   const { repos, loading: reposLoading, refreshRepos } = useRepos();
   const [worktreeCounts, setWorktreeCounts] = useState<Record<string, number>>({});
   const [tick, setTick] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [registerRepoOpen, setRegisterRepoOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
 
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
-    if (repos.length === 0) return;
-    Promise.all(
-      repos.map((r) =>
-        api.listWorktrees(r.id).then((wts) => ({ repoId: r.id, count: wts.length })),
-      ),
-    ).then((results) => {
+    const fetchData = async () => {
+      const allWorktrees = await api.listAllWorktrees();
       const counts: Record<string, number> = {};
-      for (const { repoId, count } of results) {
-        counts[repoId] = count;
+      for (const wt of allWorktrees) {
+        counts[wt.repo_id] = (counts[wt.repo_id] ?? 0) + 1;
       }
       setWorktreeCounts(counts);
+      setLoadError(null);
+    };
+
+    fetchData().catch((err: unknown) => {
+      setLoadError(err instanceof Error ? err.message : "Failed to load repos data");
     });
   }, [repos, tick]);
 
@@ -74,8 +77,10 @@ export function ReposPage() {
         onImported={refreshRepos}
       />
 
+      <ErrorBanner error={loadError} />
+
       {repos.length === 0 ? (
-        <EmptyState message="No repos registered yet. Register one to get started." />
+        <EmptyState message="The station is quiet. Register a repo to get the trains running." />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {repos.map((repo) => (

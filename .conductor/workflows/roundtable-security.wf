@@ -3,6 +3,7 @@ workflow roundtable-security {
     description = "Security roundtable review"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
+    group       = "Review"
   }
 
   parallel {

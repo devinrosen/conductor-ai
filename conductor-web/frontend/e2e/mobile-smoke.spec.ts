@@ -82,6 +82,29 @@ test.describe("Mobile smoke: workflows tab", () => {
   });
 });
 
+test.describe("Mobile smoke: hamburger menu open/close", () => {
+  test("hamburger button opens sidebar and close button dismisses it", async ({ page }) => {
+    await page.goto("/");
+
+    // The hamburger button should be reachable on mobile.
+    const hamburger = page.getByRole("button", { name: "Open menu" });
+    await expect(hamburger).toBeVisible({ timeout: 5_000 });
+    await hamburger.click();
+
+    // Sidebar should now be visible — check for the "Activity" nav link inside it.
+    const sidebarLink = page.locator("aside").getByRole("link", { name: "Activity" });
+    await expect(sidebarLink).toBeVisible({ timeout: 5_000 });
+
+    // Close the sidebar via the close button.
+    const closeBtn = page.getByRole("button", { name: "Close menu" });
+    await expect(closeBtn).toBeVisible({ timeout: 5_000 });
+    await closeBtn.click();
+
+    // Sidebar should be hidden again (translated off-screen).
+    await expect(sidebarLink).not.toBeVisible({ timeout: 5_000 });
+  });
+});
+
 test.describe("Mobile smoke: bottom tab bar navigation", () => {
   test("Activity tab navigates to ActivityPage and shows heading", async ({ page }) => {
     // Start at the repos page then navigate via the bottom tab bar.

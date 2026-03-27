@@ -3,6 +3,7 @@ workflow iterate-pr {
     description = "Sync with main, resolve conflicts, lint, then iterate review until clean"
     trigger     = "manual"
     targets     = ["worktree"]
+    group       = "Development"
   }
 
   do {

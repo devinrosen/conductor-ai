@@ -22,7 +22,7 @@ mod state;
 
 use axum::http::HeaderValue;
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{db_path, load_config};
+use conductor_core::config::{conductor_dir, load_config};
 use conductor_core::db::open_database;
 use conductor_web::routes::api_router_with_cors;
 
@@ -45,7 +45,9 @@ fn main() {
         .setup(|app| {
             use tauri::Manager;
 
-            let db_path_val = db_path();
+            // Always use the global database — the desktop app manages all
+            // repos, so worktree-local DB detection must be bypassed.
+            let db_path_val = conductor_dir().join("conductor.db");
             let conn = open_database(&db_path_val).expect("Failed to open conductor database");
             let config = load_config().expect("Failed to load conductor config");
 
@@ -98,13 +100,17 @@ fn main() {
                     // Restrict to Tauri webview origins only.
                     // - tauri://localhost  → macOS / Linux (Tauri custom protocol)
                     // - http://tauri.localhost → Windows (localhost-mapped protocol)
+                    // In debug builds, also allow the Vite dev server origin.
                     // The server only binds on 127.0.0.1, but a browser tab on any
                     // origin could still reach it without this restriction.
-                    let router = api_router_with_cors(vec![
+                    #[allow(unused_mut)]
+                    let mut allowed_origins = vec![
                         HeaderValue::from_static("tauri://localhost"),
                         HeaderValue::from_static("http://tauri.localhost"),
-                    ])
-                    .with_state(web_state);
+                    ];
+                    #[cfg(debug_assertions)]
+                    allowed_origins.push(HeaderValue::from_static("http://localhost:5173"));
+                    let router = api_router_with_cors(allowed_origins).with_state(web_state);
 
                     if let Err(e) = axum::serve(listener, router).await {
                         eprintln!(

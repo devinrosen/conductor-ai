@@ -511,9 +511,9 @@ impl App {
             };
 
             let mut items = vec![WorkflowPickerItem::StartAgent];
-            for def in manual_defs {
-                items.push(WorkflowPickerItem::Workflow(def));
-            }
+            items.extend(crate::app::workflow_management::insert_group_headers(
+                manual_defs,
+            ));
             items.push(WorkflowPickerItem::Skip);
 
             if let Some(ref tx) = bg_tx {
@@ -750,6 +750,85 @@ impl App {
             })();
 
             let _ = tx.send(Action::RepoAgentLaunched { result });
+        });
+    }
+
+    /// Restart a failed/cancelled agent run by creating a new run with the same
+    /// config and re-spawning a tmux window.
+    /// Runs on a background thread per the TUI threading rule.
+    pub(super) fn handle_restart_agent(&mut self) {
+        let run = self.selected_worktree_run().cloned();
+
+        let Some(run) = run else {
+            self.state.status_message = Some("No agent run to restart".to_string());
+            return;
+        };
+
+        if run.is_active() {
+            self.state.status_message = Some("Agent is still active — stop it first".to_string());
+            return;
+        }
+
+        // Resolve worktree path on the main thread (from cached data)
+        let worktree_path = run.worktree_id.as_ref().and_then(|wt_id| {
+            self.state
+                .data
+                .worktrees
+                .iter()
+                .find(|w| &w.id == wt_id)
+                .map(|w| w.path.clone())
+        });
+
+        let Some(worktree_path) = worktree_path else {
+            self.state.status_message =
+                Some("Cannot restart: no worktree found for this run".to_string());
+            return;
+        };
+
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+        let run_id = run.id.clone();
+        let worktree_slug = run.tmux_window.clone().unwrap_or_default();
+
+        self.state.modal = crate::state::Modal::Progress {
+            message: "Restarting agent…".into(),
+        };
+
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<String, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                let mgr = AgentManager::new(&conn);
+
+                let new_run = mgr
+                    .restart_run(&run_id)
+                    .map_err(|e| format!("Failed to restart agent run: {e}"))?;
+
+                let window_name = new_run.tmux_window.as_deref().unwrap_or(&worktree_slug);
+
+                let args = conductor_core::agent_runtime::build_agent_args(
+                    &new_run.id,
+                    &worktree_path,
+                    &new_run.prompt,
+                    None,
+                    new_run.model.as_deref(),
+                    new_run.bot_name.as_deref(),
+                    &[],
+                )
+                .inspect_err(|e| {
+                    let _ = mgr.update_run_failed(&new_run.id, e);
+                })?;
+
+                conductor_core::agent_runtime::spawn_tmux_window(&args, window_name).inspect_err(
+                    |e| {
+                        let _ = mgr.update_run_failed(&new_run.id, e);
+                    },
+                )?;
+
+                Ok(format!("Agent restarted in tmux window: {window_name}"))
+            })();
+
+            let _ = tx.send(Action::AgentRestartComplete { result });
         });
     }
 

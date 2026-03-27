@@ -295,8 +295,7 @@ mod tests {
         // Create a target file outside the worktree.
         fs::write(outside.path().join("plan.wf"), "content").unwrap();
         // Symlink from inside worktree workflows/ to outside (standard BSG setup).
-        std::os::unix::fs::symlink(outside.path().join("plan.wf"), wf_dir.join("plan.wf"))
-            .unwrap();
+        std::os::unix::fs::symlink(outside.path().join("plan.wf"), wf_dir.join("plan.wf")).unwrap();
 
         let result = resolve_conductor_subdir_for_file(
             wt.path().to_str().unwrap(),
@@ -338,11 +337,8 @@ mod tests {
         // Create a target file outside the repo.
         fs::write(outside.path().join("deploy.wf"), "content").unwrap();
         // Symlink from inside workflows/ to outside (standard BSG setup).
-        std::os::unix::fs::symlink(
-            outside.path().join("deploy.wf"),
-            wf_dir.join("deploy.wf"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(outside.path().join("deploy.wf"), wf_dir.join("deploy.wf"))
+            .unwrap();
 
         let result = resolve_conductor_subdir_for_file(
             "",

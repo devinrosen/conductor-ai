@@ -3,6 +3,7 @@ workflow roundtable-strategic {
     description = "Engineering and architecture roundtable review"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
+    group       = "Review"
   }
 
   parallel {

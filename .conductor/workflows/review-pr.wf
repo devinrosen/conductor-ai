@@ -3,6 +3,7 @@ workflow review-pr {
     description = "Run review swarm and aggregate findings"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
+    group       = "Review"
   }
 
   inputs {

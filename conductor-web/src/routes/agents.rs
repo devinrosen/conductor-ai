@@ -1,5 +1,5 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::process::Command;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -15,9 +15,46 @@ use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
+use tracing::warn;
+
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
+
+/// Spawn a tmux window on a blocking thread and mark the agent run as failed
+/// if the spawn panics or returns an error.
+async fn spawn_tmux_blocking(
+    state: &AppState,
+    run_id: &str,
+    args: Vec<Cow<'static, str>>,
+    window: String,
+) -> Result<(), ApiError> {
+    let spawn_result = tokio::task::spawn_blocking(move || {
+        conductor_core::agent_runtime::spawn_tmux_window(&args, &window)
+    })
+    .await;
+
+    match spawn_result {
+        Err(join_err) => {
+            let msg = format!("spawn task panicked: {join_err}");
+            let db = state.db.lock().await;
+            let agent_mgr = AgentManager::new(&db);
+            if let Err(db_err) = agent_mgr.update_run_failed(run_id, &msg) {
+                warn!(run_id, %db_err, "failed to mark agent run as failed after spawn panic");
+            }
+            Err(ConductorError::Agent(msg).into())
+        }
+        Ok(Err(tmux_err)) => {
+            let db = state.db.lock().await;
+            let agent_mgr = AgentManager::new(&db);
+            if let Err(db_err) = agent_mgr.update_run_failed(run_id, &tmux_err) {
+                warn!(run_id, %db_err, "failed to mark agent run as failed after tmux error");
+            }
+            Err(ConductorError::Agent(tmux_err).into())
+        }
+        Ok(Ok(())) => Ok(()),
+    }
+}
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
 
@@ -106,108 +143,122 @@ pub async fn start_agent(
     Path(worktree_id): Path<String>,
     Json(body): Json<StartAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
-    let db = state.db.lock().await;
+    // Scope DB + config access so locks are dropped before the blocking spawn.
+    let (run, args, wt_slug, wt_id) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
 
-    // Look up the worktree to get slug and path
-    let config = state.config.read().await;
-    let wt_mgr = WorktreeManager::new(&db, &config);
-    let wt = wt_mgr.get_by_id(&worktree_id)?;
+        // Look up the worktree to get slug and path
+        let wt_mgr = WorktreeManager::new(&db, &config);
+        let wt = wt_mgr.get_by_id(&worktree_id)?;
 
-    // Check if there's already a running agent
-    let agent_mgr = AgentManager::new(&db);
-    if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
-        if existing.is_active() {
-            return Err(conductor_core::error::ConductorError::Agent(
-                "Agent already running for this worktree".to_string(),
-            )
-            .into());
+        // Check if there's already a running agent
+        let agent_mgr = AgentManager::new(&db);
+        if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
+            if existing.is_active() {
+                return Err(conductor_core::error::ConductorError::Agent(
+                    "Agent already running for this worktree".to_string(),
+                )
+                .into());
+            }
         }
-    }
 
-    // Resolve model: per-worktree → per-repo config → global config
-    let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
-    let model = wt
-        .model
-        .as_deref()
-        .or(repo.model.as_deref())
-        .or(config.general.model.as_deref())
-        .map(str::to_string);
+        // Resolve model: per-worktree → per-repo config → global config
+        let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
+        let model = wt
+            .model
+            .as_deref()
+            .or(repo.model.as_deref())
+            .or(config.general.model.as_deref())
+            .map(str::to_string);
 
-    // Create DB record (child or top-level)
-    let run = if let Some(ref parent_id) = body.parent_run_id {
-        agent_mgr.create_child_run(
-            Some(&worktree_id),
+        // Create DB record (child or top-level)
+        let run = if let Some(ref parent_id) = body.parent_run_id {
+            agent_mgr.create_child_run(
+                Some(&worktree_id),
+                &body.prompt,
+                Some(&wt.slug),
+                model.as_deref(),
+                parent_id,
+                None,
+            )?
+        } else {
+            agent_mgr.create_run(
+                Some(&worktree_id),
+                &body.prompt,
+                Some(&wt.slug),
+                model.as_deref(),
+            )?
+        };
+
+        // Build conductor agent run command
+        let args = conductor_core::agent_runtime::build_agent_args(
+            &run.id,
+            &wt.path,
             &body.prompt,
-            Some(&wt.slug),
+            body.resume_session_id.as_deref(),
             model.as_deref(),
-            parent_id,
             None,
-        )?
-    } else {
-        agent_mgr.create_run(
-            Some(&worktree_id),
-            &body.prompt,
-            Some(&wt.slug),
-            model.as_deref(),
-        )?
-    };
-
-    // Build conductor agent run command
-    let args = conductor_core::agent_runtime::build_agent_args(
-        &run.id,
-        &wt.path,
-        &body.prompt,
-        body.resume_session_id.as_deref(),
-        model.as_deref(),
-        None,
-        &[],
-    )
-    .map_err(|e| {
-        let _ = agent_mgr.update_run_failed(&run.id, &e);
-        ConductorError::Agent(e)
-    })?;
-
-    match conductor_core::agent_runtime::spawn_tmux_window(&args, &wt.slug) {
-        Ok(()) => {
-            state.events.emit(ConductorEvent::AgentStarted {
-                run_id: run.id.clone(),
-                worktree_id: wt.id.clone(),
-            });
-            Ok((StatusCode::CREATED, Json(run)))
-        }
-        Err(e) => {
+            &[],
+        )
+        .map_err(|e| {
             let _ = agent_mgr.update_run_failed(&run.id, &e);
-            Err(conductor_core::error::ConductorError::Agent(e).into())
-        }
-    }
+            ConductorError::Agent(e)
+        })?;
+
+        (run, args, wt.slug.clone(), wt.id.clone())
+    };
+    // DB and config locks are now dropped.
+
+    // Spawn tmux off the async runtime thread to avoid blocking the executor.
+    spawn_tmux_blocking(&state, &run.id, args, wt_slug.clone()).await?;
+
+    state.events.emit(ConductorEvent::AgentStarted {
+        run_id: run.id.clone(),
+        worktree_id: wt_id,
+    });
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
-/// Stop a running agent: capture scrollback, kill tmux, mark cancelled.
+/// Stop a running agent: mark cancelled under lock, then capture scrollback
+/// and kill tmux on a blocking thread without holding the DB mutex.
 pub async fn stop_agent(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
 ) -> Result<Json<AgentRun>, ApiError> {
+    // Phase 1: DB operations under lock — validate + mark cancelled immediately.
+    let (run, tmux_window) = {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+
+        let run = agent_mgr
+            .latest_for_worktree(&worktree_id)?
+            .ok_or_else(|| {
+                conductor_core::error::ConductorError::Agent(
+                    "No agent run found for this worktree".to_string(),
+                )
+            })?;
+
+        if !run.is_active() {
+            return Err(conductor_core::error::ConductorError::Agent(
+                "Agent is not running".to_string(),
+            )
+            .into());
+        }
+
+        agent_mgr.update_run_cancelled(&run.id)?;
+
+        let tmux_window = run.tmux_window.clone();
+        (run, tmux_window)
+    };
+    // DB lock is now dropped.
+
+    // Phase 2: tmux cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&state, &run.id, tmux_window).await;
+
+    // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
-
-    let run = agent_mgr
-        .latest_for_worktree(&worktree_id)?
-        .ok_or_else(|| {
-            conductor_core::error::ConductorError::Agent(
-                "No agent run found for this worktree".to_string(),
-            )
-        })?;
-
-    if !run.is_active() {
-        return Err(conductor_core::error::ConductorError::Agent(
-            "Agent is not running".to_string(),
-        )
-        .into());
-    }
-
-    cancel_agent_run(&agent_mgr, &run)?;
-
-    // Re-fetch to get updated record
     let updated = agent_mgr.latest_for_worktree(&worktree_id)?.unwrap_or(run);
 
     state.events.emit(ConductorEvent::AgentStopped {
@@ -486,63 +537,64 @@ pub async fn orchestrate_agent(
     Path(worktree_id): Path<String>,
     Json(body): Json<OrchestrateRequest>,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
-    let db = state.db.lock().await;
+    // Scope DB + config access so locks are dropped before the blocking spawn.
+    let (run, args, wt_slug, wt_id) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
 
-    // Look up the worktree
-    let config = state.config.read().await;
-    let wt_mgr = WorktreeManager::new(&db, &config);
-    let wt = wt_mgr.get_by_id(&worktree_id)?;
+        // Look up the worktree
+        let wt_mgr = WorktreeManager::new(&db, &config);
+        let wt = wt_mgr.get_by_id(&worktree_id)?;
 
-    // Check if there's already a running agent
-    let agent_mgr = AgentManager::new(&db);
-    if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
-        if existing.is_active() {
-            return Err(conductor_core::error::ConductorError::Agent(
-                "Agent already running for this worktree".to_string(),
-            )
-            .into());
+        // Check if there's already a running agent
+        let agent_mgr = AgentManager::new(&db);
+        if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
+            if existing.is_active() {
+                return Err(conductor_core::error::ConductorError::Agent(
+                    "Agent already running for this worktree".to_string(),
+                )
+                .into());
+            }
         }
-    }
 
-    // Resolve model: per-worktree → per-repo config → global config
-    let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
-    let model = wt
-        .model
-        .as_deref()
-        .or(repo.model.as_deref())
-        .or(config.general.model.as_deref())
-        .map(str::to_string);
+        // Resolve model: per-worktree → per-repo config → global config
+        let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
+        let model = wt
+            .model
+            .as_deref()
+            .or(repo.model.as_deref())
+            .or(config.general.model.as_deref())
+            .map(str::to_string);
 
-    // Create parent run record (this is the orchestrator run)
-    let run = agent_mgr.create_run(
-        Some(&worktree_id),
-        &body.prompt,
-        Some(&wt.slug),
-        model.as_deref(),
-    )?;
+        // Create parent run record (this is the orchestrator run)
+        let run = agent_mgr.create_run(
+            Some(&worktree_id),
+            &body.prompt,
+            Some(&wt.slug),
+            model.as_deref(),
+        )?;
 
-    // Build conductor agent orchestrate command
-    let args = conductor_core::agent_runtime::build_orchestrate_args(
-        &run.id,
-        &wt.path,
-        model.as_deref(),
-        body.fail_fast,
-        Some(body.child_timeout_secs),
-    );
+        // Build conductor agent orchestrate command
+        let args = conductor_core::agent_runtime::build_orchestrate_args(
+            &run.id,
+            &wt.path,
+            model.as_deref(),
+            body.fail_fast,
+            Some(body.child_timeout_secs),
+        );
 
-    match conductor_core::agent_runtime::spawn_tmux_window(&args, &wt.slug) {
-        Ok(()) => {
-            state.events.emit(ConductorEvent::AgentStarted {
-                run_id: run.id.clone(),
-                worktree_id: wt.id.clone(),
-            });
-            Ok((StatusCode::CREATED, Json(run)))
-        }
-        Err(e) => {
-            let _ = agent_mgr.update_run_failed(&run.id, &e);
-            Err(conductor_core::error::ConductorError::Agent(e).into())
-        }
-    }
+        (run, args, wt.slug.clone(), wt.id.clone())
+    };
+    // DB and config locks are now dropped.
+
+    // Spawn tmux off the async runtime thread to avoid blocking the executor.
+    spawn_tmux_blocking(&state, &run.id, args, wt_slug.clone()).await?;
+
+    state.events.emit(ConductorEvent::AgentStarted {
+        run_id: run.id.clone(),
+        worktree_id: wt_id,
+    });
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
 // ── Feedback (human-in-the-loop) ──────────────────────────────────────
@@ -692,16 +744,105 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
     }
 }
 
-/// Capture tmux log, kill tmux window, and mark run as cancelled.
-fn cancel_agent_run(mgr: &AgentManager, run: &AgentRun) -> Result<(), ApiError> {
-    if let Some(ref window) = run.tmux_window {
-        mgr.capture_agent_log(&run.id, window);
-        let _ = Command::new("tmux")
-            .args(["kill-window", "-t", &format!(":{window}")])
-            .output();
+/// Restart a failed/cancelled agent run by creating a new run with the
+/// same prompt/config and re-spawning a tmux window.
+pub async fn restart_agent(
+    State(state): State<AppState>,
+    Path((worktree_id, run_id)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
+    // Scope DB + config access so locks are dropped before the blocking spawn.
+    let (new_run, args, window_name) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
+
+        let agent_mgr = AgentManager::new(&db);
+
+        // Validate ownership BEFORE creating the child run (IDOR guard).
+        let original = agent_mgr
+            .get_run(&run_id)?
+            .ok_or_else(|| ConductorError::Agent(format!("Run {run_id} not found")))?;
+        if original.worktree_id.as_deref() != Some(worktree_id.as_str()) {
+            return Err(ConductorError::Agent(
+                "run does not belong to the specified worktree".to_string(),
+            )
+            .into());
+        }
+
+        let new_run = agent_mgr.restart_run(&run_id)?;
+
+        // Resolve worktree path from new_run.worktree_id (single source of truth).
+        let wt_mgr = WorktreeManager::new(&db, &config);
+        let wt = wt_mgr.get_by_id(
+            new_run
+                .worktree_id
+                .as_deref()
+                .expect("worktree_id verified above"),
+        )?;
+
+        let window_name = new_run
+            .tmux_window
+            .as_deref()
+            .unwrap_or(&wt.slug)
+            .to_string();
+
+        let args = conductor_core::agent_runtime::build_agent_args(
+            &new_run.id,
+            &wt.path,
+            &new_run.prompt,
+            None,
+            new_run.model.as_deref(),
+            new_run.bot_name.as_deref(),
+        )
+        .map_err(|e| {
+            let _ = agent_mgr.update_run_failed(&new_run.id, &e);
+            ConductorError::Agent(e)
+        })?;
+
+        (new_run, args, window_name)
+    };
+    // DB and config locks are now dropped.
+
+    // Spawn tmux off the async runtime thread to avoid blocking the executor.
+    spawn_tmux_blocking(&state, &new_run.id, args, window_name.clone()).await?;
+
+    state.events.emit(ConductorEvent::AgentRestarted {
+        run_id: new_run.id.clone(),
+        old_run_id: run_id,
+        worktree_id: worktree_id.clone(),
+    });
+    Ok((StatusCode::CREATED, Json(new_run)))
+}
+
+/// Capture tmux scrollback and kill the tmux window on a blocking thread,
+/// then persist the log file path in the DB. Best-effort — failures are logged
+/// but do not fail the request.
+async fn cancel_agent_blocking(state: &AppState, run_id: &str, tmux_window: Option<String>) {
+    let Some(window) = tmux_window else {
+        return;
+    };
+
+    let rid = run_id.to_owned();
+    let w = window.clone();
+    let log_path = match tokio::task::spawn_blocking(move || {
+        conductor_core::agent::capture_and_kill_tmux_window(&rid, &w)
+    })
+    .await
+    {
+        Ok(path) => path,
+        Err(e) => {
+            warn!(run_id, %e, "cancel_agent_blocking: spawn_blocking task panicked");
+            None
+        }
+    };
+
+    // Persist log file path under a brief lock (best-effort).
+    if let Some(path) = log_path {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+        if let Err(e) = agent_mgr.update_run_log_file(run_id, &path) {
+            warn!(run_id, %e, "failed to record agent log path in DB after cancel");
+        }
     }
-    mgr.update_run_cancelled(&run.id)?;
-    Ok(())
 }
 
 // ── Repo-scoped agent routes ────────────────────────────────────────────
@@ -720,65 +861,71 @@ pub async fn start_repo_agent(
     Path(repo_id): Path<String>,
     Json(body): Json<StartRepoAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
-    let db = state.db.lock().await;
-    let config = state.config.read().await;
-    let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
+    // Scope DB + config access so locks are dropped before the blocking spawn.
+    let (run, args, window_name) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
+        let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
 
-    // Resolve model: per-repo config → global config
-    let model = repo
-        .model
-        .as_deref()
-        .or(config.general.model.as_deref())
-        .map(str::to_string);
+        // Resolve model: per-repo config → global config
+        let model = repo
+            .model
+            .as_deref()
+            .or(config.general.model.as_deref())
+            .map(str::to_string);
 
-    let agent_mgr = AgentManager::new(&db);
+        let agent_mgr = AgentManager::new(&db);
 
-    // Auto-resume: look up the latest repo-scoped session unless new_session is requested
-    let resume_session_id = if body.new_session {
-        None
-    } else {
-        agent_mgr
-            .latest_repo_scoped(&repo_id)?
-            .and_then(|run| run.claude_session_id)
-    };
+        // Auto-resume: look up the latest repo-scoped session unless new_session is requested
+        let resume_session_id = if body.new_session {
+            None
+        } else {
+            agent_mgr
+                .latest_repo_scoped(&repo_id)?
+                .and_then(|run| run.claude_session_id)
+        };
 
-    // Tmux window name: repo-<slug>-<short_id>
-    let run_id = conductor_core::new_id();
-    let window_name = conductor_core::agent_runtime::repo_agent_window_name(&repo.slug, &run_id);
+        // Tmux window name: repo-<slug>-<short_id>
+        let run_id = conductor_core::new_id();
+        let window_name =
+            conductor_core::agent_runtime::repo_agent_window_name(&repo.slug, &run_id);
 
-    let run =
-        agent_mgr.create_repo_run(&repo_id, &body.prompt, Some(&window_name), model.as_deref())?;
+        let run = agent_mgr.create_repo_run(
+            &repo_id,
+            &body.prompt,
+            Some(&window_name),
+            model.as_deref(),
+        )?;
 
-    // Build args with plan permission mode (read-only)
-    let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
-    let args = conductor_core::agent_runtime::build_agent_args_with_mode(
-        &run.id,
-        &repo.local_path,
-        &body.prompt,
-        resume_session_id.as_deref(),
-        model.as_deref(),
-        None,
-        Some(&plan_mode),
-        &[],
-    )
-    .map_err(|e| {
-        let _ = agent_mgr.update_run_failed(&run.id, &e);
-        ConductorError::Agent(e)
-    })?;
-
-    match conductor_core::agent_runtime::spawn_tmux_window(&args, &window_name) {
-        Ok(()) => {
-            state.events.emit(ConductorEvent::RepoAgentStarted {
-                run_id: run.id.clone(),
-                repo_id: repo_id.clone(),
-            });
-            Ok((StatusCode::CREATED, Json(run)))
-        }
-        Err(e) => {
+        // Build args with plan permission mode (read-only)
+        let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
+        let args = conductor_core::agent_runtime::build_agent_args_with_mode(
+            &run.id,
+            &repo.local_path,
+            &body.prompt,
+            resume_session_id.as_deref(),
+            model.as_deref(),
+            None,
+            Some(&plan_mode),
+            &[],
+        )
+        .map_err(|e| {
             let _ = agent_mgr.update_run_failed(&run.id, &e);
-            Err(ConductorError::Agent(e).into())
-        }
-    }
+            ConductorError::Agent(e)
+        })?;
+
+        (run, args, window_name)
+    };
+    // DB and config locks are now dropped.
+
+    // Spawn tmux off the async runtime thread to avoid blocking the executor.
+    spawn_tmux_blocking(&state, &run.id, args, window_name.clone()).await?;
+
+    state.events.emit(ConductorEvent::RepoAgentStarted {
+        run_id: run.id.clone(),
+        repo_id: repo_id.clone(),
+    });
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
 /// List repo-scoped agent runs (newest first).
@@ -797,24 +944,37 @@ pub async fn stop_repo_agent(
     State(state): State<AppState>,
     Path((repo_id, run_id)): Path<(String, String)>,
 ) -> Result<Json<AgentRun>, ApiError> {
+    // Phase 1: DB operations under lock — validate + mark cancelled immediately.
+    let (run, tmux_window) = {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+
+        let run = agent_mgr
+            .get_run(&run_id)?
+            .ok_or_else(|| ConductorError::Agent("Agent run not found".to_string()))?;
+
+        // Validate run belongs to the requested repo
+        if run.repo_id.as_deref() != Some(&repo_id) {
+            return Err(ConductorError::Agent("Agent run not found".to_string()).into());
+        }
+
+        if !run.is_active() {
+            return Err(ConductorError::Agent("Agent is not running".to_string()).into());
+        }
+
+        agent_mgr.update_run_cancelled(&run.id)?;
+
+        let tmux_window = run.tmux_window.clone();
+        (run, tmux_window)
+    };
+    // DB lock is now dropped.
+
+    // Phase 2: tmux cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&state, &run.id, tmux_window).await;
+
+    // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
-
-    let run = agent_mgr
-        .get_run(&run_id)?
-        .ok_or_else(|| ConductorError::Agent("Agent run not found".to_string()))?;
-
-    // Validate run belongs to the requested repo
-    if run.repo_id.as_deref() != Some(&repo_id) {
-        return Err(ConductorError::Agent("Agent run not found".to_string()).into());
-    }
-
-    if !run.is_active() {
-        return Err(ConductorError::Agent("Agent is not running".to_string()).into());
-    }
-
-    cancel_agent_run(&agent_mgr, &run)?;
-
     let updated = agent_mgr.get_run(&run_id)?.unwrap_or(run);
 
     state.events.emit(ConductorEvent::RepoAgentStopped {
