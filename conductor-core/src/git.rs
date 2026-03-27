@@ -55,6 +55,7 @@ fn run_command(
 /// (since `Command::output()` consumes the command's state).
 ///
 /// Part of: bounded-retry-with-escalation@1.0.0
+#[allow(dead_code)]
 pub(crate) fn check_output_with_retry<F>(
     config: &crate::retry::RetryConfig,
     build_cmd: F,
@@ -68,6 +69,7 @@ where
 /// Run a gh CLI command with bounded retry for transient failures.
 ///
 /// Part of: bounded-retry-with-escalation@1.0.0
+#[allow(dead_code)]
 pub(crate) fn check_gh_output_with_retry<F>(
     config: &crate::retry::RetryConfig,
     build_cmd: F,
@@ -78,6 +80,7 @@ where
     check_with_retry(config, build_cmd, ConductorError::GhCli)
 }
 
+#[allow(dead_code)]
 fn check_with_retry<F>(
     config: &crate::retry::RetryConfig,
     build_cmd: F,

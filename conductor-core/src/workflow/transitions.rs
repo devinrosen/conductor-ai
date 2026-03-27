@@ -11,6 +11,7 @@
 use super::status::WorkflowRunStatus;
 
 /// Check if a workflow run status transition is valid.
+#[allow(dead_code)]
 pub fn is_valid_run_transition(from: &WorkflowRunStatus, to: &WorkflowRunStatus) -> bool {
     use WorkflowRunStatus::*;
     matches!(
@@ -29,6 +30,7 @@ pub fn is_valid_run_transition(from: &WorkflowRunStatus, to: &WorkflowRunStatus)
 }
 
 /// Log a warning for an invalid transition (warn-only guard mode).
+#[allow(dead_code)]
 pub fn warn_invalid_run_transition(run_id: &str, from: &WorkflowRunStatus, to: &WorkflowRunStatus) {
     if !is_valid_run_transition(from, to) {
         tracing::warn!(

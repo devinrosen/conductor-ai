@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::error::SubprocessFailure;
 
 /// Configuration for retry behavior.
+#[allow(dead_code)]
 pub struct RetryConfig {
     /// Maximum number of attempts (including the first). Default: 3.
     pub max_attempts: u32,
@@ -31,6 +32,7 @@ impl Default for RetryConfig {
 
 /// Outcome of a retried operation.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum RetryOutcome<T, E> {
     /// Operation succeeded after `attempts` tries.
     Success {
@@ -56,6 +58,7 @@ pub enum RetryOutcome<T, E> {
 /// `is_cancelled` is checked before each retry and during backoff sleep (every 100ms).
 /// When it returns `true`, the retry loop exits with `RetryOutcome::Cancelled`.
 /// Pass `|| false` if cancellation is not needed.
+#[allow(dead_code)]
 pub fn retry_with_backoff<T, E, F, R, C>(
     config: &RetryConfig,
     mut operation: F,
@@ -106,6 +109,7 @@ where
 /// Checks stderr and exit codes for known transient patterns (network errors,
 /// rate limits, temporary server errors, SQLite busy). Unknown failures are
 /// treated as permanent (safe default).
+#[allow(dead_code)]
 pub fn is_transient(failure: &SubprocessFailure) -> bool {
     let stderr = failure.stderr.to_lowercase();
 
