@@ -25,7 +25,8 @@ pub struct PushPayload {
 pub struct PushSubscriptionManager<'a> {
     db: &'a Connection,
     vapid_private_key: String,
-    #[allow(dead_code)] // public key is served to browsers via API; not needed for server-side signing
+    #[allow(dead_code)]
+    // public key is served to browsers via API; not needed for server-side signing
     vapid_public_key: String,
     vapid_subject: String,
 }
@@ -136,7 +137,10 @@ impl<'a> PushSubscriptionManager<'a> {
             .map_err(|e| conductor_core::error::ConductorError::Agent(e.to_string()))?;
 
         for subscription in &subscriptions {
-            match self.send_to_subscription(subscription, &payload_bytes).await {
+            match self
+                .send_to_subscription(subscription, &payload_bytes)
+                .await
+            {
                 Ok(()) => {}
                 Err(web_push::WebPushError::EndpointNotValid)
                 | Err(web_push::WebPushError::EndpointNotFound) => {
@@ -147,10 +151,7 @@ impl<'a> PushSubscriptionManager<'a> {
                     let _ = self.delete_subscription(&subscription.endpoint);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Push send failed for {}: {e}",
-                        subscription.endpoint
-                    );
+                    tracing::warn!("Push send failed for {}: {e}", subscription.endpoint);
                 }
             }
         }
@@ -173,8 +174,11 @@ impl<'a> PushSubscriptionManager<'a> {
             &subscription.p256dh,
             &subscription.auth,
         );
-        let mut sig_builder =
-            VapidSignatureBuilder::from_base64(&self.vapid_private_key, URL_SAFE_NO_PAD, &sub_info)?;
+        let mut sig_builder = VapidSignatureBuilder::from_base64(
+            &self.vapid_private_key,
+            URL_SAFE_NO_PAD,
+            &sub_info,
+        )?;
         sig_builder.add_claim("sub", self.vapid_subject.as_str());
         let signature = sig_builder.build()?;
 
