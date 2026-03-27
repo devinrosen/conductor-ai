@@ -730,15 +730,32 @@ fn test_parse_pr_view_output_non_default_base() {
 
 #[test]
 fn test_parse_pr_view_output_fork_headrepository_owner_null() {
-    // Regression test for #1597: some fork PRs have headRepository.owner == null
-    // but headRepositoryOwner.login is populated. The fixed jq uses
-    // .headRepositoryOwner.login, so the output is "fork-user/repo" not "/repo".
-    let raw = "feat/my-feature|main|fork-user/repo|true";
-    let (head, base, head_repo, is_fork) = git_helpers::parse_pr_view_output(raw).unwrap();
-    assert_eq!(head, "feat/my-feature");
-    assert_eq!(base, "main");
-    assert_eq!(head_repo, "fork-user/repo");
+    // Regression test for #1597: when headRepository.owner is null (some fork
+    // PRs), the old jq expression `.headRepository.owner.login + "/" + .headRepository.name`
+    // produced "/repo" (empty owner before the slash).  The fix uses
+    // `.headRepositoryOwner.login` which is always populated for fork PRs.
+    //
+    // This test confirms that the broken output "/repo" (what the old jq would
+    // emit) yields an empty fork_owner string, which validate_remote_name then
+    // rejects with "fork owner name is empty".  A regression back to
+    // .headRepository.owner.login would produce this broken output in production
+    // and the downstream path would surface this specific error rather than
+    // silently building a remote URL with an empty owner.
+    let broken_output = "feat/my-feature|main|/repo|true";
+    let (_head, _base, head_repo, is_fork) =
+        git_helpers::parse_pr_view_output(broken_output).unwrap();
+    assert_eq!(head_repo, "/repo");
     assert!(is_fork);
+
+    // Replicate what fetch_pr_branch does to extract the fork owner.
+    let fork_owner = head_repo.split('/').next().unwrap_or(&head_repo);
+    assert_eq!(fork_owner, "", "broken jq output yields an empty fork owner");
+
+    let err = git_helpers::validate_remote_name(fork_owner).unwrap_err();
+    assert!(
+        err.to_string().contains("fork owner name is empty"),
+        "expected 'fork owner name is empty', got: {err}"
+    );
 }
 
 #[test]
