@@ -135,7 +135,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           Settings <ShortcutHint keys="g s" />
         </NavLink>
         <NavLink to="/getting-started" className={linkClass}>
-          Getting Started
+          Getting Started <span className="ml-auto">🚂</span>
         </NavLink>
         <div className="mt-2 px-2.5 text-xs text-gray-400 space-y-0.5">
           <div><kbd className="px-1 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-[10px]">&#8984;K</kbd> command palette</div>

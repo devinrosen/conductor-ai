@@ -87,7 +87,7 @@ function SetupSection() {
       description: "Tell Conductor about a git repository. It will detect the remote, set up the workspace directory, and start tracking branches.",
       command: "conductor repo register /path/to/your/repo",
       done: hasRepos,
-      link: "/repos",
+      link: "/repos?highlight=register",
       linkText: "Go to Repos",
     },
     {
@@ -96,8 +96,8 @@ function SetupSection() {
       subtitle: "Lay some track",
       description: "Create an isolated worktree for a feature or fix. Conductor handles the git branch, directory setup, and dependency installation automatically.",
       command: "conductor worktree create <repo-slug> <name>",
-      done: false, // Would need worktree data to check
-      link: hasRepos ? `/repos/${repos[0]?.id}` : "/repos",
+      done: false,
+      link: hasRepos ? `/repos/${repos[0]?.id}?highlight=create-worktree` : "/repos?highlight=register",
       linkText: "Create Worktree",
     },
     {
@@ -107,8 +107,8 @@ function SetupSection() {
       description: "Connect GitHub Issues or Jira and sync your tickets. Link a ticket to a worktree to give agents and workflows the full context of what they're working on.",
       command: "conductor ticket sync <repo-slug>",
       done: false,
-      link: "/tickets",
-      linkText: "View Tickets",
+      link: hasRepos ? `/repos/${repos[0]?.id}?highlight=issue-sources` : "/repos?highlight=register",
+      linkText: "Configure Sources",
     },
   ];
 

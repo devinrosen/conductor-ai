@@ -22,6 +22,7 @@ import {
   type ConductorEventData,
 } from "../hooks/useConductorEvents";
 import { useHotkeys } from "../hooks/useHotkeys";
+import { OnboardingHint, useOnboardingHighlight } from "../components/shared/OnboardingHint";
 import { useListNav } from "../hooks/useListNav";
 
 export function RepoDetailPage() {
@@ -142,7 +143,8 @@ export function RepoDetailPage() {
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [createWtOpen, setCreateWtOpen] = useState(false);
   const [editingModel, setEditingModel] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const highlightIssues = useOnboardingHighlight("issue-sources");
+  const [settingsOpen, setSettingsOpen] = useState(highlightIssues);
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function handleSyncTickets() {
@@ -459,13 +461,15 @@ export function RepoDetailPage() {
       <hr className="border-gray-200" />
 
       {/* Issue Sources */}
-      <IssueSourcesSection
-        repoId={repoId!}
-        remoteUrl={repo.remote_url}
-        sources={issueSources ?? []}
-        loading={sourcesLoading}
-        onChanged={refetchSources}
-      />
+      <OnboardingHint target="issue-sources" label="Add an issue source here">
+        <IssueSourcesSection
+          repoId={repoId!}
+          remoteUrl={repo.remote_url}
+          sources={issueSources ?? []}
+          loading={sourcesLoading}
+          onChanged={refetchSources}
+        />
+      </OnboardingHint>
 
       <hr className="border-gray-200" />
 
@@ -507,7 +511,9 @@ export function RepoDetailPage() {
             >
               {showCompletedWorktrees ? "Hiding active only" : "Show completed"}
             </button>
-            <CreateWorktreeForm repoId={repoId!} onCreated={refetchWorktrees} open={createWtOpen} onOpenChange={setCreateWtOpen} />
+            <OnboardingHint target="create-worktree" label="Start here">
+              <CreateWorktreeForm repoId={repoId!} onCreated={refetchWorktrees} open={createWtOpen} onOpenChange={setCreateWtOpen} />
+            </OnboardingHint>
           </div>
         </div>
         {wtLoading ? (
