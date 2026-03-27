@@ -350,7 +350,7 @@ async fn main() -> Result<()> {
                             };
                             let rt = tokio::runtime::Handle::current();
                             if let Err(e) = rt.block_on(push_mgr.send_all(&payload)) {
-                                tracing::warn!("gate push failed: {e}");
+                                tracing::warn!("gate push failed for run {run_id}: {e}");
                             }
                         }
                     });
@@ -386,7 +386,7 @@ async fn main() -> Result<()> {
                             };
                             let rt = tokio::runtime::Handle::current();
                             if let Err(e) = rt.block_on(push_mgr.send_all(&payload)) {
-                                tracing::warn!("feedback push failed: {e}");
+                                tracing::warn!("feedback push failed for run {run_id}: {e}");
                             }
                         }
                     });

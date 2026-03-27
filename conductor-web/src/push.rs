@@ -148,7 +148,12 @@ impl<'a> PushSubscriptionManager<'a> {
                         "Push subscription expired (410/404), removing: {}",
                         subscription.endpoint
                     );
-                    let _ = self.delete_subscription(&subscription.endpoint);
+                    if let Err(e) = self.delete_subscription(&subscription.endpoint) {
+                        tracing::warn!(
+                            "Failed to delete expired subscription {}: {e}",
+                            subscription.endpoint
+                        );
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("Push send failed for {}: {e}", subscription.endpoint);
