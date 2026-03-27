@@ -1462,7 +1462,7 @@ mod tests {
         app.state.view = View::Dashboard;
         app.state.column_focus = ColumnFocus::Content;
         app.state.dashboard_index = 1; // worktree row
-        // Pre-populate stale PR data to verify it is cleared on navigation
+                                       // Pre-populate stale PR data to verify it is cleared on navigation
         app.state.detail_prs = vec![conductor_core::github::GithubPr {
             number: 99,
             title: "stale".into(),
