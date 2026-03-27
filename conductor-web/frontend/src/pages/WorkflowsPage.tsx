@@ -52,9 +52,11 @@ export function WorkflowsPage() {
         api.listAllWorkflowRuns(),
       ]);
 
+      const repoMap = new Map(repos.map((r) => [r.id, r]));
       const ctxMap = new Map<string, WorktreeContext>();
       for (const wt of allWorktrees) {
-        const repo = repos.find((r) => r.id === wt.repo_id);
+        if (wt.status !== "active") continue;
+        const repo = repoMap.get(wt.repo_id);
         if (repo) {
           ctxMap.set(wt.id, { repoId: wt.repo_id, repoSlug: repo.slug, branch: wt.branch, worktreeId: wt.id });
         }
