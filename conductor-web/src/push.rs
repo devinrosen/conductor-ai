@@ -24,11 +24,9 @@ pub struct PushPayload {
 
 pub struct PushSubscriptionManager<'a> {
     db: &'a Connection,
-    #[allow(dead_code)] // will be used when actual web-push sending is implemented
     vapid_private_key: String,
-    #[allow(dead_code)] // will be used when actual web-push sending is implemented
+    #[allow(dead_code)] // public key is served to browsers via API; not needed for server-side signing
     vapid_public_key: String,
-    #[allow(dead_code)] // will be used when actual web-push sending is implemented
     vapid_subject: String,
 }
 
@@ -121,7 +119,7 @@ impl<'a> PushSubscriptionManager<'a> {
     }
 
     /// Send push notification to all subscriptions
-    pub async fn send_all(&self, _payload: &PushPayload) -> Result<()> {
+    pub async fn send_all(&self, payload: &PushPayload) -> Result<()> {
         let subscriptions = self.get_all_subscriptions()?;
 
         if subscriptions.is_empty() {
@@ -129,19 +127,64 @@ impl<'a> PushSubscriptionManager<'a> {
             return Ok(());
         }
 
-        // TODO: Implement actual push notification sending
-        // For now, just log that we would send notifications
         info!(
-            "Would send push notification to {} subscription(s)",
+            "Sending push notification to {} subscription(s)",
             subscriptions.len()
         );
+
+        let payload_bytes = serde_json::to_vec(payload)
+            .map_err(|e| conductor_core::error::ConductorError::Agent(e.to_string()))?;
+
+        for subscription in &subscriptions {
+            match self.send_to_subscription(subscription, &payload_bytes).await {
+                Ok(()) => {}
+                Err(web_push::WebPushError::EndpointNotValid)
+                | Err(web_push::WebPushError::EndpointNotFound) => {
+                    tracing::info!(
+                        "Push subscription expired (410/404), removing: {}",
+                        subscription.endpoint
+                    );
+                    let _ = self.delete_subscription(&subscription.endpoint);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Push send failed for {}: {e}",
+                        subscription.endpoint
+                    );
+                }
+            }
+        }
 
         Ok(())
     }
 
-    // TODO: Implement actual push notification sending
-    // async fn send_to_subscription(&self, ...) -> ... { ... }
-    // fn is_subscription_expired(&self, ...) -> ... { ... }
+    async fn send_to_subscription(
+        &self,
+        subscription: &PushSubscription,
+        payload_json: &[u8],
+    ) -> std::result::Result<(), web_push::WebPushError> {
+        use web_push::{
+            ContentEncoding, IsahcWebPushClient, SubscriptionInfo, VapidSignatureBuilder,
+            WebPushClient, WebPushMessageBuilder, URL_SAFE_NO_PAD,
+        };
+
+        let sub_info = SubscriptionInfo::new(
+            &subscription.endpoint,
+            &subscription.p256dh,
+            &subscription.auth,
+        );
+        let mut sig_builder =
+            VapidSignatureBuilder::from_base64(&self.vapid_private_key, URL_SAFE_NO_PAD, &sub_info)?;
+        sig_builder.add_claim("sub", self.vapid_subject.as_str());
+        let signature = sig_builder.build()?;
+
+        let mut builder = WebPushMessageBuilder::new(&sub_info);
+        builder.set_payload(ContentEncoding::Aes128Gcm, payload_json);
+        builder.set_vapid_signature(signature);
+
+        let client = IsahcWebPushClient::new()?;
+        client.send(builder.build()?).await
+    }
 }
 
 #[cfg(test)]
