@@ -1506,6 +1506,7 @@ fn format_source_config_lines(source: &IssueSource) -> Vec<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_gate_action(
     frame: &mut Frame,
     area: Rect,
@@ -1589,10 +1590,7 @@ pub fn render_gate_action(
         }
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled(
-                "  j/k",
-                Style::default().fg(theme.label_secondary),
-            ),
+            Span::styled("  j/k", Style::default().fg(theme.label_secondary)),
             Span::raw(" = move  "),
             Span::styled("Space", Style::default().fg(theme.label_secondary)),
             Span::raw(" = toggle  "),
@@ -1603,10 +1601,7 @@ pub fn render_gate_action(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" = submit  "),
-            Span::styled(
-                "n",
-                Style::default().fg(theme.status_failed),
-            ),
+            Span::styled("n", Style::default().fg(theme.status_failed)),
             Span::raw(" = skip  "),
             Span::styled("Esc", Style::default().fg(theme.label_secondary)),
             Span::raw(" = cancel"),
