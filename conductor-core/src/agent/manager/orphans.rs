@@ -1,8 +1,7 @@
 use std::time::{Duration, SystemTime};
 
-use crate::db::query_collect;
+use crate::db::{active_workflow_parent_run_ids, query_collect};
 use crate::error::Result;
-use crate::workflow::WorkflowManager;
 
 use super::super::db::{row_to_agent_run, AGENT_RUN_SELECT};
 use super::super::log_parsing::try_recover_from_log;
@@ -62,7 +61,7 @@ impl<'a> AgentManager<'a> {
         // Fetch parent_run_ids of active (non-terminal) workflow runs.
         // Workflow parent runs are created with tmux_window = None by design
         // and must not be reaped while their workflow is still active.
-        let active_wf_parent_ids = WorkflowManager::new(self.conn).get_active_parent_run_ids()?;
+        let active_wf_parent_ids = active_workflow_parent_run_ids(self.conn)?;
 
         // Fetch all live tmux window names once (avoids N+1 subprocess spawns).
         let live_windows = list_live_tmux_windows();

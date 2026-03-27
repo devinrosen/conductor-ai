@@ -819,17 +819,7 @@ impl<'a> WorkflowManager<'a> {
 
     /// Return the set of `parent_run_id` values for all non-terminal workflow
     /// runs (`pending`, `running`, or `waiting`).
-    ///
-    /// Used by the orphan reaper to avoid mistakenly reaping agent runs that
-    /// are acting as workflow parent runs while their workflow is still active.
     pub fn get_active_parent_run_ids(&self) -> Result<HashSet<String>> {
-        let ids: Vec<String> = query_collect(
-            self.conn,
-            "SELECT parent_run_id FROM workflow_runs \
-             WHERE status IN ('pending', 'running', 'waiting')",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(ids.into_iter().collect())
+        crate::db::active_workflow_parent_run_ids(self.conn)
     }
 }
