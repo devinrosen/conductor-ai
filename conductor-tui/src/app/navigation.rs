@@ -754,11 +754,12 @@ impl App {
                     .detail_prs
                     .iter()
                     .any(|pr| pr.head_ref_name == wt_branch);
-                let count = if has_pr { info_row::COUNT } else { info_row::COUNT - 1 };
-                clamp_increment(
-                    &mut self.state.worktree_detail_selected_row,
-                    count,
-                );
+                let count = if has_pr {
+                    info_row::COUNT
+                } else {
+                    info_row::COUNT - 1
+                };
+                clamp_increment(&mut self.state.worktree_detail_selected_row, count);
             }
             View::WorkflowDefDetail => {
                 self.state.workflow_def_detail_scroll =
