@@ -1067,8 +1067,14 @@ fn test_execute_workflow_worktree_base_branch_wins_over_feature_base_branch() {
         "feature_base_branch should be the worktree's base_branch (feat/masq), not the feature's (main)"
     );
     // Other feature variables should still be injected.
-    assert_eq!(run.inputs.get("feature_id").map(String::as_str), Some("f-masq"));
-    assert_eq!(run.inputs.get("feature_name").map(String::as_str), Some("masq-feature"));
+    assert_eq!(
+        run.inputs.get("feature_id").map(String::as_str),
+        Some("f-masq")
+    );
+    assert_eq!(
+        run.inputs.get("feature_name").map(String::as_str),
+        Some("masq-feature")
+    );
 }
 
 /// Regression test for #1539: when `repo_id` is `None` but `worktree_id` is provided,
