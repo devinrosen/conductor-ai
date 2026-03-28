@@ -393,20 +393,18 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             .or_insert_with(|| repo.slug.clone());
     }
 
-    // Inject feature metadata when a feature is provided.
-    if let Some(ref f) = feature {
-        inject_feature_variables(f, &mut merged_inputs);
-    } else if let Some(wt_id) = input.worktree_id {
-        // Defensive fallback: even without a resolved feature, inject
-        // feature_base_branch from the worktree's effective base so that
-        // push-and-pr.sh targets the correct branch instead of defaulting
-        // to main.
+    // Worktree's base_branch is the authoritative PR target. Insert it first so
+    // inject_feature_variables (which uses or_insert_with) cannot overwrite it.
+    if let Some(wt_id) = input.worktree_id {
         let wt = crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id)?;
         let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&wt.repo_id)?;
         let base = wt.effective_base(&repo.default_branch);
         merged_inputs
             .entry("feature_base_branch".to_string())
             .or_insert_with(|| base.to_string());
+    }
+    if let Some(ref f) = feature {
+        inject_feature_variables(f, &mut merged_inputs);
     }
 
     // Persist inputs so they can be restored on resume
