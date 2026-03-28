@@ -17,10 +17,16 @@ pub enum BlockedOn {
     HumanApproval {
         gate_name: String,
         prompt: Option<String>,
+        /// Resolved options for multi-select gates. Empty = binary approve/reject mode.
+        #[serde(default)]
+        options: Vec<String>,
     },
     HumanReview {
         gate_name: String,
         prompt: Option<String>,
+        /// Resolved options for multi-select gates. Empty = binary approve/reject mode.
+        #[serde(default)]
+        options: Vec<String>,
     },
     PrApproval {
         gate_name: String,
@@ -111,6 +117,10 @@ pub struct WorkflowRunStep {
     pub structured_output: Option<String>,
     /// Path to the stdout capture file for script steps (persisted for resume).
     pub output_file: Option<String>,
+    /// Resolved gate options as JSON `[{"value":"...","label":"..."}]` (set at gate start).
+    pub gate_options: Option<String>,
+    /// User-selected gate option values as JSON `["val1","val2"]` (set on approval).
+    pub gate_selections: Option<String>,
 }
 
 /// Lightweight summary of the currently-running step for a workflow run.

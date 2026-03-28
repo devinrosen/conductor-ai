@@ -1,0 +1,142 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary:
+    - generic:
+      - generic:
+        - img "Station clock"
+        - img "Conductor"
+        - heading "Conductor" [level=1]
+      - button "Close menu": ✕
+    - navigation:
+      - link "Home":
+        - /url: /
+      - link "Repos":
+        - /url: /repos
+      - link "Workflows":
+        - /url: /workflows
+      - link "Tickets":
+        - /url: /tickets
+      - generic: Repos
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
+    - generic:
+      - link "Settings":
+        - /url: /settings
+      - link "Getting Started 🚂":
+        - /url: /getting-started
+        - text: Getting Started
+        - generic: 🚂
+      - generic:
+        - generic: ⌘K command palette
+        - generic: "? shortcuts"
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - button "Open menu" [ref=e6]: ☰
+      - generic [ref=e7]: Conductor
+      - button "Notifications" [ref=e10]:
+        - img [ref=e11]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - heading "Home" [level=2] [ref=e17]
+          - generic [ref=e18]:
+            - generic [ref=e19]: "4"
+            - generic [ref=e21]: R
+            - generic [ref=e22]: E
+            - generic [ref=e23]: P
+            - generic [ref=e24]: O
+            - generic [ref=e25]: S
+            - generic [ref=e28]: "0"
+            - generic [ref=e30]: T
+            - generic [ref=e31]: R
+            - generic [ref=e32]: A
+            - generic [ref=e33]: C
+            - generic [ref=e34]: K
+            - generic [ref=e35]: S
+            - generic [ref=e38]: "0"
+            - generic [ref=e40]: A
+            - generic [ref=e41]: G
+            - generic [ref=e42]: E
+            - generic [ref=e43]: "N"
+            - generic [ref=e44]: T
+            - generic [ref=e45]: S
+        - generic [ref=e51]:
+          - button "Discover" [ref=e52]
+          - button "Register Repo" [ref=e53]
+      - generic [ref=e54]:
+        - generic [ref=e55]:
+          - heading "Active Worktrees(0)" [level=3] [ref=e58]:
+            - text: Active Worktrees
+            - generic [ref=e59]: (0)
+          - generic [ref=e60]: No platforms active. Create a worktree from a repo to lay some track.
+        - generic [ref=e67]:
+          - heading "Stations(4)" [level=3] [ref=e70]:
+            - text: Stations
+            - generic [ref=e71]: (4)
+          - generic [ref=e72]:
+            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 0 worktrees Created 8 days ago" [ref=e73] [cursor=pointer]:
+              - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+              - generic [ref=e75]:
+                - heading "conductor-ai" [level=3] [ref=e76]
+                - paragraph [ref=e77]: https://github.com/devinrosen/conductor-ai.git
+                - generic [ref=e78]:
+                  - generic [ref=e79]: 0 worktrees
+                  - generic [ref=e81]:
+                    - text: Created
+                    - time [ref=e82]: 8 days ago
+            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 4 days ago" [ref=e83] [cursor=pointer]:
+              - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+              - generic [ref=e85]:
+                - heading "docs" [level=3] [ref=e86]
+                - paragraph [ref=e87]: https://github.com/LivelyVideo/docs
+                - generic [ref=e88]:
+                  - generic [ref=e89]: 0 worktrees
+                  - generic [ref=e91]:
+                    - text: Created
+                    - time [ref=e92]: 4 days ago
+            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 4 days ago" [ref=e93] [cursor=pointer]:
+              - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+              - generic [ref=e95]:
+                - heading "global-sdlc" [level=3] [ref=e96]
+                - paragraph [ref=e97]: https://github.com/LivelyVideo/global-sdlc
+                - generic [ref=e98]:
+                  - generic [ref=e99]: 0 worktrees
+                  - generic [ref=e101]:
+                    - text: Created
+                    - time [ref=e102]: 4 days ago
+            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 8 days ago" [ref=e103] [cursor=pointer]:
+              - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+              - generic [ref=e105]:
+                - heading "video-client" [level=3] [ref=e106]
+                - paragraph [ref=e107]: https://github.com/LivelyVideo/video-client
+                - generic [ref=e108]:
+                  - generic [ref=e109]: 0 worktrees
+                  - generic [ref=e111]:
+                    - text: Created
+                    - time [ref=e112]: 8 days ago
+  - generic [ref=e113]:
+    - link "Home" [ref=e114] [cursor=pointer]:
+      - /url: /
+      - img [ref=e115]
+      - text: Home
+    - link "Repos" [ref=e117] [cursor=pointer]:
+      - /url: /repos
+      - img [ref=e118]
+      - text: Repos
+    - link "Workflows" [ref=e120] [cursor=pointer]:
+      - /url: /workflows
+      - img [ref=e121]
+      - text: Workflows
+```

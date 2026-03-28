@@ -19,9 +19,10 @@ workflow mobile-ux-audit {
   call analyze-mobile-ux
 
   gate human_review {
-    prompt     = "Review the mobile UX audit report above. Approve to file GitHub issues for high-severity findings, or reject to skip issue creation."
+    prompt     = "Select findings to file as GitHub issues:"
     timeout    = "48h"
     on_timeout = continue
+    options    = analyze-mobile-ux.findings
   }
 
   if analyze-mobile-ux.has_high_severity {

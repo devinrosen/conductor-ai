@@ -3,7 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::error::{ConductorError, Result};
-use crate::workflow_dsl::{ApprovalMode, GateNode, GateType, OnFailAction, OnTimeout};
+use crate::workflow_dsl::{ApprovalMode, GateNode, GateOptions, GateType, OnFailAction, OnTimeout};
 
 use crate::workflow::engine::{restore_step, should_skip, ExecutionState};
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
@@ -73,6 +73,63 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
         None,
     )?;
 
+    // Resolve gate options (if any) and persist them.
+    let resolved_options: Vec<String> = if let Some(ref gate_opts) = node.options {
+        match gate_opts {
+            GateOptions::Static(items) => items.clone(),
+            GateOptions::StepRef(dotted) => {
+                // Split "step.field" — everything before the first dot is the step key.
+                let dot = dotted.find('.').ok_or_else(|| {
+                    ConductorError::Workflow(format!(
+                        "Gate '{}': options StepRef '{dotted}' must be in 'step.field' format",
+                        node.name
+                    ))
+                })?;
+                let step_key = &dotted[..dot];
+                let field_key = &dotted[dot + 1..];
+                let result = state.step_results.get(step_key).ok_or_else(|| {
+                    ConductorError::Workflow(format!(
+                        "Gate '{}': options StepRef references step '{step_key}' which has no result yet",
+                        node.name
+                    ))
+                })?;
+                let json_str = result.structured_output.as_deref().ok_or_else(|| {
+                    ConductorError::Workflow(format!(
+                        "Gate '{}': step '{step_key}' has no structured_output to extract field '{field_key}' from",
+                        node.name
+                    ))
+                })?;
+                let val: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+                    ConductorError::Workflow(format!(
+                        "Gate '{}': failed to parse structured_output of step '{step_key}': {e}",
+                        node.name
+                    ))
+                })?;
+                let arr = val.get(field_key).and_then(|v| v.as_array()).ok_or_else(|| {
+                    ConductorError::Workflow(format!(
+                        "Gate '{}': field '{field_key}' in step '{step_key}' structured_output is not a JSON array",
+                        node.name
+                    ))
+                })?;
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    if !resolved_options.is_empty() {
+        // Persist as [{value, label}] JSON for downstream consumers.
+        let opts_json: Vec<serde_json::Value> = resolved_options
+            .iter()
+            .map(|s| serde_json::json!({"value": s, "label": s}))
+            .collect();
+        let opts_str = serde_json::to_string(&opts_json).unwrap_or_default();
+        state.wf_mgr.set_step_gate_options(&step_id, &opts_str)?;
+    }
+
     // Atomically set status=Waiting and blocked_on in a single DB statement so
     // there is no observable window where status=Waiting but blocked_on=NULL.
     let gate_name = node.name.clone();
@@ -80,10 +137,12 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
         GateType::HumanApproval => crate::workflow::types::BlockedOn::HumanApproval {
             gate_name,
             prompt: node.prompt.clone(),
+            options: resolved_options,
         },
         GateType::HumanReview => crate::workflow::types::BlockedOn::HumanReview {
             gate_name,
             prompt: node.prompt.clone(),
+            options: resolved_options,
         },
         GateType::PrApproval => crate::workflow::types::BlockedOn::PrApproval {
             gate_name,
@@ -273,7 +332,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                                             approvals,
                                             node.min_approvals
                                         );
-                                        state.wf_mgr.approve_gate(&step_id, "gh", None)?;
+                                        state.wf_mgr.approve_gate(&step_id, "gh", None, None)?;
                                         state.wf_mgr.update_workflow_status(
                                             &state.workflow_run_id,
                                             WorkflowRunStatus::Running,
@@ -308,7 +367,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                                         decision
                                     );
                                     if decision == "APPROVED" {
-                                        state.wf_mgr.approve_gate(&step_id, "gh", None)?;
+                                        state.wf_mgr.approve_gate(&step_id, "gh", None, None)?;
                                         state.wf_mgr.update_workflow_status(
                                             &state.workflow_run_id,
                                             WorkflowRunStatus::Running,
@@ -355,7 +414,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                                     });
                                 if all_pass {
                                     tracing::info!("Gate '{}': all checks passing", node.name);
-                                    state.wf_mgr.approve_gate(&step_id, "gh", None)?;
+                                    state.wf_mgr.approve_gate(&step_id, "gh", None, None)?;
                                     state.wf_mgr.update_workflow_status(
                                         &state.workflow_run_id,
                                         WorkflowRunStatus::Running,

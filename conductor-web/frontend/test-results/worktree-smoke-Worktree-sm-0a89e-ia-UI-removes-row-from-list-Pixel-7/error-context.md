@@ -25,15 +25,12 @@
       - link "docs":
         - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
         - generic: docs
-      - link "e2e-repo-1774636039488-ef2184":
-        - /url: /repos/01KMR8SZKQV2P94BKQVJ583KXB
-        - generic: e2e-repo-1774636039488-ef2184
-      - link "e2e-repo-1774636040511-a7878b":
-        - /url: /repos/01KMR8T0KPR9WKVKS79PV4PYDD
-        - generic: e2e-repo-1774636040511-a7878b
-      - link "e2e-repo-1774636049000-2ac1ca":
-        - /url: /repos/01KMR8T8WZ87CPQYMZTXBMFXTZ
-        - generic: e2e-repo-1774636049000-2ac1ca
+      - link "e2e-repo-1774642101691-55c435":
+        - /url: /repos/01KMREJZQP9WMFAVK2W5FAHH9E
+        - generic: e2e-repo-1774642101691-55c435
+      - link "e2e-repo-1774642105326-b76395":
+        - /url: /repos/01KMREK397TDPXCYYQQ01D5YZV
+        - generic: e2e-repo-1774642105326-b76395
       - link "global-sdlc":
         - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
         - generic: global-sdlc
@@ -57,39 +54,20 @@
       - button "Notifications" [ref=e10]:
         - img [ref=e11]
     - generic [ref=e14]:
-      - generic [ref=e15]:
-        - heading "e2e-repo-1774636049000-2ac1ca" [level=2] [ref=e16]
-        - button "Settings" [ref=e17]:
-          - img [ref=e18]
-      - generic [ref=e20]:
-        - generic [ref=e21]:
-          - heading "Worktrees" [level=3] [ref=e22]
-          - generic [ref=e23]:
-            - button "Show completed" [ref=e24]
-            - button "Create Worktree" [ref=e25]:
-              - img [ref=e26]
-              - generic [ref=e29]: Create Worktree
-        - generic [ref=e30]:
-          - img [ref=e31]
-          - paragraph [ref=e37]: No platforms active. Create a worktree to lay some track.
-      - generic [ref=e38]:
-        - generic [ref=e39]:
-          - heading "Tickets" [level=3] [ref=e40]
-          - button "Configure Issue Sources" [ref=e41]
-        - generic [ref=e42]:
-          - img [ref=e43]
-          - paragraph [ref=e50]: No issue sources configured. Add one in Settings to sync tickets.
-  - generic [ref=e51]:
-    - link "Home" [ref=e52] [cursor=pointer]:
+      - paragraph [ref=e15]: Repo not found
+      - link "Back to dashboard" [ref=e16] [cursor=pointer]:
+        - /url: /
+  - generic [ref=e17]:
+    - link "Home" [ref=e18] [cursor=pointer]:
       - /url: /
-      - img [ref=e53]
+      - img [ref=e19]
       - text: Home
-    - link "Repos" [ref=e55] [cursor=pointer]:
+    - link "Repos" [ref=e21] [cursor=pointer]:
       - /url: /repos
-      - img [ref=e56]
+      - img [ref=e22]
       - text: Repos
-    - link "Workflows" [ref=e58] [cursor=pointer]:
+    - link "Workflows" [ref=e24] [cursor=pointer]:
       - /url: /workflows
-      - img [ref=e59]
+      - img [ref=e25]
       - text: Workflows
 ```

@@ -138,6 +138,7 @@ pub struct ResumeWorkflowRequest {
 #[derive(Deserialize)]
 pub struct GateActionRequest {
     pub feedback: Option<String>,
+    pub selections: Option<Vec<String>>,
 }
 
 // ── Endpoints ─────────────────────────────────────────────────────────
@@ -636,7 +637,12 @@ pub async fn approve_gate(
         ))
     })?;
 
-    mgr.approve_gate(&step.id, "user", req.feedback.as_deref())?;
+    mgr.approve_gate(
+        &step.id,
+        "user",
+        req.feedback.as_deref(),
+        req.selections.as_deref(),
+    )?;
 
     state
         .events

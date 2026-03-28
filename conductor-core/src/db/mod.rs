@@ -3,6 +3,7 @@ pub mod seed;
 
 use rusqlite::types::ToSql;
 use rusqlite::Connection;
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::error::Result;
@@ -76,6 +77,22 @@ pub(crate) fn with_in_clause<T>(
         params.push(item);
     }
     f(&sql, &params)
+}
+
+/// Return the set of `parent_run_id` values for all non-terminal workflow runs.
+///
+/// A free DB helper — intentionally not on `WorkflowManager` — so that the
+/// agent orphan reaper can call it without creating a mutual module dependency
+/// between the `agent` and `workflow` modules.
+pub(crate) fn active_workflow_parent_run_ids(conn: &Connection) -> Result<HashSet<String>> {
+    let ids: Vec<String> = query_collect(
+        conn,
+        "SELECT parent_run_id FROM workflow_runs \
+         WHERE status IN ('pending', 'running', 'waiting')",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(ids.into_iter().collect())
 }
 
 /// Prepare a query, map each row, and collect results into a `Vec`.

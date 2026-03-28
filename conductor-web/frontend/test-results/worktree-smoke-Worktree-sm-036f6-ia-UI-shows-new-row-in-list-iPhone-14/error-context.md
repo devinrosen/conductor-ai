@@ -19,37 +19,21 @@
       - link "Tickets":
         - /url: /tickets
       - generic: Repos
-      - generic: Loading...
       - link "conductor-ai":
         - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
         - generic: conductor-ai
       - link "docs":
         - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
         - generic: docs
-      - link "e2e-repo-1774636005914-18a872":
-        - /url: /repos/01KMR8RYTHC4QG1MRHEW8D9BJY
-        - generic: e2e-repo-1774636005914-18a872
-      - link "e2e-repo-1774636008949-b46ea1":
-        - /url: /repos/01KMR8S1SMHCHMKJ9T8W4RBE6G
-        - generic: e2e-repo-1774636008949-b46ea1
-      - link "e2e-repo-1774636010477-e4be3a":
-        - /url: /repos/01KMR8S39JPXX9Y4DZQJS9AYR8
-        - generic: e2e-repo-1774636010477-e4be3a
-      - link "e2e-repo-1774636010478-167ede":
-        - /url: /repos/01KMR8S39G9CHZEYRF6WN5KMG5
-        - generic: e2e-repo-1774636010478-167ede
-      - link "e2e-repo-1774636010485-5d1d03":
-        - /url: /repos/01KMR8S39M17PJZN4BA5T6QSBR
-        - generic: e2e-repo-1774636010485-5d1d03
-      - link "e2e-repo-1774636010683-d0973c":
-        - /url: /repos/01KMR8S3FPJSX6BSE3ZNX4MF36
-        - generic: e2e-repo-1774636010683-d0973c
-      - link "e2e-repo-1774636013815-e0d25a":
-        - /url: /repos/01KMR8S6HDEPRMJT04XP4SSB13
-        - generic: e2e-repo-1774636013815-e0d25a
-      - link "e2e-repo-1774636016631-06f664":
-        - /url: /repos/01KMR8S99D88SZ15RP84GPARRN
-        - generic: e2e-repo-1774636016631-06f664
+      - link "e2e-repo-1774642073732-b04286":
+        - /url: /repos/01KMREJ4E54V496J9HFFEETEFF
+        - generic: e2e-repo-1774642073732-b04286
+      - link "e2e-repo-1774642077136-a21d4c":
+        - /url: /repos/01KMREJ7RN2V9YZFG64AFTZRKQ
+        - generic: e2e-repo-1774642077136-a21d4c
+      - link "e2e-repo-1774642078420-ab462e":
+        - /url: /repos/01KMREJ90BK4PHNG3KM94FQKFB
+        - generic: e2e-repo-1774642078420-ab462e
       - link "global-sdlc":
         - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
         - generic: global-sdlc
@@ -73,48 +57,20 @@
       - button "Notifications" [ref=e10]:
         - img [ref=e11]
     - generic [ref=e14]:
-      - generic [ref=e15]:
-        - heading "e2e-repo-1774636010477-e4be3a" [level=2] [ref=e16]
-        - button "Settings" [ref=e17]:
-          - img [ref=e18]
-      - generic [ref=e20]:
-        - generic [ref=e21]:
-          - heading "Worktrees" [level=3] [ref=e22]
-          - generic [ref=e23]:
-            - button "Show completed" [ref=e24]
-            - generic [ref=e25]:
-              - generic [ref=e26]:
-                - generic [ref=e27]:
-                  - generic [ref=e28]: Name
-                  - textbox "feat-my-feature" [ref=e29]: e2e-create-1774636011121-aa611e
-                - generic [ref=e30]:
-                  - generic [ref=e31]: From Branch (optional)
-                  - textbox "main" [ref=e32]
-              - paragraph [ref=e33]: "invalid input: uncommitted changes on base branch, please commit or stash first"
-              - generic [ref=e34]:
-                - button "Create" [ref=e35]
-                - button "Cancel" [ref=e36]
-        - generic [ref=e37]:
-          - img [ref=e38]
-          - paragraph [ref=e44]: No platforms active. Create a worktree to lay some track.
-      - generic [ref=e45]:
-        - generic [ref=e46]:
-          - heading "Tickets" [level=3] [ref=e47]
-          - button "Configure Issue Sources" [ref=e48]
-        - generic [ref=e49]:
-          - img [ref=e50]
-          - paragraph [ref=e57]: No issue sources configured. Add one in Settings to sync tickets.
-  - generic [ref=e58]:
-    - link "Home" [ref=e59]:
+      - paragraph [ref=e15]: Repo not found
+      - link "Back to dashboard" [ref=e16]:
+        - /url: /
+  - generic [ref=e17]:
+    - link "Home" [ref=e18]:
       - /url: /
-      - img [ref=e60]
+      - img [ref=e19]
       - text: Home
-    - link "Repos" [ref=e62]:
+    - link "Repos" [ref=e21]:
       - /url: /repos
-      - img [ref=e63]
+      - img [ref=e22]
       - text: Repos
-    - link "Workflows" [ref=e65]:
+    - link "Workflows" [ref=e24]:
       - /url: /workflows
-      - img [ref=e66]
+      - img [ref=e25]
       - text: Workflows
 ```

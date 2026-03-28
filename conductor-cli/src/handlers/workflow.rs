@@ -678,7 +678,7 @@ pub fn handle_workflow(
         }
         WorkflowCommands::GateApprove { run_id } => {
             with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
-                wf_mgr.approve_gate(&step.id, user, None)?;
+                wf_mgr.approve_gate(&step.id, user, None, None)?;
                 println!("Gate '{}' approved by {user}.", step.step_name);
                 Ok(())
             })?;
@@ -697,7 +697,7 @@ pub fn handle_workflow(
         }
         WorkflowCommands::GateFeedback { run_id, feedback } => {
             with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
-                wf_mgr.approve_gate(&step.id, user, Some(&feedback))?;
+                wf_mgr.approve_gate(&step.id, user, Some(&feedback), None)?;
                 println!(
                     "Gate '{}' approved with feedback by {user}.",
                     step.step_name

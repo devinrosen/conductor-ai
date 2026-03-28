@@ -152,8 +152,20 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Modal::GateAction {
             gate_prompt,
             feedback,
+            options,
+            selected,
+            focused_option,
             ..
-        } => modal::render_gate_action(frame, area, gate_prompt, feedback, &state.theme),
+        } => modal::render_gate_action(
+            frame,
+            area,
+            gate_prompt,
+            feedback,
+            options,
+            selected,
+            *focused_option,
+            &state.theme,
+        ),
         Modal::EventDetail {
             title,
             body,

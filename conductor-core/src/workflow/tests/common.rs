@@ -28,6 +28,7 @@ pub(super) fn make_gate_node(gate_type: GateType, on_timeout: OnTimeout) -> Gate
         on_timeout,
         bot_name: None,
         quality_gate: None,
+        options: None,
     }
 }
 
@@ -95,6 +96,7 @@ pub(super) fn make_state_with_run<'a>(
             &BlockedOn::HumanApproval {
                 gate_name: "test-gate".to_string(),
                 prompt: None,
+                options: vec![],
             },
         )
         .unwrap();
@@ -276,6 +278,8 @@ pub(super) fn make_test_step(
         gate_feedback: None,
         structured_output: structured_output.map(String::from),
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
     }
 }
 

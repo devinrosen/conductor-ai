@@ -25,21 +25,18 @@
       - link "docs":
         - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
         - generic: docs
-      - link "e2e-repo-1774636005914-18a872":
-        - /url: /repos/01KMR8RYTHC4QG1MRHEW8D9BJY
-        - generic: e2e-repo-1774636005914-18a872
-      - link "e2e-repo-1774636008949-b46ea1":
-        - /url: /repos/01KMR8S1SMHCHMKJ9T8W4RBE6G
-        - generic: e2e-repo-1774636008949-b46ea1
-      - link "e2e-repo-1774636010485-5d1d03":
-        - /url: /repos/01KMR8S39M17PJZN4BA5T6QSBR
-        - generic: e2e-repo-1774636010485-5d1d03
-      - link "e2e-repo-1774636013815-e0d25a":
-        - /url: /repos/01KMR8S6HDEPRMJT04XP4SSB13
-        - generic: e2e-repo-1774636013815-e0d25a
-      - link "e2e-repo-1774636016631-06f664":
-        - /url: /repos/01KMR8S99D88SZ15RP84GPARRN
-        - generic: e2e-repo-1774636016631-06f664
+      - link "e2e-repo-1774642073732-b04286":
+        - /url: /repos/01KMREJ4E54V496J9HFFEETEFF
+        - generic: e2e-repo-1774642073732-b04286
+      - link "e2e-repo-1774642078420-ab462e":
+        - /url: /repos/01KMREJ90BK4PHNG3KM94FQKFB
+        - generic: e2e-repo-1774642078420-ab462e
+      - link "e2e-repo-1774642090375-0332d2":
+        - /url: /repos/01KMREJMNXNRH58VVV0FWYTVZ5
+        - generic: e2e-repo-1774642090375-0332d2
+      - link "e2e-repo-1774642090399-4739d6":
+        - /url: /repos/01KMREJMPPVDFWT14ER3TMNVP4
+        - generic: e2e-repo-1774642090399-4739d6
       - link "global-sdlc":
         - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
         - generic: global-sdlc

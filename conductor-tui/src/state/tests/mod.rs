@@ -153,6 +153,8 @@ pub(crate) fn make_wf_step(
         gate_feedback: None,
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
     }
 }
 
@@ -250,6 +252,8 @@ pub(crate) fn make_iter_step(
         gate_feedback: None,
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
     }
 }
 

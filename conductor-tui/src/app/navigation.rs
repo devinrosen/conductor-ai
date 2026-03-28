@@ -499,6 +499,14 @@ impl App {
                 wrap_decrement(cursor, repos.len());
                 return;
             }
+            Modal::GateAction {
+                ref options,
+                ref mut focused_option,
+                ..
+            } if !options.is_empty() => {
+                wrap_decrement(focused_option, options.len());
+                return;
+            }
             Modal::Notifications {
                 ref notifications,
                 ref mut selected,
@@ -655,6 +663,14 @@ impl App {
                 ..
             } => {
                 wrap_increment(cursor, repos.len());
+                return;
+            }
+            Modal::GateAction {
+                ref options,
+                ref mut focused_option,
+                ..
+            } if !options.is_empty() => {
+                wrap_increment(focused_option, options.len());
                 return;
             }
             Modal::Notifications {
@@ -1041,6 +1057,8 @@ mod tests {
                 gate_feedback: None,
                 structured_output: None,
                 output_file: None,
+                gate_options: None,
+                gate_selections: None,
             },
             workflow_name: "test-wf".into(),
             target_label: None,

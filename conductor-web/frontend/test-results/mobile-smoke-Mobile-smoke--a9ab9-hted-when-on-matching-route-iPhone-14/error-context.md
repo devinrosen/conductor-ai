@@ -1,0 +1,75 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary:
+    - generic:
+      - generic:
+        - img "Station clock"
+        - img "Conductor"
+        - heading "Conductor" [level=1]
+      - button "Close menu": ✕
+    - navigation:
+      - link "Home":
+        - /url: /
+      - link "Repos":
+        - /url: /repos
+      - link "Workflows":
+        - /url: /workflows
+      - link "Tickets":
+        - /url: /tickets
+      - generic: Repos
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
+    - generic:
+      - link "Settings":
+        - /url: /settings
+      - link "Getting Started 🚂":
+        - /url: /getting-started
+        - text: Getting Started
+        - generic: 🚂
+      - generic:
+        - generic: ⌘K command palette
+        - generic: "? shortcuts"
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - button "Open menu" [ref=e6]: ☰
+      - generic [ref=e7]: Conductor
+      - button "Notifications" [ref=e10]:
+        - img [ref=e11]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - heading "Workflows" [level=2] [ref=e17]
+        - generic [ref=e18]:
+          - generic [ref=e19]:
+            - button "Tree" [ref=e20]
+            - button "Table" [ref=e21]
+          - button "Start Workflow" [ref=e22]
+      - textbox "Search runs..." [ref=e24]
+      - generic [ref=e26]:
+        - img [ref=e27]
+        - paragraph [ref=e36]: No timetable set. Run a workflow to see activity here.
+  - generic [ref=e37]:
+    - link "Home" [ref=e38]:
+      - /url: /
+      - img [ref=e39]
+      - text: Home
+    - link "Repos" [ref=e41]:
+      - /url: /repos
+      - img [ref=e42]
+      - text: Repos
+    - link "Workflows" [ref=e44]:
+      - /url: /workflows
+      - img [ref=e45]
+      - text: Workflows
+```

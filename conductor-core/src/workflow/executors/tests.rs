@@ -6,7 +6,7 @@ use crate::workflow::engine::ExecutionState;
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::StepResult;
 use crate::workflow_dsl::{
-    ApprovalMode, Condition, GateNode, GateType, IfNode, OnFailAction, OnTimeout,
+    ApprovalMode, Condition, GateNode, GateOptions, GateType, IfNode, OnFailAction, OnTimeout,
     QualityGateConfig, UnlessNode,
 };
 
@@ -712,6 +712,7 @@ fn make_quality_gate_node(
         on_timeout: OnTimeout::Fail,
         bot_name: None,
         quality_gate,
+        options: None,
     }
 }
 
@@ -931,4 +932,187 @@ fn test_execute_gate_dispatches_quality_gate() {
         result.is_ok(),
         "execute_gate should dispatch QualityGate correctly: {result:?}"
     );
+}
+
+// -----------------------------------------------------------------------
+// StepRef resolution tests
+// -----------------------------------------------------------------------
+
+fn make_stepref_gate_node(name: &str, options: Option<GateOptions>) -> GateNode {
+    GateNode {
+        name: name.to_string(),
+        gate_type: GateType::HumanApproval,
+        prompt: None,
+        min_approvals: 1,
+        approval_mode: ApprovalMode::default(),
+        timeout_secs: 60,
+        on_timeout: OnTimeout::Fail,
+        bot_name: None,
+        quality_gate: None,
+        options,
+    }
+}
+
+#[test]
+fn test_stepref_gate_missing_dot_format_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+
+    let node = make_stepref_gate_node("gate1", Some(GateOptions::StepRef("nodot".to_string())));
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("must be in 'step.field' format"), "got: {err}");
+}
+
+#[test]
+fn test_stepref_gate_step_not_found_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    // step_results is empty — "missing_step" has no result
+
+    let node = make_stepref_gate_node(
+        "gate2",
+        Some(GateOptions::StepRef("missing_step.field".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("which has no result yet"), "got: {err}");
+}
+
+#[test]
+fn test_stepref_gate_no_structured_output_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    state
+        .step_results
+        .insert("prior".to_string(), make_step_result(None));
+
+    let node = make_stepref_gate_node(
+        "gate3",
+        Some(GateOptions::StepRef("prior.field".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("has no structured_output"), "got: {err}");
+}
+
+#[test]
+fn test_stepref_gate_invalid_json_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    state.step_results.insert(
+        "prior".to_string(),
+        make_step_result(Some("not valid json")),
+    );
+
+    let node = make_stepref_gate_node(
+        "gate4",
+        Some(GateOptions::StepRef("prior.field".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("failed to parse structured_output"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn test_stepref_gate_field_not_array_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    state.step_results.insert(
+        "prior".to_string(),
+        make_step_result(Some(r#"{"field": "not-an-array"}"#)),
+    );
+
+    let node = make_stepref_gate_node(
+        "gate5",
+        Some(GateOptions::StepRef("prior.field".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("is not a JSON array"), "got: {err}");
+}
+
+#[test]
+fn test_stepref_gate_happy_path() {
+    use std::time::Duration;
+
+    // Use a named temp file so two connections can share the same WAL-mode DB.
+    let db_file = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db_file.path().to_str().unwrap().to_string();
+
+    // Primary connection — used by execute_gate.
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys = ON;")
+        .unwrap();
+    crate::db::migrations::run(&conn).unwrap();
+    // Seed the worktree that make_test_state references (same rows as setup_db).
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let config = crate::config::Config::default();
+    let mut state = make_test_state(
+        &conn,
+        &config,
+        "/tmp",
+        crate::workflow::types::WorkflowExecConfig {
+            // Short poll interval so the test doesn't drag out.
+            poll_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+    );
+    state.step_results.insert(
+        "prior".to_string(),
+        make_step_result(Some(r#"{"choices": ["a","b","c"]}"#)),
+    );
+
+    let run_id = state.workflow_run_id.clone();
+
+    // Background thread: opens a second connection and approves the gate once
+    // the step row appears in the DB (written by execute_gate before the poll).
+    let db_path_clone = db_path.clone();
+    let approver = std::thread::spawn(move || {
+        let conn2 = rusqlite::Connection::open(&db_path_clone).unwrap();
+        conn2
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys = ON;")
+            .unwrap();
+        let wf_mgr2 = crate::workflow::manager::WorkflowManager::new(&conn2);
+        loop {
+            if let Ok(Some(step)) = wf_mgr2.find_waiting_gate(&run_id) {
+                wf_mgr2.approve_gate(&step.id, "test", None, None).unwrap();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+
+    let node = make_stepref_gate_node(
+        "gate6",
+        Some(GateOptions::StepRef("prior.choices".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    approver.join().unwrap();
+    assert!(result.is_ok(), "happy path should succeed: {result:?}");
 }

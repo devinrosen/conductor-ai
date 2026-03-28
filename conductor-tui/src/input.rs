@@ -246,15 +246,29 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::GateAction { .. } => {
-            return match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Action::ApproveGate,
-                KeyCode::Char('n') | KeyCode::Char('N') => Action::RejectGate,
-                KeyCode::Esc => Action::DismissModal,
-                KeyCode::Backspace => Action::GateInputBackspace,
-                KeyCode::Char(c) => Action::GateInputChar(c),
-                _ => Action::None,
-            };
+        Modal::GateAction { options, .. } => {
+            if options.is_empty() {
+                // Binary approve/reject mode — original behaviour.
+                return match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Action::ApproveGate,
+                    KeyCode::Char('n') | KeyCode::Char('N') => Action::RejectGate,
+                    KeyCode::Esc => Action::DismissModal,
+                    KeyCode::Backspace => Action::GateInputBackspace,
+                    KeyCode::Char(c) => Action::GateInputChar(c),
+                    _ => Action::None,
+                };
+            } else {
+                // Checklist mode.
+                return match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+                    KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+                    KeyCode::Char(' ') => Action::GateToggleOption,
+                    KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => Action::ApproveGate,
+                    KeyCode::Char('n') | KeyCode::Char('N') => Action::RejectGate,
+                    KeyCode::Esc => Action::DismissModal,
+                    _ => Action::None,
+                };
+            }
         }
         Modal::TemplatePicker { ref items, .. } => {
             return match key.code {
@@ -1042,6 +1056,8 @@ mod tests {
             gate_feedback: None,
             structured_output: None,
             output_file: None,
+            gate_options: None,
+            gate_selections: None,
         }];
         state
     }

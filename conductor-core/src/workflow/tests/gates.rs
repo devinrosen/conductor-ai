@@ -28,7 +28,7 @@ fn test_gate_approve() {
     assert_eq!(waiting.unwrap().id, step_id);
 
     // Approve
-    mgr.approve_gate(&step_id, "user", Some("Looks good!"))
+    mgr.approve_gate(&step_id, "user", Some("Looks good!"), None)
         .unwrap();
 
     // Verify
@@ -132,7 +132,7 @@ fn test_gate_pr_approval_approve() {
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
-    mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"))
+    mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"), None)
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
@@ -191,7 +191,7 @@ fn test_gate_pr_checks_approve() {
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
-    mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"))
+    mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"), None)
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
@@ -263,4 +263,102 @@ fn test_gate_timeout_zero_seconds() {
     assert!(result.is_err());
     let step = wf_mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Failed);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-select gate options
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_gate_multiselect_options_and_approval() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let run = mgr
+        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+    let step_id = mgr
+        .insert_step(&run.id, "pick_items", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Select items:"), "1h")
+        .unwrap();
+
+    // Simulate the executor persisting resolved options
+    let options_json = r#"[{"value":"finding-a","label":"finding-a"},{"value":"finding-b","label":"finding-b"},{"value":"finding-c","label":"finding-c"}]"#;
+    mgr.set_step_gate_options(&step_id, options_json).unwrap();
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+    // Verify gate_options are stored and step is waiting
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.status, WorkflowStepStatus::Waiting);
+    assert!(step.gate_options.is_some(), "gate_options should be set");
+
+    // Approve with a subset of selections
+    let selections = vec!["finding-a".to_string(), "finding-c".to_string()];
+    mgr.approve_gate(&step_id, "user", None, Some(&selections))
+        .unwrap();
+
+    // Verify post-approval state
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.status, WorkflowStepStatus::Completed);
+    assert!(step.gate_approved_at.is_some());
+    assert_eq!(step.gate_approved_by.as_deref(), Some("user"));
+
+    // Verify selections were persisted as JSON
+    let stored: Vec<String> =
+        serde_json::from_str(step.gate_selections.as_deref().unwrap()).unwrap();
+    assert_eq!(stored, vec!["finding-a", "finding-c"]);
+
+    // Verify context_out was built from selections
+    let ctx = step.context_out.as_deref().unwrap();
+    assert!(
+        ctx.contains("- finding-a"),
+        "context_out missing finding-a: {ctx}"
+    );
+    assert!(
+        ctx.contains("- finding-c"),
+        "context_out missing finding-c: {ctx}"
+    );
+    assert!(
+        !ctx.contains("finding-b"),
+        "context_out should not include unselected item"
+    );
+}
+
+#[test]
+fn test_gate_approve_empty_selections() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let run = mgr
+        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+    let step_id = mgr
+        .insert_step(&run.id, "pick_items", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Select items:"), "1h")
+        .unwrap();
+
+    let options_json = r#"[{"value":"item-x","label":"item-x"}]"#;
+    mgr.set_step_gate_options(&step_id, options_json).unwrap();
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+    // Approve with empty selections (skip all)
+    mgr.approve_gate(&step_id, "user", None, Some(&[])).unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.status, WorkflowStepStatus::Completed);
+    // Empty selections → no context_out injected
+    assert!(
+        step.context_out.is_none(),
+        "empty selections should not produce context_out"
+    );
 }

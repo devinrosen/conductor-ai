@@ -25,15 +25,15 @@
       - link "docs":
         - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
         - generic: docs
-      - link "e2e-repo-1774636010485-5d1d03":
-        - /url: /repos/01KMR8S39M17PJZN4BA5T6QSBR
-        - generic: e2e-repo-1774636010485-5d1d03
-      - link "e2e-repo-1774636013815-e0d25a":
-        - /url: /repos/01KMR8S6HDEPRMJT04XP4SSB13
-        - generic: e2e-repo-1774636013815-e0d25a
-      - link "e2e-repo-1774636032135-9d92b5":
-        - /url: /repos/01KMR8SRDYE6HN2HSE3YZ4DWBW
-        - generic: e2e-repo-1774636032135-9d92b5
+      - link "e2e-repo-1774642078420-ab462e":
+        - /url: /repos/01KMREJ90BK4PHNG3KM94FQKFB
+        - generic: e2e-repo-1774642078420-ab462e
+      - link "e2e-repo-1774642097526-f30501":
+        - /url: /repos/01KMREJVNC6CCTD84YEYYJRWWK
+        - generic: e2e-repo-1774642097526-f30501
+      - link "e2e-repo-1774642101691-55c435":
+        - /url: /repos/01KMREJZQP9WMFAVK2W5FAHH9E
+        - generic: e2e-repo-1774642101691-55c435
       - link "global-sdlc":
         - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
         - generic: global-sdlc

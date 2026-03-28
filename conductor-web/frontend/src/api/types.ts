@@ -235,6 +235,8 @@ export interface WorkflowRunStep {
   gate_approved_by: string | null;
   gate_feedback: string | null;
   context_out: string | null;
+  gate_options: string | null;
+  gate_selections: string | null;
 }
 
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)

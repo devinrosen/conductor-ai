@@ -1,0 +1,175 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img "Station clock" [ref=e8]
+        - img "Conductor" [ref=e22]
+        - heading "Conductor" [level=1] [ref=e23]
+      - button "Close menu" [ref=e24]: ✕
+    - navigation [ref=e25]:
+      - link "Home" [ref=e26] [cursor=pointer]:
+        - /url: /
+      - link "Repos" [ref=e27] [cursor=pointer]:
+        - /url: /repos
+      - link "Workflows" [ref=e28] [cursor=pointer]:
+        - /url: /workflows
+      - link "Tickets" [ref=e29] [cursor=pointer]:
+        - /url: /tickets
+      - generic [ref=e30]: Repos
+      - link "conductor-ai" [ref=e31] [cursor=pointer]:
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic [ref=e32]: conductor-ai
+      - link "docs" [ref=e34] [cursor=pointer]:
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic [ref=e35]: docs
+      - link "global-sdlc" [ref=e37] [cursor=pointer]:
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic [ref=e38]: global-sdlc
+      - link "video-client" [ref=e40] [cursor=pointer]:
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic [ref=e41]: video-client
+    - generic [ref=e43]:
+      - link "Settings" [ref=e44] [cursor=pointer]:
+        - /url: /settings
+      - link "Getting Started 🚂" [ref=e45] [cursor=pointer]:
+        - /url: /getting-started
+        - text: Getting Started
+        - generic [ref=e46]: 🚂
+      - generic [ref=e47]:
+        - generic [ref=e48]: ⌘K command palette
+        - generic [ref=e49]: "? shortcuts"
+  - main [ref=e50]:
+    - generic [ref=e51]:
+      - button "Open menu" [active] [ref=e52]: ☰
+      - generic [ref=e53]: Conductor
+      - button "Notifications" [ref=e56]:
+        - img [ref=e57]
+    - generic [ref=e60]:
+      - generic [ref=e61]:
+        - generic [ref=e62]:
+          - heading "Home" [level=2] [ref=e63]
+          - generic [ref=e64]:
+            - generic [ref=e65]: "4"
+            - generic [ref=e67]: R
+            - generic [ref=e68]: E
+            - generic [ref=e69]: P
+            - generic [ref=e70]: O
+            - generic [ref=e71]: S
+            - generic [ref=e74]: "2"
+            - generic [ref=e76]: T
+            - generic [ref=e77]: R
+            - generic [ref=e78]: A
+            - generic [ref=e79]: C
+            - generic [ref=e80]: K
+            - generic [ref=e81]: S
+            - generic [ref=e84]: "0"
+            - generic [ref=e86]: A
+            - generic [ref=e87]: G
+            - generic [ref=e88]: E
+            - generic [ref=e89]: "N"
+            - generic [ref=e90]: T
+            - generic [ref=e91]: S
+        - generic [ref=e97]:
+          - button "Discover" [ref=e98]
+          - button "Register Repo" [ref=e99]
+      - generic [ref=e100]:
+        - generic [ref=e101]:
+          - heading "Active Worktrees(2)" [level=3] [ref=e104]:
+            - text: Active Worktrees
+            - generic [ref=e105]: (2)
+          - table [ref=e107]:
+            - rowgroup [ref=e108]:
+              - row "Branch Repo Status Agent Created" [ref=e109]:
+                - columnheader [ref=e110]
+                - columnheader "Branch" [ref=e111]
+                - columnheader "Repo" [ref=e112]
+                - columnheader "Status" [ref=e113]
+                - columnheader "Agent" [ref=e114]
+                - columnheader "Created" [ref=e115]
+            - rowgroup [ref=e116]:
+              - row "feat/desktop-workflow-detail conductor-ai active completed 3 days ago" [ref=e117] [cursor=pointer]:
+                - cell [ref=e118]:
+                  - generic "active" [ref=e119]
+                - cell "feat/desktop-workflow-detail" [ref=e123]
+                - cell "conductor-ai" [ref=e124]:
+                  - generic [ref=e125]: conductor-ai
+                - cell "active" [ref=e126]:
+                  - generic [ref=e127]: active
+                - cell "completed" [ref=e128]:
+                  - generic [ref=e129]: completed
+                - cell "3 days ago" [ref=e130]:
+                  - time [ref=e131]: 3 days ago
+              - row "feat/Desktop-worktree-detail conductor-ai active completed 1 hour ago" [ref=e132] [cursor=pointer]:
+                - cell [ref=e133]:
+                  - generic "active" [ref=e134]
+                - cell "feat/Desktop-worktree-detail" [ref=e138]
+                - cell "conductor-ai" [ref=e139]:
+                  - generic [ref=e140]: conductor-ai
+                - cell "active" [ref=e141]:
+                  - generic [ref=e142]: active
+                - cell "completed" [ref=e143]:
+                  - generic [ref=e144]: completed
+                - cell "1 hour ago" [ref=e145]:
+                  - time [ref=e146]: 1 hour ago
+        - generic [ref=e153]:
+          - heading "Stations(4)" [level=3] [ref=e156]:
+            - text: Stations
+            - generic [ref=e157]: (4)
+          - generic [ref=e158]:
+            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 8 days ago" [ref=e159] [cursor=pointer]:
+              - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+              - generic [ref=e161]:
+                - heading "conductor-ai" [level=3] [ref=e162]
+                - paragraph [ref=e163]: https://github.com/devinrosen/conductor-ai.git
+                - generic [ref=e164]:
+                  - generic [ref=e165]: 2 worktrees
+                  - generic [ref=e167]:
+                    - text: Created
+                    - time [ref=e168]: 8 days ago
+            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 4 days ago" [ref=e169] [cursor=pointer]:
+              - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+              - generic [ref=e171]:
+                - heading "docs" [level=3] [ref=e172]
+                - paragraph [ref=e173]: https://github.com/LivelyVideo/docs
+                - generic [ref=e174]:
+                  - generic [ref=e175]: 0 worktrees
+                  - generic [ref=e177]:
+                    - text: Created
+                    - time [ref=e178]: 4 days ago
+            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 4 days ago" [ref=e179] [cursor=pointer]:
+              - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+              - generic [ref=e181]:
+                - heading "global-sdlc" [level=3] [ref=e182]
+                - paragraph [ref=e183]: https://github.com/LivelyVideo/global-sdlc
+                - generic [ref=e184]:
+                  - generic [ref=e185]: 0 worktrees
+                  - generic [ref=e187]:
+                    - text: Created
+                    - time [ref=e188]: 4 days ago
+            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 8 days ago" [ref=e189] [cursor=pointer]:
+              - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+              - generic [ref=e191]:
+                - heading "video-client" [level=3] [ref=e192]
+                - paragraph [ref=e193]: https://github.com/LivelyVideo/video-client
+                - generic [ref=e194]:
+                  - generic [ref=e195]: 0 worktrees
+                  - generic [ref=e197]:
+                    - text: Created
+                    - time [ref=e198]: 8 days ago
+  - generic [ref=e199]:
+    - link "Home" [ref=e200] [cursor=pointer]:
+      - /url: /
+      - img [ref=e201]
+      - text: Home
+    - link "Repos" [ref=e203] [cursor=pointer]:
+      - /url: /repos
+      - img [ref=e204]
+      - text: Repos
+    - link "Workflows" [ref=e206] [cursor=pointer]:
+      - /url: /workflows
+      - img [ref=e207]
+      - text: Workflows
+```

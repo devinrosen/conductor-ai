@@ -261,10 +261,13 @@ export const api = {
     request<WorkflowRun[]>(`/workflows/runs/${runId}/children`),
   cancelWorkflow: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/cancel`, { method: "POST" }),
-  approveGate: (runId: string, feedback?: string) =>
+  approveGate: (runId: string, feedback?: string, selections?: string[]) =>
     request<void>(`/workflows/runs/${runId}/gate/approve`, {
       method: "POST",
-      body: JSON.stringify({ feedback: feedback ?? null }),
+      body: JSON.stringify({
+        feedback: feedback ?? null,
+        selections: selections ?? null,
+      }),
     }),
   rejectGate: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/gate/reject`, { method: "POST" }),
