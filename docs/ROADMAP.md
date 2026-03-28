@@ -1,6 +1,6 @@
 # Conductor Roadmap
 
-Priority order as of 2026-03-20. See linked GitHub issues for full details.
+Priority order as of 2026-03-28. See linked GitHub issues for full details.
 
 > **Note:** This file tracks upcoming work only. Completed items should be removed, not moved to a "recently completed" section — git history and closed issues are the source of truth for what's done.
 
@@ -10,8 +10,7 @@ Small scope, immediately useful. Start here.
 
 | Priority | Issue | Title | Notes |
 |----------|-------|-------|-------|
-| 1 | [#1367](https://github.com/devinrosen/conductor-ai/issues/1367) | 'Cannot determine repo for this workflow run' on historical runs | Affects 98% of historical workflow runs; repo_id backfill + deleted worktree fallback |
-| 2 | [#140](https://github.com/devinrosen/conductor-ai/issues/140) | Role-based tool profiles for scoped agent MCP access | Important as parallel agent usage scales |
+| 1 | [#140](https://github.com/devinrosen/conductor-ai/issues/140) | Role-based tool profiles for scoped agent MCP access | Important as parallel agent usage scales |
 
 ---
 
@@ -46,10 +45,3 @@ High value but require more design and implementation work.
 |------|-----------|---------|
 | GitHub sync | Sub-issues not supported | Ticket sync uses `gh issue list` which returns a flat list. GitHub sub-issues require the GraphQL API and are not yet pulled in. |
 
----
-
-## Deferred — Phase 5
-
-| Issue | Title | Notes |
-|-------|-------|-------|
-| [#9](https://github.com/devinrosen/conductor-ai/issues/9) | Daemon extraction — async service with IPC | Build once parallel agent workflows make the TUI-must-be-open limitation painful. Requirements will be clearer then. |
