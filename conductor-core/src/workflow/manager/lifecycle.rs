@@ -255,22 +255,25 @@ impl<'a> WorkflowManager<'a> {
 
     /// Mark a workflow run as failed and also fail its parent agent run.
     ///
-    /// This is the canonical way to fail a workflow run together with its
-    /// parent agent run in a single operation. Used by the background executor
-    /// when the workflow thread crashes after the run ID has already been
-    /// returned to the caller.
+    /// Marks a workflow run as failed.
     ///
-    /// Best-effort: the parent agent run update is silently ignored on error.
-    pub fn fail_workflow_run_and_parent(
+    /// This is used by the background executor when the workflow thread crashes
+    /// after the run ID has already been returned to the caller.
+    ///
+    /// Returns the parent agent run ID so callers can handle updating it
+    /// separately to avoid cross-manager coupling.
+    pub fn fail_workflow_run(
         &self,
         workflow_run_id: &str,
         error_msg: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.update_workflow_status(workflow_run_id, WorkflowRunStatus::Failed, Some(error_msg))?;
         if let Ok(Some(run)) = self.get_workflow_run(workflow_run_id) {
-            let agent_mgr = AgentManager::new(self.conn);
-            let _ = agent_mgr.update_run_failed(&run.parent_run_id, error_msg);
+            Ok(run.parent_run_id)
+        } else {
+            Err(ConductorError::InvalidInput(format!(
+                "Workflow run not found: {workflow_run_id}"
+            )))
         }
-        Ok(())
     }
 }

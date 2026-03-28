@@ -141,7 +141,7 @@ pub(super) fn make_step_result(step_name: &str, markers: Vec<&str>) -> StepResul
 
 /// Helper to build an `ExecutionState` suitable for testing loop functions
 /// (no real agents or worktrees needed).
-pub(super) fn make_loop_test_state<'a>(
+pub(in crate::workflow) fn make_loop_test_state<'a>(
     conn: &'a Connection,
     config: &'a Config,
 ) -> ExecutionState<'a> {

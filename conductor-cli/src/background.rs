@@ -22,6 +22,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use anyhow::{Context, Result};
 
+use conductor_core::agent::AgentManager;
 use conductor_core::workflow::{
     execute_workflow_standalone, WorkflowExecStandalone, WorkflowManager,
 };
@@ -265,7 +266,14 @@ fn child_main(mut params: WorkflowExecStandalone, read_fd: i32, write_fd: i32) -
 fn cleanup_failed_run(workflow_run_id: &str, error_msg: &str) -> std::result::Result<(), ()> {
     let db_path = conductor_core::config::db_path();
     let conn = conductor_core::db::open_database(&db_path).map_err(|_| ())?;
-    let _ = WorkflowManager::new(&conn).fail_workflow_run_and_parent(workflow_run_id, error_msg);
+
+    // Fail the workflow run and get the parent run ID
+    let wf_mgr = WorkflowManager::new(&conn);
+    if let Ok(parent_run_id) = wf_mgr.fail_workflow_run(workflow_run_id, error_msg) {
+        // Best-effort: update the parent agent run
+        let agent_mgr = AgentManager::new(&conn);
+        let _ = agent_mgr.update_run_failed(&parent_run_id, error_msg);
+    }
     Ok(())
 }
 

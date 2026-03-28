@@ -1016,15 +1016,31 @@ pub(super) fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNod
             break;
         }
         // Check if the run has been externally cancelled before each step.
-        if let Ok(Some(run)) = state.wf_mgr.get_workflow_run(&state.workflow_run_id) {
-            if matches!(run.status, WorkflowRunStatus::Cancelled) {
-                tracing::info!(
-                    "Workflow run {} cancelled externally, stopping execution",
+        match state.wf_mgr.get_workflow_run(&state.workflow_run_id) {
+            Ok(Some(run)) => {
+                if matches!(run.status, WorkflowRunStatus::Cancelled) {
+                    tracing::info!(
+                        "Workflow run {} cancelled externally, stopping execution",
+                        state.workflow_run_id
+                    );
+                    return Err(ConductorError::Workflow(
+                        "Workflow run cancelled".to_string(),
+                    ));
+                }
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    "Workflow run {} not found during cancellation check",
                     state.workflow_run_id
                 );
-                return Err(ConductorError::Workflow(
-                    "Workflow run cancelled".to_string(),
-                ));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Database error during cancellation check for workflow run {}: {}",
+                    state.workflow_run_id,
+                    e
+                );
+                // Continue execution - don't fail the workflow due to a transient DB error
             }
         }
         execute_single_node(state, node, 0)?;

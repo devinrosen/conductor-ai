@@ -1641,10 +1641,10 @@ fn test_cancel_run_not_found() {
     assert!(result.is_err(), "cancelling a nonexistent run should fail");
 }
 
-/// `fail_workflow_run_and_parent` must atomically mark both the workflow run
-/// and its parent agent run as failed.
+/// `fail_workflow_run` marks the workflow run as failed and returns the parent run ID.
+/// Callers should handle updating the parent agent run separately.
 #[test]
-fn test_fail_workflow_run_and_parent_marks_both_failed() {
+fn test_fail_workflow_run_returns_parent_id() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let wf_mgr = WorkflowManager::new(&conn);
@@ -1656,17 +1656,22 @@ fn test_fail_workflow_run_and_parent_marks_both_failed() {
         .create_workflow_run("wf", Some("w1"), &parent_run.id, false, "manual", None)
         .unwrap();
 
-    wf_mgr
-        .fail_workflow_run_and_parent(&wf_run.id, "engine panic")
+    let returned_parent_id = wf_mgr
+        .fail_workflow_run(&wf_run.id, "engine panic")
         .unwrap();
+    assert_eq!(returned_parent_id, parent_run.id);
 
+    // Workflow run should be marked as failed
     let updated_wf = wf_mgr.get_workflow_run(&wf_run.id).unwrap().unwrap();
     assert_eq!(updated_wf.status, WorkflowRunStatus::Failed);
     assert_eq!(updated_wf.result_summary.as_deref(), Some("engine panic"));
 
+    // Parent agent run update is handled separately by caller
     let updated_parent = agent_mgr.get_run(&parent_run.id).unwrap().unwrap();
-    assert_eq!(
-        updated_parent.status,
-        crate::agent::status::AgentRunStatus::Failed
-    );
+    assert_eq!(updated_parent.status, crate::agent::status::AgentRunStatus::Running);
+
+    // Now caller can update parent separately
+    agent_mgr.update_run_failed(&returned_parent_id, "engine panic").unwrap();
+    let final_parent = agent_mgr.get_run(&parent_run.id).unwrap().unwrap();
+    assert_eq!(final_parent.status, crate::agent::status::AgentRunStatus::Failed);
 }
