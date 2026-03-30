@@ -205,6 +205,25 @@ impl<'a> WorktreeManager<'a> {
             })
     }
 
+    /// Fetch a worktree by ID, returning `WorktreeNotFound` if it does not exist
+    /// or does not belong to `repo_id`.
+    pub fn get_by_id_for_repo(&self, id: &str, repo_id: &str) -> Result<Worktree> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = ?1 AND repo_id = ?2"
+                ),
+                params![id, repo_id],
+                map_worktree_row,
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
+                    slug: id.to_string(),
+                },
+                _ => ConductorError::Database(e),
+            })
+    }
+
     /// Fetch multiple worktrees by their IDs in a single query.
     /// Returns an empty Vec when `ids` is empty (avoids a syntax-error `IN ()` clause).
     pub fn get_by_ids(&self, ids: &[&str]) -> Result<Vec<Worktree>> {

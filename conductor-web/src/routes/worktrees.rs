@@ -89,13 +89,7 @@ pub async fn get_worktree(
     // Verify repo exists
     RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let mgr = WorktreeManager::new(&db, &config);
-    let wt = mgr.get_by_id(&worktree_id)?;
-    // Ensure the worktree belongs to the requested repo
-    if wt.repo_id != repo_id {
-        return Err(
-            conductor_core::error::ConductorError::WorktreeNotFound { slug: worktree_id }.into(),
-        );
-    }
+    let wt = mgr.get_by_id_for_repo(&worktree_id, &repo_id)?;
     Ok(Json(wt))
 }
 
