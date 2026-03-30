@@ -210,9 +210,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_id_for_repo(&self, id: &str, repo_id: &str) -> Result<Worktree> {
         self.conn
             .query_row(
-                &format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = ?1 AND repo_id = ?2"
-                ),
+                &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = ?1 AND repo_id = ?2"),
                 params![id, repo_id],
                 map_worktree_row,
             )
