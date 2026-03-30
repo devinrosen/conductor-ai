@@ -1,0 +1,52 @@
+---
+name: iterate-pr
+description: Sync with main, resolve conflicts, lint, then iterate review until all blocking findings are addressed
+version: "1.0.0"
+target_types:
+  - worktree
+hints:
+  - Check how the repo handles rebasing vs merging — if the team prefers merge commits, replace rebase-worktree with a merge step
+  - Look at the repo's lint/fmt commands to ensure the fmt-fix script uses the right toolchain (cargo fmt, prettier, eslint --fix, etc.)
+  - Inspect what "blocking" means in this repo's review culture — some teams treat all findings as blocking, others only security/correctness issues
+  - If the repo uses a monorepo, the push script may need to target a specific package path
+  - Consider whether 10 max_iterations is appropriate — smaller repos with less churn may need fewer
+---
+workflow iterate-pr {
+  meta {
+    description = "Sync with main, resolve conflicts, lint, then iterate review until clean"
+    trigger     = "manual"
+    targets     = ["worktree"]
+    group       = "Development"
+  }
+
+  do {
+    max_iterations = 10
+    on_max_iter    = fail
+
+    call workflow rebase-worktree
+
+    if rebase-worktree.pulled_new_commits {
+      call workflow lint-fix
+    }
+
+    call workflow review-pr {
+      inputs {
+        scope = "incremental"
+      }
+    }
+
+    if review-aggregator.has_blocking_findings {
+      call address-reviews {
+        as = "developer"
+      }
+      script fmt-fix {
+        run = ".conductor/scripts/fmt-fix.sh"
+      }
+      script push {
+        run = ".conductor/scripts/push.sh"
+        as  = "developer"
+      }
+      call workflow lint-fix
+    }
+  } while review-aggregator.has_blocking_findings
+}

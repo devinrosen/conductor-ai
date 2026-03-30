@@ -1,0 +1,31 @@
+---
+name: fix-ci
+description: Read failing CI logs, fix the code, push, and verify CI goes green
+version: "1.0.0"
+target_types:
+  - worktree
+hints:
+  - Check the CI provider (GitHub Actions, CircleCI, Buildkite, etc.) and adapt the fix-ci-failures agent prompt to fetch logs from the right API
+  - Look at the repo's CI config to understand which jobs are required vs optional — the agent should prioritize fixing required checks
+  - Inspect the most common failure categories (lint, test, build, type check) and tune max_iterations accordingly
+  - If the repo has flaky tests, consider adding a retry step before declaring failure
+  - Check if the repo requires running commands in a specific order (e.g. codegen before build) that the fix agent must be aware of
+---
+workflow fix-ci {
+  meta {
+    description = "Read failing CI logs, fix the code, push, and verify CI goes green"
+    trigger     = "manual"
+    targets     = ["worktree"]
+    group       = "Development"
+  }
+
+  do {
+    max_iterations = 3
+    on_max_iter    = fail
+
+    call fix-ci-failures {
+      output = "fix-ci-failures"
+      as     = "developer"
+    }
+  } while fix-ci-failures.has_failures
+}
