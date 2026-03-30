@@ -132,6 +132,8 @@ This is the highest-leverage addition at L1 — it's also the prerequisite for L
 - Deployment sources are platform-specific (App Store Connect, Vercel, Railway, custom CI). How do we model these generically?
 - What's the right regression signal for conductor-ai? CLI error rates, workflow failure rates, and test pass rates are the most accessible early signals.
 
+**Daemon note:** Stage 5b is the first place the library-first v1 architecture shows strain. The `production_signal` watchdog needs to run continuously and independently of any binary a human has open. A cron-triggered CLI invocation can approximate this, but it is fighting the architecture. Stage 5b is a natural trigger for the v2 daemon extraction described in [docs/VISION.md](./VISION.md#v2-daemon-extraction).
+
 ---
 
 ### 6. Knowledge Synthesis
@@ -178,6 +180,8 @@ The supervisor itself runs as a persistent background cron (e.g., every 5 minute
 - Remediation loops: how do we prevent a remediation workflow from triggering its own remediator? A `max_remediation_depth` setting.
 - Who gets paged when Tier B escalates? Integration with notification channels (Slack, email) is a dependency.
 
+**Daemon note:** The Tier B supervisor is the forcing function for the v2 daemon. It needs to watch multiple concurrent workflow runs and react to state transitions — not poll on an interval. SQLite polling every few seconds is workable for a small number of runs but becomes latency-sensitive and architecturally awkward at scale. Stage 7b should not be built on top of the polling model; it should land on top of the daemon's event bus. Together with stage 5b, this is the clearest signal that the daemon RFC should be opened before implementing either.
+
 ---
 
 ### 8. Research Orchestration (L3)
@@ -211,16 +215,19 @@ Proposals are gated for human approval before becoming tickets. Approved proposa
 These stages have a natural delivery order. Earlier stages are prerequisites for later ones:
 
 ```
-1. Ticket Quality Gate      → catches garbage-in before it reaches agents
-2. Architecture Review      → reduces wasted implementation cycles
-3. Resolution Validation    → closes the ticket loop; prerequisite for L2 signals
-4. Knowledge Synthesis      → feeds L3 with quality institutional memory
-5. Deploy + Prod Verify     → closes the production loop; feeds L2 regression detection
-6. Failure Remediation (L2) → requires structured failure signals from stages above
+1. Ticket Quality Gate         → catches garbage-in before it reaches agents
+2. Architecture Review         → reduces wasted implementation cycles
+3. Resolution Validation       → closes the ticket loop; prerequisite for L2 signals
+4. Knowledge Synthesis         → feeds L3 with quality institutional memory
+── v2 daemon extraction ──────────────────────────────────────────────────────
+5. Deploy + Prod Verify (5b)   → first stage requiring a persistent background process
+6. Failure Remediation (7b)    → forcing function for the daemon's event bus
 7. Research Orchestration (L3) → requires knowledge synthesis and completion signals
 ```
 
-Implementation stages 1 → 3 are the first priority. They are the most tractable, deliver immediate value, and unblock the later stages.
+**Stages 1–4 ship under the library-first v1 architecture.** They are trigger-and-wait operations that fit the existing polling + background threads model.
+
+**Stages 5b and 7b (Tier B supervisor) are the daemon trigger.** Both require persistent, event-driven background processes that run independently of any human-facing binary. These two stages should not be implemented until the v2 daemon RFC is open. See [docs/VISION.md](./VISION.md#v2-daemon-extraction) for the daemon design.
 
 ---
 
