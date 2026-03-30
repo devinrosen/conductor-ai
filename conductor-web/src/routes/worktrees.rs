@@ -80,6 +80,26 @@ pub async fn create_worktree(
     Ok((StatusCode::CREATED, Json(wt)))
 }
 
+pub async fn get_worktree(
+    State(state): State<AppState>,
+    Path((repo_id, worktree_id)): Path<(String, String)>,
+) -> Result<Json<Worktree>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    // Verify repo exists
+    RepoManager::new(&db, &config).get_by_id(&repo_id)?;
+    let mgr = WorktreeManager::new(&db, &config);
+    let wt = mgr.get_by_id(&worktree_id)?;
+    // Ensure the worktree belongs to the requested repo
+    if wt.repo_id != repo_id {
+        return Err(conductor_core::error::ConductorError::WorktreeNotFound {
+            slug: worktree_id,
+        }
+        .into());
+    }
+    Ok(Json(wt))
+}
+
 pub async fn delete_worktree(
     State(state): State<AppState>,
     Path(id): Path<String>,
