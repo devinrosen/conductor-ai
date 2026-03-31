@@ -82,14 +82,12 @@ pub async fn create_worktree(
 
 pub async fn get_worktree(
     State(state): State<AppState>,
-    Path((repo_id, worktree_id)): Path<(String, String)>,
+    Path(id): Path<String>,
 ) -> Result<Json<Worktree>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
-    // Verify repo exists
-    RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let mgr = WorktreeManager::new(&db, &config);
-    let wt = mgr.get_by_id_for_repo(&worktree_id, &repo_id)?;
+    let wt = mgr.get_by_id(&id)?;
     Ok(Json(wt))
 }
 
@@ -192,7 +190,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_worktree_returns_200_with_worktree() {
-        let (status, body) = send_get("/api/repos/r1/worktrees/w1", seeded_state()).await;
+        let (status, body) = send_get("/api/worktrees/w1", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["id"], "w1");
@@ -201,14 +199,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_worktree_returns_404_when_worktree_not_found() {
-        let (status, _) = send_get("/api/repos/r1/worktrees/nonexistent", seeded_state()).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn get_worktree_returns_404_when_repo_not_found() {
-        let (status, _) = send_get("/api/repos/bad-repo/worktrees/w1", seeded_state()).await;
+    async fn get_worktree_returns_404_when_not_found() {
+        let (status, _) = send_get("/api/worktrees/nonexistent", seeded_state()).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

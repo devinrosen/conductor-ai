@@ -57,10 +57,9 @@ pub fn api_router() -> Router<AppState> {
             get(worktrees::list_worktrees).post(worktrees::create_worktree),
         )
         .route(
-            "/api/repos/{id}/worktrees/{worktree_id}",
-            get(worktrees::get_worktree),
+            "/api/worktrees/{id}",
+            get(worktrees::get_worktree).delete(worktrees::delete_worktree),
         )
-        .route("/api/worktrees/{id}", delete(worktrees::delete_worktree))
         .route(
             "/api/worktrees/{id}/model",
             patch(worktrees::patch_worktree_model),
