@@ -5,7 +5,7 @@
   "build": {
     "frontendDist": "../conductor-web/frontend/dist",
     "devUrl": "http://localhost:8675",
-    "beforeDevCommand": "",
+    "beforeDevCommand": "bun install --cwd conductor-web/frontend && bun run --cwd conductor-web/frontend dev",
     "beforeBuildCommand": "bun --cwd conductor-web/frontend run build"
   },
   "app": {

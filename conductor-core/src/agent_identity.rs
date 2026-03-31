@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use crate::{error::Result, db::query_collect};
+use crate::{db::query_collect, error::Result};
 
 // ─── Persona Configuration ──────────────────────────────────────────────────
 // Part of: persona-based-agent-specialization@1.1.0

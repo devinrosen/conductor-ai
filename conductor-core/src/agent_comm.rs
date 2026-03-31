@@ -12,7 +12,7 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::{error::Result, db::query_collect};
+use crate::{db::query_collect, error::Result};
 
 // ─── Decision Log ────────────────────────────────────────────────────────────
 
@@ -360,7 +360,7 @@ pub fn get_votes(conn: &Connection, session_id: &str) -> Result<Vec<CouncilVote>
                 rationale: row.get(6)?,
                 created_at: row.get(7)?,
             })
-        }
+        },
     )
 }
 
@@ -430,7 +430,7 @@ pub fn list_artifacts(conn: &Connection, workflow_run_id: &str) -> Result<Vec<Ag
                 format: row.get(6)?,
                 created_at: row.get(7)?,
             })
-        }
+        },
     )
 }
 
