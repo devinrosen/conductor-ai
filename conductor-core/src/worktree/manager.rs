@@ -13,6 +13,14 @@ use super::git_helpers::*;
 use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
 use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W, WORKTREE_COLUMN_COUNT};
 
+fn worktree_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
+    let slug = slug.into();
+    move |e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound { slug },
+        _ => ConductorError::Database(e),
+    }
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -197,12 +205,7 @@ impl<'a> WorktreeManager<'a> {
                 params![id],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: id.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(worktree_not_found(id))
     }
 
     /// Fetch a worktree by ID, returning `WorktreeNotFound` if it does not exist
@@ -214,12 +217,7 @@ impl<'a> WorktreeManager<'a> {
                 params![id, repo_id],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: id.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(worktree_not_found(id))
     }
 
     /// Fetch multiple worktrees by their IDs in a single query.
@@ -247,12 +245,7 @@ impl<'a> WorktreeManager<'a> {
                 params![repo_id, slug],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: slug.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(worktree_not_found(slug))
     }
 
     pub fn get_by_branch(&self, repo_id: &str, branch: &str) -> Result<Worktree> {
@@ -264,12 +257,7 @@ impl<'a> WorktreeManager<'a> {
                 params![repo_id, branch],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: branch.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(worktree_not_found(branch))
     }
 
     /// Try to resolve a worktree by slug first, then by branch name.
@@ -422,12 +410,7 @@ impl<'a> WorktreeManager<'a> {
                 params![repo.id, name],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: name.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })?;
+            .map_err(worktree_not_found(name))?;
 
         self.delete_internal(&repo, worktree, None)
     }
