@@ -1792,3 +1792,157 @@ fn test_delete_by_id_for_repo_cross_repo_isolation() {
         .unwrap();
     assert_eq!(count, 1, "w1 should not have been deleted");
 }
+
+// -----------------------------------------------------------------------
+// get_by_id_enriched / get_by_id_for_repo_enriched / list_by_repo_id_enriched tests
+// -----------------------------------------------------------------------
+
+fn insert_ticket(conn: &Connection, id: &str, repo_id: &str, title: &str, source_id: &str) {
+    conn.execute(
+        "INSERT INTO tickets \
+         (id, repo_id, source_type, source_id, title, synced_at) \
+         VALUES (?1, ?2, 'github', ?3, ?4, '2024-01-01T00:00:00Z')",
+        rusqlite::params![id, repo_id, source_id, title],
+    )
+    .unwrap();
+}
+
+fn link_ticket(conn: &Connection, worktree_id: &str, ticket_id: &str) {
+    conn.execute(
+        "UPDATE worktrees SET ticket_id = ?1 WHERE id = ?2",
+        rusqlite::params![ticket_id, worktree_id],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_get_by_id_enriched_no_ticket_no_agent() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    let result = mgr.get_by_id_enriched("w1").unwrap();
+    assert_eq!(result.worktree.id, "w1");
+    assert!(result.agent_status.is_none());
+    assert!(result.ticket_title.is_none());
+    assert!(result.ticket_number.is_none());
+}
+
+#[test]
+fn test_get_by_id_enriched_with_ticket() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    insert_ticket(&conn, "t1", "r1", "Fix the bug", "42");
+    link_ticket(&conn, "w1", "t1");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.get_by_id_enriched("w1").unwrap();
+    assert_eq!(result.ticket_title.as_deref(), Some("Fix the bug"));
+    assert_eq!(result.ticket_number.as_deref(), Some("42"));
+}
+
+#[test]
+fn test_get_by_id_enriched_with_agent_run() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    insert_agent_run(&conn, "ar1", "w1", "running", "2024-01-01T10:00:00Z");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.get_by_id_enriched("w1").unwrap();
+    assert_eq!(
+        result.agent_status,
+        Some(crate::agent::AgentRunStatus::Running)
+    );
+}
+
+#[test]
+fn test_get_by_id_enriched_not_found() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let err = mgr.get_by_id_enriched("nonexistent").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::WorktreeNotFound { .. }),
+        "expected WorktreeNotFound, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_get_by_id_for_repo_enriched_no_ticket_no_agent() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    let result = mgr.get_by_id_for_repo_enriched("w1", "r1").unwrap();
+    assert_eq!(result.worktree.id, "w1");
+    assert!(result.agent_status.is_none());
+    assert!(result.ticket_title.is_none());
+}
+
+#[test]
+fn test_get_by_id_for_repo_enriched_with_ticket_and_agent() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    insert_ticket(&conn, "t1", "r1", "Implement feature", "99");
+    link_ticket(&conn, "w1", "t1");
+    insert_agent_run(&conn, "ar1", "w1", "completed", "2024-01-01T10:00:00Z");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.get_by_id_for_repo_enriched("w1", "r1").unwrap();
+    assert_eq!(result.ticket_title.as_deref(), Some("Implement feature"));
+    assert_eq!(result.ticket_number.as_deref(), Some("99"));
+    assert_eq!(
+        result.agent_status,
+        Some(crate::agent::AgentRunStatus::Completed)
+    );
+}
+
+#[test]
+fn test_get_by_id_for_repo_enriched_cross_repo_isolation() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let err = mgr.get_by_id_for_repo_enriched("w1", "r2").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::WorktreeNotFound { .. }),
+        "expected WorktreeNotFound for cross-repo access, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_list_by_repo_id_enriched_no_ticket_no_agent() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    let results = mgr.list_by_repo_id_enriched("r1", false).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].worktree.id, "w1");
+    assert!(results[0].agent_status.is_none());
+    assert!(results[0].ticket_title.is_none());
+}
+
+#[test]
+fn test_list_by_repo_id_enriched_with_ticket_and_agent() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    insert_ticket(&conn, "t1", "r1", "Do the thing", "7");
+    link_ticket(&conn, "w1", "t1");
+    insert_agent_run(&conn, "ar1", "w1", "running", "2024-01-01T10:00:00Z");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let results = mgr.list_by_repo_id_enriched("r1", false).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].ticket_title.as_deref(), Some("Do the thing"));
+    assert_eq!(results[0].ticket_number.as_deref(), Some("7"));
+    assert_eq!(
+        results[0].agent_status,
+        Some(crate::agent::AgentRunStatus::Running)
+    );
+}
