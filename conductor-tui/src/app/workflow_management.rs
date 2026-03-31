@@ -5,7 +5,12 @@ use std::sync::Arc;
 use conductor_core::worktree::WorktreeManager;
 
 /// (target_label, ticket_id, repo_slug, wt_slug) resolved from a worktree.
-type WorktreeLabelParts = (Option<String>, Option<String>, Option<String>, Option<String>);
+type WorktreeLabelParts = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal, View, WorkflowPickerItem, WorkflowRunDetailFocus};
@@ -906,8 +911,8 @@ impl App {
                         use conductor_core::db::open_database;
                         let label = (|| -> Option<WorktreeLabelParts> {
                             let conn = open_database(&db_path()).ok()?;
-                            let (repo_slug, wt_slug, ticket_id): (String, String, Option<String>) = conn
-                                .query_row(
+                            let (repo_slug, wt_slug, ticket_id): (String, String, Option<String>) =
+                                conn.query_row(
                                     "SELECT r.slug, w.slug, w.ticket_id \
                                      FROM worktrees w \
                                      JOIN repos r ON r.id = w.repo_id \
