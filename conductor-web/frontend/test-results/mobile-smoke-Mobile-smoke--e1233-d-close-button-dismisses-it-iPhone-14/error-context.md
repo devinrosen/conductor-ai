@@ -90,7 +90,7 @@
                 - columnheader "Agent" [ref=e115]
                 - columnheader "Created" [ref=e116]
             - rowgroup [ref=e117]:
-              - row "feat/desktop-workflow-detail conductor-ai active completed 3 days ago" [ref=e118] [cursor=pointer]:
+              - row "feat/desktop-workflow-detail conductor-ai active completed 7 days ago" [ref=e118] [cursor=pointer]:
                 - cell [ref=e119]:
                   - generic "active" [ref=e120]
                 - cell "feat/desktop-workflow-detail" [ref=e124]
@@ -100,9 +100,9 @@
                   - generic [ref=e128]: active
                 - cell "completed" [ref=e129]:
                   - generic [ref=e130]: completed
-                - cell "3 days ago" [ref=e131]:
-                  - time [ref=e132]: 3 days ago
-              - row "feat/Desktop-worktree-detail conductor-ai active completed 1 hour ago" [ref=e133] [cursor=pointer]:
+                - cell "7 days ago" [ref=e131]:
+                  - time [ref=e132]: 7 days ago
+              - row "feat/Desktop-worktree-detail conductor-ai active completed 4 days ago" [ref=e133] [cursor=pointer]:
                 - cell [ref=e134]:
                   - generic "active" [ref=e135]
                 - cell "feat/Desktop-worktree-detail" [ref=e139]
@@ -112,14 +112,14 @@
                   - generic [ref=e143]: active
                 - cell "completed" [ref=e144]:
                   - generic [ref=e145]: completed
-                - cell "1 hour ago" [ref=e146]:
-                  - time [ref=e147]: 1 hour ago
+                - cell "4 days ago" [ref=e146]:
+                  - time [ref=e147]: 4 days ago
         - generic [ref=e154]:
           - heading "Stations(4)" [level=3] [ref=e157]:
             - text: Stations
             - generic [ref=e158]: (4)
           - generic [ref=e159]:
-            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 8 days ago" [ref=e160]:
+            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 12 days ago" [ref=e160]:
               - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
               - generic [ref=e162]:
                 - heading "conductor-ai" [level=3] [ref=e163]
@@ -128,8 +128,8 @@
                   - generic [ref=e166]: 2 worktrees
                   - generic [ref=e168]:
                     - text: Created
-                    - time [ref=e169]: 8 days ago
-            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 4 days ago" [ref=e170]:
+                    - time [ref=e169]: 12 days ago
+            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 8 days ago" [ref=e170]:
               - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
               - generic [ref=e172]:
                 - heading "docs" [level=3] [ref=e173]
@@ -138,8 +138,8 @@
                   - generic [ref=e176]: 0 worktrees
                   - generic [ref=e178]:
                     - text: Created
-                    - time [ref=e179]: 4 days ago
-            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 4 days ago" [ref=e180]:
+                    - time [ref=e179]: 8 days ago
+            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 8 days ago" [ref=e180]:
               - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
               - generic [ref=e182]:
                 - heading "global-sdlc" [level=3] [ref=e183]
@@ -148,8 +148,8 @@
                   - generic [ref=e186]: 0 worktrees
                   - generic [ref=e188]:
                     - text: Created
-                    - time [ref=e189]: 4 days ago
-            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 8 days ago" [ref=e190]:
+                    - time [ref=e189]: 8 days ago
+            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 12 days ago" [ref=e190]:
               - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
               - generic [ref=e192]:
                 - heading "video-client" [level=3] [ref=e193]
@@ -158,7 +158,7 @@
                   - generic [ref=e196]: 0 worktrees
                   - generic [ref=e198]:
                     - text: Created
-                    - time [ref=e199]: 8 days ago
+                    - time [ref=e199]: 12 days ago
   - generic [ref=e200]:
     - link "Home" [ref=e201]:
       - /url: /

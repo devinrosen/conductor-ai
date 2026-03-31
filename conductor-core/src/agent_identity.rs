@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use crate::error::Result;
+use crate::{error::Result, db::query_collect};
 
 // ─── Persona Configuration ──────────────────────────────────────────────────
 // Part of: persona-based-agent-specialization@1.1.0
@@ -537,13 +537,12 @@ pub fn list_templates_by_namespace(
     conn: &Connection,
     namespace: &AgentNamespace,
 ) -> Result<Vec<AgentTemplate>> {
-    let mut stmt = conn.prepare(
+    query_collect(
+        conn,
         "SELECT id, name, persona_name, persona_depth, persona_credentials, domain_grounding, philosophy, role, tier, namespace, model_tier, model_override, capabilities, delegation_table, output_contract, version, created_at, updated_at
          FROM agent_templates WHERE namespace = ?1 ORDER BY name",
-    )?;
-
-    let rows = stmt
-        .query_map(params![namespace.to_string()], |row| {
+        params![namespace.to_string()],
+        |row| {
             let depth_str: String = row.get(3)?;
             let role_str: String = row.get(7)?;
             let ns_str: String = row.get(9)?;
@@ -573,11 +572,8 @@ pub fn list_templates_by_namespace(
                 created_at: row.get(16)?,
                 updated_at: row.get(17)?,
             })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(rows)
+        }
+    )
 }
 
 #[cfg(test)]

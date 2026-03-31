@@ -12,7 +12,7 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::{error::Result, db::query_collect};
 
 // ─── Decision Log ────────────────────────────────────────────────────────────
 
@@ -70,12 +70,12 @@ pub fn record_decision(
 
 /// List decisions for a workflow run, ordered by sequence number.
 pub fn list_decisions(conn: &Connection, workflow_run_id: &str) -> Result<Vec<AgentDecision>> {
-    let mut stmt = conn.prepare(
+    query_collect(
+        conn,
         "SELECT id, workflow_run_id, feature_id, sequence_number, context, decision, rationale, agent_run_id, agent_name, supersedes_id, created_at
          FROM agent_decisions WHERE workflow_run_id = ?1 ORDER BY sequence_number",
-    )?;
-    let rows = stmt
-        .query_map(params![workflow_run_id], |row| {
+        params![workflow_run_id],
+        |row| {
             Ok(AgentDecision {
                 id: row.get(0)?,
                 workflow_run_id: row.get(1)?,
@@ -89,10 +89,8 @@ pub fn list_decisions(conn: &Connection, workflow_run_id: &str) -> Result<Vec<Ag
                 supersedes_id: row.get(9)?,
                 created_at: row.get(10)?,
             })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+        }
+    )
 }
 
 // ─── Handoffs ────────────────────────────────────────────────────────────────
@@ -132,12 +130,12 @@ pub fn create_handoff(
 
 /// Get handoffs for a workflow run.
 pub fn list_handoffs(conn: &Connection, workflow_run_id: &str) -> Result<Vec<AgentHandoff>> {
-    let mut stmt = conn.prepare(
+    query_collect(
+        conn,
         "SELECT id, workflow_run_id, from_step_id, to_step_id, payload, producer_agent, consumer_agent, validated, created_at
          FROM agent_handoffs WHERE workflow_run_id = ?1 ORDER BY created_at",
-    )?;
-    let rows = stmt
-        .query_map(params![workflow_run_id], |row| {
+        params![workflow_run_id],
+        |row| {
             Ok(AgentHandoff {
                 id: row.get(0)?,
                 workflow_run_id: row.get(1)?,
@@ -149,10 +147,8 @@ pub fn list_handoffs(conn: &Connection, workflow_run_id: &str) -> Result<Vec<Age
                 validated: row.get(7)?,
                 created_at: row.get(8)?,
             })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+        }
+    )
 }
 
 // ─── Blockers ────────────────────────────────────────────────────────────────
@@ -215,12 +211,12 @@ pub fn resolve_blocker(
 
 /// List open blockers for a workflow run.
 pub fn list_open_blockers(conn: &Connection, workflow_run_id: &str) -> Result<Vec<AgentBlocker>> {
-    let mut stmt = conn.prepare(
+    query_collect(
+        conn,
         "SELECT id, workflow_run_id, workflow_step_id, agent_run_id, parent_blocker_id, severity, category, summary, detail, status, resolved_by, resolution_note, created_at, resolved_at
          FROM agent_blockers WHERE workflow_run_id = ?1 AND status = 'open' ORDER BY created_at",
-    )?;
-    let rows = stmt
-        .query_map(params![workflow_run_id], |row| {
+        params![workflow_run_id],
+        |row| {
             Ok(AgentBlocker {
                 id: row.get(0)?,
                 workflow_run_id: row.get(1)?,
@@ -237,10 +233,8 @@ pub fn list_open_blockers(conn: &Connection, workflow_run_id: &str) -> Result<Ve
                 created_at: row.get(12)?,
                 resolved_at: row.get(13)?,
             })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+        }
+    )
 }
 
 // ─── Delegations ─────────────────────────────────────────────────────────────
@@ -350,12 +344,12 @@ pub fn cast_vote(
 
 /// Get all votes for a council session.
 pub fn get_votes(conn: &Connection, session_id: &str) -> Result<Vec<CouncilVote>> {
-    let mut stmt = conn.prepare(
+    query_collect(
+        conn,
         "SELECT id, session_id, agent_run_id, agent_role, vote, confidence, rationale, created_at
          FROM council_votes WHERE session_id = ?1 ORDER BY created_at",
-    )?;
-    let rows = stmt
-        .query_map(params![session_id], |row| {
+        params![session_id],
+        |row| {
             Ok(CouncilVote {
                 id: row.get(0)?,
                 session_id: row.get(1)?,
@@ -366,10 +360,8 @@ pub fn get_votes(conn: &Connection, session_id: &str) -> Result<Vec<CouncilVote>
                 rationale: row.get(6)?,
                 created_at: row.get(7)?,
             })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+        }
+    )
 }
 
 /// Reconcile a council session with a final decision.
@@ -422,12 +414,12 @@ pub fn store_artifact(
 
 /// List artifacts for a workflow run.
 pub fn list_artifacts(conn: &Connection, workflow_run_id: &str) -> Result<Vec<AgentArtifact>> {
-    let mut stmt = conn.prepare(
+    query_collect(
+        conn,
         "SELECT id, workflow_run_id, agent_run_id, artifact_type, name, content, format, created_at
          FROM agent_artifacts WHERE workflow_run_id = ?1 ORDER BY created_at",
-    )?;
-    let rows = stmt
-        .query_map(params![workflow_run_id], |row| {
+        params![workflow_run_id],
+        |row| {
             Ok(AgentArtifact {
                 id: row.get(0)?,
                 workflow_run_id: row.get(1)?,
@@ -438,10 +430,8 @@ pub fn list_artifacts(conn: &Connection, workflow_run_id: &str) -> Result<Vec<Ag
                 format: row.get(6)?,
                 created_at: row.get(7)?,
             })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+        }
+    )
 }
 
 // ─── Output Behavior Contract ────────────────────────────────────────────────

@@ -54,7 +54,7 @@
           - button "Discover from GitHub" [ref=e18]
           - button "Register Repo" [ref=e19]
       - generic [ref=e20]:
-        - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 8 days ago" [ref=e21] [cursor=pointer]:
+        - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 12 days ago" [ref=e21] [cursor=pointer]:
           - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
           - generic [ref=e23]:
             - heading "conductor-ai" [level=3] [ref=e24]
@@ -63,8 +63,8 @@
               - generic [ref=e27]: 2 worktrees
               - generic [ref=e29]:
                 - text: Created
-                - time [ref=e30]: 8 days ago
-        - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 4 days ago" [ref=e31] [cursor=pointer]:
+                - time [ref=e30]: 12 days ago
+        - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 8 days ago" [ref=e31] [cursor=pointer]:
           - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
           - generic [ref=e33]:
             - heading "docs" [level=3] [ref=e34]
@@ -73,8 +73,8 @@
               - generic [ref=e37]: 0 worktrees
               - generic [ref=e39]:
                 - text: Created
-                - time [ref=e40]: 4 days ago
-        - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 4 days ago" [ref=e41] [cursor=pointer]:
+                - time [ref=e40]: 8 days ago
+        - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 8 days ago" [ref=e41] [cursor=pointer]:
           - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
           - generic [ref=e43]:
             - heading "global-sdlc" [level=3] [ref=e44]
@@ -83,8 +83,8 @@
               - generic [ref=e47]: 0 worktrees
               - generic [ref=e49]:
                 - text: Created
-                - time [ref=e50]: 4 days ago
-        - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 8 days ago" [ref=e51] [cursor=pointer]:
+                - time [ref=e50]: 8 days ago
+        - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 12 days ago" [ref=e51] [cursor=pointer]:
           - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
           - generic [ref=e53]:
             - heading "video-client" [level=3] [ref=e54]
@@ -93,7 +93,7 @@
               - generic [ref=e57]: 0 worktrees
               - generic [ref=e59]:
                 - text: Created
-                - time [ref=e60]: 8 days ago
+                - time [ref=e60]: 12 days ago
   - generic [ref=e61]:
     - link "Home" [ref=e62] [cursor=pointer]:
       - /url: /

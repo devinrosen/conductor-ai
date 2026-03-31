@@ -25,15 +25,15 @@
       - link "docs":
         - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
         - generic: docs
-      - link "e2e-repo-1774642073732-b04286":
-        - /url: /repos/01KMREJ4E54V496J9HFFEETEFF
-        - generic: e2e-repo-1774642073732-b04286
-      - link "e2e-repo-1774642073756-77af61":
-        - /url: /repos/01KMREJ4GFRSQRDCHH9W0QYCEM
-        - generic: e2e-repo-1774642073756-77af61
-      - link "e2e-repo-1774642073757-0bd67d":
-        - /url: /repos/01KMREJ4GFSRKTNE8TD5SN2A0R
-        - generic: e2e-repo-1774642073757-0bd67d
+      - link "e2e-repo-1774970901981-16e615":
+        - /url: /repos/01KN2855SEKQ09533E6HZBATZY
+        - generic: e2e-repo-1774970901981-16e615
+      - link "e2e-repo-1774970901981-332383":
+        - /url: /repos/01KN2855RSD6YV3QSBGVADW3H8
+        - generic: e2e-repo-1774970901981-332383
+      - link "e2e-repo-1774970902023-076757":
+        - /url: /repos/01KN2855TM4BHFJAHGCKFVG4YA
+        - generic: e2e-repo-1774970902023-076757
       - link "global-sdlc":
         - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
         - generic: global-sdlc
@@ -99,7 +99,7 @@
                 - columnheader "Agent" [ref=e68]
                 - columnheader "Created" [ref=e69]
             - rowgroup [ref=e70]:
-              - row "feat/desktop-workflow-detail conductor-ai active completed 3 days ago" [ref=e71] [cursor=pointer]:
+              - row "feat/desktop-workflow-detail conductor-ai active completed 7 days ago" [ref=e71] [cursor=pointer]:
                 - cell [ref=e72]:
                   - generic "active" [ref=e73]
                 - cell "feat/desktop-workflow-detail" [ref=e77]
@@ -109,9 +109,9 @@
                   - generic [ref=e81]: active
                 - cell "completed" [ref=e82]:
                   - generic [ref=e83]: completed
-                - cell "3 days ago" [ref=e84]:
-                  - time [ref=e85]: 3 days ago
-              - row "feat/Desktop-worktree-detail conductor-ai active completed 60 minutes ago" [ref=e86] [cursor=pointer]:
+                - cell "7 days ago" [ref=e84]:
+                  - time [ref=e85]: 7 days ago
+              - row "feat/Desktop-worktree-detail conductor-ai active completed 4 days ago" [ref=e86] [cursor=pointer]:
                 - cell [ref=e87]:
                   - generic "active" [ref=e88]
                 - cell "feat/Desktop-worktree-detail" [ref=e92]
@@ -121,14 +121,14 @@
                   - generic [ref=e96]: active
                 - cell "completed" [ref=e97]:
                   - generic [ref=e98]: completed
-                - cell "60 minutes ago" [ref=e99]:
-                  - time [ref=e100]: 60 minutes ago
+                - cell "4 days ago" [ref=e99]:
+                  - time [ref=e100]: 4 days ago
         - generic [ref=e107]:
           - heading "Stations(7)" [level=3] [ref=e110]:
             - text: Stations
             - generic [ref=e111]: (7)
           - generic [ref=e112]:
-            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 8 days ago" [ref=e113] [cursor=pointer]:
+            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 12 days ago" [ref=e113] [cursor=pointer]:
               - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
               - generic [ref=e115]:
                 - heading "conductor-ai" [level=3] [ref=e116]
@@ -137,8 +137,8 @@
                   - generic [ref=e119]: 2 worktrees
                   - generic [ref=e121]:
                     - text: Created
-                    - time [ref=e122]: 8 days ago
-            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 4 days ago" [ref=e123] [cursor=pointer]:
+                    - time [ref=e122]: 12 days ago
+            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 8 days ago" [ref=e123] [cursor=pointer]:
               - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
               - generic [ref=e125]:
                 - heading "docs" [level=3] [ref=e126]
@@ -147,38 +147,38 @@
                   - generic [ref=e129]: 0 worktrees
                   - generic [ref=e131]:
                     - text: Created
-                    - time [ref=e132]: 4 days ago
-            - link "e2e-repo-1774642073732-b04286 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-wMzMj5 0 worktrees Created 3 seconds ago" [ref=e133] [cursor=pointer]:
-              - /url: /repos/01KMREJ4E54V496J9HFFEETEFF
+                    - time [ref=e132]: 8 days ago
+            - link "e2e-repo-1774970901981-16e615 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-abybby 0 worktrees Created 3 seconds ago" [ref=e133] [cursor=pointer]:
+              - /url: /repos/01KN2855SEKQ09533E6HZBATZY
               - generic [ref=e135]:
-                - heading "e2e-repo-1774642073732-b04286" [level=3] [ref=e136]
-                - paragraph [ref=e137]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-wMzMj5
+                - heading "e2e-repo-1774970901981-16e615" [level=3] [ref=e136]
+                - paragraph [ref=e137]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-abybby
                 - generic [ref=e138]:
                   - generic [ref=e139]: 0 worktrees
                   - generic [ref=e141]:
                     - text: Created
                     - time [ref=e142]: 3 seconds ago
-            - link "e2e-repo-1774642073756-77af61 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-lfx02G 0 worktrees Created 3 seconds ago" [ref=e143] [cursor=pointer]:
-              - /url: /repos/01KMREJ4GFRSQRDCHH9W0QYCEM
+            - link "e2e-repo-1774970901981-332383 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-etk040 0 worktrees Created 3 seconds ago" [ref=e143] [cursor=pointer]:
+              - /url: /repos/01KN2855RSD6YV3QSBGVADW3H8
               - generic [ref=e145]:
-                - heading "e2e-repo-1774642073756-77af61" [level=3] [ref=e146]
-                - paragraph [ref=e147]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-lfx02G
+                - heading "e2e-repo-1774970901981-332383" [level=3] [ref=e146]
+                - paragraph [ref=e147]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-etk040
                 - generic [ref=e148]:
                   - generic [ref=e149]: 0 worktrees
                   - generic [ref=e151]:
                     - text: Created
                     - time [ref=e152]: 3 seconds ago
-            - link "e2e-repo-1774642073757-0bd67d file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-QcTuFq 0 worktrees Created 3 seconds ago" [ref=e153] [cursor=pointer]:
-              - /url: /repos/01KMREJ4GFSRKTNE8TD5SN2A0R
+            - link "e2e-repo-1774970902023-076757 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-GsutPi 0 worktrees Created 3 seconds ago" [ref=e153] [cursor=pointer]:
+              - /url: /repos/01KN2855TM4BHFJAHGCKFVG4YA
               - generic [ref=e155]:
-                - heading "e2e-repo-1774642073757-0bd67d" [level=3] [ref=e156]
-                - paragraph [ref=e157]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-QcTuFq
+                - heading "e2e-repo-1774970902023-076757" [level=3] [ref=e156]
+                - paragraph [ref=e157]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-GsutPi
                 - generic [ref=e158]:
                   - generic [ref=e159]: 0 worktrees
                   - generic [ref=e161]:
                     - text: Created
                     - time [ref=e162]: 3 seconds ago
-            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 4 days ago" [ref=e163] [cursor=pointer]:
+            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 8 days ago" [ref=e163] [cursor=pointer]:
               - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
               - generic [ref=e165]:
                 - heading "global-sdlc" [level=3] [ref=e166]
@@ -187,8 +187,8 @@
                   - generic [ref=e169]: 0 worktrees
                   - generic [ref=e171]:
                     - text: Created
-                    - time [ref=e172]: 4 days ago
-            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 8 days ago" [ref=e173] [cursor=pointer]:
+                    - time [ref=e172]: 8 days ago
+            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 12 days ago" [ref=e173] [cursor=pointer]:
               - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
               - generic [ref=e175]:
                 - heading "video-client" [level=3] [ref=e176]
@@ -197,7 +197,7 @@
                   - generic [ref=e179]: 0 worktrees
                   - generic [ref=e181]:
                     - text: Created
-                    - time [ref=e182]: 8 days ago
+                    - time [ref=e182]: 12 days ago
   - generic [ref=e183]:
     - link "Home" [ref=e184] [cursor=pointer]:
       - /url: /

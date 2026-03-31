@@ -25,18 +25,15 @@
       - link "docs":
         - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
         - generic: docs
-      - link "e2e-repo-1774642078420-ab462e":
-        - /url: /repos/01KMREJ90BK4PHNG3KM94FQKFB
-        - generic: e2e-repo-1774642078420-ab462e
-      - link "e2e-repo-1774642093783-371afb":
-        - /url: /repos/01KMREJR0HW6NEVAJDR704NAYX
-        - generic: e2e-repo-1774642093783-371afb
-      - link "e2e-repo-1774642097526-f30501":
-        - /url: /repos/01KMREJVNC6CCTD84YEYYJRWWK
-        - generic: e2e-repo-1774642097526-f30501
-      - link "e2e-repo-1774642101691-55c435":
-        - /url: /repos/01KMREJZQP9WMFAVK2W5FAHH9E
-        - generic: e2e-repo-1774642101691-55c435
+      - link "e2e-repo-1774970906621-076956":
+        - /url: /repos/01KN285A9Q1YSGAT78GWRBYVJG
+        - generic: e2e-repo-1774970906621-076956
+      - link "e2e-repo-1774970922162-65fb64":
+        - /url: /repos/01KN285SF9W38WQYN8ZM8976N1
+        - generic: e2e-repo-1774970922162-65fb64
+      - link "e2e-repo-1774970925805-83425c":
+        - /url: /repos/01KN285X13Z1J0BXVFNA1VC6NV
+        - generic: e2e-repo-1774970925805-83425c
       - link "global-sdlc":
         - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
         - generic: global-sdlc
@@ -62,7 +59,7 @@
     - generic [ref=e14]:
       - paragraph [ref=e15]: Worktree not found
       - link "Back to repo" [ref=e16]:
-        - /url: /repos/01KMREJ4E54V496J9HFFEETEFF
+        - /url: /repos/01KN2855SEKQ09533E6HZBATZY
   - generic [ref=e17]:
     - link "Home" [ref=e18]:
       - /url: /

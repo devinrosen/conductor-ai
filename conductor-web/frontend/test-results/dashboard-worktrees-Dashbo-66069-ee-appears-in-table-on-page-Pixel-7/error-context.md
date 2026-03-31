@@ -19,7 +19,27 @@
       - link "Tickets":
         - /url: /tickets
       - generic: Repos
-      - generic: Loading...
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "e2e-repo-1774970901981-16e615":
+        - /url: /repos/01KN2855SEKQ09533E6HZBATZY
+        - generic: e2e-repo-1774970901981-16e615
+      - link "e2e-repo-1774970901981-332383":
+        - /url: /repos/01KN2855RSD6YV3QSBGVADW3H8
+        - generic: e2e-repo-1774970901981-332383
+      - link "e2e-repo-1774970902023-076757":
+        - /url: /repos/01KN2855TM4BHFJAHGCKFVG4YA
+        - generic: e2e-repo-1774970902023-076757
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
     - generic:
       - link "Settings":
         - /url: /settings
@@ -36,18 +56,126 @@
       - generic [ref=e7]: Conductor
       - button "Notifications" [ref=e10]:
         - img [ref=e11]
-    - generic [ref=e16]: Checking the timetable…
-  - generic [ref=e17]:
-    - link "Home" [ref=e18] [cursor=pointer]:
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - heading "Home" [level=2] [ref=e17]
+          - generic [ref=e18]:
+            - generic [ref=e19]: "7"
+            - generic [ref=e21]: R
+            - generic [ref=e22]: E
+            - generic [ref=e23]: P
+            - generic [ref=e24]: O
+            - generic [ref=e25]: S
+            - generic [ref=e28]: "0"
+            - generic [ref=e30]: T
+            - generic [ref=e31]: R
+            - generic [ref=e32]: A
+            - generic [ref=e33]: C
+            - generic [ref=e34]: K
+            - generic [ref=e35]: S
+            - generic [ref=e38]: "0"
+            - generic [ref=e40]: A
+            - generic [ref=e41]: G
+            - generic [ref=e42]: E
+            - generic [ref=e43]: "N"
+            - generic [ref=e44]: T
+            - generic [ref=e45]: S
+        - generic [ref=e51]:
+          - button "Discover" [ref=e52]
+          - button "Register Repo" [ref=e53]
+      - generic [ref=e54]:
+        - generic [ref=e55]:
+          - heading "Active Worktrees(0)" [level=3] [ref=e58]:
+            - text: Active Worktrees
+            - generic [ref=e59]: (0)
+          - generic [ref=e60]: No platforms active. Create a worktree from a repo to lay some track.
+        - generic [ref=e67]:
+          - heading "Stations(7)" [level=3] [ref=e70]:
+            - text: Stations
+            - generic [ref=e71]: (7)
+          - generic [ref=e72]:
+            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 0 worktrees Created 12 days ago" [ref=e73] [cursor=pointer]:
+              - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+              - generic [ref=e75]:
+                - heading "conductor-ai" [level=3] [ref=e76]
+                - paragraph [ref=e77]: https://github.com/devinrosen/conductor-ai.git
+                - generic [ref=e78]:
+                  - generic [ref=e79]: 0 worktrees
+                  - generic [ref=e81]:
+                    - text: Created
+                    - time [ref=e82]: 12 days ago
+            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 8 days ago" [ref=e83] [cursor=pointer]:
+              - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+              - generic [ref=e85]:
+                - heading "docs" [level=3] [ref=e86]
+                - paragraph [ref=e87]: https://github.com/LivelyVideo/docs
+                - generic [ref=e88]:
+                  - generic [ref=e89]: 0 worktrees
+                  - generic [ref=e91]:
+                    - text: Created
+                    - time [ref=e92]: 8 days ago
+            - link "e2e-repo-1774970901981-16e615 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-abybby 0 worktrees Created 1 second ago" [ref=e93] [cursor=pointer]:
+              - /url: /repos/01KN2855SEKQ09533E6HZBATZY
+              - generic [ref=e95]:
+                - heading "e2e-repo-1774970901981-16e615" [level=3] [ref=e96]
+                - paragraph [ref=e97]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-abybby
+                - generic [ref=e98]:
+                  - generic [ref=e99]: 0 worktrees
+                  - generic [ref=e101]:
+                    - text: Created
+                    - time [ref=e102]: 1 second ago
+            - link "e2e-repo-1774970901981-332383 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-etk040 0 worktrees Created 1 second ago" [ref=e103] [cursor=pointer]:
+              - /url: /repos/01KN2855RSD6YV3QSBGVADW3H8
+              - generic [ref=e105]:
+                - heading "e2e-repo-1774970901981-332383" [level=3] [ref=e106]
+                - paragraph [ref=e107]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-etk040
+                - generic [ref=e108]:
+                  - generic [ref=e109]: 0 worktrees
+                  - generic [ref=e111]:
+                    - text: Created
+                    - time [ref=e112]: 1 second ago
+            - link "e2e-repo-1774970902023-076757 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-GsutPi 0 worktrees Created 1 second ago" [ref=e113] [cursor=pointer]:
+              - /url: /repos/01KN2855TM4BHFJAHGCKFVG4YA
+              - generic [ref=e115]:
+                - heading "e2e-repo-1774970902023-076757" [level=3] [ref=e116]
+                - paragraph [ref=e117]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-GsutPi
+                - generic [ref=e118]:
+                  - generic [ref=e119]: 0 worktrees
+                  - generic [ref=e121]:
+                    - text: Created
+                    - time [ref=e122]: 1 second ago
+            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 8 days ago" [ref=e123] [cursor=pointer]:
+              - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+              - generic [ref=e125]:
+                - heading "global-sdlc" [level=3] [ref=e126]
+                - paragraph [ref=e127]: https://github.com/LivelyVideo/global-sdlc
+                - generic [ref=e128]:
+                  - generic [ref=e129]: 0 worktrees
+                  - generic [ref=e131]:
+                    - text: Created
+                    - time [ref=e132]: 8 days ago
+            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 12 days ago" [ref=e133] [cursor=pointer]:
+              - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+              - generic [ref=e135]:
+                - heading "video-client" [level=3] [ref=e136]
+                - paragraph [ref=e137]: https://github.com/LivelyVideo/video-client
+                - generic [ref=e138]:
+                  - generic [ref=e139]: 0 worktrees
+                  - generic [ref=e141]:
+                    - text: Created
+                    - time [ref=e142]: 12 days ago
+  - generic [ref=e143]:
+    - link "Home" [ref=e144] [cursor=pointer]:
       - /url: /
-      - img [ref=e19]
+      - img [ref=e145]
       - text: Home
-    - link "Repos" [ref=e21] [cursor=pointer]:
+    - link "Repos" [ref=e147] [cursor=pointer]:
       - /url: /repos
-      - img [ref=e22]
+      - img [ref=e148]
       - text: Repos
-    - link "Workflows" [ref=e24] [cursor=pointer]:
+    - link "Workflows" [ref=e150] [cursor=pointer]:
       - /url: /workflows
-      - img [ref=e25]
+      - img [ref=e151]
       - text: Workflows
 ```

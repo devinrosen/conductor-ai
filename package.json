@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {
+    "desktop": "bun install --cwd conductor-web/frontend && bun run --cwd conductor-web/frontend dev & cargo tauri dev --manifest-path conductor-desktop/Cargo.toml ; kill %1 2>/dev/null",
+    "desktop:build": "bun install --cwd conductor-web/frontend && bun run --cwd conductor-web/frontend build && cargo tauri build --manifest-path conductor-desktop/Cargo.toml",
+    "web": "bun install --cwd conductor-web/frontend && bun run --cwd conductor-web/frontend dev & cargo run --bin conductor-web ; kill %1 2>/dev/null",
+    "cli:build": "cargo build --bin conductor",
+    "build": "cargo build && bun install --cwd conductor-web/frontend && bun run --cwd conductor-web/frontend build"
+  }
+}

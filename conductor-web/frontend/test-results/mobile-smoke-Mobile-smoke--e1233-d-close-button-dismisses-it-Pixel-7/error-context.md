@@ -6,170 +6,170 @@
     - generic [ref=e6]:
       - generic [ref=e7]:
         - img "Station clock" [ref=e8]
-        - img "Conductor" [ref=e22]
-        - heading "Conductor" [level=1] [ref=e23]
-      - button "Close menu" [ref=e24]: ✕
-    - navigation [ref=e25]:
-      - link "Home" [ref=e26] [cursor=pointer]:
+        - img "Conductor" [ref=e23]
+        - heading "Conductor" [level=1] [ref=e24]
+      - button "Close menu" [ref=e25]: ✕
+    - navigation [ref=e26]:
+      - link "Home" [ref=e27] [cursor=pointer]:
         - /url: /
-      - link "Repos" [ref=e27] [cursor=pointer]:
+      - link "Repos" [ref=e28] [cursor=pointer]:
         - /url: /repos
-      - link "Workflows" [ref=e28] [cursor=pointer]:
+      - link "Workflows" [ref=e29] [cursor=pointer]:
         - /url: /workflows
-      - link "Tickets" [ref=e29] [cursor=pointer]:
+      - link "Tickets" [ref=e30] [cursor=pointer]:
         - /url: /tickets
-      - generic [ref=e30]: Repos
-      - link "conductor-ai" [ref=e31] [cursor=pointer]:
+      - generic [ref=e31]: Repos
+      - link "conductor-ai" [ref=e32] [cursor=pointer]:
         - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
-        - generic [ref=e32]: conductor-ai
-      - link "docs" [ref=e34] [cursor=pointer]:
+        - generic [ref=e33]: conductor-ai
+      - link "docs" [ref=e35] [cursor=pointer]:
         - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
-        - generic [ref=e35]: docs
-      - link "global-sdlc" [ref=e37] [cursor=pointer]:
+        - generic [ref=e36]: docs
+      - link "global-sdlc" [ref=e38] [cursor=pointer]:
         - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
-        - generic [ref=e38]: global-sdlc
-      - link "video-client" [ref=e40] [cursor=pointer]:
+        - generic [ref=e39]: global-sdlc
+      - link "video-client" [ref=e41] [cursor=pointer]:
         - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
-        - generic [ref=e41]: video-client
-    - generic [ref=e43]:
-      - link "Settings" [ref=e44] [cursor=pointer]:
+        - generic [ref=e42]: video-client
+    - generic [ref=e44]:
+      - link "Settings" [ref=e45] [cursor=pointer]:
         - /url: /settings
-      - link "Getting Started 🚂" [ref=e45] [cursor=pointer]:
+      - link "Getting Started 🚂" [ref=e46] [cursor=pointer]:
         - /url: /getting-started
         - text: Getting Started
-        - generic [ref=e46]: 🚂
-      - generic [ref=e47]:
-        - generic [ref=e48]: ⌘K command palette
-        - generic [ref=e49]: "? shortcuts"
-  - main [ref=e50]:
-    - generic [ref=e51]:
-      - button "Open menu" [active] [ref=e52]: ☰
-      - generic [ref=e53]: Conductor
-      - button "Notifications" [ref=e56]:
-        - img [ref=e57]
-    - generic [ref=e60]:
-      - generic [ref=e61]:
-        - generic [ref=e62]:
-          - heading "Home" [level=2] [ref=e63]
-          - generic [ref=e64]:
-            - generic [ref=e65]: "4"
-            - generic [ref=e67]: R
-            - generic [ref=e68]: E
-            - generic [ref=e69]: P
-            - generic [ref=e70]: O
-            - generic [ref=e71]: S
-            - generic [ref=e74]: "2"
-            - generic [ref=e76]: T
-            - generic [ref=e77]: R
-            - generic [ref=e78]: A
-            - generic [ref=e79]: C
-            - generic [ref=e80]: K
-            - generic [ref=e81]: S
-            - generic [ref=e84]: "0"
-            - generic [ref=e86]: A
-            - generic [ref=e87]: G
-            - generic [ref=e88]: E
-            - generic [ref=e89]: "N"
-            - generic [ref=e90]: T
-            - generic [ref=e91]: S
-        - generic [ref=e97]:
-          - button "Discover" [ref=e98]
-          - button "Register Repo" [ref=e99]
-      - generic [ref=e100]:
-        - generic [ref=e101]:
-          - heading "Active Worktrees(2)" [level=3] [ref=e104]:
+        - generic [ref=e47]: 🚂
+      - generic [ref=e48]:
+        - generic [ref=e49]: ⌘K command palette
+        - generic [ref=e50]: "? shortcuts"
+  - main [ref=e51]:
+    - generic [ref=e52]:
+      - button "Open menu" [active] [ref=e53]: ☰
+      - generic [ref=e54]: Conductor
+      - button "Notifications" [ref=e57]:
+        - img [ref=e58]
+    - generic [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e63]:
+          - heading "Home" [level=2] [ref=e64]
+          - generic [ref=e65]:
+            - generic [ref=e66]: "4"
+            - generic [ref=e68]: R
+            - generic [ref=e69]: E
+            - generic [ref=e70]: P
+            - generic [ref=e71]: O
+            - generic [ref=e72]: S
+            - generic [ref=e75]: "2"
+            - generic [ref=e77]: T
+            - generic [ref=e78]: R
+            - generic [ref=e79]: A
+            - generic [ref=e80]: C
+            - generic [ref=e81]: K
+            - generic [ref=e82]: S
+            - generic [ref=e85]: "0"
+            - generic [ref=e87]: A
+            - generic [ref=e88]: G
+            - generic [ref=e89]: E
+            - generic [ref=e90]: "N"
+            - generic [ref=e91]: T
+            - generic [ref=e92]: S
+        - generic [ref=e98]:
+          - button "Discover" [ref=e99]
+          - button "Register Repo" [ref=e100]
+      - generic [ref=e101]:
+        - generic [ref=e102]:
+          - heading "Active Worktrees(2)" [level=3] [ref=e105]:
             - text: Active Worktrees
-            - generic [ref=e105]: (2)
-          - table [ref=e107]:
-            - rowgroup [ref=e108]:
-              - row "Branch Repo Status Agent Created" [ref=e109]:
-                - columnheader [ref=e110]
-                - columnheader "Branch" [ref=e111]
-                - columnheader "Repo" [ref=e112]
-                - columnheader "Status" [ref=e113]
-                - columnheader "Agent" [ref=e114]
-                - columnheader "Created" [ref=e115]
-            - rowgroup [ref=e116]:
-              - row "feat/desktop-workflow-detail conductor-ai active completed 3 days ago" [ref=e117] [cursor=pointer]:
-                - cell [ref=e118]:
-                  - generic "active" [ref=e119]
-                - cell "feat/desktop-workflow-detail" [ref=e123]
-                - cell "conductor-ai" [ref=e124]:
-                  - generic [ref=e125]: conductor-ai
-                - cell "active" [ref=e126]:
-                  - generic [ref=e127]: active
-                - cell "completed" [ref=e128]:
-                  - generic [ref=e129]: completed
-                - cell "3 days ago" [ref=e130]:
-                  - time [ref=e131]: 3 days ago
-              - row "feat/Desktop-worktree-detail conductor-ai active completed 1 hour ago" [ref=e132] [cursor=pointer]:
-                - cell [ref=e133]:
-                  - generic "active" [ref=e134]
-                - cell "feat/Desktop-worktree-detail" [ref=e138]
-                - cell "conductor-ai" [ref=e139]:
-                  - generic [ref=e140]: conductor-ai
-                - cell "active" [ref=e141]:
-                  - generic [ref=e142]: active
-                - cell "completed" [ref=e143]:
-                  - generic [ref=e144]: completed
-                - cell "1 hour ago" [ref=e145]:
-                  - time [ref=e146]: 1 hour ago
-        - generic [ref=e153]:
-          - heading "Stations(4)" [level=3] [ref=e156]:
+            - generic [ref=e106]: (2)
+          - table [ref=e108]:
+            - rowgroup [ref=e109]:
+              - row "Branch Repo Status Agent Created" [ref=e110]:
+                - columnheader [ref=e111]
+                - columnheader "Branch" [ref=e112]
+                - columnheader "Repo" [ref=e113]
+                - columnheader "Status" [ref=e114]
+                - columnheader "Agent" [ref=e115]
+                - columnheader "Created" [ref=e116]
+            - rowgroup [ref=e117]:
+              - row "feat/desktop-workflow-detail conductor-ai active completed 7 days ago" [ref=e118] [cursor=pointer]:
+                - cell [ref=e119]:
+                  - generic "active" [ref=e120]
+                - cell "feat/desktop-workflow-detail" [ref=e124]
+                - cell "conductor-ai" [ref=e125]:
+                  - generic [ref=e126]: conductor-ai
+                - cell "active" [ref=e127]:
+                  - generic [ref=e128]: active
+                - cell "completed" [ref=e129]:
+                  - generic [ref=e130]: completed
+                - cell "7 days ago" [ref=e131]:
+                  - time [ref=e132]: 7 days ago
+              - row "feat/Desktop-worktree-detail conductor-ai active completed 4 days ago" [ref=e133] [cursor=pointer]:
+                - cell [ref=e134]:
+                  - generic "active" [ref=e135]
+                - cell "feat/Desktop-worktree-detail" [ref=e139]
+                - cell "conductor-ai" [ref=e140]:
+                  - generic [ref=e141]: conductor-ai
+                - cell "active" [ref=e142]:
+                  - generic [ref=e143]: active
+                - cell "completed" [ref=e144]:
+                  - generic [ref=e145]: completed
+                - cell "4 days ago" [ref=e146]:
+                  - time [ref=e147]: 4 days ago
+        - generic [ref=e154]:
+          - heading "Stations(4)" [level=3] [ref=e157]:
             - text: Stations
-            - generic [ref=e157]: (4)
-          - generic [ref=e158]:
-            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 8 days ago" [ref=e159] [cursor=pointer]:
+            - generic [ref=e158]: (4)
+          - generic [ref=e159]:
+            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 2 worktrees Created 12 days ago" [ref=e160] [cursor=pointer]:
               - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
-              - generic [ref=e161]:
-                - heading "conductor-ai" [level=3] [ref=e162]
-                - paragraph [ref=e163]: https://github.com/devinrosen/conductor-ai.git
-                - generic [ref=e164]:
-                  - generic [ref=e165]: 2 worktrees
-                  - generic [ref=e167]:
+              - generic [ref=e162]:
+                - heading "conductor-ai" [level=3] [ref=e163]
+                - paragraph [ref=e164]: https://github.com/devinrosen/conductor-ai.git
+                - generic [ref=e165]:
+                  - generic [ref=e166]: 2 worktrees
+                  - generic [ref=e168]:
                     - text: Created
-                    - time [ref=e168]: 8 days ago
-            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 4 days ago" [ref=e169] [cursor=pointer]:
+                    - time [ref=e169]: 12 days ago
+            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 8 days ago" [ref=e170] [cursor=pointer]:
               - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
-              - generic [ref=e171]:
-                - heading "docs" [level=3] [ref=e172]
-                - paragraph [ref=e173]: https://github.com/LivelyVideo/docs
-                - generic [ref=e174]:
-                  - generic [ref=e175]: 0 worktrees
-                  - generic [ref=e177]:
+              - generic [ref=e172]:
+                - heading "docs" [level=3] [ref=e173]
+                - paragraph [ref=e174]: https://github.com/LivelyVideo/docs
+                - generic [ref=e175]:
+                  - generic [ref=e176]: 0 worktrees
+                  - generic [ref=e178]:
                     - text: Created
-                    - time [ref=e178]: 4 days ago
-            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 4 days ago" [ref=e179] [cursor=pointer]:
+                    - time [ref=e179]: 8 days ago
+            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 8 days ago" [ref=e180] [cursor=pointer]:
               - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
-              - generic [ref=e181]:
-                - heading "global-sdlc" [level=3] [ref=e182]
-                - paragraph [ref=e183]: https://github.com/LivelyVideo/global-sdlc
-                - generic [ref=e184]:
-                  - generic [ref=e185]: 0 worktrees
-                  - generic [ref=e187]:
+              - generic [ref=e182]:
+                - heading "global-sdlc" [level=3] [ref=e183]
+                - paragraph [ref=e184]: https://github.com/LivelyVideo/global-sdlc
+                - generic [ref=e185]:
+                  - generic [ref=e186]: 0 worktrees
+                  - generic [ref=e188]:
                     - text: Created
-                    - time [ref=e188]: 4 days ago
-            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 8 days ago" [ref=e189] [cursor=pointer]:
+                    - time [ref=e189]: 8 days ago
+            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 12 days ago" [ref=e190] [cursor=pointer]:
               - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
-              - generic [ref=e191]:
-                - heading "video-client" [level=3] [ref=e192]
-                - paragraph [ref=e193]: https://github.com/LivelyVideo/video-client
-                - generic [ref=e194]:
-                  - generic [ref=e195]: 0 worktrees
-                  - generic [ref=e197]:
+              - generic [ref=e192]:
+                - heading "video-client" [level=3] [ref=e193]
+                - paragraph [ref=e194]: https://github.com/LivelyVideo/video-client
+                - generic [ref=e195]:
+                  - generic [ref=e196]: 0 worktrees
+                  - generic [ref=e198]:
                     - text: Created
-                    - time [ref=e198]: 8 days ago
-  - generic [ref=e199]:
-    - link "Home" [ref=e200] [cursor=pointer]:
+                    - time [ref=e199]: 12 days ago
+  - generic [ref=e200]:
+    - link "Home" [ref=e201] [cursor=pointer]:
       - /url: /
-      - img [ref=e201]
+      - img [ref=e202]
       - text: Home
-    - link "Repos" [ref=e203] [cursor=pointer]:
+    - link "Repos" [ref=e204] [cursor=pointer]:
       - /url: /repos
-      - img [ref=e204]
+      - img [ref=e205]
       - text: Repos
-    - link "Workflows" [ref=e206] [cursor=pointer]:
+    - link "Workflows" [ref=e207] [cursor=pointer]:
       - /url: /workflows
-      - img [ref=e207]
+      - img [ref=e208]
       - text: Workflows
 ```
