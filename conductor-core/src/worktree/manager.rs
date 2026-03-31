@@ -21,6 +21,43 @@ fn worktree_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -
     }
 }
 
+/// SQL fragment that LEFT JOINs the latest agent run per worktree.
+///
+/// Adds one extra column: `latest.status AS agent_status` (at index `WORKTREE_COLUMN_COUNT`).
+/// Must be used together with `map_enriched_row`.
+const AGENT_LATEST_JOIN: &str = "LEFT JOIN (\
+        SELECT a.worktree_id, a.status \
+        FROM agent_runs a \
+        INNER JOIN (\
+            SELECT worktree_id, MAX(started_at) AS max_started \
+            FROM agent_runs \
+            WHERE worktree_id IS NOT NULL \
+            GROUP BY worktree_id\
+        ) top ON a.worktree_id = top.worktree_id AND a.started_at = top.max_started \
+        GROUP BY a.worktree_id\
+    ) latest ON latest.worktree_id = w.id";
+
+/// Map a row that contains the standard worktree columns followed by
+/// `agent_status`, `ticket_title`, and `ticket_number` (in that order).
+///
+/// Column layout:
+/// - `[0 .. WORKTREE_COLUMN_COUNT)`: mapped by `map_worktree_row`
+/// - `WORKTREE_COLUMN_COUNT + 0`: `agent_status`
+/// - `WORKTREE_COLUMN_COUNT + 1`: `ticket_title`
+/// - `WORKTREE_COLUMN_COUNT + 2`: `ticket_number`
+fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithStatus> {
+    let worktree = map_worktree_row(row)?;
+    let agent_status: Option<crate::agent::AgentRunStatus> = row.get(WORKTREE_COLUMN_COUNT)?;
+    let ticket_title: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 1)?;
+    let ticket_number: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 2)?;
+    Ok(WorktreeWithStatus {
+        worktree,
+        agent_status,
+        ticket_title,
+        ticket_number,
+    })
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -353,38 +390,18 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let sql = format!(
-            "SELECT {cols}, latest.status AS agent_status, t.title AS ticket_title, t.source_id AS ticket_number
-             FROM worktrees w
-             LEFT JOIN (
-                 SELECT a.worktree_id, a.status
-                 FROM agent_runs a
-                 INNER JOIN (
-                     SELECT worktree_id, MAX(started_at) AS max_started
-                     FROM agent_runs
-                     WHERE worktree_id IS NOT NULL
-                     GROUP BY worktree_id
-                 ) top ON a.worktree_id = top.worktree_id AND a.started_at = top.max_started
-                 GROUP BY a.worktree_id
-             ) latest ON latest.worktree_id = w.id
-             LEFT JOIN tickets t ON t.id = w.ticket_id
-             WHERE 1=1{status_filter}
+            "SELECT {cols}, latest.status AS agent_status, \
+             t.title AS ticket_title, t.source_id AS ticket_number \
+             FROM worktrees w \
+             {agent_join} \
+             LEFT JOIN tickets t ON t.id = w.ticket_id \
+             WHERE 1=1{status_filter} \
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
             cols = &*WORKTREE_COLUMNS_W,
+            agent_join = AGENT_LATEST_JOIN,
             status_filter = status_filter,
         );
-        query_collect(self.conn, &sql, [], |row| {
-            let worktree = map_worktree_row(row)?;
-            let agent_status: Option<crate::agent::AgentRunStatus> =
-                row.get(WORKTREE_COLUMN_COUNT)?;
-            let ticket_title: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 1)?;
-            let ticket_number: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 2)?;
-            Ok(WorktreeWithStatus {
-                worktree,
-                agent_status,
-                ticket_title,
-                ticket_number,
-            })
-        })
+        query_collect(self.conn, &sql, [], map_enriched_row)
     }
 
     /// Fetch a worktree by ID, returning a `WorktreeWithStatus` with ticket info populated.
@@ -392,24 +409,17 @@ impl<'a> WorktreeManager<'a> {
         self.conn
             .query_row(
                 &format!(
-                    "SELECT {cols}, t.title AS ticket_title, t.source_id AS ticket_number \
+                    "SELECT {cols}, latest.status AS agent_status, \
+                     t.title AS ticket_title, t.source_id AS ticket_number \
                      FROM worktrees w \
+                     {agent_join} \
                      LEFT JOIN tickets t ON t.id = w.ticket_id \
                      WHERE w.id = ?1",
                     cols = &*WORKTREE_COLUMNS_W,
+                    agent_join = AGENT_LATEST_JOIN,
                 ),
                 params![id],
-                |row| {
-                    let worktree = map_worktree_row(row)?;
-                    let ticket_title: Option<String> = row.get(WORKTREE_COLUMN_COUNT)?;
-                    let ticket_number: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 1)?;
-                    Ok(WorktreeWithStatus {
-                        worktree,
-                        agent_status: None,
-                        ticket_title,
-                        ticket_number,
-                    })
-                },
+                map_enriched_row,
             )
             .map_err(worktree_not_found(id))
     }
@@ -424,24 +434,17 @@ impl<'a> WorktreeManager<'a> {
         self.conn
             .query_row(
                 &format!(
-                    "SELECT {cols}, t.title AS ticket_title, t.source_id AS ticket_number \
+                    "SELECT {cols}, latest.status AS agent_status, \
+                     t.title AS ticket_title, t.source_id AS ticket_number \
                      FROM worktrees w \
+                     {agent_join} \
                      LEFT JOIN tickets t ON t.id = w.ticket_id \
                      WHERE w.id = ?1 AND w.repo_id = ?2",
                     cols = &*WORKTREE_COLUMNS_W,
+                    agent_join = AGENT_LATEST_JOIN,
                 ),
                 params![id, repo_id],
-                |row| {
-                    let worktree = map_worktree_row(row)?;
-                    let ticket_title: Option<String> = row.get(WORKTREE_COLUMN_COUNT)?;
-                    let ticket_number: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 1)?;
-                    Ok(WorktreeWithStatus {
-                        worktree,
-                        agent_status: None,
-                        ticket_title,
-                        ticket_number,
-                    })
-                },
+                map_enriched_row,
             )
             .map_err(worktree_not_found(id))
     }
@@ -459,25 +462,18 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let sql = format!(
-            "SELECT {cols}, t.title AS ticket_title, t.source_id AS ticket_number \
+            "SELECT {cols}, latest.status AS agent_status, \
+             t.title AS ticket_title, t.source_id AS ticket_number \
              FROM worktrees w \
+             {agent_join} \
              LEFT JOIN tickets t ON t.id = w.ticket_id \
              WHERE w.repo_id = ?1{status_filter} \
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
             cols = &*WORKTREE_COLUMNS_W,
+            agent_join = AGENT_LATEST_JOIN,
             status_filter = status_filter,
         );
-        query_collect(self.conn, &sql, params![repo_id], |row| {
-            let worktree = map_worktree_row(row)?;
-            let ticket_title: Option<String> = row.get(WORKTREE_COLUMN_COUNT)?;
-            let ticket_number: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 1)?;
-            Ok(WorktreeWithStatus {
-                worktree,
-                agent_status: None,
-                ticket_title,
-                ticket_number,
-            })
-        })
+        query_collect(self.conn, &sql, params![repo_id], map_enriched_row)
     }
 
     /// Walk up from `cwd` and return the worktree whose `path` is a prefix of (or equals) `cwd`.
