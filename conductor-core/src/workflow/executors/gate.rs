@@ -127,10 +127,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
             .map(|s| serde_json::json!({"value": s, "label": s}))
             .collect();
         let opts_str = serde_json::to_string(&opts_json).map_err(|e| {
-            ConductorError::Workflow(format!(
-                "Failed to serialize gate options: {}",
-                e
-            ))
+            ConductorError::Workflow(format!("Failed to serialize gate options: {}", e))
         })?;
         state.wf_mgr.set_step_gate_options(&step_id, &opts_str)?;
     }

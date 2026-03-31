@@ -828,6 +828,23 @@ impl<'a> WorkflowManager<'a> {
         Ok(map)
     }
 
+    /// Lightweight cancellation check — queries only the status column.
+    ///
+    /// Returns `true` when the run exists and its status is `cancelled`.
+    /// Returns `false` for any other status or if the run is not found.
+    /// Propagates DB errors so callers can decide how to handle them.
+    pub fn is_workflow_cancelled(&self, run_id: &str) -> Result<bool> {
+        let status: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(status.as_deref() == Some("cancelled"))
+    }
+
     /// Return the set of `parent_run_id` values for all non-terminal workflow
     /// runs (`pending`, `running`, or `waiting`).
     pub fn get_active_parent_run_ids(&self) -> Result<HashSet<String>> {

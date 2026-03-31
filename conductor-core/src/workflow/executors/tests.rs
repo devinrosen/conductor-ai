@@ -12,24 +12,6 @@ use crate::workflow_dsl::{
 };
 
 // -----------------------------------------------------------------------
-// Shared test helper: build an ExecutionState backed by a real in-memory DB.
-// -----------------------------------------------------------------------
-
-/// Build an `ExecutionState` wired to a real in-memory SQLite connection.
-///
-/// Uses the common test helper but allows customization of exec_config.
-fn make_test_state_with_config<'a>(
-    conn: &'a rusqlite::Connection,
-    config: &'a crate::config::Config,
-    exec_config: crate::workflow::types::WorkflowExecConfig,
-) -> ExecutionState<'a> {
-    ExecutionState {
-        exec_config,
-        ..make_loop_test_state(conn, config)
-    }
-}
-
-// -----------------------------------------------------------------------
 // read_stdout_bounded tests
 // -----------------------------------------------------------------------
 
@@ -131,14 +113,11 @@ fn test_execute_script_failure_captures_stdout() {
     let mut state = ExecutionState {
         working_dir: dir_str.clone(),
         repo_path: dir_str,
-        ..make_test_state_with_config(
-            &conn,
-            config,
-            crate::workflow::types::WorkflowExecConfig {
-                fail_fast: false,
-                ..Default::default()
-            },
-        )
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            fail_fast: false,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
     };
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -301,14 +280,11 @@ fn test_execute_script_timeout() {
     let mut state = ExecutionState {
         working_dir: dir_str.clone(),
         repo_path: dir_str,
-        ..make_test_state_with_config(
-            &conn,
-            config,
-            crate::workflow::types::WorkflowExecConfig {
-                fail_fast: false,
-                ..Default::default()
-            },
-        )
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            fail_fast: false,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
     };
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -358,14 +334,11 @@ fn test_execute_script_cancelled() {
     let mut state = ExecutionState {
         working_dir: dir_str.clone(),
         repo_path: dir_str,
-        ..make_test_state_with_config(
-            &conn,
-            config,
-            crate::workflow::types::WorkflowExecConfig {
-                shutdown: Some(Arc::clone(&shutdown)),
-                ..Default::default()
-            },
-        )
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            shutdown: Some(Arc::clone(&shutdown)),
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
     };
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -406,14 +379,11 @@ fn test_execute_script_retries_exhausted() {
     let mut state = ExecutionState {
         working_dir: dir_str.clone(),
         repo_path: dir_str,
-        ..make_test_state_with_config(
-            &conn,
-            config,
-            crate::workflow::types::WorkflowExecConfig {
-                fail_fast: false, // don't short-circuit on first failure
-                ..Default::default()
-            },
-        )
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            fail_fast: false, // don't short-circuit on first failure
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
     };
     let run_id = state.workflow_run_id.clone();
 
@@ -1040,15 +1010,14 @@ fn test_stepref_gate_happy_path() {
     .unwrap();
 
     let config = crate::config::Config::default();
-    let mut state = make_test_state_with_config(
-        &conn,
-        &config,
-        crate::workflow::types::WorkflowExecConfig {
+    let mut state = ExecutionState {
+        exec_config: crate::workflow::types::WorkflowExecConfig {
             // Short poll interval so the test doesn't drag out.
             poll_interval: Duration::from_millis(50),
             ..Default::default()
         },
-    );
+        ..make_loop_test_state(&conn, &config)
+    };
     state.step_results.insert(
         "prior".to_string(),
         make_step_result(Some(r#"{"choices": ["a","b","c"]}"#)),

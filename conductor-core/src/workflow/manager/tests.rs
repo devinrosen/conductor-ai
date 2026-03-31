@@ -1668,10 +1668,18 @@ fn test_fail_workflow_run_returns_parent_id() {
 
     // Parent agent run update is handled separately by caller
     let updated_parent = agent_mgr.get_run(&parent_run.id).unwrap().unwrap();
-    assert_eq!(updated_parent.status, crate::agent::status::AgentRunStatus::Running);
+    assert_eq!(
+        updated_parent.status,
+        crate::agent::status::AgentRunStatus::Running
+    );
 
     // Now caller can update parent separately
-    agent_mgr.update_run_failed(&returned_parent_id, "engine panic").unwrap();
+    agent_mgr
+        .update_run_failed(&returned_parent_id, "engine panic")
+        .unwrap();
     let final_parent = agent_mgr.get_run(&parent_run.id).unwrap().unwrap();
-    assert_eq!(final_parent.status, crate::agent::status::AgentRunStatus::Failed);
+    assert_eq!(
+        final_parent.status,
+        crate::agent::status::AgentRunStatus::Failed
+    );
 }
