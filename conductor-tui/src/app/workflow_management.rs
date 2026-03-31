@@ -872,6 +872,10 @@ impl App {
                     return;
                 }
 
+                // Try the in-memory cache first.  If the worktree was just
+                // created and the background refresh hasn't fired yet, the
+                // cache will miss and we fall back to a direct DB query so
+                // that target_label is never stored as an empty string.
                 let (wt_target_label, wt_ticket_id, repo_slug, wt_slug) = self
                     .state
                     .data
@@ -886,14 +890,38 @@ impl App {
                             .find(|r| r.id == w.repo_id)
                             .map(|r| {
                                 (
-                                    format!("{}/{}", r.slug, w.slug),
+                                    Some(format!("{}/{}", r.slug, w.slug)),
                                     w.ticket_id.clone(),
                                     Some(r.slug.clone()),
                                     Some(w.slug.clone()),
                                 )
                             })
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| {
+                        // Cache miss — query DB directly to avoid storing "".
+                        use conductor_core::config::db_path;
+                        use conductor_core::db::open_database;
+                        let label = (|| -> Option<(Option<String>, Option<String>, Option<String>, Option<String>)> {
+                            let conn = open_database(&db_path()).ok()?;
+                            let (repo_slug, wt_slug, ticket_id): (String, String, Option<String>) = conn
+                                .query_row(
+                                    "SELECT r.slug, w.slug, w.ticket_id \
+                                     FROM worktrees w \
+                                     JOIN repos r ON r.id = w.repo_id \
+                                     WHERE w.id = ?1",
+                                    rusqlite::params![worktree_id],
+                                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                                )
+                                .ok()?;
+                            Some((
+                                Some(format!("{repo_slug}/{wt_slug}")),
+                                ticket_id,
+                                Some(repo_slug),
+                                Some(wt_slug),
+                            ))
+                        })();
+                        label.unwrap_or((None, None, None, None))
+                    });
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
@@ -1005,7 +1033,7 @@ impl App {
                         repo_path,
                         ticket_id,
                         run_inputs,
-                        format!("workflow_run:{workflow_run_id}"),
+                        Some(format!("workflow_run:{workflow_run_id}")),
                         model,
                         repo_slug,
                         wt_slug,
@@ -1037,7 +1065,7 @@ impl App {
         repo_path: String,
         ticket_id: Option<String>,
         inputs: std::collections::HashMap<String, String>,
-        target_label: String,
+        target_label: Option<String>,
         model: Option<String>,
         repo_slug: Option<String>,
         wt_slug: Option<String>,
@@ -1082,7 +1110,7 @@ impl App {
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
-                target_label: Some(target_label),
+                target_label,
                 feature_id,
                 run_id_notify: None,
                 triggered_by_hook: false,

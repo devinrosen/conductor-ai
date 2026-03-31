@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 56;
+pub const LATEST_SCHEMA_VERSION: u32 = 57;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -976,6 +976,16 @@ pub fn run(conn: &Connection) -> Result<()> {
             conn.execute_batch(include_str!("migrations/056_gate_options.sql"))?;
         }
         bump_version(conn, 56)?;
+    }
+
+    // Migration 057: backfill target_label for workflow_runs that have a
+    // worktree_id but a NULL or empty target_label (pre-033 rows and TUI
+    // race condition where cache hadn't refreshed after worktree creation).
+    if version < 57 {
+        conn.execute_batch(include_str!(
+            "migrations/057_backfill_workflow_run_target_label.sql"
+        ))?;
+        bump_version(conn, 57)?;
     }
 
     Ok(())
