@@ -106,6 +106,32 @@ pub async fn delete_worktree(
     Ok(Json(wt))
 }
 
+pub async fn get_worktree_for_repo(
+    State(state): State<AppState>,
+    Path((repo_id, id)): Path<(String, String)>,
+) -> Result<Json<Worktree>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let mgr = WorktreeManager::new(&db, &config);
+    let wt = mgr.get_by_id_for_repo(&id, &repo_id)?;
+    Ok(Json(wt))
+}
+
+pub async fn delete_worktree_for_repo(
+    State(state): State<AppState>,
+    Path((repo_id, id)): Path<(String, String)>,
+) -> Result<Json<Worktree>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let mgr = WorktreeManager::new(&db, &config);
+    let wt = mgr.delete_by_id_for_repo(&id, &repo_id)?;
+    state.events.emit(ConductorEvent::WorktreeDeleted {
+        id: wt.id.clone(),
+        repo_id: wt.repo_id.clone(),
+    });
+    Ok(Json(wt))
+}
+
 #[derive(Deserialize)]
 pub struct SetModelRequest {
     pub model: Option<String>,
@@ -201,6 +227,94 @@ mod tests {
     #[tokio::test]
     async fn get_worktree_returns_404_when_not_found() {
         let (status, _) = send_get("/api/worktrees/nonexistent", seeded_state()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_worktree_for_repo_returns_200_with_matching_repo() {
+        let (status, body) =
+            send_get("/api/repos/r1/worktrees/w1", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["id"], "w1");
+        assert_eq!(json["repo_id"], "r1");
+    }
+
+    #[tokio::test]
+    async fn get_worktree_for_repo_returns_404_for_mismatched_repo() {
+        let state = seeded_state();
+        // Insert a second repo so the route can be exercised
+        {
+            let db = state.db.lock().await;
+            db.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+        // w1 belongs to r1 — requesting it under r2 must return 404
+        let (status, _) = send_get("/api/repos/r2/worktrees/w1", state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_worktree_for_repo_returns_404_when_not_found() {
+        let (status, _) =
+            send_get("/api/repos/r1/worktrees/nonexistent", seeded_state()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    async fn send_delete(uri: &str, state: AppState) -> (StatusCode, Vec<u8>) {
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn delete_worktree_for_repo_returns_200_with_matching_repo() {
+        let (status, body) =
+            send_delete("/api/repos/r1/worktrees/w1", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["id"], "w1");
+    }
+
+    #[tokio::test]
+    async fn delete_worktree_for_repo_returns_404_for_mismatched_repo() {
+        let state = seeded_state();
+        {
+            let db = state.db.lock().await;
+            db.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+        // w1 belongs to r1 — deleting it under r2 must return 404
+        let (status, _) = send_delete("/api/repos/r2/worktrees/w1", state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_worktree_for_repo_returns_404_when_not_found() {
+        let (status, _) =
+            send_delete("/api/repos/r1/worktrees/nonexistent", seeded_state()).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

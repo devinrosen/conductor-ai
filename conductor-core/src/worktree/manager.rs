@@ -439,6 +439,15 @@ impl<'a> WorktreeManager<'a> {
         self.delete_internal(&repo, worktree, None)
     }
 
+    /// Delete a worktree by ID, enforcing that it belongs to `repo_id`.
+    /// Returns `WorktreeNotFound` if the worktree does not exist or belongs to a different repo.
+    pub fn delete_by_id_for_repo(&self, id: &str, repo_id: &str) -> Result<Worktree> {
+        let worktree = self.get_by_id_for_repo(id, repo_id)?;
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
+        self.delete_internal(&repo, worktree, None)
+    }
+
     /// `ticket_closed_hint`: when `Some(true)` the caller already knows the
     /// linked ticket is closed; the per-ticket DB query is skipped.
     fn delete_internal(

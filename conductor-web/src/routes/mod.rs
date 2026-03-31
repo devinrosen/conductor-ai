@@ -61,6 +61,10 @@ pub fn api_router() -> Router<AppState> {
             get(worktrees::get_worktree).delete(worktrees::delete_worktree),
         )
         .route(
+            "/api/repos/{repo_id}/worktrees/{id}",
+            get(worktrees::get_worktree_for_repo).delete(worktrees::delete_worktree_for_repo),
+        )
+        .route(
             "/api/worktrees/{id}/model",
             patch(worktrees::patch_worktree_model),
         )
