@@ -1803,13 +1803,13 @@ fn insert_ticket(
     repo_id: &str,
     title: &str,
     source_id: &str,
-    url: Option<&str>,
+    url: &str,
 ) {
     conn.execute(
         "INSERT INTO tickets \
          (id, repo_id, source_type, source_id, title, url, synced_at) \
          VALUES (?1, ?2, 'github', ?3, ?4, ?5, '2024-01-01T00:00:00Z')",
-        rusqlite::params![id, repo_id, source_id, title, url.unwrap_or("")],
+        rusqlite::params![id, repo_id, source_id, title, url],
     )
     .unwrap();
 }
@@ -1839,7 +1839,7 @@ fn test_get_by_id_enriched_no_ticket_no_agent() {
 fn test_get_by_id_enriched_with_ticket() {
     let conn = crate::test_helpers::setup_db();
     let config = Config::default();
-    insert_ticket(&conn, "t1", "r1", "Fix the bug", "42", None);
+    insert_ticket(&conn, "t1", "r1", "Fix the bug", "42", "");
     link_ticket(&conn, "w1", "t1");
 
     let mgr = WorktreeManager::new(&conn, &config);
@@ -1890,7 +1890,7 @@ fn test_get_by_id_for_repo_enriched_no_ticket_no_agent() {
 fn test_get_by_id_for_repo_enriched_with_ticket_and_agent() {
     let conn = crate::test_helpers::setup_db();
     let config = Config::default();
-    insert_ticket(&conn, "t1", "r1", "Implement feature", "99", None);
+    insert_ticket(&conn, "t1", "r1", "Implement feature", "99", "");
     link_ticket(&conn, "w1", "t1");
     insert_agent_run(&conn, "ar1", "w1", "completed", "2024-01-01T10:00:00Z");
 
@@ -1939,7 +1939,7 @@ fn test_list_by_repo_id_enriched_no_ticket_no_agent() {
 fn test_list_by_repo_id_enriched_with_ticket_and_agent() {
     let conn = crate::test_helpers::setup_db();
     let config = Config::default();
-    insert_ticket(&conn, "t1", "r1", "Do the thing", "7", None);
+    insert_ticket(&conn, "t1", "r1", "Do the thing", "7", "");
     link_ticket(&conn, "w1", "t1");
     insert_agent_run(&conn, "ar1", "w1", "running", "2024-01-01T10:00:00Z");
 
@@ -1964,7 +1964,7 @@ fn test_ticket_url_populated_in_enriched_response() {
         "r1",
         "Fix the bug",
         "42",
-        Some("https://github.com/owner/repo/issues/42"),
+        "https://github.com/owner/repo/issues/42",
     );
     link_ticket(&conn, "w1", "t1");
 
