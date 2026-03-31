@@ -444,9 +444,22 @@ pub async fn list_all_workflow_runs_handler(
         .into_iter()
         .map(|run| {
             let active_steps = steps_by_run.remove(&run.id).unwrap_or_default();
-            let repo_slug = run.repo_id.as_deref().and_then(|id| repo_slug_map.get(id)).cloned();
-            let worktree_slug = run.worktree_id.as_deref().and_then(|id| wt_slug_map.get(id)).cloned();
-            WorkflowRunResponse { run, active_steps, repo_slug, worktree_slug }
+            let repo_slug = run
+                .repo_id
+                .as_deref()
+                .and_then(|id| repo_slug_map.get(id))
+                .cloned();
+            let worktree_slug = run
+                .worktree_id
+                .as_deref()
+                .and_then(|id| wt_slug_map.get(id))
+                .cloned();
+            WorkflowRunResponse {
+                run,
+                active_steps,
+                repo_slug,
+                worktree_slug,
+            }
         })
         .collect();
 
