@@ -69,6 +69,10 @@ pub struct WorkflowRunResponse {
     run: WorkflowRun,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     active_steps: Vec<WorkflowRunStep>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree_slug: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -419,11 +423,43 @@ pub async fn list_all_workflow_runs_handler(
     // Batch-fetch only running/waiting steps for all runs (filter pushed to SQL)
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     let mut steps_by_run = mgr.get_active_steps_for_runs(&run_ids)?;
+
+    // Build slug lookup maps for repo_slug / worktree_slug enrichment
+    let repo_slug_map: HashMap<String, String> = RepoManager::new(&db, &config)
+        .list()?
+        .into_iter()
+        .map(|r| (r.id, r.slug))
+        .collect();
+    let wt_ids: Vec<&str> = runs
+        .iter()
+        .filter_map(|r| r.worktree_id.as_deref())
+        .collect();
+    let wt_slug_map: HashMap<String, String> = WorktreeManager::new(&db, &config)
+        .get_by_ids(&wt_ids)?
+        .into_iter()
+        .map(|wt| (wt.id, wt.slug))
+        .collect();
+
     let responses: Vec<WorkflowRunResponse> = runs
         .into_iter()
         .map(|run| {
             let active_steps = steps_by_run.remove(&run.id).unwrap_or_default();
-            WorkflowRunResponse { run, active_steps }
+            let repo_slug = run
+                .repo_id
+                .as_deref()
+                .and_then(|id| repo_slug_map.get(id))
+                .cloned();
+            let worktree_slug = run
+                .worktree_id
+                .as_deref()
+                .and_then(|id| wt_slug_map.get(id))
+                .cloned();
+            WorkflowRunResponse {
+                run,
+                active_steps,
+                repo_slug,
+                worktree_slug,
+            }
         })
         .collect();
 
