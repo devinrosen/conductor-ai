@@ -189,7 +189,7 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/workflows/runs",
-            get(workflows::list_all_workflow_runs_handler),
+            get(workflows::list_all_workflow_runs_handler).post(workflows::post_workflow_run),
         )
         .route("/api/workflows/runs/{id}", get(workflows::get_workflow_run))
         .route(
