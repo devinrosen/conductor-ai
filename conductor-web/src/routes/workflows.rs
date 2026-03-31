@@ -514,21 +514,26 @@ pub async fn post_workflow_run(
         let run_id_slot: RunIdSlot =
             std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
 
+        // Helper: emit a failed WorkflowRunStatusChanged event and return the run_id used.
+        let emit_failed = |run_id_slot: &RunIdSlot, wt_id: Option<String>| -> String {
+            let error_run_id = resolve_error_run_id(run_id_slot, &workflow_name, &target_label);
+            state_clone
+                .events
+                .emit(ConductorEvent::WorkflowRunStatusChanged {
+                    run_id: error_run_id.clone(),
+                    worktree_id: wt_id,
+                    status: "failed".to_string(),
+                });
+            error_run_id
+        };
+
         let result = {
             let db = state_clone.db.lock().await;
             let config = state_clone.config.read().await;
 
             if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
                 tracing::error!("Workflow input validation failed workflow={workflow_name}: {e}");
-                let error_run_id =
-                    resolve_error_run_id(&run_id_slot, &workflow_name, &target_label);
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: error_run_id,
-                        worktree_id: wt_id_clone.clone(),
-                        status: "failed".to_string(),
-                    });
+                emit_failed(&run_id_slot, wt_id_clone.clone());
                 if let Some(notify) = &state_clone.workflow_done_notify {
                     notify.notify_one();
                 }
@@ -613,15 +618,7 @@ pub async fn post_workflow_run(
                 tracing::error!(
                     "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
                 );
-                let error_run_id =
-                    resolve_error_run_id(&run_id_slot, &workflow_name, &target_label);
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: error_run_id.clone(),
-                        worktree_id: wt_id_clone,
-                        status: "failed".to_string(),
-                    });
+                let error_run_id = emit_failed(&run_id_slot, wt_id_clone);
                 let wf_name = workflow_name.clone();
                 let label = target_label.clone();
                 tokio::task::spawn_blocking(move || {
