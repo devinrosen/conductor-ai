@@ -364,12 +364,16 @@ export function WorkflowsPage() {
                 {filteredRuns.map(({ run, ctx }) => (
                   <tr key={run.id} className="hover:bg-gray-50">
                     <td className="px-3 py-1.5">
-                      <Link
-                        to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
-                        className="text-indigo-600 hover:underline font-medium"
-                      >
-                        {run.workflow_name}
-                      </Link>
+                      {ctx.repoId && ctx.worktreeId ? (
+                        <Link
+                          to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
+                          className="text-indigo-600 hover:underline font-medium"
+                        >
+                          {run.workflow_name}
+                        </Link>
+                      ) : (
+                        <span className="font-medium">{run.workflow_name}</span>
+                      )}
                     </td>
                     <td className="px-3 py-1.5 text-gray-500">
                       <span className="inline-block px-1.5 py-0.5 text-[11px] font-mono rounded bg-gray-100 text-gray-600 mr-1">
