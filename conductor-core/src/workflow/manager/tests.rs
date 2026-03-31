@@ -1670,3 +1670,141 @@ fn test_fail_workflow_run_and_parent_marks_both_failed() {
         crate::agent::status::AgentRunStatus::Failed
     );
 }
+
+// ── list_active_workflow_runs_for_repo ───────────────────────────────────
+
+#[test]
+fn test_list_active_workflow_runs_for_repo_includes_worktree_runs() {
+    // Runs linked to a worktree whose repo_id = r1 must appear.
+    let conn = setup_db();
+    let run = create_worktree_run(&conn, "w1"); // w1 belongs to r1
+    let runs = WorkflowManager::new(&conn)
+        .list_active_workflow_runs_for_repo("r1", &[WorkflowRunStatus::Pending])
+        .unwrap();
+    let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    assert!(ids.contains(&run.id.as_str()), "worktree run must appear");
+}
+
+#[test]
+fn test_list_active_workflow_runs_for_repo_includes_repo_targeted_runs() {
+    // Runs with repo_id = r1 set directly must appear.
+    let conn = setup_db();
+    let run = create_repo_run(&conn, "r1");
+    let runs = WorkflowManager::new(&conn)
+        .list_active_workflow_runs_for_repo("r1", &[WorkflowRunStatus::Pending])
+        .unwrap();
+    let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    assert!(
+        ids.contains(&run.id.as_str()),
+        "repo-targeted run must appear"
+    );
+}
+
+#[test]
+fn test_list_active_workflow_runs_for_repo_excludes_other_repo() {
+    // Runs belonging to r2 must not appear when querying r1.
+    let conn = setup_db();
+    let _r2_wt_run = create_worktree_run(&conn, "w3"); // w3 belongs to r2
+    let _r2_repo_run = create_repo_run(&conn, "r2");
+    let runs = WorkflowManager::new(&conn)
+        .list_active_workflow_runs_for_repo("r1", &[WorkflowRunStatus::Pending])
+        .unwrap();
+    assert!(runs.is_empty(), "r1 query must not return r2 runs");
+}
+
+#[test]
+fn test_list_active_workflow_runs_for_repo_inactive_worktree_excluded() {
+    // Runs linked to a merged worktree must not appear.
+    let conn = setup_db();
+    let run = create_worktree_run(&conn, "w1");
+    conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w1'", [])
+        .unwrap();
+    let runs = WorkflowManager::new(&conn)
+        .list_active_workflow_runs_for_repo("r1", &[WorkflowRunStatus::Pending])
+        .unwrap();
+    let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    assert!(
+        !ids.contains(&run.id.as_str()),
+        "run linked to a merged worktree must not appear"
+    );
+}
+
+#[test]
+fn test_list_active_workflow_runs_for_repo_empty_slice_defaults_to_active() {
+    // Empty status slice defaults to [pending, running, waiting]; completed must not appear.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let pending = create_repo_run(&conn, "r1");
+    let completed = create_repo_run(&conn, "r1");
+    mgr.update_workflow_status(&completed.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    let runs = mgr.list_active_workflow_runs_for_repo("r1", &[]).unwrap();
+    let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+    assert!(
+        ids.contains(&pending.id.as_str()),
+        "pending run must appear"
+    );
+    assert!(
+        !ids.contains(&completed.id.as_str()),
+        "completed run must not appear"
+    );
+}
+
+#[test]
+fn test_list_active_workflow_runs_for_repo_explicit_status_filter() {
+    // Only runs with the requested status should appear.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let pending = create_repo_run(&conn, "r1");
+    let running = create_repo_run(&conn, "r1");
+    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let runs = mgr
+        .list_active_workflow_runs_for_repo("r1", &[WorkflowRunStatus::Running])
+        .unwrap();
+    let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+    assert!(
+        ids.contains(&running.id.as_str()),
+        "running run must appear"
+    );
+    assert!(
+        !ids.contains(&pending.id.as_str()),
+        "pending run must not appear"
+    );
+}
+
+#[test]
+fn test_list_active_workflow_runs_for_repo_distinct_no_duplicates() {
+    // A run matching both join paths (repo_id = r1 AND worktree belongs to r1) must appear once.
+    let conn = setup_db();
+    let parent_id = make_parent_id(&conn, "w1");
+    WorkflowManager::new(&conn)
+        .create_workflow_run_with_targets(
+            "wf",
+            Some("w1"),
+            None,
+            Some("r1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let runs = WorkflowManager::new(&conn)
+        .list_active_workflow_runs_for_repo("r1", &[WorkflowRunStatus::Pending])
+        .unwrap();
+    assert_eq!(
+        runs.len(),
+        1,
+        "run matching both join paths must appear exactly once"
+    );
+}

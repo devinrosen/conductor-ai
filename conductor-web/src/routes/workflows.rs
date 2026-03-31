@@ -371,6 +371,8 @@ pub async fn run_workflow(
 pub struct ListAllRunsQuery {
     /// Comma-separated list of statuses. Defaults to running, waiting, pending (owned by the manager layer).
     pub status: Option<String>,
+    /// Filter by repo slug. When provided, only runs associated with this repo are returned.
+    pub repo: Option<String>,
 }
 
 /// GET /api/workflows/runs?status=<csv>
@@ -405,8 +407,14 @@ pub async fn list_all_workflow_runs_handler(
     }
 
     let db = state.db.lock().await;
+    let config = state.config.read().await;
     let mgr = WorkflowManager::new(&db);
-    let runs = mgr.list_active_workflow_runs(&statuses)?;
+    let runs = if let Some(ref slug) = params.repo {
+        let repo = RepoManager::new(&db, &config).get_by_slug(slug)?;
+        mgr.list_active_workflow_runs_for_repo(&repo.id, &statuses)?
+    } else {
+        mgr.list_active_workflow_runs(&statuses)?
+    };
 
     // Batch-fetch only running/waiting steps for all runs (filter pushed to SQL)
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
