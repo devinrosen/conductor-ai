@@ -416,7 +416,11 @@ impl<'a> WorktreeManager<'a> {
 
     /// Fetch a worktree by ID and repo, returning a `WorktreeWithStatus` with ticket info.
     /// Returns `WorktreeNotFound` if the worktree does not exist or belongs to a different repo.
-    pub fn get_by_id_for_repo_enriched(&self, id: &str, repo_id: &str) -> Result<WorktreeWithStatus> {
+    pub fn get_by_id_for_repo_enriched(
+        &self,
+        id: &str,
+        repo_id: &str,
+    ) -> Result<WorktreeWithStatus> {
         self.conn
             .query_row(
                 &format!(
