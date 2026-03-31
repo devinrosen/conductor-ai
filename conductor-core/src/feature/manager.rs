@@ -16,6 +16,14 @@ use super::helpers::{
 };
 use super::types::{Feature, FeatureRow, FeatureStatus, UnregisteredBranch};
 
+fn feature_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
+    let id = id.into();
+    move |e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ConductorError::FeatureNotFound { name: id },
+        _ => ConductorError::Database(e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared SQL fragments & row mapper for FeatureRow queries
 // ---------------------------------------------------------------------------
@@ -250,12 +258,7 @@ impl<'a> FeatureManager<'a> {
                 params![id],
                 map_feature_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::FeatureNotFound {
-                    name: id.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(feature_not_found(id))
     }
 
     /// Look up a feature by repo slug + name and verify it is active.
@@ -805,12 +808,7 @@ impl<'a> FeatureManager<'a> {
                 params![repo_id, name],
                 map_feature_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::FeatureNotFound {
-                    name: name.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(feature_not_found(name))
     }
 
     /// Resolve ticket source_ids (e.g. "1262") to internal ULID ticket IDs.
