@@ -310,6 +310,15 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// When `statuses` is empty, returns `WorkflowRunStatus::ACTIVE`; otherwise returns `statuses`.
+    fn effective_statuses(statuses: &[WorkflowRunStatus]) -> &[WorkflowRunStatus] {
+        if statuses.is_empty() {
+            &WorkflowRunStatus::ACTIVE
+        } else {
+            statuses
+        }
+    }
+
     /// List workflow runs across all worktrees filtered by a set of statuses.
     /// When `statuses` is empty, defaults to `[running, waiting, pending]`.
     /// Only includes runs whose associated worktree is `active` (or runs with no worktree).
@@ -318,11 +327,7 @@ impl<'a> WorkflowManager<'a> {
         &self,
         statuses: &[WorkflowRunStatus],
     ) -> Result<Vec<WorkflowRun>> {
-        let effective: &[WorkflowRunStatus] = if statuses.is_empty() {
-            &WorkflowRunStatus::ACTIVE
-        } else {
-            statuses
-        };
+        let effective = Self::effective_statuses(statuses);
 
         let placeholders = sql_placeholders(effective.len());
 
@@ -541,11 +546,7 @@ impl<'a> WorkflowManager<'a> {
         repo_id: &str,
         statuses: &[WorkflowRunStatus],
     ) -> Result<Vec<WorkflowRun>> {
-        let effective: &[WorkflowRunStatus] = if statuses.is_empty() {
-            &WorkflowRunStatus::ACTIVE
-        } else {
-            statuses
-        };
+        let effective = Self::effective_statuses(statuses);
 
         let placeholders = sql_placeholders_from(effective.len(), 2);
 
