@@ -1703,3 +1703,46 @@ fn test_list_all_with_status_duplicate_timestamp_deduplication() {
         "duplicate started_at should not produce duplicate rows"
     );
 }
+
+#[test]
+fn test_get_by_id_for_repo_happy_path() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    // setup_db seeds repo r1 and worktree w1 belonging to r1
+    let mgr = WorktreeManager::new(&conn, &config);
+    let wt = mgr.get_by_id_for_repo("w1", "r1").unwrap();
+    assert_eq!(wt.id, "w1");
+    assert_eq!(wt.repo_id, "r1");
+}
+
+#[test]
+fn test_get_by_id_for_repo_not_found() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let err = mgr.get_by_id_for_repo("nonexistent", "r1").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::WorktreeNotFound { .. }),
+        "expected WorktreeNotFound, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_get_by_id_for_repo_cross_repo_isolation() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    // Insert a second repo
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    // w1 belongs to r1 — querying it against r2 must return WorktreeNotFound
+    let err = mgr.get_by_id_for_repo("w1", "r2").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::WorktreeNotFound { .. }),
+        "expected WorktreeNotFound for cross-repo access, got: {err:?}"
+    );
+}

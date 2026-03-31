@@ -150,3 +150,65 @@ pub async fn link_ticket(
     let updated = mgr.get_by_id(&id)?;
     Ok(Json(updated))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use conductor_core::config::Config;
+    use tokio::sync::{Mutex, RwLock};
+    use tower::ServiceExt;
+
+    use crate::events::EventBus;
+    use crate::routes::api_router;
+
+    fn seeded_state() -> AppState {
+        // setup_db provides: repo r1 (slug test-repo), worktree w1 (feat-test, active)
+        let conn = conductor_core::test_helpers::setup_db();
+        AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(Config::default())),
+            events: EventBus::new(1),
+            workflow_done_notify: None,
+        }
+    }
+
+    async fn send_get(uri: &str, state: AppState) -> (StatusCode, Vec<u8>) {
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn get_worktree_returns_200_with_worktree() {
+        let (status, body) = send_get("/api/repos/r1/worktrees/w1", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["id"], "w1");
+        assert_eq!(json["repo_id"], "r1");
+        assert_eq!(json["slug"], "feat-test");
+    }
+
+    #[tokio::test]
+    async fn get_worktree_returns_404_when_worktree_not_found() {
+        let (status, _) = send_get("/api/repos/r1/worktrees/nonexistent", seeded_state()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_worktree_returns_404_when_repo_not_found() {
+        let (status, _) = send_get("/api/repos/bad-repo/worktrees/w1", seeded_state()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+}
