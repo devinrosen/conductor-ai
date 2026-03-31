@@ -111,6 +111,7 @@ fn test_execute_do_sets_and_restores_block_state() {
             on_timeout: OnTimeout::Fail,
             bot_name: None,
             quality_gate: None,
+            options: None,
         })],
     };
 
@@ -179,6 +180,7 @@ fn test_execute_do_fail_fast_exits_early() {
                 on_timeout: OnTimeout::Fail,
                 bot_name: None,
                 quality_gate: None,
+                options: None,
             }),
             WorkflowNode::Gate(GateNode {
                 name: "g2".into(),
@@ -190,6 +192,7 @@ fn test_execute_do_fail_fast_exits_early() {
                 on_timeout: OnTimeout::Fail,
                 bot_name: None,
                 quality_gate: None,
+                options: None,
             }),
         ],
     };
@@ -226,6 +229,7 @@ fn test_execute_do_nested_with_combination() {
                 on_timeout: OnTimeout::Fail,
                 bot_name: None,
                 quality_gate: None,
+                options: None,
             })],
         })],
     };
@@ -263,6 +267,7 @@ fn test_execute_do_nested_inner_output_overrides_outer() {
                 on_timeout: OnTimeout::Fail,
                 bot_name: None,
                 quality_gate: None,
+                options: None,
             })],
         })],
     };

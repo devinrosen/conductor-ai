@@ -58,6 +58,21 @@ function applyTheme(theme: Theme) {
   s.setProperty("--color-red-500", palette.statusStop);
   s.setProperty("--color-red-600", palette.statusStop);
   s.setProperty("--color-red-700", palette.statusStop);
+
+  // Derive light tints for badges/backgrounds from the semantic colors
+  s.setProperty("--color-green-50", palette.statusGo + "1a");
+  s.setProperty("--color-green-100", palette.statusGo + "33");
+  s.setProperty("--color-red-50", palette.statusStop + "1a");
+  s.setProperty("--color-red-100", palette.statusStop + "33");
+  s.setProperty("--color-yellow-50", palette.statusCaution + "1a");
+  s.setProperty("--color-yellow-100", palette.statusCaution + "33");
+  s.setProperty("--color-yellow-700", palette.statusCaution);
+  s.setProperty("--color-amber-50", palette.statusCaution + "1a");
+  s.setProperty("--color-amber-100", palette.statusCaution + "33");
+  s.setProperty("--color-amber-400", palette.statusCaution);
+  s.setProperty("--color-amber-500", palette.statusCaution);
+  s.setProperty("--color-indigo-50", palette.accentBg + "66");
+
   s.setProperty("--cd-heading-family", typography.headingFamily);
   s.setProperty("--cd-heading-weight", typography.headingWeight);
   s.setProperty("--cd-heading-letter-spacing", typography.headingLetterSpacing);
@@ -65,6 +80,7 @@ function applyTheme(theme: Theme) {
   s.setProperty("--cd-body-size", typography.bodySize);
   s.setProperty("--cd-body-line-height", typography.bodyLineHeight);
   s.setProperty("--cd-label-letter-spacing", typography.labelLetterSpacing);
+  s.setProperty("--cd-label-case", typography.labelCase === "title-case" ? "capitalize" : typography.labelCase === "uppercase" ? "uppercase" : "none");
   s.setProperty("--cd-code-family", typography.codeFamily);
   s.setProperty("--font-sans", typography.bodyFamily);
   s.setProperty("--font-mono", typography.codeFamily);

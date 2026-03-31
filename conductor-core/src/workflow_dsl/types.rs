@@ -377,6 +377,19 @@ fn default_on_fail() -> OnFailAction {
     OnFailAction::Fail
 }
 
+/// Specifies the set of options for a multi-select gate.
+///
+/// - `Static`: a literal list of option strings defined in the workflow file.
+/// - `StepRef`: a `"step.field"` reference resolved at runtime from a prior step's
+///   structured output (the field must be a JSON array of strings).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GateOptions {
+    Static(Vec<String>),
+    /// Raw `"step.field"` dotted reference — resolved at execution time.
+    StepRef(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateNode {
     pub name: String,
@@ -393,6 +406,8 @@ pub struct GateNode {
     /// Quality gate-specific configuration. Present only when `gate_type == QualityGate`.
     #[serde(flatten)]
     pub quality_gate: Option<QualityGateConfig>,
+    /// Optional multi-select options for human_approval / human_review gates.
+    pub options: Option<GateOptions>,
 }
 
 fn default_one() -> u32 {

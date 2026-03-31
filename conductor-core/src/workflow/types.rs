@@ -17,10 +17,16 @@ pub enum BlockedOn {
     HumanApproval {
         gate_name: String,
         prompt: Option<String>,
+        /// Resolved options for multi-select gates. Empty = binary approve/reject mode.
+        #[serde(default)]
+        options: Vec<String>,
     },
     HumanReview {
         gate_name: String,
         prompt: Option<String>,
+        /// Resolved options for multi-select gates. Empty = binary approve/reject mode.
+        #[serde(default)]
+        options: Vec<String>,
     },
     PrApproval {
         gate_name: String,
@@ -111,6 +117,10 @@ pub struct WorkflowRunStep {
     pub structured_output: Option<String>,
     /// Path to the stdout capture file for script steps (persisted for resume).
     pub output_file: Option<String>,
+    /// Resolved gate options as JSON `[{"value":"...","label":"..."}]` (set at gate start).
+    pub gate_options: Option<String>,
+    /// User-selected gate option values as JSON `["val1","val2"]` (set on approval).
+    pub gate_selections: Option<String>,
 }
 
 /// Lightweight summary of the currently-running step for a workflow run.
@@ -357,6 +367,11 @@ pub struct WorkflowExecInput<'a> {
     /// Directory containing the conductor binary, injected into script step PATH.
     /// Resolved by the caller (binary crate) so the library doesn't call `current_exe()`.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// When true, bypass the WorkflowRunAlreadyActive guard by cancelling the
+    /// existing run before starting a new one. Only applies to top-level runs
+    /// (depth == 0); not propagated to child workflows or hook-triggered runs.
+    /// Part of: process-escape-hatch@1.0.0
+    pub force: bool,
     /// Additional plugin directories passed via `--plugin-dir` CLI flag.
     /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
     pub extra_plugin_dirs: Vec<String>,
@@ -387,9 +402,14 @@ pub struct WorkflowExecStandalone {
     pub triggered_by_hook: bool,
     /// Directory containing the conductor binary, injected into script step PATH.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// When true, bypass the WorkflowRunAlreadyActive guard. Part of: process-escape-hatch@1.0.0
+    pub force: bool,
     /// Additional plugin directories passed via `--plugin-dir` CLI flag.
     /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
     pub extra_plugin_dirs: Vec<String>,
+    /// Override the database path. Uses the default conductor db when `None`.
+    /// Useful for tests that operate on a temporary database.
+    pub db_path: Option<std::path::PathBuf>,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues

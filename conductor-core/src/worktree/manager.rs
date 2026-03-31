@@ -13,6 +13,54 @@ use super::git_helpers::*;
 use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
 use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W, WORKTREE_COLUMN_COUNT};
 
+fn worktree_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
+    let slug = slug.into();
+    move |e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound { slug },
+        _ => ConductorError::Database(e),
+    }
+}
+
+/// SQL fragment that LEFT JOINs the latest agent run per worktree.
+///
+/// Adds one extra column: `latest.status AS agent_status` (at index `WORKTREE_COLUMN_COUNT`).
+/// Must be used together with `map_enriched_row`.
+const AGENT_LATEST_JOIN: &str = "LEFT JOIN (\
+        SELECT a.worktree_id, a.status \
+        FROM agent_runs a \
+        INNER JOIN (\
+            SELECT worktree_id, MAX(started_at) AS max_started \
+            FROM agent_runs \
+            WHERE worktree_id IS NOT NULL \
+            GROUP BY worktree_id\
+        ) top ON a.worktree_id = top.worktree_id AND a.started_at = top.max_started \
+        GROUP BY a.worktree_id\
+    ) latest ON latest.worktree_id = w.id";
+
+/// Map a row that contains the standard worktree columns followed by
+/// `agent_status`, `ticket_title`, `ticket_number`, and `ticket_url` (in that order).
+///
+/// Column layout:
+/// - `[0 .. WORKTREE_COLUMN_COUNT)`: mapped by `map_worktree_row`
+/// - `WORKTREE_COLUMN_COUNT + 0`: `agent_status`
+/// - `WORKTREE_COLUMN_COUNT + 1`: `ticket_title`
+/// - `WORKTREE_COLUMN_COUNT + 2`: `ticket_number`
+/// - `WORKTREE_COLUMN_COUNT + 3`: `ticket_url`
+fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithStatus> {
+    let worktree = map_worktree_row(row)?;
+    let agent_status: Option<crate::agent::AgentRunStatus> = row.get(WORKTREE_COLUMN_COUNT)?;
+    let ticket_title: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 1)?;
+    let ticket_number: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 2)?;
+    let ticket_url: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 3)?;
+    Ok(WorktreeWithStatus {
+        worktree,
+        agent_status,
+        ticket_title,
+        ticket_number,
+        ticket_url,
+    })
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -197,12 +245,19 @@ impl<'a> WorktreeManager<'a> {
                 params![id],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: id.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(worktree_not_found(id))
+    }
+
+    /// Fetch a worktree by ID, returning `WorktreeNotFound` if it does not exist
+    /// or does not belong to `repo_id`.
+    pub fn get_by_id_for_repo(&self, id: &str, repo_id: &str) -> Result<Worktree> {
+        self.conn
+            .query_row(
+                &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = ?1 AND repo_id = ?2"),
+                params![id, repo_id],
+                map_worktree_row,
+            )
+            .map_err(worktree_not_found(id))
     }
 
     /// Fetch multiple worktrees by their IDs in a single query.
@@ -230,12 +285,7 @@ impl<'a> WorktreeManager<'a> {
                 params![repo_id, slug],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: slug.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(worktree_not_found(slug))
     }
 
     pub fn get_by_branch(&self, repo_id: &str, branch: &str) -> Result<Worktree> {
@@ -247,12 +297,7 @@ impl<'a> WorktreeManager<'a> {
                 params![repo_id, branch],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: branch.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(worktree_not_found(branch))
     }
 
     /// Try to resolve a worktree by slug first, then by branch name.
@@ -348,33 +393,90 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let sql = format!(
-            "SELECT {cols}, latest.status AS agent_status
-             FROM worktrees w
-             LEFT JOIN (
-                 SELECT a.worktree_id, a.status
-                 FROM agent_runs a
-                 INNER JOIN (
-                     SELECT worktree_id, MAX(started_at) AS max_started
-                     FROM agent_runs
-                     WHERE worktree_id IS NOT NULL
-                     GROUP BY worktree_id
-                 ) top ON a.worktree_id = top.worktree_id AND a.started_at = top.max_started
-                 GROUP BY a.worktree_id
-             ) latest ON latest.worktree_id = w.id
-             WHERE 1=1{status_filter}
+            "SELECT {cols}, latest.status AS agent_status, \
+             t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
+             FROM worktrees w \
+             {agent_join} \
+             LEFT JOIN tickets t ON t.id = w.ticket_id \
+             WHERE 1=1{status_filter} \
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
             cols = &*WORKTREE_COLUMNS_W,
+            agent_join = AGENT_LATEST_JOIN,
             status_filter = status_filter,
         );
-        query_collect(self.conn, &sql, [], |row| {
-            let worktree = map_worktree_row(row)?;
-            let agent_status: Option<crate::agent::AgentRunStatus> =
-                row.get(WORKTREE_COLUMN_COUNT)?;
-            Ok(WorktreeWithStatus {
-                worktree,
-                agent_status,
-            })
-        })
+        query_collect(self.conn, &sql, [], map_enriched_row)
+    }
+
+    /// Fetch a worktree by ID, returning a `WorktreeWithStatus` with ticket info populated.
+    pub fn get_by_id_enriched(&self, id: &str) -> Result<WorktreeWithStatus> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {cols}, latest.status AS agent_status, \
+                     t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
+                     FROM worktrees w \
+                     {agent_join} \
+                     LEFT JOIN tickets t ON t.id = w.ticket_id \
+                     WHERE w.id = ?1",
+                    cols = &*WORKTREE_COLUMNS_W,
+                    agent_join = AGENT_LATEST_JOIN,
+                ),
+                params![id],
+                map_enriched_row,
+            )
+            .map_err(worktree_not_found(id))
+    }
+
+    /// Fetch a worktree by ID and repo, returning a `WorktreeWithStatus` with ticket info.
+    /// Returns `WorktreeNotFound` if the worktree does not exist or belongs to a different repo.
+    pub fn get_by_id_for_repo_enriched(
+        &self,
+        id: &str,
+        repo_id: &str,
+    ) -> Result<WorktreeWithStatus> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {cols}, latest.status AS agent_status, \
+                     t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
+                     FROM worktrees w \
+                     {agent_join} \
+                     LEFT JOIN tickets t ON t.id = w.ticket_id \
+                     WHERE w.id = ?1 AND w.repo_id = ?2",
+                    cols = &*WORKTREE_COLUMNS_W,
+                    agent_join = AGENT_LATEST_JOIN,
+                ),
+                params![id, repo_id],
+                map_enriched_row,
+            )
+            .map_err(worktree_not_found(id))
+    }
+
+    /// List worktrees for a repo with ticket info populated.
+    /// Does not modify `list_by_repo_id` to avoid breaking internal callers.
+    pub fn list_by_repo_id_enriched(
+        &self,
+        repo_id: &str,
+        active_only: bool,
+    ) -> Result<Vec<WorktreeWithStatus>> {
+        let status_filter = if active_only {
+            " AND w.status = 'active'"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT {cols}, latest.status AS agent_status, \
+             t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
+             FROM worktrees w \
+             {agent_join} \
+             LEFT JOIN tickets t ON t.id = w.ticket_id \
+             WHERE w.repo_id = ?1{status_filter} \
+             ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+            cols = &*WORKTREE_COLUMNS_W,
+            agent_join = AGENT_LATEST_JOIN,
+            status_filter = status_filter,
+        );
+        query_collect(self.conn, &sql, params![repo_id], map_enriched_row)
     }
 
     /// Walk up from `cwd` and return the worktree whose `path` is a prefix of (or equals) `cwd`.
@@ -405,18 +507,22 @@ impl<'a> WorktreeManager<'a> {
                 params![repo.id, name],
                 map_worktree_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: name.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })?;
+            .map_err(worktree_not_found(name))?;
 
         self.delete_internal(&repo, worktree, None)
     }
 
     pub fn delete_by_id(&self, worktree_id: &str) -> Result<Worktree> {
         let worktree = self.get_by_id(worktree_id)?;
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
+        self.delete_internal(&repo, worktree, None)
+    }
+
+    /// Delete a worktree by ID, enforcing that it belongs to `repo_id`.
+    /// Returns `WorktreeNotFound` if the worktree does not exist or belongs to a different repo.
+    pub fn delete_by_id_for_repo(&self, id: &str, repo_id: &str) -> Result<Worktree> {
+        let worktree = self.get_by_id_for_repo(id, repo_id)?;
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
         self.delete_internal(&repo, worktree, None)
@@ -621,7 +727,7 @@ impl<'a> WorktreeManager<'a> {
         let worktree = self.get_by_slug(&repo.id, wt_slug)?;
 
         if !worktree.is_active() {
-            return Err(ConductorError::Git(format!(
+            return Err(ConductorError::InvalidInput(format!(
                 "worktree '{}' is not active (status: {})",
                 wt_slug, worktree.status
             )));

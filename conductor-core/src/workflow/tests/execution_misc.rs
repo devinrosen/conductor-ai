@@ -1,5 +1,5 @@
 use super::*;
-use crate::workflow_dsl::{CallWorkflowNode, GateType, WorkflowNode};
+use crate::workflow_dsl::{CallWorkflowNode, Condition, GateType, IfNode, WorkflowNode};
 
 #[test]
 fn test_metadata_fields_basic() {
@@ -30,6 +30,8 @@ fn test_metadata_fields_basic() {
         gate_feedback: None,
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
     };
     let entries = step.metadata_fields();
     assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
@@ -110,6 +112,8 @@ fn test_metadata_fields_optional_sections() {
         gate_feedback: Some("Looks good".into()),
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
     };
     let entries = step.metadata_fields();
     assert!(entries.contains(&MetadataEntry::Field {
@@ -210,6 +214,7 @@ fn test_call_workflow_propagates_feature_id_to_child() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -301,6 +306,7 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
         triggered_by_hook: true,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
     assert!(result.all_succeeded);
@@ -403,6 +409,7 @@ on_complete = "should-not-fire"
         triggered_by_hook: true,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -471,6 +478,7 @@ on_complete = "nonexistent-hook-wf"
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -529,6 +537,7 @@ on_complete = "post-complete"
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -557,5 +566,34 @@ on_complete = "post-complete"
         hook_run.parent_workflow_run_id.as_deref(),
         Some(result.workflow_run_id.as_str()),
         "hook run should link to parent"
+    );
+}
+
+/// Regression test: execute_nodes must stop immediately when the workflow run
+/// has been externally cancelled (e.g. via the TUI or web cancel button).
+/// Before the fix, a cancelled run would continue executing until it finished
+/// naturally, leaving it stuck in `pending` or `running` status.
+#[test]
+fn test_execute_nodes_stops_on_external_cancel() {
+    let conn = setup_db();
+    let config: &'static Config = Box::leak(Box::new(Config::default()));
+    let mut state = make_loop_test_state(&conn, config);
+
+    // Mark the run as cancelled before any nodes execute.
+    WorkflowManager::new(&conn)
+        .update_workflow_status(&state.workflow_run_id, WorkflowRunStatus::Cancelled, None)
+        .unwrap();
+
+    // Any node will do — cancellation is detected before execute_single_node is called.
+    let nodes = vec![WorkflowNode::If(IfNode {
+        condition: Condition::BoolInput { input: "x".into() },
+        body: vec![],
+    })];
+
+    let result = execute_nodes(&mut state, &nodes);
+    assert!(result.is_err(), "cancelled run should return Err");
+    assert!(
+        result.unwrap_err().to_string().contains("cancelled"),
+        "error message should mention cancellation"
     );
 }

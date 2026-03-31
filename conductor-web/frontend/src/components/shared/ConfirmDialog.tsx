@@ -6,6 +6,7 @@ interface ConfirmDialogProps {
   message: string;
   onConfirm: () => void;
   onCancel: () => void;
+  loading?: boolean;
 }
 
 export function ConfirmDialog({
@@ -14,6 +15,7 @@ export function ConfirmDialog({
   message,
   onConfirm,
   onCancel,
+  loading = false,
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -62,7 +64,7 @@ export function ConfirmDialog({
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 modal-backdrop">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 modal-backdrop" onClick={() => { if (!loading) onCancel(); }}>
       <div
         ref={dialogRef}
         role="dialog"
@@ -70,6 +72,7 @@ export function ConfirmDialog({
         aria-labelledby={titleId}
         tabIndex={-1}
         className="bg-white rounded-lg shadow-lg p-6 max-w-sm w-full mx-4 outline-none modal-panel"
+        onClick={(e) => e.stopPropagation()}
       >
         <h3 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h3>
         <p className="mt-2 text-sm text-gray-600">{message}</p>
@@ -77,15 +80,17 @@ export function ConfirmDialog({
           <button
             ref={cancelRef}
             onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 active:scale-95 transition-transform"
+            disabled={loading}
+            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 active:scale-95 transition-transform disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700 hover:brightness-110 active:scale-95 transition-transform"
+            disabled={loading}
+            className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700 hover:brightness-110 active:scale-95 transition-transform disabled:opacity-50"
           >
-            Confirm
+            {loading ? "Deleting..." : "Confirm"}
           </button>
         </div>
       </div>

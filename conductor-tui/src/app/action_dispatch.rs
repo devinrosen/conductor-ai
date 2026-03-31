@@ -691,6 +691,19 @@ impl App {
                     feedback.pop();
                 }
             }
+            Action::GateToggleOption => {
+                if let Modal::GateAction {
+                    ref options,
+                    ref mut selected,
+                    ref focused_option,
+                    ..
+                } = self.state.modal
+                {
+                    if *focused_option < options.len() {
+                        selected[*focused_option] = !selected[*focused_option];
+                    }
+                }
+            }
             Action::WorkflowDataRefreshed(payload) => {
                 if let Some(defs) = payload.workflow_defs {
                     self.state.data.workflow_defs = defs;

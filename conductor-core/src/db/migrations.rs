@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 55;
+pub const LATEST_SCHEMA_VERSION: u32 = 57;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -963,6 +963,31 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 55)?;
     }
 
+    // Migration 056: add gate_options and gate_selections columns to
+    // workflow_run_steps for dynamic multi-select gate support.
+    if version < 56 {
+        let table_exists: bool = conn
+            .prepare(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_run_steps' LIMIT 1",
+            )
+            .and_then(|mut s| s.exists([]))
+            .unwrap_or(false);
+        if table_exists {
+            conn.execute_batch(include_str!("migrations/056_gate_options.sql"))?;
+        }
+        bump_version(conn, 56)?;
+    }
+
+    // Migration 057: backfill target_label for workflow_runs that have a
+    // worktree_id but a NULL or empty target_label (pre-033 rows and TUI
+    // race condition where cache hadn't refreshed after worktree creation).
+    if version < 57 {
+        conn.execute_batch(include_str!(
+            "migrations/057_backfill_workflow_run_target_label.sql"
+        ))?;
+        bump_version(conn, 57)?;
+    }
+
     Ok(())
 }
 
@@ -1124,7 +1149,10 @@ mod tests {
         // Call with a closure that always fails.
         let result = with_foreign_keys_off(&conn, || {
             Err(crate::error::ConductorError::Git(
-                "simulated migration error".to_string(),
+                crate::error::SubprocessFailure::from_message(
+                    "test",
+                    "simulated migration error".to_string(),
+                ),
             ))
         });
         assert!(result.is_err(), "helper must propagate the closure error");
@@ -1255,6 +1283,32 @@ mod tests {
         )
         .unwrap();
         conn.execute_batch(workflow_runs_ddl).unwrap();
+        // workflow_run_steps as it exists at v46 (all columns up to migration 039).
+        conn.execute_batch(
+            "CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate','workflow','script')),
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending'
+                                   CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
+                 child_run_id      TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 position          INTEGER NOT NULL,
+                 started_at        TEXT, ended_at TEXT, result_text TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT, markers_out TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type TEXT, gate_prompt TEXT, gate_timeout TEXT,
+                 gate_approved_by TEXT, gate_approved_at TEXT, gate_feedback TEXT,
+                 structured_output TEXT, output_file TEXT
+             );
+             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);",
+        )
+        .unwrap();
         conn.execute_batch(
             "INSERT INTO _conductor_meta VALUES ('schema_version', '46');
              INSERT INTO repos VALUES ('r1', 'test-repo', '/tmp/repo',

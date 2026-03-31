@@ -4,6 +4,14 @@ use std::sync::Arc;
 
 use conductor_core::worktree::WorktreeManager;
 
+/// (target_label, ticket_id, repo_slug, wt_slug) resolved from a worktree.
+type WorktreeLabelParts = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal, View, WorkflowPickerItem, WorkflowRunDetailFocus};
 
@@ -872,6 +880,10 @@ impl App {
                     return;
                 }
 
+                // Try the in-memory cache first.  If the worktree was just
+                // created and the background refresh hasn't fired yet, the
+                // cache will miss and we fall back to a direct DB query so
+                // that target_label is never stored as an empty string.
                 let (wt_target_label, wt_ticket_id, repo_slug, wt_slug) = self
                     .state
                     .data
@@ -886,14 +898,38 @@ impl App {
                             .find(|r| r.id == w.repo_id)
                             .map(|r| {
                                 (
-                                    format!("{}/{}", r.slug, w.slug),
+                                    Some(format!("{}/{}", r.slug, w.slug)),
                                     w.ticket_id.clone(),
                                     Some(r.slug.clone()),
                                     Some(w.slug.clone()),
                                 )
                             })
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| {
+                        // Cache miss — query DB directly to avoid storing "".
+                        use conductor_core::config::db_path;
+                        use conductor_core::db::open_database;
+                        let label = (|| -> Option<WorktreeLabelParts> {
+                            let conn = open_database(&db_path()).ok()?;
+                            let (repo_slug, wt_slug, ticket_id): (String, String, Option<String>) =
+                                conn.query_row(
+                                    "SELECT r.slug, w.slug, w.ticket_id \
+                                     FROM worktrees w \
+                                     JOIN repos r ON r.id = w.repo_id \
+                                     WHERE w.id = ?1",
+                                    rusqlite::params![worktree_id],
+                                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                                )
+                                .ok()?;
+                            Some((
+                                Some(format!("{repo_slug}/{wt_slug}")),
+                                ticket_id,
+                                Some(repo_slug),
+                                Some(wt_slug),
+                            ))
+                        })();
+                        label.unwrap_or((None, None, None, None))
+                    });
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
@@ -1005,7 +1041,7 @@ impl App {
                         repo_path,
                         ticket_id,
                         run_inputs,
-                        format!("workflow_run:{workflow_run_id}"),
+                        Some(format!("workflow_run:{workflow_run_id}")),
                         model,
                         repo_slug,
                         wt_slug,
@@ -1037,7 +1073,7 @@ impl App {
         repo_path: String,
         ticket_id: Option<String>,
         inputs: std::collections::HashMap<String, String>,
-        target_label: String,
+        target_label: Option<String>,
         model: Option<String>,
         repo_slug: Option<String>,
         wt_slug: Option<String>,
@@ -1082,12 +1118,14 @@ impl App {
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
-                target_label: Some(target_label),
+                target_label,
                 feature_id,
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
                 extra_plugin_dirs: vec![],
+                db_path: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1152,7 +1190,9 @@ impl App {
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
                 extra_plugin_dirs: vec![],
+                db_path: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1202,7 +1242,9 @@ impl App {
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
                 extra_plugin_dirs: vec![],
+                db_path: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1251,7 +1293,9 @@ impl App {
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
                 extra_plugin_dirs: vec![],
+                db_path: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1481,6 +1525,8 @@ impl App {
         if let Modal::GateAction {
             ref step_id,
             ref feedback,
+            ref options,
+            ref selected,
             ..
         } = self.state.modal
         {
@@ -1490,7 +1536,21 @@ impl App {
             } else {
                 Some(feedback.as_str())
             };
-            match wf_mgr.approve_gate(step_id, "tui-user", fb) {
+            // Collect checked selections (only when options are present).
+            let selections: Option<Vec<String>> = if options.is_empty() {
+                None
+            } else {
+                Some(
+                    options
+                        .iter()
+                        .zip(selected.iter())
+                        .filter_map(
+                            |(opt, &checked)| if checked { Some(opt.clone()) } else { None },
+                        )
+                        .collect(),
+                )
+            };
+            match wf_mgr.approve_gate(step_id, "tui-user", fb, selections.as_deref()) {
                 Ok(()) => {
                     self.state.status_message = Some("Gate approved".to_string());
                 }
@@ -1507,11 +1567,31 @@ impl App {
         if let Some(ref run_id) = self.state.selected_workflow_run_id {
             let wf_mgr = WorkflowManager::new(&self.conn);
             if let Ok(Some(step)) = wf_mgr.find_waiting_gate(run_id) {
+                // Deserialize gate_options if present.
+                let options: Vec<String> = step
+                    .gate_options
+                    .as_deref()
+                    .and_then(|json| {
+                        serde_json::from_str::<Vec<serde_json::Value>>(json)
+                            .ok()
+                            .map(|arr| {
+                                arr.into_iter()
+                                    .filter_map(|v| {
+                                        v.get("value").and_then(|s| s.as_str()).map(String::from)
+                                    })
+                                    .collect()
+                            })
+                    })
+                    .unwrap_or_default();
+                let n = options.len();
                 self.state.modal = Modal::GateAction {
                     run_id: run_id.clone(),
                     step_id: step.id.clone(),
                     gate_prompt: step.gate_prompt.unwrap_or_default(),
                     feedback: String::new(),
+                    selected: vec![false; n],
+                    focused_option: 0,
+                    options,
                 };
             } else {
                 self.state.status_message = Some("No waiting gate found".to_string());

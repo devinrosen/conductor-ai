@@ -61,6 +61,7 @@ export function WorktreeDetailPage() {
   });
   const [agentLoading, setAgentLoading] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
+
   const [orchestrateModalOpen, setOrchestrateModalOpen] = useState(false);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
 

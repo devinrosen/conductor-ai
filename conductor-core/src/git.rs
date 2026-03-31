@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use crate::error::{ConductorError, Result};
+use crate::error::{ConductorError, Result, SubprocessFailure};
 
 /// Return a `Command` for `git` rooted at `dir`.
 pub(crate) fn git_in(dir: impl AsRef<std::path::Path>) -> Command {
@@ -20,26 +20,91 @@ pub(crate) fn check_gh_output(cmd: &mut Command) -> Result<std::process::Output>
 }
 
 /// Shared implementation: run a command and map failures using the given error constructor.
+///
+/// Constructs a `SubprocessFailure` with structured data (exit code, stderr, stdout)
+/// so callers can programmatically classify and handle errors.
 fn run_command(
     cmd: &mut Command,
-    make_err: fn(String) -> ConductorError,
+    make_err: fn(SubprocessFailure) -> ConductorError,
 ) -> Result<std::process::Output> {
     let program = cmd.get_program().to_string_lossy().to_string();
     let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into()).collect();
     let cmd_str = format!("`{program} {}`", args.join(" "));
-    let output = cmd
-        .output()
-        .map_err(|e| make_err(format!("failed to spawn {cmd_str}: {e}")))?;
+    let output = cmd.output().map_err(|e| {
+        make_err(SubprocessFailure::from_message(
+            &cmd_str,
+            format!("failed to spawn {cmd_str}: {e}"),
+        ))
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let detail = if stderr.is_empty() {
-            format!("{cmd_str} exited with {}", output.status)
-        } else {
-            format!("{cmd_str} failed: {stderr}")
-        };
-        return Err(make_err(detail));
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(make_err(SubprocessFailure {
+            command: cmd_str,
+            exit_code: output.status.code(),
+            stderr,
+            stdout,
+        }));
     }
     Ok(output)
+}
+
+/// Run a git command with bounded retry for transient failures.
+///
+/// `build_cmd` is called on each attempt to produce a fresh `Command`
+/// (since `Command::output()` consumes the command's state).
+///
+/// Part of: bounded-retry-with-escalation@1.0.0
+#[allow(dead_code)]
+pub(crate) fn check_output_with_retry<F>(
+    config: &crate::retry::RetryConfig,
+    build_cmd: F,
+) -> Result<std::process::Output>
+where
+    F: Fn() -> Command,
+{
+    check_with_retry(config, build_cmd, ConductorError::Git)
+}
+
+/// Run a gh CLI command with bounded retry for transient failures.
+///
+/// Part of: bounded-retry-with-escalation@1.0.0
+#[allow(dead_code)]
+pub(crate) fn check_gh_output_with_retry<F>(
+    config: &crate::retry::RetryConfig,
+    build_cmd: F,
+) -> Result<std::process::Output>
+where
+    F: Fn() -> Command,
+{
+    check_with_retry(config, build_cmd, ConductorError::GhCli)
+}
+
+#[allow(dead_code)]
+fn check_with_retry<F>(
+    config: &crate::retry::RetryConfig,
+    build_cmd: F,
+    make_err: fn(SubprocessFailure) -> ConductorError,
+) -> Result<std::process::Output>
+where
+    F: Fn() -> Command,
+{
+    let outcome = crate::retry::retry_with_backoff(
+        config,
+        || run_command(&mut build_cmd(), make_err),
+        |err: &ConductorError| match err {
+            ConductorError::Git(f) | ConductorError::GhCli(f) => crate::retry::is_transient(f),
+            _ => false,
+        },
+        || false, // No cancellation support at this level; callers run in background threads
+    );
+    match outcome {
+        crate::retry::RetryOutcome::Success { value, .. } => Ok(value),
+        crate::retry::RetryOutcome::Exhausted { last_error, .. } => Err(last_error),
+        crate::retry::RetryOutcome::Cancelled => {
+            unreachable!("cancellation predicate is || false")
+        }
+    }
 }
 
 /// Check if a local branch exists in the given repo.
@@ -51,20 +116,25 @@ fn run_command(
 /// invalid repo path) so callers can distinguish "branch absent" from
 /// "unable to check".
 pub(crate) fn local_branch_exists(repo_path: &str, branch: &str) -> Result<bool> {
+    let cmd_str = format!("`git branch --list -- {branch}`");
     let output = git_in(repo_path)
         .args(["branch", "--list", "--", branch])
         .output()
         .map_err(|e| {
-            ConductorError::Git(format!(
-                "failed to spawn `git branch --list -- {branch}`: {e}"
+            ConductorError::Git(SubprocessFailure::from_message(
+                &cmd_str,
+                format!("failed to spawn {cmd_str}: {e}"),
             ))
         })?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ConductorError::Git(format!(
-            "`git branch --list -- {branch}` exited with {}: {stderr}",
-            output.status
-        )));
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(ConductorError::Git(SubprocessFailure {
+            command: cmd_str,
+            exit_code: output.status.code(),
+            stderr,
+            stdout,
+        }));
     }
     Ok(!output.stdout.is_empty())
 }
@@ -125,7 +195,7 @@ mod tests {
         let err =
             check_output(Command::new("sh").args(["-c", "echo oops >&2; exit 1"])).unwrap_err();
         assert!(
-            matches!(&err, ConductorError::Git(msg) if msg.contains("oops")),
+            matches!(&err, ConductorError::Git(f) if f.stderr.contains("oops")),
             "expected Git variant with stderr, got: {err:?}"
         );
     }
@@ -135,7 +205,7 @@ mod tests {
         let err =
             check_gh_output(Command::new("sh").args(["-c", "echo bad >&2; exit 1"])).unwrap_err();
         assert!(
-            matches!(&err, ConductorError::GhCli(msg) if msg.contains("bad")),
+            matches!(&err, ConductorError::GhCli(f) if f.stderr.contains("bad")),
             "expected GhCli variant with stderr, got: {err:?}"
         );
     }
@@ -144,8 +214,8 @@ mod tests {
     fn check_gh_output_empty_stderr_includes_exit_status() {
         let err = check_gh_output(Command::new("sh").args(["-c", "exit 42"])).unwrap_err();
         assert!(
-            matches!(&err, ConductorError::GhCli(msg) if msg.contains("exited with")),
-            "expected GhCli variant with exit status, got: {err:?}"
+            matches!(&err, ConductorError::GhCli(f) if f.exit_code == Some(42)),
+            "expected GhCli variant with exit code 42, got: {err:?}"
         );
     }
 
@@ -153,7 +223,7 @@ mod tests {
     fn check_gh_output_spawn_failure_returns_ghcli_error() {
         let err = check_gh_output(&mut Command::new("__nonexistent_binary_xyz__")).unwrap_err();
         assert!(
-            matches!(&err, ConductorError::GhCli(msg) if msg.contains("failed to spawn")),
+            matches!(&err, ConductorError::GhCli(f) if f.stderr.contains("failed to spawn")),
             "expected GhCli variant for spawn failure, got: {err:?}"
         );
     }
@@ -207,7 +277,7 @@ mod tests {
     fn check_output_spawn_failure_returns_git_error() {
         let err = check_output(&mut Command::new("__nonexistent_binary_xyz__")).unwrap_err();
         assert!(
-            matches!(&err, ConductorError::Git(msg) if msg.contains("failed to spawn")),
+            matches!(&err, ConductorError::Git(f) if f.stderr.contains("failed to spawn")),
             "expected Git variant for spawn failure, got: {err:?}"
         );
     }

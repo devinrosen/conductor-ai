@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
 use conductor_web::assets::static_handler;
-use conductor_web::events::EventBus;
+use conductor_web::events::{ConductorEvent, EventBus};
 use conductor_web::push::{PushPayload, PushSubscriptionManager};
 use conductor_web::routes::api_router;
 use conductor_web::state::AppState;
@@ -21,26 +21,50 @@ async fn main() -> Result<()> {
     let mut config = load_config()?;
     ensure_dirs(&config)?;
 
-    // Generate or load VAPID keys for push notifications
-    if config.web_push.vapid_public_key.is_none() || config.web_push.vapid_private_key.is_none() {
+    // Generate or load VAPID keys for push notifications.
+    // The placeholder check detects zero-filled keys written by older versions.
+    fn is_placeholder_key(key: &str) -> bool {
+        key == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+    let needs_keygen = config.web_push.vapid_public_key.is_none()
+        || config.web_push.vapid_private_key.is_none()
+        || config
+            .web_push
+            .vapid_private_key
+            .as_deref()
+            .map(is_placeholder_key)
+            .unwrap_or(false)
+        || config
+            .web_push
+            .vapid_public_key
+            .as_deref()
+            .map(is_placeholder_key)
+            .unwrap_or(false);
+    if needs_keygen {
         tracing::info!("Generating VAPID keys for push notifications");
 
-        // Generate VAPID key pair using a placeholder for now
-        // In a real implementation, you'd use proper ECDSA key generation
+        use p256::ecdsa::SigningKey;
+        let signing_key = SigningKey::random(&mut rand_core::OsRng);
+        let private_key_bytes = signing_key.to_bytes();
+        let public_key_bytes = signing_key
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+
         let private_key = base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            [0u8; 32], // Placeholder private key
+            private_key_bytes,
         );
         let public_key = base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            [0u8; 65], // Placeholder public key
+            public_key_bytes,
         );
 
         config.web_push.vapid_private_key = Some(private_key);
         config.web_push.vapid_public_key = Some(public_key);
         config.web_push.vapid_subject = Some("mailto:notifications@conductor.local".to_string());
 
-        // Save the updated config
         if let Err(e) = save_config(&config) {
             tracing::warn!("Failed to save VAPID keys to config: {e}");
         } else {
@@ -289,6 +313,89 @@ async fn main() -> Result<()> {
                 }
                 Ok(Err(e)) => tracing::warn!("periodic reaper failed: {e}"),
                 Err(join_err) => tracing::warn!("periodic reaper panicked: {join_err}"),
+            }
+        }
+    });
+
+    // Spawn a task that subscribes to the EventBus and sends push notifications
+    // for high-urgency gate-waiting and feedback-requested events in real time.
+    let gate_state = state.clone();
+    tokio::spawn(async move {
+        let mut rx = gate_state.events.subscribe();
+        loop {
+            match rx.recv().await {
+                Ok(ConductorEvent::WorkflowGateWaiting { run_id, .. }) => {
+                    let db = gate_state.db.clone();
+                    let cfg = gate_state.config.clone();
+                    let run_id = run_id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let conn = db.blocking_lock();
+                        let cfg = cfg.blocking_read();
+                        if let (Some(priv_k), Some(pub_k), Some(sub)) = (
+                            &cfg.web_push.vapid_private_key,
+                            &cfg.web_push.vapid_public_key,
+                            &cfg.web_push.vapid_subject,
+                        ) {
+                            let push_mgr = PushSubscriptionManager::new(
+                                &conn,
+                                priv_k.clone(),
+                                pub_k.clone(),
+                                sub.clone(),
+                            );
+                            let payload = PushPayload {
+                                title: "Workflow paused — your review is needed".into(),
+                                body: "Gate waiting for approval".into(),
+                                tag: Some(format!("gate-{run_id}")),
+                                url: Some(format!("/workflows/runs/{run_id}")),
+                            };
+                            let rt = tokio::runtime::Handle::current();
+                            if let Err(e) = rt.block_on(push_mgr.send_all(&payload)) {
+                                tracing::warn!("gate push failed for run {run_id}: {e}");
+                            }
+                        }
+                    });
+                }
+                Ok(ConductorEvent::FeedbackRequested {
+                    run_id,
+                    worktree_id,
+                    ..
+                }) => {
+                    let db = gate_state.db.clone();
+                    let cfg = gate_state.config.clone();
+                    let run_id = run_id.clone();
+                    let worktree_id = worktree_id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let conn = db.blocking_lock();
+                        let cfg = cfg.blocking_read();
+                        if let (Some(priv_k), Some(pub_k), Some(sub)) = (
+                            &cfg.web_push.vapid_private_key,
+                            &cfg.web_push.vapid_public_key,
+                            &cfg.web_push.vapid_subject,
+                        ) {
+                            let push_mgr = PushSubscriptionManager::new(
+                                &conn,
+                                priv_k.clone(),
+                                pub_k.clone(),
+                                sub.clone(),
+                            );
+                            let payload = PushPayload {
+                                title: "Agent needs your input".into(),
+                                body: format!("Feedback requested for run {run_id}"),
+                                tag: Some(format!("feedback-{run_id}")),
+                                url: Some(format!("/worktrees/{worktree_id}")),
+                            };
+                            let rt = tokio::runtime::Handle::current();
+                            if let Err(e) = rt.block_on(push_mgr.send_all(&payload)) {
+                                tracing::warn!("feedback push failed for run {run_id}: {e}");
+                            }
+                        }
+                    });
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("gate-push subscriber lagged by {n} events");
+                }
+                Err(_) => break,
             }
         }
     });

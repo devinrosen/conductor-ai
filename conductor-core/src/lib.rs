@@ -45,6 +45,7 @@ pub mod notify;
 pub mod orchestrator;
 pub mod prompt_config;
 pub mod repo;
+pub(crate) mod retry;
 pub mod schema_config;
 pub mod text_util;
 pub mod tickets;

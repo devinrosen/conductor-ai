@@ -252,4 +252,24 @@ impl<'a> WorkflowManager<'a> {
 
         self.update_workflow_status(run_id, WorkflowRunStatus::Cancelled, Some(reason))
     }
+
+    /// Mark a workflow run as failed and also fail its parent agent run.
+    ///
+    /// Marks a workflow run as failed.
+    ///
+    /// This is used by the background executor when the workflow thread crashes
+    /// after the run ID has already been returned to the caller.
+    ///
+    /// Returns the parent agent run ID so callers can handle updating it
+    /// separately to avoid cross-manager coupling.
+    pub fn fail_workflow_run(&self, workflow_run_id: &str, error_msg: &str) -> Result<String> {
+        self.update_workflow_status(workflow_run_id, WorkflowRunStatus::Failed, Some(error_msg))?;
+        if let Ok(Some(run)) = self.get_workflow_run(workflow_run_id) {
+            Ok(run.parent_run_id)
+        } else {
+            Err(ConductorError::InvalidInput(format!(
+                "Workflow run not found: {workflow_run_id}"
+            )))
+        }
+    }
 }

@@ -1,7 +1,7 @@
 use chrono::Utc;
 use rusqlite::params;
 
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::GateType;
 
 use super::WorkflowManager;
@@ -151,18 +151,59 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
-    /// Approve a gate: set gate_approved_at, gate_approved_by, and optional feedback.
+    /// Store the resolved gate options JSON on a step (called at gate start).
+    pub fn set_step_gate_options(&self, step_id: &str, options_json: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_run_steps SET gate_options = ?1 WHERE id = ?2",
+            params![options_json, step_id],
+        )?;
+        Ok(())
+    }
+
+    /// Approve a gate: set gate_approved_at, gate_approved_by, optional feedback, and optional selections.
     pub fn approve_gate(
         &self,
         step_id: &str,
         approved_by: &str,
         feedback: Option<&str>,
+        selections: Option<&[String]>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+
+        // Validate selections against stored gate options if provided
+        if let Some(selections) = selections {
+            self.validate_gate_selections(step_id, selections)?;
+        }
+
+        let selections_json = if let Some(s) = selections {
+            Some(serde_json::to_string(s).map_err(|e| {
+                ConductorError::Workflow(format!("Failed to serialize gate selections: {}", e))
+            })?)
+        } else {
+            None
+        };
+
+        // Build a context_out snippet when selections are present.
+        let context_out = selections.filter(|s| !s.is_empty()).map(|items| {
+            let mut out = String::from("User selected the following items:\n");
+            for item in items {
+                out.push_str(&format!("- {item}\n"));
+            }
+            out
+        });
+
         self.conn.execute(
             "UPDATE workflow_run_steps SET gate_approved_at = ?1, gate_approved_by = ?2, \
-             gate_feedback = ?3, status = 'completed', ended_at = ?1 WHERE id = ?4",
-            params![now, approved_by, feedback, step_id],
+             gate_feedback = ?3, gate_selections = ?4, context_out = COALESCE(?5, context_out), \
+             status = 'completed', ended_at = ?1 WHERE id = ?6",
+            params![
+                now,
+                approved_by,
+                feedback,
+                selections_json,
+                context_out,
+                step_id
+            ],
         )?;
         Ok(())
     }
@@ -180,6 +221,73 @@ impl<'a> WorkflowManager<'a> {
              WHERE id = ?4",
             params![rejected_by, feedback, now, step_id],
         )?;
+        Ok(())
+    }
+
+    /// Validate that gate selections are within the allowed options for this step.
+    fn validate_gate_selections(&self, step_id: &str, selections: &[String]) -> Result<()> {
+        // Get the stored gate options for this step
+        let mut stmt = self
+            .conn
+            .prepare("SELECT gate_options FROM workflow_run_steps WHERE id = ?1")?;
+        let gate_options: Option<String> = stmt
+            .query_row(params![step_id], |row| row.get::<_, Option<String>>(0))
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    ConductorError::InvalidInput(format!("Step not found: {}", step_id))
+                }
+                other => ConductorError::Database(other),
+            })?;
+
+        // If no options are stored, reject any selections
+        let options_json = match gate_options {
+            Some(json) => json,
+            None => {
+                if !selections.is_empty() {
+                    return Err(ConductorError::InvalidInput(
+                        "Gate selections provided but no options configured for this gate"
+                            .to_string(),
+                    ));
+                }
+                return Ok(());
+            }
+        };
+
+        // Parse the stored options
+        let allowed_options: Vec<serde_json::Value> =
+            serde_json::from_str(&options_json).map_err(|e| {
+                ConductorError::InvalidInput(format!(
+                    "Invalid gate options JSON in database: {}",
+                    e
+                ))
+            })?;
+
+        // Extract allowed values from the options (assuming format [{"value": "...", "label": "..."}, ...])
+        let allowed_values: Vec<String> = allowed_options
+            .iter()
+            .filter_map(|opt: &serde_json::Value| {
+                opt.get("value")
+                    .and_then(|v: &serde_json::Value| v.as_str().map(|s: &str| s.to_string()))
+            })
+            .collect();
+
+        if allowed_values.is_empty() {
+            return Err(ConductorError::InvalidInput(
+                "No valid options found in gate configuration".to_string(),
+            ));
+        }
+
+        // Validate that all selections are in the allowed values
+        for selection in selections {
+            if !allowed_values.contains(selection) {
+                return Err(ConductorError::InvalidInput(format!(
+                    "Invalid gate selection '{}' - not in allowed options: [{}]",
+                    selection,
+                    allowed_values.join(", ")
+                )));
+            }
+        }
+
         Ok(())
     }
 }

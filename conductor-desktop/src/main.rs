@@ -109,7 +109,7 @@ fn main() {
                         HeaderValue::from_static("http://tauri.localhost"),
                     ];
                     #[cfg(debug_assertions)]
-                    allowed_origins.push(HeaderValue::from_static("http://localhost:5173"));
+                    allowed_origins.push(HeaderValue::from_static("http://localhost:8675"));
                     let router = api_router_with_cors(allowed_origins).with_state(web_state);
 
                     if let Err(e) = axum::serve(listener, router).await {

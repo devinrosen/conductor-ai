@@ -6,6 +6,7 @@ pub mod model_config;
 pub mod notifications;
 pub mod push;
 pub mod repos;
+pub mod stats;
 pub mod tickets;
 pub mod workflows;
 pub mod worktrees;
@@ -56,7 +57,14 @@ pub fn api_router() -> Router<AppState> {
             "/api/repos/{id}/worktrees",
             get(worktrees::list_worktrees).post(worktrees::create_worktree),
         )
-        .route("/api/worktrees/{id}", delete(worktrees::delete_worktree))
+        .route(
+            "/api/worktrees/{id}",
+            get(worktrees::get_worktree).delete(worktrees::delete_worktree),
+        )
+        .route(
+            "/api/repos/{repo_id}/worktrees/{id}",
+            get(worktrees::get_worktree_for_repo).delete(worktrees::delete_worktree_for_repo),
+        )
         .route(
             "/api/worktrees/{id}/model",
             patch(worktrees::patch_worktree_model),
@@ -70,6 +78,10 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/tickets", get(tickets::list_all_tickets))
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
+        .route(
+            "/api/repos/{id}/workflows",
+            get(workflows::list_repo_workflow_defs),
+        )
         .route(
             "/api/tickets/{ticket_id}/detail",
             get(tickets::ticket_detail),
@@ -169,6 +181,10 @@ pub fn api_router() -> Router<AppState> {
             get(workflows::list_workflow_defs),
         )
         .route(
+            "/api/worktrees/{id}/workflows/defs/{name}",
+            get(workflows::get_workflow_def),
+        )
+        .route(
             "/api/worktrees/{id}/workflows/run",
             post(workflows::run_workflow),
         )
@@ -178,12 +194,16 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/workflows/runs",
-            get(workflows::list_all_workflow_runs_handler),
+            get(workflows::list_all_workflow_runs_handler).post(workflows::post_workflow_run),
         )
         .route("/api/workflows/runs/{id}", get(workflows::get_workflow_run))
         .route(
             "/api/workflows/runs/{id}/steps",
             get(workflows::get_workflow_steps),
+        )
+        .route(
+            "/api/workflows/runs/{id}/children",
+            get(workflows::get_child_workflow_runs),
         )
         .route(
             "/api/workflows/runs/{id}/cancel",
@@ -230,6 +250,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/notifications/{id}/read",
             post(notifications::mark_read),
         )
+        // Stats
+        .route("/api/stats/theme-unlocks", get(stats::theme_unlock_stats))
         // Push Notifications
         .route(
             "/api/push/vapid-public-key",

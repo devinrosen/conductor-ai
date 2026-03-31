@@ -4,71 +4,12 @@ use super::{
 };
 use crate::workflow::engine::ExecutionState;
 use crate::workflow::status::WorkflowStepStatus;
+use crate::workflow::tests::common::make_loop_test_state;
 use crate::workflow::types::StepResult;
 use crate::workflow_dsl::{
-    ApprovalMode, Condition, GateNode, GateType, IfNode, OnFailAction, OnTimeout,
+    ApprovalMode, Condition, GateNode, GateOptions, GateType, IfNode, OnFailAction, OnTimeout,
     QualityGateConfig, UnlessNode,
 };
-
-// -----------------------------------------------------------------------
-// Shared test helper: build an ExecutionState backed by a real in-memory DB.
-// -----------------------------------------------------------------------
-
-/// Build an `ExecutionState` wired to a real in-memory SQLite connection.
-///
-/// The caller owns the `Connection`; the state borrows it.  `working_dir`
-/// and `repo_path` are both set to `dir`.
-fn make_test_state<'a>(
-    conn: &'a rusqlite::Connection,
-    config: &'a crate::config::Config,
-    dir: &str,
-    exec_config: crate::workflow::types::WorkflowExecConfig,
-) -> ExecutionState<'a> {
-    let agent_mgr = crate::agent::AgentManager::new(conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "test", None, None)
-        .unwrap();
-    let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
-    let run = wf_mgr
-        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    ExecutionState {
-        conn,
-        config,
-        workflow_run_id: run.id,
-        workflow_name: "test-wf".into(),
-        worktree_id: None,
-        working_dir: dir.to_string(),
-        worktree_slug: String::new(),
-        repo_path: dir.to_string(),
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config,
-        inputs: std::collections::HashMap::new(),
-        agent_mgr: crate::agent::AgentManager::new(conn),
-        wf_mgr: crate::workflow::manager::WorkflowManager::new(conn),
-        parent_run_id: String::new(),
-        depth: 0,
-        target_label: None,
-        step_results: std::collections::HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
-        default_bot_name: None,
-        feature_id: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-    }
-}
 
 // -----------------------------------------------------------------------
 // read_stdout_bounded tests
@@ -130,12 +71,11 @@ fn test_execute_script_success() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = make_test_state(
-        &conn,
-        config,
-        &dir_str,
-        crate::workflow::types::WorkflowExecConfig::default(),
-    );
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
 
     let node = crate::workflow_dsl::ScriptNode {
         name: "hello".into(),
@@ -170,15 +110,15 @@ fn test_execute_script_failure_captures_stdout() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = make_test_state(
-        &conn,
-        config,
-        &dir_str,
-        crate::workflow::types::WorkflowExecConfig {
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
             fail_fast: false,
             ..Default::default()
         },
-    );
+        ..make_loop_test_state(&conn, config)
+    };
 
     let node = crate::workflow_dsl::ScriptNode {
         name: "fail".into(),
@@ -258,12 +198,11 @@ fn test_execute_script_with_bot_name_not_configured() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = make_test_state(
-        &conn,
-        config,
-        &dir_str,
-        crate::workflow::types::WorkflowExecConfig::default(),
-    );
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
 
     let node = crate::workflow_dsl::ScriptNode {
         name: "bot-step".into(),
@@ -299,12 +238,11 @@ fn test_execute_script_bot_name_falls_back_to_default() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = make_test_state(
-        &conn,
-        config,
-        &dir_str,
-        crate::workflow::types::WorkflowExecConfig::default(),
-    );
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
     state.default_bot_name = Some("default-bot".into());
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -339,15 +277,15 @@ fn test_execute_script_timeout() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = make_test_state(
-        &conn,
-        config,
-        &dir_str,
-        crate::workflow::types::WorkflowExecConfig {
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
             fail_fast: false,
             ..Default::default()
         },
-    );
+        ..make_loop_test_state(&conn, config)
+    };
 
     let node = crate::workflow_dsl::ScriptNode {
         name: "slow".into(),
@@ -393,15 +331,15 @@ fn test_execute_script_cancelled() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = make_test_state(
-        &conn,
-        config,
-        &dir_str,
-        crate::workflow::types::WorkflowExecConfig {
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
             shutdown: Some(Arc::clone(&shutdown)),
             ..Default::default()
         },
-    );
+        ..make_loop_test_state(&conn, config)
+    };
 
     let node = crate::workflow_dsl::ScriptNode {
         name: "cancel".into(),
@@ -438,15 +376,15 @@ fn test_execute_script_retries_exhausted() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = make_test_state(
-        &conn,
-        config,
-        &dir_str,
-        crate::workflow::types::WorkflowExecConfig {
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
             fail_fast: false, // don't short-circuit on first failure
             ..Default::default()
         },
-    );
+        ..make_loop_test_state(&conn, config)
+    };
     let run_id = state.workflow_run_id.clone();
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -494,7 +432,7 @@ fn test_execute_script_retries_exhausted() {
 fn test_eval_condition_bool_input_true() {
     let db = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&db, &config);
     state.inputs.insert("flag".to_string(), "true".to_string());
 
     let cond = Condition::BoolInput {
@@ -507,7 +445,7 @@ fn test_eval_condition_bool_input_true() {
 fn test_eval_condition_bool_input_false() {
     let db = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&db, &config);
     state.inputs.insert("flag".to_string(), "false".to_string());
 
     let cond = Condition::BoolInput {
@@ -520,7 +458,7 @@ fn test_eval_condition_bool_input_false() {
 fn test_eval_condition_bool_input_missing_defaults_false() {
     let db = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let state = make_test_state(&db, &config, "/tmp", Default::default());
+    let state = make_loop_test_state(&db, &config);
 
     let cond = Condition::BoolInput {
         input: "missing".to_string(),
@@ -532,7 +470,7 @@ fn test_eval_condition_bool_input_missing_defaults_false() {
 fn test_eval_condition_bool_input_case_insensitive() {
     let db = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&db, &config);
     state.inputs.insert("flag".to_string(), "TRUE".to_string());
 
     let cond = Condition::BoolInput {
@@ -545,7 +483,7 @@ fn test_eval_condition_bool_input_case_insensitive() {
 fn test_execute_if_bool_input_runs_body_when_true() {
     let db = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&db, &config);
     state
         .inputs
         .insert("run_it".to_string(), "true".to_string());
@@ -565,7 +503,7 @@ fn test_execute_if_bool_input_runs_body_when_true() {
 fn test_execute_if_bool_input_skips_body_when_false() {
     let db = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&db, &config);
     state
         .inputs
         .insert("run_it".to_string(), "false".to_string());
@@ -583,7 +521,7 @@ fn test_execute_if_bool_input_skips_body_when_false() {
 fn test_execute_unless_bool_input_runs_body_when_false() {
     let db = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&db, &config);
     state.inputs.insert("skip".to_string(), "false".to_string());
 
     let node = UnlessNode {
@@ -609,12 +547,11 @@ fn test_execute_script_injects_conductor_on_path() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = make_test_state(
-        &conn,
-        config,
-        &dir_str,
-        crate::workflow::types::WorkflowExecConfig::default(),
-    );
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
 
     // Simulate what binary crates do: resolve conductor binary dir from current_exe.
     let bin_dir = std::env::current_exe()
@@ -655,7 +592,7 @@ fn test_execute_script_injects_conductor_on_path() {
 fn test_execute_unless_bool_input_skips_body_when_true() {
     let db = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&db, &config);
     state.inputs.insert("skip".to_string(), "true".to_string());
 
     let node = UnlessNode {
@@ -712,6 +649,7 @@ fn make_quality_gate_node(
         on_timeout: OnTimeout::Fail,
         bot_name: None,
         quality_gate,
+        options: None,
     }
 }
 
@@ -719,7 +657,7 @@ fn make_quality_gate_node(
 fn test_quality_gate_passes_when_confidence_meets_threshold() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state.step_results.insert(
         "review".to_string(),
@@ -735,7 +673,7 @@ fn test_quality_gate_passes_when_confidence_meets_threshold() {
 fn test_quality_gate_fails_when_confidence_below_threshold() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state.step_results.insert(
         "review".to_string(),
@@ -753,7 +691,7 @@ fn test_quality_gate_fails_when_confidence_below_threshold() {
 fn test_quality_gate_continues_on_fail_when_configured() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state.step_results.insert(
         "review".to_string(),
@@ -772,7 +710,7 @@ fn test_quality_gate_continues_on_fail_when_configured() {
 fn test_quality_gate_errors_when_source_step_missing() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     let node = make_quality_gate_node("qg", Some("nonexistent"), Some(70), OnFailAction::Fail);
     let result = execute_quality_gate(&mut state, &node, 0, 0);
@@ -785,7 +723,7 @@ fn test_quality_gate_errors_when_source_step_missing() {
 fn test_quality_gate_errors_when_config_missing() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     let node = make_quality_gate_node("qg", None, None, OnFailAction::Fail);
     let result = execute_quality_gate(&mut state, &node, 0, 0);
@@ -801,7 +739,7 @@ fn test_quality_gate_errors_when_config_missing() {
 fn test_quality_gate_malformed_json_treats_as_zero_confidence() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state.step_results.insert(
         "review".to_string(),
@@ -821,7 +759,7 @@ fn test_quality_gate_malformed_json_treats_as_zero_confidence() {
 fn test_quality_gate_missing_confidence_key_treats_as_zero() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state.step_results.insert(
         "review".to_string(),
@@ -840,7 +778,7 @@ fn test_quality_gate_missing_confidence_key_treats_as_zero() {
 fn test_quality_gate_no_structured_output_treats_as_zero() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state
         .step_results
@@ -857,7 +795,7 @@ fn test_quality_gate_no_structured_output_treats_as_zero() {
 fn test_quality_gate_float_confidence_handled() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state.step_results.insert(
         "review".to_string(),
@@ -877,7 +815,7 @@ fn test_quality_gate_float_confidence_handled() {
 fn test_quality_gate_clamps_large_confidence_to_100() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state.step_results.insert(
         "review".to_string(),
@@ -897,7 +835,7 @@ fn test_quality_gate_clamps_large_confidence_to_100() {
 fn test_quality_gate_clamps_large_float_confidence_to_100() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     // Use a float value to exercise the as_f64() fallback branch
     state.step_results.insert(
@@ -918,7 +856,7 @@ fn test_quality_gate_clamps_large_float_confidence_to_100() {
 fn test_execute_gate_dispatches_quality_gate() {
     let conn = crate::test_helpers::setup_db();
     let config = crate::config::Config::default();
-    let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+    let mut state = make_loop_test_state(&conn, &config);
 
     state.step_results.insert(
         "review".to_string(),
@@ -931,4 +869,190 @@ fn test_execute_gate_dispatches_quality_gate() {
         result.is_ok(),
         "execute_gate should dispatch QualityGate correctly: {result:?}"
     );
+}
+
+// -----------------------------------------------------------------------
+// StepRef resolution tests
+// -----------------------------------------------------------------------
+
+fn make_stepref_gate_node(name: &str, options: Option<GateOptions>) -> GateNode {
+    GateNode {
+        name: name.to_string(),
+        gate_type: GateType::HumanApproval,
+        prompt: None,
+        min_approvals: 1,
+        approval_mode: ApprovalMode::default(),
+        timeout_secs: 60,
+        on_timeout: OnTimeout::Fail,
+        bot_name: None,
+        quality_gate: None,
+        options,
+    }
+}
+
+#[test]
+fn test_stepref_gate_missing_dot_format_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_loop_test_state(&conn, &config);
+
+    let node = make_stepref_gate_node("gate1", Some(GateOptions::StepRef("nodot".to_string())));
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("must be in 'step.field' format"), "got: {err}");
+}
+
+#[test]
+fn test_stepref_gate_step_not_found_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_loop_test_state(&conn, &config);
+    // step_results is empty — "missing_step" has no result
+
+    let node = make_stepref_gate_node(
+        "gate2",
+        Some(GateOptions::StepRef("missing_step.field".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("which has no result yet"), "got: {err}");
+}
+
+#[test]
+fn test_stepref_gate_no_structured_output_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_loop_test_state(&conn, &config);
+    state
+        .step_results
+        .insert("prior".to_string(), make_step_result(None));
+
+    let node = make_stepref_gate_node(
+        "gate3",
+        Some(GateOptions::StepRef("prior.field".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("has no structured_output"), "got: {err}");
+}
+
+#[test]
+fn test_stepref_gate_invalid_json_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_loop_test_state(&conn, &config);
+    state.step_results.insert(
+        "prior".to_string(),
+        make_step_result(Some("not valid json")),
+    );
+
+    let node = make_stepref_gate_node(
+        "gate4",
+        Some(GateOptions::StepRef("prior.field".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("failed to parse structured_output"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn test_stepref_gate_field_not_array_error() {
+    let conn = crate::test_helpers::setup_db();
+    let config = crate::config::Config::default();
+    let mut state = make_loop_test_state(&conn, &config);
+    state.step_results.insert(
+        "prior".to_string(),
+        make_step_result(Some(r#"{"field": "not-an-array"}"#)),
+    );
+
+    let node = make_stepref_gate_node(
+        "gate5",
+        Some(GateOptions::StepRef("prior.field".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("is not a JSON array"), "got: {err}");
+}
+
+#[test]
+fn test_stepref_gate_happy_path() {
+    use std::time::Duration;
+
+    // Use a named temp file so two connections can share the same WAL-mode DB.
+    let db_file = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db_file.path().to_str().unwrap().to_string();
+
+    // Primary connection — used by execute_gate.
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys = ON;")
+        .unwrap();
+    crate::db::migrations::run(&conn).unwrap();
+    // Seed the worktree that make_test_state references (same rows as setup_db).
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let config = crate::config::Config::default();
+    let mut state = ExecutionState {
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            // Short poll interval so the test doesn't drag out.
+            poll_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, &config)
+    };
+    state.step_results.insert(
+        "prior".to_string(),
+        make_step_result(Some(r#"{"choices": ["a","b","c"]}"#)),
+    );
+
+    let run_id = state.workflow_run_id.clone();
+
+    // Background thread: opens a second connection and approves the gate once
+    // the step row appears in the DB (written by execute_gate before the poll).
+    let db_path_clone = db_path.clone();
+    let approver = std::thread::spawn(move || {
+        let conn2 = rusqlite::Connection::open(&db_path_clone).unwrap();
+        conn2
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys = ON;")
+            .unwrap();
+        let wf_mgr2 = crate::workflow::manager::WorkflowManager::new(&conn2);
+        let start_time = std::time::Instant::now();
+        let timeout = Duration::from_secs(5); // 5 second timeout guard
+        loop {
+            if let Ok(Some(step)) = wf_mgr2.find_waiting_gate(&run_id) {
+                wf_mgr2.approve_gate(&step.id, "test", None, None).unwrap();
+                return;
+            }
+            if start_time.elapsed() > timeout {
+                panic!("Timeout waiting for gate to appear - execute_gate may have failed early");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+
+    let node = make_stepref_gate_node(
+        "gate6",
+        Some(GateOptions::StepRef("prior.choices".to_string())),
+    );
+    let result = execute_gate(&mut state, &node, 0);
+    approver.join().unwrap();
+    assert!(result.is_ok(), "happy path should succeed: {result:?}");
 }

@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::config::Config;
 use crate::db::{query_collect, with_in_clause};
-use crate::error::{ConductorError, Result};
+use crate::error::{ConductorError, Result, SubprocessFailure};
 use crate::git::{check_output, git_in};
 use crate::repo::RepoManager;
 use crate::tickets::TicketSyncer;
@@ -15,6 +15,14 @@ use super::helpers::{
     batch_branch_timestamps, derive_branch_name, last_commit_timestamp, map_feature_row,
 };
 use super::types::{Feature, FeatureRow, FeatureStatus, UnregisteredBranch};
+
+fn feature_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
+    let id = id.into();
+    move |e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ConductorError::FeatureNotFound { name: id },
+        _ => ConductorError::Database(e),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Shared SQL fragments & row mapper for FeatureRow queries
@@ -250,12 +258,7 @@ impl<'a> FeatureManager<'a> {
                 params![id],
                 map_feature_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::FeatureNotFound {
-                    name: id.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(feature_not_found(id))
     }
 
     /// Look up a feature by repo slug + name and verify it is active.
@@ -406,11 +409,19 @@ impl<'a> FeatureManager<'a> {
             .args(&args)
             .current_dir(&repo.local_path)
             .output()
-            .map_err(|e| ConductorError::GhCli(format!("failed to run `gh`: {e}")))?;
+            .map_err(|e| {
+                ConductorError::GhCli(SubprocessFailure::from_message(
+                    "gh",
+                    format!("failed to run `gh`: {e}"),
+                ))
+            })?;
         if !output.status.success() {
-            return Err(ConductorError::GhCli(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
+            return Err(ConductorError::GhCli(SubprocessFailure {
+                command: "gh".to_string(),
+                exit_code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            }));
         }
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(url)
@@ -435,12 +446,24 @@ impl<'a> FeatureManager<'a> {
         let branch_output = git_in(&repo.local_path)
             .args(["branch", "-d", "--", &feature.branch])
             .output()
-            .map_err(|e| ConductorError::Git(format!("failed to run git: {e}")))?;
+            .map_err(|e| {
+                ConductorError::Git(SubprocessFailure::from_message(
+                    "git branch -d",
+                    format!("failed to run git: {e}"),
+                ))
+            })?;
         if !branch_output.status.success() {
             let stderr = String::from_utf8_lossy(&branch_output.stderr);
             // Branch already gone — that's fine.
             if !stderr.contains("not found") && !stderr.contains("no branch named") {
-                return Err(ConductorError::Git(stderr.trim().to_string()));
+                return Err(ConductorError::Git(SubprocessFailure {
+                    command: "git branch -d".to_string(),
+                    exit_code: branch_output.status.code(),
+                    stderr: stderr.trim().to_string(),
+                    stdout: String::from_utf8_lossy(&branch_output.stdout)
+                        .trim()
+                        .to_string(),
+                }));
             }
         }
 
@@ -785,12 +808,7 @@ impl<'a> FeatureManager<'a> {
                 params![repo_id, name],
                 map_feature_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::FeatureNotFound {
-                    name: name.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(feature_not_found(name))
     }
 
     /// Resolve ticket source_ids (e.g. "1262") to internal ULID ticket IDs.

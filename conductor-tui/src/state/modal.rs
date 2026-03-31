@@ -95,6 +95,12 @@ pub enum Modal {
         step_id: String,
         gate_prompt: String,
         feedback: String,
+        /// Resolved option strings (empty = binary approve/reject mode).
+        options: Vec<String>,
+        /// Checkbox state parallel to `options`.
+        selected: Vec<bool>,
+        /// Cursor row for j/k navigation inside the checklist.
+        focused_option: usize,
     },
     /// Confirm-by-name modal: user must type the expected slug to confirm.
     ConfirmByName {

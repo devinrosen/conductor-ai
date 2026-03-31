@@ -6,6 +6,7 @@ import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
 import { EmptyState } from "../components/shared/EmptyState";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
+import { OnboardingHint } from "../components/shared/OnboardingHint";
 import { ErrorBanner } from "../components/shared/ErrorBanner";
 import {
   useConductorEvents,
@@ -63,11 +64,13 @@ export function ReposPage() {
           >
             Discover from GitHub
           </button>
-          <RegisterRepoForm
-            onCreated={refreshRepos}
-            open={registerRepoOpen}
-            onOpenChange={setRegisterRepoOpen}
-          />
+          <OnboardingHint target="register" label="Register a repo">
+            <RegisterRepoForm
+              onCreated={refreshRepos}
+              open={registerRepoOpen}
+              onOpenChange={setRegisterRepoOpen}
+            />
+          </OnboardingHint>
         </div>
       </div>
 

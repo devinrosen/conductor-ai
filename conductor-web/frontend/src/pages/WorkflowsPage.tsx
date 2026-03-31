@@ -8,6 +8,8 @@ import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
 import { RunWorkflowModal } from "../components/workflows/RunWorkflowModal";
+import { WorkflowRunTree } from "../components/workflows/WorkflowRunTree";
+import { formatDuration, liveElapsedMs } from "../utils/agentStats";
 
 interface WorktreeContext {
   repoId: string;
@@ -32,6 +34,7 @@ export function WorkflowsPage() {
   const [searchText, setSearchText] = useState("");
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [viewMode, setViewMode] = useState<"tree" | "table">("tree");
 
   // Picker state
   const [pickerStep, setPickerStep] = useState<PickerStep | null>(null);
@@ -47,28 +50,36 @@ export function WorkflowsPage() {
     if (repos.length === 0) { setLoading(false); return; }
 
     const fetchAll = async () => {
-      const repoWorktrees = await Promise.all(
-        repos.map((r) => api.listWorktrees(r.id).then((wts) => ({ repo: r, wts }))),
-      );
+      const [allWorktrees, allRunsList] = await Promise.all([
+        api.listAllWorktrees(),
+        api.listAllWorkflowRuns(),
+      ]);
 
+      const repoMap = new Map(repos.map((r) => [r.id, r]));
       const ctxMap = new Map<string, WorktreeContext>();
-      for (const { repo, wts } of repoWorktrees) {
-        for (const wt of wts) {
-          if (wt.status === "active") {
-            ctxMap.set(wt.id, { repoId: repo.id, repoSlug: repo.slug, branch: wt.branch, worktreeId: wt.id });
-          }
+      for (const wt of allWorktrees) {
+        if (wt.status !== "active") continue;
+        const repo = repoMap.get(wt.repo_id);
+        if (repo) {
+          ctxMap.set(wt.id, { repoId: wt.repo_id, repoSlug: repo.slug, branch: wt.branch, worktreeId: wt.id });
         }
       }
 
-      const activeWorktreeIds = Array.from(ctxMap.keys());
-      const runArrays = await Promise.all(
-        activeWorktreeIds.map((wtId) => api.listWorkflowRuns(wtId).catch(() => [] as WorkflowRun[])),
-      );
-
       const allRuns: { run: WorkflowRun; ctx: WorktreeContext }[] = [];
-      for (let i = 0; i < activeWorktreeIds.length; i++) {
-        const ctx = ctxMap.get(activeWorktreeIds[i])!;
-        for (const run of runArrays[i]) allRuns.push({ run, ctx });
+      for (const run of allRunsList) {
+        const ctx = run.worktree_id ? ctxMap.get(run.worktree_id) : undefined;
+        if (ctx) {
+          allRuns.push({ run, ctx });
+        } else if (run.repo_slug) {
+          const repoEntry = repos.find((r) => r.slug === run.repo_slug);
+          const fallbackCtx: WorktreeContext = {
+            repoId: repoEntry?.id ?? "",
+            repoSlug: run.repo_slug,
+            branch: run.worktree_slug ?? run.target_label ?? "",
+            worktreeId: run.worktree_id ?? "",
+          };
+          allRuns.push({ run, ctx: fallbackCtx });
+        }
       }
       allRuns.sort((a, b) => new Date(b.run.started_at).getTime() - new Date(a.run.started_at).getTime());
 
@@ -107,11 +118,17 @@ export function WorkflowsPage() {
       result = result.filter((r) =>
         r.run.workflow_name.toLowerCase().includes(q) ||
         r.ctx.repoSlug.toLowerCase().includes(q) ||
-        r.ctx.branch.toLowerCase().includes(q)
+        r.ctx.branch.toLowerCase().includes(q) ||
+        (r.run.target_label?.toLowerCase().includes(q) ?? false)
       );
     }
     if (sortCol) {
       result = [...result].sort((a, b) => {
+        if (sortCol === "duration") {
+          const da = runDurationMs(a.run) ?? -1;
+          const db = runDurationMs(b.run) ?? -1;
+          return sortDir === "asc" ? da - db : db - da;
+        }
         let va = "", vb = "";
         switch (sortCol) {
           case "workflow": va = a.run.workflow_name; vb = b.run.workflow_name; break;
@@ -125,6 +142,23 @@ export function WorkflowsPage() {
     }
     return result;
   }, [runs, statusFilter, nameFilter, searchText, sortCol, sortDir]);
+
+  const runDurationMs = useCallback((run: WorkflowRun): number | null => {
+    if (run.ended_at) return new Date(run.ended_at).getTime() - new Date(run.started_at).getTime();
+    if (run.status === "running" || run.status === "waiting") return liveElapsedMs(run.started_at);
+    return null;
+  }, []);
+
+  // Build ctxMap for tree view from the runs data
+  const treeCtxMap = useMemo(() => {
+    const m = new Map<string, { repoId: string; worktreeId: string; repoSlug: string; branch: string }>();
+    for (const { run, ctx } of runs) {
+      if (run.worktree_id && !m.has(run.worktree_id)) {
+        m.set(run.worktree_id, { repoId: ctx.repoId, worktreeId: ctx.worktreeId, repoSlug: ctx.repoSlug, branch: ctx.branch });
+      }
+    }
+    return m;
+  }, [runs]);
 
   const activeFilterCount = statusFilter.size + (nameFilter ? 1 : 0) + (searchText ? 1 : 0);
 
@@ -212,12 +246,28 @@ export function WorkflowsPage() {
             ))}
           </div>
         </div>
-        <button
-          onClick={() => setPickerStep("repo")}
-          className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-500"
-        >
-          Start Workflow
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs">
+            <button
+              onClick={() => setViewMode("tree")}
+              className={`px-2.5 py-1 ${viewMode === "tree" ? "bg-gray-100 text-gray-800 font-medium" : "text-gray-500 hover:bg-gray-50"}`}
+            >
+              Tree
+            </button>
+            <button
+              onClick={() => setViewMode("table")}
+              className={`px-2.5 py-1 border-l border-gray-200 ${viewMode === "table" ? "bg-gray-100 text-gray-800 font-medium" : "text-gray-500 hover:bg-gray-50"}`}
+            >
+              Table
+            </button>
+          </div>
+          <button
+            onClick={() => setPickerStep("repo")}
+            className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-500"
+          >
+            Start Workflow
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -299,13 +349,13 @@ export function WorkflowsPage() {
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           placeholder="Search runs..."
-          className="flex-1 sm:max-w-xs px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="flex-1 sm:max-w-xs px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-gray-50 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
         {uniqueNames.length > 1 && (
           <select
             value={nameFilter}
             onChange={(e) => setNameFilter(e.target.value)}
-            className="px-2 py-1.5 text-sm rounded-md border border-gray-200 bg-white text-gray-700"
+            className="px-2 py-1.5 text-sm rounded-md border border-gray-200 bg-gray-50 text-gray-700"
           >
             <option value="">All workflows</option>
             {uniqueNames.map((n) => <option key={n} value={n}>{n}</option>)}
@@ -318,12 +368,21 @@ export function WorkflowsPage() {
         )}
       </div>
 
-      {/* Run history table */}
+      {/* Run history */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {runs.length === 0 ? (
           <EmptyState message="No timetable set. Run a workflow to see activity here." />
         ) : filteredRuns.length === 0 ? (
           <EmptyState message="No runs match your filter." />
+        ) : viewMode === "tree" ? (
+          <div className="overflow-y-auto h-full">
+            <WorkflowRunTree
+              runs={filteredRuns.map((r) => r.run)}
+              repos={repos}
+              ctxMap={treeCtxMap}
+              onCancel={handleCancelWorkflow}
+            />
+          </div>
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-y-auto overflow-x-auto h-full">
             <table className="w-full text-sm min-w-[600px]">
@@ -349,6 +408,11 @@ export function WorkflowsPage() {
                       Started {sortArrow("started") && <span>{sortArrow("started")}</span>}
                     </button>
                   </th>
+                  <th className="px-3 py-1.5">
+                    <button onClick={() => toggleSort("duration")} className="hover:text-gray-800 flex items-center gap-1">
+                      Duration {sortArrow("duration") && <span>{sortArrow("duration")}</span>}
+                    </button>
+                  </th>
                   <th className="px-3 py-1.5">Actions</th>
                 </tr>
               </thead>
@@ -356,12 +420,16 @@ export function WorkflowsPage() {
                 {filteredRuns.map(({ run, ctx }) => (
                   <tr key={run.id} className="hover:bg-gray-50">
                     <td className="px-3 py-1.5">
-                      <Link
-                        to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
-                        className="text-indigo-600 hover:underline font-medium"
-                      >
-                        {run.workflow_name}
-                      </Link>
+                      {ctx.repoId && ctx.worktreeId ? (
+                        <Link
+                          to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
+                          className="text-indigo-600 hover:underline font-medium"
+                        >
+                          {run.workflow_name}
+                        </Link>
+                      ) : (
+                        <span className="font-medium">{run.workflow_name}</span>
+                      )}
                     </td>
                     <td className="px-3 py-1.5 text-gray-500">
                       <span className="inline-block px-1.5 py-0.5 text-[11px] font-mono rounded bg-gray-100 text-gray-600 mr-1">
@@ -377,6 +445,12 @@ export function WorkflowsPage() {
                     </td>
                     <td className="px-3 py-1.5 text-xs text-gray-400">
                       <TimeAgo date={run.started_at} />
+                    </td>
+                    <td className="px-3 py-1.5 text-xs text-gray-500 font-mono tabular-nums">
+                      {(() => {
+                        const ms = runDurationMs(run);
+                        return ms != null ? formatDuration(ms) : "\u2014";
+                      })()}
                     </td>
                     <td className="px-3 py-1.5">
                       {(run.status === "running" || run.status === "waiting") && (

@@ -28,8 +28,8 @@ self.addEventListener('push', (event: PushEvent) => {
     const notificationOptions: NotificationOptions = {
       body: payload.body,
       tag: payload.tag,
-      icon: '/conductor-icon-192.png', // Adjust path as needed
-      badge: '/conductor-badge-72.png', // Adjust path as needed
+      icon: '/icon-192.svg',
+      badge: '/favicon.svg',
       data: {
         url: payload.url,
       },

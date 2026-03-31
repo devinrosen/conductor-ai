@@ -389,6 +389,8 @@ pub enum Action {
     ToggleDefStepTree,
     GateInputChar(char),
     GateInputBackspace,
+    /// Toggle the focused checklist option in a multi-select gate modal.
+    GateToggleOption,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
 
     // Notification modal loaded

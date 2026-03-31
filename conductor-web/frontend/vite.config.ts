@@ -23,7 +23,7 @@ export default defineConfig({
     exclude: ["e2e/**", "node_modules/**"],
   },
   server: {
-    port: 5173,
+    port: 8675,
     proxy: {
       "/api": {
         target: "http://localhost:3000",

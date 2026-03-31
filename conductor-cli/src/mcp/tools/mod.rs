@@ -215,11 +215,24 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_approve_gate",
-            "Approve a waiting gate in a workflow run.",
-            schema(&[
-                ("run_id", "Workflow run ID", true),
-                ("feedback", "Optional feedback or approval message", false),
-            ]),
+            "Approve a waiting gate in a workflow run. \
+             When the gate has multi-select options, pass the chosen values as `selections`. \
+             An empty selections array means 'approve with nothing selected' (skip).",
+            Arc::new({
+                let mut m = serde_json::Map::new();
+                m.insert("type".into(), json!("object"));
+                m.insert("properties".into(), json!({
+                    "run_id": { "type": "string", "description": "Workflow run ID" },
+                    "feedback": { "type": "string", "description": "Optional feedback or approval message" },
+                    "selections": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional list of selected option values for multi-select gates"
+                    }
+                }));
+                m.insert("required".into(), json!(["run_id"]));
+                m
+            }),
         ),
         Tool::new(
             "conductor_reject_gate",

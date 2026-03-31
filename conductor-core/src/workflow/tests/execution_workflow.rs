@@ -43,6 +43,7 @@ fn test_cannot_start_workflow_run_when_active() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -91,6 +92,7 @@ fn test_can_start_workflow_run_after_completion() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -141,6 +143,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input);
     assert!(
@@ -185,6 +188,7 @@ fn test_run_id_notify_slot_is_populated() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -237,6 +241,7 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input).expect(
@@ -278,6 +283,7 @@ fn test_execute_workflow_injects_repo_variables() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -332,6 +338,7 @@ fn test_execute_workflow_injects_ticket_variables() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -390,6 +397,7 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -435,6 +443,7 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -471,6 +480,7 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -512,6 +522,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result1 = execute_workflow(&input1);
     assert!(
@@ -547,6 +558,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result2 = execute_workflow(&input2);
     assert!(
@@ -593,6 +605,7 @@ fn test_execute_workflow_iteration_persisted() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input);
@@ -670,6 +683,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -747,6 +761,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -828,6 +843,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
@@ -883,6 +899,7 @@ fn test_execute_workflow_injects_feature_variables() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -935,6 +952,7 @@ fn test_execute_workflow_invalid_feature_id_returns_error() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -984,6 +1002,7 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = crate::workflow::engine::execute_workflow(&input).unwrap();
@@ -998,6 +1017,83 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
         run.inputs.get("feature_base_branch").map(String::as_str),
         Some("develop"),
         "feature_base_branch should equal the worktree's custom base_branch, not default 'main'"
+    );
+}
+
+/// Regression test for #1614: when a worktree has base_branch="feat/masq" and its ticket is
+/// linked to a feature whose base_branch="main", execute_workflow must use the worktree's
+/// base_branch as feature_base_branch, not the feature's.
+#[test]
+fn test_execute_workflow_worktree_base_branch_wins_over_feature_base_branch() {
+    let conn = setup_db();
+    let config: &'static Config = Box::leak(Box::new(Config::default()));
+
+    // Insert a feature with base_branch="main".
+    conn.execute(
+        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
+         VALUES ('f-masq', 'r1', 'masq-feature', 'feat/masq', 'main', 'active', '2025-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    // Insert a worktree for that feature with base_branch="feat/masq".
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES ('wt-masq-child', 'r1', 'fix-masq-child', 'fix/masq-child', 'feat/masq', '/tmp/ws/fix-masq-child', 'active', '2025-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let workflow = make_empty_workflow();
+    let exec_config = WorkflowExecConfig::default();
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config,
+        workflow: &workflow,
+        worktree_id: Some("wt-masq-child"),
+        working_dir: "/tmp/ws/fix-masq-child",
+        repo_path: "/tmp/repo",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        feature_id: Some("f-masq"),
+        iteration: 0,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
+    };
+
+    let result = execute_workflow(&input).unwrap();
+
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .get_workflow_run(&result.workflow_run_id)
+        .unwrap()
+        .unwrap();
+
+    // The worktree's base_branch must win: PR should target feat/masq, not main.
+    assert_eq!(
+        run.inputs.get("feature_base_branch").map(String::as_str),
+        Some("feat/masq"),
+        "feature_base_branch should be the worktree's base_branch (feat/masq), not the feature's (main)"
+    );
+    // Other feature variables should still be injected.
+    assert_eq!(
+        run.inputs.get("feature_id").map(String::as_str),
+        Some("f-masq")
+    );
+    assert_eq!(
+        run.inputs.get("feature_name").map(String::as_str),
+        Some("masq-feature")
     );
 }
 
@@ -1032,6 +1128,7 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
         triggered_by_hook: false,
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
+        force: false,
     };
 
     let result = execute_workflow(&input).unwrap();

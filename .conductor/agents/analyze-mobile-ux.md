@@ -90,15 +90,17 @@ Emit markers based on findings:
 - `has_high_severity` — if any high-severity findings exist
 - `has_findings` — if any findings exist at all
 
+Also emit a `findings` JSON array in structured output so the downstream gate can present them as selectable checkboxes. Each entry is a short string that will be shown to the reviewer. Use the format `"[HIGH] <title> (<view>)"`, `"[MED] ..."`, or `"[LOW] ..."`:
+
 ```
 <<<CONDUCTOR_OUTPUT>>>
-{"markers": ["has_findings", "has_high_severity"], "context": "Wrote mobile UX audit report to ~/.conductor/audits/conductor-ai/mobile-ux-audit-<date>.md — <count> findings (<high> high, <medium> medium, <low> low). Top issue: <one-line summary of worst finding>"}
+{"markers": ["has_findings", "has_high_severity"], "context": "Wrote mobile UX audit report to ~/.conductor/audits/conductor-ai/mobile-ux-audit-<date>.md — <count> findings (<high> high, <medium> medium, <low> low). Top issue: <one-line summary of worst finding>", "structured_output": {"findings": ["[HIGH] Touch targets too small on Repo Detail (iPhone 14)", "[MED] Table overflow on Activity page (Pixel 7)"]}}
 <<<END_CONDUCTOR_OUTPUT>>>
 ```
 
 If no findings at all:
 ```
 <<<CONDUCTOR_OUTPUT>>>
-{"markers": [], "context": "Mobile UX audit complete — no issues found. Report at ~/.conductor/audits/conductor-ai/mobile-ux-audit-<date>.md"}
+{"markers": [], "context": "Mobile UX audit complete — no issues found. Report at ~/.conductor/audits/conductor-ai/mobile-ux-audit-<date>.md", "structured_output": {"findings": []}}
 <<<END_CONDUCTOR_OUTPUT>>>
 ```

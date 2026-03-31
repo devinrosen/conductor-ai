@@ -16,10 +16,4 @@ workflow evaluate-desktop-ux {
   call eval-ux-synthesizer {
     retries = 1
   }
-
-  gate quality_gate {
-    source    = "eval-ux-synthesizer"
-    threshold = 70
-    on_fail   = fail
-  }
 }

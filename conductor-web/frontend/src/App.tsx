@@ -7,8 +7,10 @@ import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { RepoDetailPage } from "./pages/RepoDetailPage";
 import { WorktreeDetailPage } from "./pages/WorktreeDetailPage";
 import { WorkflowRunDetailPage } from "./pages/WorkflowRunDetailPage";
+import { WorkflowDefDetailPage } from "./pages/WorkflowDefDetailPage";
 import { TicketsPage } from "./pages/TicketsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { GettingStartedPage } from "./pages/GettingStartedPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 const router = createBrowserRouter([
@@ -28,7 +30,12 @@ const router = createBrowserRouter([
         path: "repos/:repoId/worktrees/:worktreeId/workflows/runs/:runId",
         element: <WorkflowRunDetailPage />,
       },
+      {
+        path: "repos/:repoId/worktrees/:worktreeId/workflows/defs/:defName",
+        element: <WorkflowDefDetailPage />,
+      },
       { path: "settings", element: <SettingsPage /> },
+      { path: "getting-started", element: <GettingStartedPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],
   },
