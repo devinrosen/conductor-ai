@@ -9,9 +9,9 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, validate_resume_preconditions, InputDecl, RunIdSlot,
-    WorkflowDef, WorkflowExecConfig, WorkflowManager, WorkflowResumeStandalone, WorkflowRun,
-    WorkflowRunStatus, WorkflowRunStep,
+    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
+    RunIdSlot, WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -593,6 +593,7 @@ pub async fn post_workflow_run(
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 extra_plugin_dirs: vec![],
+                force: false,
             };
 
             execute_workflow(&input)
