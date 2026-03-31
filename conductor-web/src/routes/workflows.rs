@@ -409,8 +409,8 @@ pub async fn list_all_workflow_runs_handler(
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let mgr = WorkflowManager::new(&db);
-    let runs = if let Some(ref slug) = params.repo {
-        let repo = RepoManager::new(&db, &config).get_by_slug(slug)?;
+    let runs = if let Some(ref repo_id) = params.repo {
+        let repo = RepoManager::new(&db, &config).get_by_id(repo_id)?;
         mgr.list_active_workflow_runs_for_repo(&repo.id, &statuses)?
     } else {
         mgr.list_active_workflow_runs(&statuses)?
@@ -848,6 +848,48 @@ mod tests {
     async fn status_whitespace_only_tokens_only_returns_400() {
         let (status, _) = get_response("/api/workflows/runs?status=%20,%20", empty_state()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn repo_filter_by_ulid_returns_matching_run() {
+        let state = empty_state();
+        let repo_id = "01TESTREPOULID0000000000001";
+        {
+            let db = state.db.lock().await;
+            db.execute_batch(&format!(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('{repo_id}', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
+                 INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('wt1', '{repo_id}', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z');
+                 INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
+                 VALUES ('ar1', 'wt1', 'test', 'running', '2024-01-01T00:00:00Z');"
+            ))
+            .unwrap();
+
+            let mgr = WorkflowManager::new(&db);
+            let run = mgr
+                .create_workflow_run("test-wf", Some("wt1"), "ar1", false, "manual", None)
+                .unwrap();
+            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+                .unwrap();
+        }
+
+        // Filtering by ULID returns the run
+        let (status, body) =
+            get_response(&format!("/api/workflows/runs?repo={repo_id}"), state).await;
+        assert_eq!(status, StatusCode::OK);
+        let runs = body.as_array().unwrap();
+        assert_eq!(runs.len(), 1, "should return exactly one run for the repo");
+    }
+
+    #[tokio::test]
+    async fn repo_filter_nonexistent_ulid_returns_404() {
+        let (status, _) = get_response(
+            "/api/workflows/runs?repo=01NONEXISTENTREPO000000000",
+            empty_state(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
