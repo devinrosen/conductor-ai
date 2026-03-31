@@ -520,6 +520,15 @@ pub async fn post_workflow_run(
 
             if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
                 tracing::error!("Workflow input validation failed workflow={workflow_name}: {e}");
+                let error_run_id =
+                    resolve_error_run_id(&run_id_slot, &workflow_name, &target_label);
+                state_clone
+                    .events
+                    .emit(ConductorEvent::WorkflowRunStatusChanged {
+                        run_id: error_run_id,
+                        worktree_id: wt_id_clone.clone(),
+                        status: "failed".to_string(),
+                    });
                 if let Some(notify) = &state_clone.workflow_done_notify {
                     notify.notify_one();
                 }
@@ -604,10 +613,18 @@ pub async fn post_workflow_run(
                 tracing::error!(
                     "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
                 );
+                let error_run_id =
+                    resolve_error_run_id(&run_id_slot, &workflow_name, &target_label);
+                state_clone
+                    .events
+                    .emit(ConductorEvent::WorkflowRunStatusChanged {
+                        run_id: error_run_id.clone(),
+                        worktree_id: wt_id_clone,
+                        status: "failed".to_string(),
+                    });
                 let wf_name = workflow_name.clone();
                 let label = target_label.clone();
                 tokio::task::spawn_blocking(move || {
-                    let error_run_id = resolve_error_run_id(&run_id_slot, &wf_name, &label);
                     let conn =
                         match conductor_core::db::open_database(&conductor_core::config::db_path())
                         {
@@ -1541,6 +1558,167 @@ mod tests {
             count, 1,
             "handler must invoke execute_workflow — no workflow_runs row found for 'noop'"
         );
+    }
+
+    // ── POST /api/workflows/runs tests ──────────────────────────────
+
+    #[tokio::test]
+    async fn post_workflow_run_unknown_repo_returns_error() {
+        let state = empty_state();
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "repo": "ghost-repo",
+                            "workflow": "noop"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "unknown repo must return 4xx; got: {}",
+            response.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_workflow_run_unknown_worktree_returns_error() {
+        let state = empty_state();
+        {
+            let db = state.db.lock().await;
+            db.execute_batch(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', \
+                         'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            )
+            .unwrap();
+        }
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "repo": "r1",
+                            "workflow": "noop",
+                            "worktree": "ghost-worktree-id"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "unknown worktree must return 4xx; got: {}",
+            response.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_workflow_run_unknown_workflow_returns_error() {
+        let state = empty_state();
+        {
+            let db = state.db.lock().await;
+            db.execute_batch(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', \
+                         'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            )
+            .unwrap();
+        }
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "repo": "r1",
+                            "workflow": "nonexistent-workflow-xyz"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            response.status().is_client_error() || response.status().is_server_error(),
+            "unknown workflow must return an error; got: {}",
+            response.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_workflow_run_repo_only_with_valid_workflow_returns_accepted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wf_dir = tmp.path().join(".conductor").join("workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(
+            wf_dir.join("noop.wf"),
+            "workflow noop { meta { description = \"no-op\" targets = [\"worktree\"] } }",
+        )
+        .unwrap();
+        let repo_path = tmp.path().to_str().unwrap().to_string();
+
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let state = AppState {
+            workflow_done_notify: Some(Arc::clone(&notify)),
+            ..empty_state()
+        };
+        {
+            let db = state.db.lock().await;
+            db.execute_batch(&format!(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '{repo_path}', \
+                         'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            ))
+            .unwrap();
+        }
+
+        let app = api_router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "repo": "r1",
+                            "workflow": "noop"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::ACCEPTED,
+            "repo-only workflow run must return 202 Accepted"
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
+            .await
+            .expect("background task did not complete within 5 s");
     }
 
     // ── Template endpoint tests ──────────────────────────────────────
