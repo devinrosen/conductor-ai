@@ -275,6 +275,7 @@ pub(super) fn tool_run_workflow(
         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
         force: false,
         extra_plugin_dirs: vec![],
+        db_path: None,
     };
 
     // Slot receives the error message if execute_workflow_standalone fails before

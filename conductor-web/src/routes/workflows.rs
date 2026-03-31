@@ -9,9 +9,9 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
-    RunIdSlot, WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    apply_workflow_input_defaults, validate_resume_preconditions, InputDecl, RunIdSlot,
+    WorkflowDef, WorkflowExecConfig, WorkflowManager, WorkflowResumeStandalone, WorkflowRun,
+    WorkflowRunStatus, WorkflowRunStep,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -250,100 +250,78 @@ pub async fn run_workflow(
     let mut inputs = req.inputs.unwrap_or_default();
     let wt_id = worktree_id.clone();
 
-    // Spawn background task to run the workflow
+    // Spawn blocking task with its own DB connection so the shared AppState
+    // mutex is not held for the entire workflow execution (which would starve
+    // all other API requests).
     let wt_target_label = format!("{repo_slug}/{wt_slug}");
+    let config = state.config.read().await.clone();
+    let notifications = config.notifications.clone();
     let state_clone = state.clone();
-    tokio::task::spawn(async move {
-        // Slot receives the real workflow run ULID once execute_workflow creates the
-        // DB record. On the error path we prefer the real ULID (so dedup aligns with
-        // any concurrent TUI notification keyed on the same ID); we fall back to the
-        // deterministic bucket key only when no run record was created at all.
+    tokio::task::spawn_blocking(move || {
         let run_id_slot: RunIdSlot =
             std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
 
-        let result = {
-            let db = state_clone.db.lock().await;
-            let config = state_clone.config.read().await;
-
-            let def = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, &workflow_name)
-            {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::error!("Failed to load workflow def: {e}");
-                    return;
-                }
-            };
-
-            // Validate required inputs and apply defaults (matches CLI and ephemeral paths)
-            if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
-                tracing::error!("Workflow input validation failed: {e}");
+        let def = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, &workflow_name) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to load workflow def: {e}");
                 return;
             }
-
-            let exec_config = WorkflowExecConfig {
-                dry_run,
-                ..Default::default()
-            };
-
-            let input = WorkflowExecInput {
-                conn: &db,
-                config: &config,
-                workflow: &def,
-                worktree_id: Some(&wt_id),
-                working_dir: &wt_path,
-                repo_path: &repo_path,
-                ticket_id: wt_ticket_id.as_deref(),
-                repo_id: None,
-                model: model.as_deref(),
-                exec_config: &exec_config,
-                inputs: inputs.clone(),
-                depth: 0,
-                parent_workflow_run_id: None,
-                target_label: Some(&wt_target_label),
-                default_bot_name: None,
-                feature_id: feature_id.as_deref(),
-                iteration: 0,
-                run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
-                triggered_by_hook: false,
-                conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                force: false,
-                extra_plugin_dirs: vec![],
-            };
-
-            execute_workflow(&input)
         };
 
-        // Fire desktop notification off the async executor.
-        // Use the cached config from AppState to avoid a redundant disk read.
-        let notifications = state_clone.config.read().await.notifications.clone();
+        // Validate required inputs and apply defaults (matches CLI and ephemeral paths)
+        if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
+            tracing::error!("Workflow input validation failed: {e}");
+            return;
+        }
+
+        let params = conductor_core::workflow::WorkflowExecStandalone {
+            config,
+            workflow: def,
+            worktree_id: Some(wt_id),
+            working_dir: wt_path,
+            repo_path,
+            ticket_id: wt_ticket_id,
+            repo_id: None,
+            model,
+            exec_config: WorkflowExecConfig {
+                dry_run,
+                ..Default::default()
+            },
+            inputs,
+            target_label: Some(wt_target_label.clone()),
+            feature_id,
+            run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
+            triggered_by_hook: false,
+            conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+            force: false,
+            extra_plugin_dirs: vec![],
+            db_path: None,
+        };
+
+        let result = conductor_core::workflow::execute_workflow_standalone(&params);
+
+        let conn = match conductor_core::db::open_database(&conductor_core::config::db_path()) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("notify: DB open failed: {e}");
+                return;
+            }
+        };
 
         match result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                let wf_name = workflow_name.clone();
-                let label = wt_target_label.clone();
-                let notify_run_id = res.workflow_run_id.clone();
-                tokio::task::spawn_blocking(move || {
-                    let conn =
-                        match conductor_core::db::open_database(&conductor_core::config::db_path())
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::error!("notify: DB open failed: {e}");
-                                return;
-                            }
-                        };
-                    notify_workflow(
-                        &conn,
-                        &notifications,
-                        &notify_run_id,
-                        &wf_name,
-                        Some(&label),
-                        succeeded,
-                    );
-                });
+                notify_workflow(
+                    &conn,
+                    &notifications,
+                    &res.workflow_run_id,
+                    &workflow_name,
+                    Some(&wt_target_label),
+                    succeeded,
+                );
 
                 state_clone
                     .events
@@ -355,28 +333,16 @@ pub async fn run_workflow(
             }
             Err(e) => {
                 tracing::error!("Workflow execution failed: {e}");
-                let wf_name = workflow_name.clone();
-                let label = wt_target_label.clone();
-                tokio::task::spawn_blocking(move || {
-                    let error_run_id = resolve_error_run_id(&run_id_slot, &wf_name, &label);
-                    let conn =
-                        match conductor_core::db::open_database(&conductor_core::config::db_path())
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::error!("notify: DB open failed: {e}");
-                                return;
-                            }
-                        };
-                    notify_workflow(
-                        &conn,
-                        &notifications,
-                        &error_run_id,
-                        &wf_name,
-                        Some(&label),
-                        false,
-                    );
-                });
+                let error_run_id =
+                    resolve_error_run_id(&run_id_slot, &workflow_name, &wt_target_label);
+                notify_workflow(
+                    &conn,
+                    &notifications,
+                    &error_run_id,
+                    &workflow_name,
+                    Some(&wt_target_label),
+                    false,
+                );
             }
         }
 
@@ -1193,13 +1159,13 @@ mod tests {
     }
 
     /// Exercises the actual run_workflow handler through the HTTP layer to verify
-    /// the end-to-end wiring: the handler must call execute_workflow (which populates
-    /// the run_id_notify slot and creates a workflow_runs record).
+    /// the end-to-end wiring: the handler must return 202 Accepted and the
+    /// background task must complete (signalled via workflow_done_notify).
     ///
-    /// If `run_id_notify: Some(...)` is ever dropped from the WorkflowExecInput
-    /// construction in the handler, execute_workflow will still create the run
-    /// record — so this test acts as a broader regression guard that the handler
-    /// successfully invokes execute_workflow and the DB state is consistent.
+    /// Note: the background task uses `execute_workflow_standalone` which opens
+    /// its own DB connection, so we cannot verify the workflow_runs row in the
+    /// test's in-memory DB. The completion signal is sufficient to prove the
+    /// handler successfully invoked the workflow engine.
     #[tokio::test]
     async fn run_workflow_handler_calls_execute_workflow() {
         // Create a temp dir with a minimal no-op workflow file.
@@ -1257,19 +1223,6 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
             .await
             .expect("run_workflow background task did not complete within 5 s");
-
-        let db = state.db.lock().await;
-        let count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM workflow_runs WHERE workflow_name = 'noop'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 1,
-            "handler must invoke execute_workflow — no workflow_runs row found for 'noop'"
-        );
     }
 
     // ── Template endpoint tests ──────────────────────────────────────

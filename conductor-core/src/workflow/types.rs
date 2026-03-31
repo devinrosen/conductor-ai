@@ -407,6 +407,9 @@ pub struct WorkflowExecStandalone {
     /// Additional plugin directories passed via `--plugin-dir` CLI flag.
     /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
     pub extra_plugin_dirs: Vec<String>,
+    /// Override the database path. Uses the default conductor db when `None`.
+    /// Useful for tests that operate on a temporary database.
+    pub db_path: Option<std::path::PathBuf>,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues

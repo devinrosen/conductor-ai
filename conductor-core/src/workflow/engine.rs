@@ -677,7 +677,10 @@ fn evaluate_hooks(
 /// connection and resolves the conductor binary path. Designed for use in
 /// background threads where the caller cannot share a `&Connection`.
 pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<WorkflowResult> {
-    let db = crate::config::db_path();
+    let db = params
+        .db_path
+        .clone()
+        .unwrap_or_else(crate::config::db_path);
     let conn = crate::db::open_database(&db)?;
 
     let input = WorkflowExecInput {

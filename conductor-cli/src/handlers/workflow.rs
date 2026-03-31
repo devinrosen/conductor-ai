@@ -349,6 +349,7 @@ pub fn handle_workflow(
                         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                         force: false,
                         extra_plugin_dirs: plugin_dirs,
+                        db_path: None,
                     };
                     let run_id = crate::background::fork_and_run_workflow(params)?;
                     println!("{}", run_id);
