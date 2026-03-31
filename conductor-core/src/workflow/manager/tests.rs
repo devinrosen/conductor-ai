@@ -1694,7 +1694,10 @@ fn test_list_active_workflow_runs_for_repo_includes_repo_targeted_runs() {
         .list_active_workflow_runs_for_repo("r1", &[WorkflowRunStatus::Pending])
         .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    assert!(ids.contains(&run.id.as_str()), "repo-targeted run must appear");
+    assert!(
+        ids.contains(&run.id.as_str()),
+        "repo-targeted run must appear"
+    );
 }
 
 #[test]
@@ -1740,7 +1743,10 @@ fn test_list_active_workflow_runs_for_repo_empty_slice_defaults_to_active() {
     let runs = mgr.list_active_workflow_runs_for_repo("r1", &[]).unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-    assert!(ids.contains(&pending.id.as_str()), "pending run must appear");
+    assert!(
+        ids.contains(&pending.id.as_str()),
+        "pending run must appear"
+    );
     assert!(
         !ids.contains(&completed.id.as_str()),
         "completed run must not appear"
@@ -1763,7 +1769,10 @@ fn test_list_active_workflow_runs_for_repo_explicit_status_filter() {
         .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-    assert!(ids.contains(&running.id.as_str()), "running run must appear");
+    assert!(
+        ids.contains(&running.id.as_str()),
+        "running run must appear"
+    );
     assert!(
         !ids.contains(&pending.id.as_str()),
         "pending run must not appear"
