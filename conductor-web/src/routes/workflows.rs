@@ -416,8 +416,7 @@ pub async fn post_workflow_run(
 
         // Route based on which target fields are present
         let (wt_path, wt_slug, wt_ticket_id, resolved_wt_id, wt_model) =
-            if let Some(ref wt_id) = req.worktree
-            {
+            if let Some(ref wt_id) = req.worktree {
                 // Worktree path: validate ownership
                 let wt = wt_mgr.get_by_id_for_repo(wt_id, &repo.id)?;
 
@@ -520,9 +519,7 @@ pub async fn post_workflow_run(
             let config = state_clone.config.read().await;
 
             if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
-                tracing::error!(
-                    "Workflow input validation failed workflow={workflow_name}: {e}"
-                );
+                tracing::error!("Workflow input validation failed workflow={workflow_name}: {e}");
                 if let Some(notify) = &state_clone.workflow_done_notify {
                     notify.notify_one();
                 }
