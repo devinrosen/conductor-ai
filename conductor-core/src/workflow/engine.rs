@@ -297,13 +297,10 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         if let Some(wt_id) = input.worktree_id {
             if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
                 if input.force {
-                    crate::escape_hatch::log_override(&crate::escape_hatch::OverrideRecord {
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        operation: "workflow run".to_string(),
-                        constraint_bypassed: "WorkflowRunAlreadyActive".to_string(),
-                        justification: "--force flag".to_string(),
-                        tier: crate::escape_hatch::OverrideTier::High,
-                    });
+                    tracing::info!(
+                        "Force override: cancelling active run {} to start new run",
+                        active.id
+                    );
                     wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
                 } else {
                     return Err(ConductorError::WorkflowRunAlreadyActive {
