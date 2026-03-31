@@ -25,6 +25,9 @@ export interface Worktree {
 
 export interface WorktreeWithStatus extends Worktree {
   agent_status: AgentRun["status"] | null;
+  ticket_title: string | null;
+  ticket_number: string | null;
+  ticket_url: string | null;
 }
 
 export interface Ticket {
@@ -213,6 +216,8 @@ export interface WorkflowRun {
   parent_workflow_run_id: string | null;
   target_label: string | null;
   active_steps?: WorkflowRunStep[];
+  repo_slug: string | null;
+  worktree_slug: string | null;
 }
 
 export interface WorkflowRunStep {

@@ -66,7 +66,7 @@ export const api = {
       showCompleted ? `/worktrees?show_completed=true` : `/worktrees`,
     ),
   listWorktrees: (repoId: string, showCompleted = false) =>
-    request<Worktree[]>(
+    request<WorktreeWithStatus[]>(
       showCompleted
         ? `/repos/${repoId}/worktrees?show_completed=true`
         : `/repos/${repoId}/worktrees`,

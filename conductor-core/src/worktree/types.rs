@@ -81,13 +81,16 @@ impl Worktree {
     }
 }
 
-/// A `Worktree` augmented with the status of its latest agent run.
-/// Returned by `WorktreeManager::list_all_with_status`.
+/// A `Worktree` augmented with the status of its latest agent run and linked ticket info.
+/// Returned by `WorktreeManager::list_all_with_status` and the enriched GET methods.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeWithStatus {
     #[serde(flatten)]
     pub worktree: Worktree,
     pub agent_status: Option<AgentRunStatus>,
+    pub ticket_title: Option<String>,
+    pub ticket_number: Option<String>,
+    pub ticket_url: Option<String>,
 }
 
 pub(super) fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
