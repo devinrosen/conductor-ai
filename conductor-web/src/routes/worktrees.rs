@@ -232,8 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_worktree_for_repo_returns_200_with_matching_repo() {
-        let (status, body) =
-            send_get("/api/repos/r1/worktrees/w1", seeded_state()).await;
+        let (status, body) = send_get("/api/repos/r1/worktrees/w1", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["id"], "w1");
@@ -260,8 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_worktree_for_repo_returns_404_when_not_found() {
-        let (status, _) =
-            send_get("/api/repos/r1/worktrees/nonexistent", seeded_state()).await;
+        let (status, _) = send_get("/api/repos/r1/worktrees/nonexistent", seeded_state()).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
@@ -287,8 +285,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_worktree_for_repo_returns_200_with_matching_repo() {
-        let (status, body) =
-            send_delete("/api/repos/r1/worktrees/w1", seeded_state()).await;
+        let (status, body) = send_delete("/api/repos/r1/worktrees/w1", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["id"], "w1");
@@ -313,8 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_worktree_for_repo_returns_404_when_not_found() {
-        let (status, _) =
-            send_delete("/api/repos/r1/worktrees/nonexistent", seeded_state()).await;
+        let (status, _) = send_delete("/api/repos/r1/worktrees/nonexistent", seeded_state()).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

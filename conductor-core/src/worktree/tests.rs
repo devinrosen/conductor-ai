@@ -1757,11 +1757,9 @@ fn test_delete_by_id_for_repo_happy_path() {
     assert_eq!(wt.id, "w1");
     // Confirm it is no longer active
     let status: String = conn
-        .query_row(
-            "SELECT status FROM worktrees WHERE id = 'w1'",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_ne!(status, "active");
 }
