@@ -38,23 +38,26 @@ const AGENT_LATEST_JOIN: &str = "LEFT JOIN (\
     ) latest ON latest.worktree_id = w.id";
 
 /// Map a row that contains the standard worktree columns followed by
-/// `agent_status`, `ticket_title`, and `ticket_number` (in that order).
+/// `agent_status`, `ticket_title`, `ticket_number`, and `ticket_url` (in that order).
 ///
 /// Column layout:
 /// - `[0 .. WORKTREE_COLUMN_COUNT)`: mapped by `map_worktree_row`
 /// - `WORKTREE_COLUMN_COUNT + 0`: `agent_status`
 /// - `WORKTREE_COLUMN_COUNT + 1`: `ticket_title`
 /// - `WORKTREE_COLUMN_COUNT + 2`: `ticket_number`
+/// - `WORKTREE_COLUMN_COUNT + 3`: `ticket_url`
 fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithStatus> {
     let worktree = map_worktree_row(row)?;
     let agent_status: Option<crate::agent::AgentRunStatus> = row.get(WORKTREE_COLUMN_COUNT)?;
     let ticket_title: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 1)?;
     let ticket_number: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 2)?;
+    let ticket_url: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 3)?;
     Ok(WorktreeWithStatus {
         worktree,
         agent_status,
         ticket_title,
         ticket_number,
+        ticket_url,
     })
 }
 
@@ -391,7 +394,7 @@ impl<'a> WorktreeManager<'a> {
         };
         let sql = format!(
             "SELECT {cols}, latest.status AS agent_status, \
-             t.title AS ticket_title, t.source_id AS ticket_number \
+             t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
              FROM worktrees w \
              {agent_join} \
              LEFT JOIN tickets t ON t.id = w.ticket_id \
@@ -410,7 +413,7 @@ impl<'a> WorktreeManager<'a> {
             .query_row(
                 &format!(
                     "SELECT {cols}, latest.status AS agent_status, \
-                     t.title AS ticket_title, t.source_id AS ticket_number \
+                     t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
                      FROM worktrees w \
                      {agent_join} \
                      LEFT JOIN tickets t ON t.id = w.ticket_id \
@@ -435,7 +438,7 @@ impl<'a> WorktreeManager<'a> {
             .query_row(
                 &format!(
                     "SELECT {cols}, latest.status AS agent_status, \
-                     t.title AS ticket_title, t.source_id AS ticket_number \
+                     t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
                      FROM worktrees w \
                      {agent_join} \
                      LEFT JOIN tickets t ON t.id = w.ticket_id \
@@ -463,7 +466,7 @@ impl<'a> WorktreeManager<'a> {
         };
         let sql = format!(
             "SELECT {cols}, latest.status AS agent_status, \
-             t.title AS ticket_title, t.source_id AS ticket_number \
+             t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
              FROM worktrees w \
              {agent_join} \
              LEFT JOIN tickets t ON t.id = w.ticket_id \

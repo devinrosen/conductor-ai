@@ -90,6 +90,7 @@ pub struct WorktreeWithStatus {
     pub agent_status: Option<AgentRunStatus>,
     pub ticket_title: Option<String>,
     pub ticket_number: Option<String>,
+    pub ticket_url: Option<String>,
 }
 
 pub(super) fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {

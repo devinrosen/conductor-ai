@@ -27,6 +27,7 @@ export interface WorktreeWithStatus extends Worktree {
   agent_status: AgentRun["status"] | null;
   ticket_title: string | null;
   ticket_number: string | null;
+  ticket_url: string | null;
 }
 
 export interface Ticket {
