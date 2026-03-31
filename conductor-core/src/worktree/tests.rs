@@ -1807,6 +1807,23 @@ fn insert_ticket(conn: &Connection, id: &str, repo_id: &str, title: &str, source
     .unwrap();
 }
 
+fn insert_ticket_with_url(
+    conn: &Connection,
+    id: &str,
+    repo_id: &str,
+    title: &str,
+    source_id: &str,
+    url: &str,
+) {
+    conn.execute(
+        "INSERT INTO tickets \
+         (id, repo_id, source_type, source_id, title, url, synced_at) \
+         VALUES (?1, ?2, 'github', ?3, ?4, ?5, '2024-01-01T00:00:00Z')",
+        rusqlite::params![id, repo_id, source_id, title, url],
+    )
+    .unwrap();
+}
+
 fn link_ticket(conn: &Connection, worktree_id: &str, ticket_id: &str) {
     conn.execute(
         "UPDATE worktrees SET ticket_id = ?1 WHERE id = ?2",
@@ -1944,5 +1961,37 @@ fn test_list_by_repo_id_enriched_with_ticket_and_agent() {
     assert_eq!(
         results[0].agent_status,
         Some(crate::agent::AgentRunStatus::Running)
+    );
+}
+
+#[test]
+fn test_ticket_url_populated_in_enriched_response() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    insert_ticket_with_url(
+        &conn,
+        "t1",
+        "r1",
+        "Fix the bug",
+        "42",
+        "https://github.com/owner/repo/issues/42",
+    );
+    link_ticket(&conn, "w1", "t1");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    // get_by_id_enriched
+    let result = mgr.get_by_id_enriched("w1").unwrap();
+    assert_eq!(
+        result.ticket_url.as_deref(),
+        Some("https://github.com/owner/repo/issues/42")
+    );
+
+    // list_by_repo_id_enriched
+    let results = mgr.list_by_repo_id_enriched("r1", false).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].ticket_url.as_deref(),
+        Some("https://github.com/owner/repo/issues/42")
     );
 }
