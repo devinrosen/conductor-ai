@@ -22,6 +22,7 @@ use crate::state::WorkflowDefFocus;
 use crate::state::WorkflowRunDetailFocus;
 use crate::state::WorkflowRunRow;
 use crate::state::WorkflowsFocus;
+use crate::state::parse_target_label;
 use crate::theme::Theme;
 
 /// Returns a short context label for workflow pane titles, e.g. "my-repo" or "feat-123".
@@ -2030,7 +2031,14 @@ fn last_run_badge(
     match latest {
         None => ("—", String::new(), theme.label_secondary),
         Some(run) => {
-            let label = time_ago(&run.started_at);
+            let time = time_ago(&run.started_at);
+            let label = match &run.target_label {
+                None => time,
+                Some(tl) => {
+                    let (_, target_key, _) = parse_target_label(tl);
+                    format!("{time}  {target_key}")
+                }
+            };
             match run.status {
                 WorkflowRunStatus::Completed => ("✓", label, theme.status_completed),
                 WorkflowRunStatus::Failed => ("✗", label, theme.status_failed),
