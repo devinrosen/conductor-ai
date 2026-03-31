@@ -1,8 +1,8 @@
 {
   "private": true,
   "scripts": {
-    "desktop": "cargo tauri dev --manifest-path conductor-desktop/Cargo.toml",
-    "desktop:build": "bun install --cwd conductor-web/frontend && bun run --cwd conductor-web/frontend build && cargo tauri build --manifest-path conductor-desktop/Cargo.toml",
+    "desktop": "cd conductor-desktop && cargo tauri dev",
+    "desktop:build": "bun install --cwd conductor-web/frontend && bun run --cwd conductor-web/frontend build && cd conductor-desktop && cargo tauri build",
     "web": "cargo run --bin conductor-web",
     "cli:build": "cargo build --bin conductor",
     "build": "cargo build && bun install --cwd conductor-web/frontend && bun run --cwd conductor-web/frontend build"

@@ -100,12 +100,20 @@ cargo run --bin conductor-web        # Without installing
 Native Mac app powered by Tauri, embedding the same web UI. Still being refined but usable today.
 
 ```bash
-# Dev mode (hot-reload frontend, run from workspace root)
-cd conductor-desktop && cargo tauri dev
+# Dev mode — builds Rust crates, starts Vite dev server, launches the app
+bun run desktop
 
 # Production build — outputs Conductor.app
-cd conductor-desktop && cargo tauri build
+bun run desktop:build
 # App bundle: target/release/bundle/macos/Conductor.app
+```
+
+Other convenience scripts (run from the workspace root):
+
+```bash
+bun run web          # Start the standalone web server (cargo run --bin conductor-web)
+bun run cli:build    # Rebuild just the CLI binary
+bun run build        # Full build of all Rust crates + frontend
 ```
 
 ## Workflows
