@@ -398,6 +398,7 @@ pub async fn post_workflow_run(
         resolved_wt_id,
         model,
         feature_id,
+        def,
     ) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
@@ -414,79 +415,61 @@ pub async fn post_workflow_run(
         };
 
         // Route based on which target fields are present
-        let (wt_path, wt_slug, wt_ticket_id, resolved_wt_id) = if let Some(ref wt_id) = req.worktree
-        {
-            // Worktree path: validate ownership
-            let wt = wt_mgr.get_by_id_for_repo(wt_id, &repo.id)?;
+        let (wt_path, wt_slug, wt_ticket_id, resolved_wt_id, wt_model) =
+            if let Some(ref wt_id) = req.worktree
+            {
+                // Worktree path: validate ownership
+                let wt = wt_mgr.get_by_id_for_repo(wt_id, &repo.id)?;
 
-            // Reject if a top-level workflow run is already active on this worktree
-            let wf_mgr = WorkflowManager::new(&db);
-            if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
-                return Err(ApiError(ConductorError::WorkflowRunAlreadyActive {
-                    name: active.workflow_name,
-                }));
-            }
+                // Reject if a top-level workflow run is already active on this worktree
+                let wf_mgr = WorkflowManager::new(&db);
+                if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
+                    return Err(ApiError(ConductorError::WorkflowRunAlreadyActive {
+                        name: active.workflow_name,
+                    }));
+                }
 
-            let path = wt.path.clone();
-            let slug = wt.slug.clone();
-            let ticket_id = wt.ticket_id.clone();
-            let wt_id = wt.id.clone();
-            (path, slug, ticket_id, Some(wt_id))
-        } else if let Some(ref ticket_id) = req.ticket_id {
-            // Ticket path: find an active worktree for this ticket in this repo
-            let worktrees = wt_mgr.list_by_ticket(ticket_id)?;
-            let active_wt = worktrees
-                .into_iter()
-                .find(|wt| wt.repo_id == repo.id && wt.is_active())
-                .ok_or_else(|| {
-                    ApiError(ConductorError::InvalidInput(format!(
-                        "no active worktree found for ticket {ticket_id} in repo {}",
-                        repo.slug
-                    )))
-                })?;
+                let path = wt.path.clone();
+                let slug = wt.slug.clone();
+                let ticket_id = wt.ticket_id.clone();
+                let wt_model = wt.model.clone();
+                let wt_id = wt.id.clone();
+                (path, slug, ticket_id, Some(wt_id), wt_model)
+            } else if let Some(ref ticket_id) = req.ticket_id {
+                // Ticket path: find an active worktree for this ticket in this repo
+                let worktrees = wt_mgr.list_by_ticket(ticket_id)?;
+                let active_wt = worktrees
+                    .into_iter()
+                    .find(|wt| wt.repo_id == repo.id && wt.is_active())
+                    .ok_or_else(|| {
+                        ApiError(ConductorError::InvalidInput(format!(
+                            "no active worktree found for ticket {ticket_id} in repo {}",
+                            repo.slug
+                        )))
+                    })?;
 
-            // Reject if a top-level workflow run is already active on this worktree
-            let wf_mgr = WorkflowManager::new(&db);
-            if let Some(active) = wf_mgr.get_active_run_for_worktree(&active_wt.id)? {
-                return Err(ApiError(ConductorError::WorkflowRunAlreadyActive {
-                    name: active.workflow_name,
-                }));
-            }
+                // Reject if a top-level workflow run is already active on this worktree
+                let wf_mgr = WorkflowManager::new(&db);
+                if let Some(active) = wf_mgr.get_active_run_for_worktree(&active_wt.id)? {
+                    return Err(ApiError(ConductorError::WorkflowRunAlreadyActive {
+                        name: active.workflow_name,
+                    }));
+                }
 
-            let path = active_wt.path.clone();
-            let slug = active_wt.slug.clone();
-            let t_id = active_wt.ticket_id.clone();
-            let wt_id = active_wt.id.clone();
-            (path, slug, t_id, Some(wt_id))
-        } else {
-            // Repo-only path: no worktree context
-            // TODO: add get_active_run_for_repo() guard when WorkflowManager supports it
-            (repo.local_path.clone(), repo.slug.clone(), None, None)
-        };
+                let path = active_wt.path.clone();
+                let slug = active_wt.slug.clone();
+                let t_id = active_wt.ticket_id.clone();
+                let wt_model = active_wt.model.clone();
+                let wt_id = active_wt.id.clone();
+                (path, slug, t_id, Some(wt_id), wt_model)
+            } else {
+                // Repo-only path: no worktree context
+                // TODO: add get_active_run_for_repo() guard when WorkflowManager supports it
+                (repo.local_path.clone(), repo.slug.clone(), None, None, None)
+            };
 
-        // Validate workflow exists
-        let _def = WorkflowManager::load_def_by_name(&wt_path, &repo.local_path, &req.workflow)?;
-
-        // Resolve model: request → per-repo → global config
-        // (no per-worktree model when there's no worktree)
-        let wt_model = resolved_wt_id.as_ref().and_then(|_| {
-            // We already have the worktree data in the path/slug above; retrieve model from
-            // the worktree if one was resolved.
-            req.worktree
-                .as_ref()
-                .and_then(|id| wt_mgr.get_by_id(id).ok())
-                .and_then(|wt| wt.model)
-                .or_else(|| {
-                    req.ticket_id.as_ref().and_then(|tid| {
-                        wt_mgr
-                            .list_by_ticket(tid)
-                            .ok()?
-                            .into_iter()
-                            .find(|wt| wt.repo_id == repo.id && wt.is_active())
-                            .and_then(|wt| wt.model)
-                    })
-                })
-        });
+        // Validate workflow exists (def is reused by the spawn below — no double load)
+        let def = WorkflowManager::load_def_by_name(&wt_path, &repo.local_path, &req.workflow)?;
         let model = req
             .model
             .clone()
@@ -512,6 +495,7 @@ pub async fn post_workflow_run(
             resolved_wt_id,
             model,
             feature_id,
+            def,
         )
     };
 
@@ -535,17 +519,13 @@ pub async fn post_workflow_run(
             let db = state_clone.db.lock().await;
             let config = state_clone.config.read().await;
 
-            let def = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, &workflow_name)
-            {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::error!("Failed to load workflow def: {e}");
-                    return;
-                }
-            };
-
             if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
-                tracing::error!("Workflow input validation failed: {e}");
+                tracing::error!(
+                    "Workflow input validation failed workflow={workflow_name}: {e}"
+                );
+                if let Some(notify) = &state_clone.workflow_done_notify {
+                    notify.notify_one();
+                }
                 return;
             }
 
@@ -624,7 +604,9 @@ pub async fn post_workflow_run(
                     });
             }
             Err(e) => {
-                tracing::error!("Workflow execution failed: {e}");
+                tracing::error!(
+                    "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
+                );
                 let wf_name = workflow_name.clone();
                 let label = target_label.clone();
                 tokio::task::spawn_blocking(move || {
