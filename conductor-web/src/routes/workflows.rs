@@ -156,8 +156,7 @@ pub async fn list_repo_workflow_defs(
     let config = state.config.read().await;
     let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
 
-    let (defs, warnings) =
-        WorkflowManager::list_defs("", &repo.local_path).unwrap_or_default();
+    let (defs, warnings) = WorkflowManager::list_defs("", &repo.local_path).unwrap_or_default();
     for w in &warnings {
         tracing::warn!("Failed to parse {}: {}", w.file, w.message);
     }
