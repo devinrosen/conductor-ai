@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useId } from "react";
 import { api } from "../../api/client";
 import type { FeedbackRequest } from "../../api/types";
 
@@ -22,6 +22,9 @@ export function AgentFeedbackModal({
   const [error, setError] = useState<string | null>(null);
   const [remainingSecs, setRemainingSecs] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
 
   useEffect(() => {
     if (!open) {
@@ -55,6 +58,42 @@ export function AgentFeedbackModal({
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [open, worktreeId]);
+
+  // Focus management and focus trap
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement as HTMLElement;
+    dialogRef.current?.focus();
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        handleDismiss();
+        return;
+      }
+      if (e.key === "Tab") {
+        const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (!focusable || focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   function buildResponseValue(): string {
     const ft = feedback?.feedback_type ?? "text";
@@ -115,10 +154,17 @@ export function AgentFeedbackModal({
   const ft = feedback?.feedback_type ?? "text";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 modal-backdrop">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4 outline-none modal-panel"
+      >
         <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900">
+          <h3 id={titleId} className="text-lg font-semibold text-gray-900">
             Agent Awaiting Feedback
           </h3>
           <p className="text-sm text-gray-500 mt-1">
@@ -254,7 +300,7 @@ export function AgentFeedbackModal({
           <button
             onClick={handleSubmit}
             disabled={!canSubmit()}
-            className="px-4 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 hover:brightness-110 active:scale-95 transition-transform disabled:opacity-50"
           >
             {submitting ? "Submitting..." : "Submit"}
           </button>

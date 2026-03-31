@@ -27,7 +27,7 @@ const kindConfig: Record<
   system: {
     label: "SYS",
     badge: "bg-gray-700 text-gray-400",
-    text: "text-gray-500",
+    text: "text-gray-400",
     border: "border-l-gray-600",
   },
   error: {
@@ -85,7 +85,7 @@ function extractStepLabel(prompt: string): string | null {
 
 const defaultConfig = {
   label: "???",
-  badge: "bg-gray-700 text-gray-400",
+  badge: "bg-gray-700 text-gray-300",
   text: "text-gray-400",
   border: "border-l-gray-600",
 };
@@ -196,11 +196,11 @@ export function AgentActivityLog({ events, runs, isRunning }: AgentActivityLogPr
   return (
     <div
       ref={scrollRef}
-      className="rounded-lg border border-gray-200 bg-gray-950 p-2 max-h-[28rem] overflow-y-auto font-mono text-sm"
+      className="rounded-lg border border-gray-200 bg-gray-50 p-2 max-h-[28rem] overflow-y-auto font-mono text-sm"
     >
       {elements}
       {isRunning && (
-        <div className="text-yellow-400 animate-pulse mt-2 px-2 py-1 text-xs">
+        <div className="text-yellow-400 motion-safe:animate-pulse mt-2 px-2 py-1 text-xs">
           Agent is working...
         </div>
       )}

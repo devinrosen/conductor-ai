@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useId } from "react";
 import type { KnownModel } from "../../api/types";
 import { api } from "../../api/client";
 
@@ -43,6 +43,9 @@ export function AgentPromptModal({
   const [prompt, setPrompt] = useState(initialPrompt);
   const [useResume, setUseResume] = useState(!!resumeSessionId);
   const [models, setModels] = useState<KnownModel[]>([]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
 
   useEffect(() => {
     setPrompt(initialPrompt);
@@ -51,11 +54,37 @@ export function AgentPromptModal({
 
   useEffect(() => {
     if (!open) return;
+
+    previousFocusRef.current = document.activeElement as HTMLElement;
+    dialogRef.current?.focus();
+
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape") {
+        onCancel();
+        return;
+      }
+      if (e.key === "Tab") {
+        const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (!focusable || focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     }
+
     document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
   }, [open, onCancel]);
 
   useEffect(() => {
@@ -76,9 +105,16 @@ export function AgentPromptModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full mx-4">
-        <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 modal-backdrop">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full mx-4 outline-none modal-panel"
+      >
+        <h3 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h3>
 
         {resumeSessionId && (
           <label className="mt-3 flex items-center gap-2 text-sm text-gray-700">
@@ -98,6 +134,12 @@ export function AgentPromptModal({
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
           rows={10}
           placeholder="Type your prompt here..."
           className="mt-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-y"
@@ -139,9 +181,10 @@ export function AgentPromptModal({
           <button
             onClick={handleSubmit}
             disabled={!prompt.trim()}
-            className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 hover:brightness-110 active:scale-95 transition-transform disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
           >
             {useResume && resumeSessionId ? "Resume Agent" : "Launch Agent"}
+            <kbd className="text-[10px] opacity-70 font-sans">&#8984;&#9166;</kbd>
           </button>
         </div>
       </div>
