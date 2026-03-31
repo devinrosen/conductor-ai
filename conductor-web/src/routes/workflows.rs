@@ -275,6 +275,10 @@ pub async fn run_workflow(
             return;
         }
 
+        // Use the same database path as the web server to ensure consistency.
+        // This is critical for tests where CONDUCTOR_DB_PATH may override the default.
+        let db_path = conductor_core::config::db_path();
+
         let params = conductor_core::workflow::WorkflowExecStandalone {
             config,
             workflow: def,
@@ -296,32 +300,33 @@ pub async fn run_workflow(
             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
             force: false,
             extra_plugin_dirs: vec![],
-            db_path: None,
+            db_path: Some(db_path.clone()),
         };
 
         let result = conductor_core::workflow::execute_workflow_standalone(&params);
 
-        let conn = match conductor_core::db::open_database(&conductor_core::config::db_path()) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("notify: DB open failed: {e}");
-                return;
-            }
-        };
+        // Use the same db_path as the workflow execution for consistency
+        let notification_conn = conductor_core::db::open_database(&db_path);
 
+        // Always emit events and notify, even if DB operations fail
         match result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                notify_workflow(
-                    &conn,
-                    &notifications,
-                    &res.workflow_run_id,
-                    &workflow_name,
-                    Some(&wt_target_label),
-                    succeeded,
-                );
+                // Send notification if DB connection is available
+                if let Ok(conn) = &notification_conn {
+                    notify_workflow(
+                        conn,
+                        &notifications,
+                        &res.workflow_run_id,
+                        &workflow_name,
+                        Some(&wt_target_label),
+                        succeeded,
+                    );
+                } else if let Err(e) = &notification_conn {
+                    tracing::error!("notify: DB open failed, skipping notification: {e}");
+                }
 
                 state_clone
                     .events
@@ -335,14 +340,20 @@ pub async fn run_workflow(
                 tracing::error!("Workflow execution failed: {e}");
                 let error_run_id =
                     resolve_error_run_id(&run_id_slot, &workflow_name, &wt_target_label);
-                notify_workflow(
-                    &conn,
-                    &notifications,
-                    &error_run_id,
-                    &workflow_name,
-                    Some(&wt_target_label),
-                    false,
-                );
+
+                // Send notification if DB connection is available
+                if let Ok(conn) = &notification_conn {
+                    notify_workflow(
+                        conn,
+                        &notifications,
+                        &error_run_id,
+                        &workflow_name,
+                        Some(&wt_target_label),
+                        false,
+                    );
+                } else if let Err(e) = &notification_conn {
+                    tracing::error!("notify: DB open failed, skipping notification: {e}");
+                }
             }
         }
 
@@ -1159,13 +1170,9 @@ mod tests {
     }
 
     /// Exercises the actual run_workflow handler through the HTTP layer to verify
-    /// the end-to-end wiring: the handler must return 202 Accepted and the
-    /// background task must complete (signalled via workflow_done_notify).
-    ///
-    /// Note: the background task uses `execute_workflow_standalone` which opens
-    /// its own DB connection, so we cannot verify the workflow_runs row in the
-    /// test's in-memory DB. The completion signal is sufficient to prove the
-    /// handler successfully invoked the workflow engine.
+    /// the end-to-end wiring: the handler must return 202 Accepted, the
+    /// background task must complete (signalled via workflow_done_notify),
+    /// and a workflow_runs row must be created in the database.
     #[tokio::test]
     async fn run_workflow_handler_calls_execute_workflow() {
         // Create a temp dir with a minimal no-op workflow file.
@@ -1179,10 +1186,19 @@ mod tests {
         .unwrap();
         let wt_path = tmp.path().to_str().unwrap().to_string();
 
+        // Create a temporary file-based database so workflow execution can access the same DB
+        let test_db_path = tmp.path().join("test.db");
+        std::env::set_var("CONDUCTOR_DB_PATH", &test_db_path);
+
+        // Create a test database connection and apply migrations
+        let conn = conductor_core::db::open_database(&test_db_path).unwrap();
+
         let notify = Arc::new(tokio::sync::Notify::new());
         let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(conductor_core::config::Config::default())),
+            events: EventBus::new(1),
             workflow_done_notify: Some(Arc::clone(&notify)),
-            ..empty_state()
         };
         {
             let db = state.db.lock().await;
@@ -1223,6 +1239,19 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
             .await
             .expect("run_workflow background task did not complete within 5 s");
+
+        // Verify that a workflow_runs row was created in the database.
+        {
+            let db = state.db.lock().await;
+            let mut stmt = db
+                .prepare("SELECT COUNT(*) FROM workflow_runs WHERE workflow_name = ?")
+                .unwrap();
+            let count: i64 = stmt.query_row(["noop"], |row| row.get(0)).unwrap();
+            assert_eq!(count, 1, "Expected exactly one workflow_runs row for 'noop' workflow");
+        }
+
+        // Clean up environment variable
+        std::env::remove_var("CONDUCTOR_DB_PATH");
     }
 
     // ── Template endpoint tests ──────────────────────────────────────
