@@ -1247,7 +1247,10 @@ mod tests {
                 .prepare("SELECT COUNT(*) FROM workflow_runs WHERE workflow_name = ?")
                 .unwrap();
             let count: i64 = stmt.query_row(["noop"], |row| row.get(0)).unwrap();
-            assert_eq!(count, 1, "Expected exactly one workflow_runs row for 'noop' workflow");
+            assert_eq!(
+                count, 1,
+                "Expected exactly one workflow_runs row for 'noop' workflow"
+            );
         }
 
         // Clean up environment variable
