@@ -147,6 +147,24 @@ pub struct GateActionRequest {
 
 // ── Endpoints ─────────────────────────────────────────────────────────
 
+/// GET /api/repos/{id}/workflows
+pub async fn list_repo_workflow_defs(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<Vec<WorkflowDefSummary>>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
+
+    let (defs, warnings) =
+        WorkflowManager::list_defs("", &repo.local_path).unwrap_or_default();
+    for w in &warnings {
+        tracing::warn!("Failed to parse {}: {}", w.file, w.message);
+    }
+    let summaries: Vec<WorkflowDefSummary> = defs.iter().map(WorkflowDefSummary::from).collect();
+    Ok(Json(summaries))
+}
+
 /// GET /api/worktrees/{id}/workflows/defs
 pub async fn list_workflow_defs(
     State(state): State<AppState>,
