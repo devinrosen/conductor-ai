@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use conductor_core::worktree::WorktreeManager;
 
+/// (target_label, ticket_id, repo_slug, wt_slug) resolved from a worktree.
+type WorktreeLabelParts = (Option<String>, Option<String>, Option<String>, Option<String>);
+
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal, View, WorkflowPickerItem, WorkflowRunDetailFocus};
 
@@ -901,7 +904,7 @@ impl App {
                         // Cache miss — query DB directly to avoid storing "".
                         use conductor_core::config::db_path;
                         use conductor_core::db::open_database;
-                        let label = (|| -> Option<(Option<String>, Option<String>, Option<String>, Option<String>)> {
+                        let label = (|| -> Option<WorktreeLabelParts> {
                             let conn = open_database(&db_path()).ok()?;
                             let (repo_slug, wt_slug, ticket_id): (String, String, Option<String>) = conn
                                 .query_row(
