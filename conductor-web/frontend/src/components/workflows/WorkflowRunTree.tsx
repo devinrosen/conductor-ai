@@ -166,6 +166,9 @@ export function WorkflowRunTree({ runs, repos, ctxMap }: WorkflowRunTreeProps) {
         repoSlug = repo.slug;
       }
 
+      if (repoSlug === "unknown" && run.repo_slug) repoSlug = run.repo_slug;
+      if (targetKey === "unknown" && run.worktree_slug) targetKey = run.worktree_slug;
+
       if (!repoGroups.has(repoSlug)) {
         repoGroups.set(repoSlug, new Map());
         repoSlugs.push(repoSlug);

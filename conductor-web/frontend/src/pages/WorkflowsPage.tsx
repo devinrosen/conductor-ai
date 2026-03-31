@@ -64,9 +64,18 @@ export function WorkflowsPage() {
 
       const allRuns: { run: WorkflowRun; ctx: WorktreeContext }[] = [];
       for (const run of allRunsList) {
-        if (run.worktree_id) {
-          const ctx = ctxMap.get(run.worktree_id);
-          if (ctx) allRuns.push({ run, ctx });
+        const ctx = run.worktree_id ? ctxMap.get(run.worktree_id) : undefined;
+        if (ctx) {
+          allRuns.push({ run, ctx });
+        } else if (run.repo_slug) {
+          const repoEntry = repos.find((r) => r.slug === run.repo_slug);
+          const fallbackCtx: WorktreeContext = {
+            repoId: repoEntry?.id ?? "",
+            repoSlug: run.repo_slug,
+            branch: run.worktree_slug ?? run.target_label ?? "",
+            worktreeId: run.worktree_id ?? "",
+          };
+          allRuns.push({ run, ctx: fallbackCtx });
         }
       }
       allRuns.sort((a, b) => new Date(b.run.started_at).getTime() - new Date(a.run.started_at).getTime());

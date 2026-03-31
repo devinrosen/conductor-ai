@@ -213,6 +213,8 @@ export interface WorkflowRun {
   parent_workflow_run_id: string | null;
   target_label: string | null;
   active_steps?: WorkflowRunStep[];
+  repo_slug: string | null;
+  worktree_slug: string | null;
 }
 
 export interface WorkflowRunStep {
