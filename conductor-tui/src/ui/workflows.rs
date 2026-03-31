@@ -14,6 +14,7 @@ use conductor_core::workflow::{
 
 use super::common::{gate_type_icon, truncate};
 use super::helpers::{format_condition, shorten_paths};
+use crate::state::parse_target_label;
 use crate::state::AppState;
 use crate::state::ColumnFocus;
 use crate::state::TargetType;
@@ -22,7 +23,6 @@ use crate::state::WorkflowDefFocus;
 use crate::state::WorkflowRunDetailFocus;
 use crate::state::WorkflowRunRow;
 use crate::state::WorkflowsFocus;
-use crate::state::parse_target_label;
 use crate::theme::Theme;
 
 /// Returns a short context label for workflow pane titles, e.g. "my-repo" or "feat-123".
