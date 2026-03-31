@@ -530,6 +530,47 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// List workflow runs filtered by a set of statuses and scoped to a single repo.
+    /// Covers both direct association (`workflow_runs.repo_id = repo_id`) and indirect
+    /// association via a worktree (`worktrees.repo_id = repo_id`).
+    /// When `statuses` is empty, defaults to `[running, waiting, pending]`.
+    /// Only includes runs whose associated worktree is `active` (or runs with no worktree).
+    /// Ordered by `started_at DESC`.
+    pub fn list_active_workflow_runs_for_repo(
+        &self,
+        repo_id: &str,
+        statuses: &[WorkflowRunStatus],
+    ) -> Result<Vec<WorkflowRun>> {
+        let effective: &[WorkflowRunStatus] = if statuses.is_empty() {
+            &WorkflowRunStatus::ACTIVE
+        } else {
+            statuses
+        };
+
+        let placeholders = sql_placeholders_from(effective.len(), 2);
+
+        let sql = format!(
+            "SELECT DISTINCT workflow_runs.* \
+             FROM workflow_runs \
+             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+             WHERE (workflow_runs.repo_id = ?1 OR worktrees.repo_id = ?1) \
+               AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+               AND workflow_runs.status IN ({placeholders}) \
+             ORDER BY workflow_runs.started_at DESC"
+        );
+
+        let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();
+        let mut all_params: Vec<rusqlite::types::Value> =
+            vec![rusqlite::types::Value::Text(repo_id.to_owned())];
+        all_params.extend(status_strings.into_iter().map(rusqlite::types::Value::Text));
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(all_params.iter()),
+            row_to_workflow_run,
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Batch-lookup the parent `workflow_run_id` for a set of agent run IDs.
     ///
     /// Uses `workflow_run_steps.child_run_id` to find the link.  Returns a map
