@@ -1647,17 +1647,33 @@ mod tests {
         };
         {
             let db = state.db.lock().await;
-            db.execute_batch(&format!(
-                "INSERT INTO repos \
-                     (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                     VALUES ('r1', 'test-repo', '{wt_path}', \
-                             'https://github.com/test/repo.git', '/tmp/ws', \
-                             '2024-01-01T00:00:00Z'); \
-                 INSERT INTO worktrees \
-                     (id, repo_id, slug, branch, path, status, created_at) \
-                     VALUES ('w1', 'r1', 'feat-test', 'feat/test', '{wt_path}', 'active', \
-                             '2024-01-01T00:00:00Z');",
-            ))
+            db.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    "r1",
+                    "test-repo",
+                    wt_path,
+                    "https://github.com/test/repo.git",
+                    "/tmp/ws",
+                    "2024-01-01T00:00:00Z"
+                ],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO worktrees \
+                 (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    "w1",
+                    "r1",
+                    "feat-test",
+                    "feat/test",
+                    wt_path,
+                    "active",
+                    "2024-01-01T00:00:00Z"
+                ],
+            )
             .unwrap();
         }
 
@@ -1835,11 +1851,18 @@ mod tests {
         };
         {
             let db = state.db.lock().await;
-            db.execute_batch(&format!(
+            db.execute(
                 "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES ('r1', 'test-repo', '{repo_path}', \
-                         'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-            ))
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    "r1",
+                    "test-repo",
+                    repo_path,
+                    "https://github.com/test/repo.git",
+                    "/tmp/ws",
+                    "2024-01-01T00:00:00Z"
+                ],
+            )
             .unwrap();
         }
 
