@@ -840,11 +840,9 @@ pub async fn get_workflow_run(
 ) -> Result<Json<WorkflowRun>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
-        ApiError(ConductorError::Workflow(format!(
-            "Workflow run not found: {id}"
-        )))
-    })?;
+    let run = mgr
+        .get_workflow_run(&id)?
+        .ok_or_else(|| ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
     Ok(Json(run))
 }
 
@@ -872,11 +870,9 @@ pub async fn get_workflow_step_log(
         let wf_mgr = WorkflowManager::new(&db);
 
         // Verify run exists
-        wf_mgr.get_workflow_run(&run_id)?.ok_or_else(|| {
-            ApiError(ConductorError::Workflow(format!(
-                "workflow run {run_id} not found"
-            )))
-        })?;
+        wf_mgr
+            .get_workflow_run(&run_id)?
+            .ok_or_else(|| ApiError(ConductorError::WorkflowRunNotFound { id: run_id.clone() }))?;
 
         // Find matching step — last iteration wins
         let steps = wf_mgr.get_workflow_steps(&run_id)?;
@@ -937,11 +933,9 @@ pub async fn cancel_workflow(
     let mgr = WorkflowManager::new(&db);
 
     // Verify run exists
-    let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
-        ApiError(ConductorError::Workflow(format!(
-            "Workflow run not found: {id}"
-        )))
-    })?;
+    let run = mgr
+        .get_workflow_run(&id)?
+        .ok_or_else(|| ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
 
     mgr.update_workflow_status(&id, WorkflowRunStatus::Cancelled, Some("Cancelled by user"))?;
 
@@ -972,11 +966,9 @@ pub async fn resume_workflow_endpoint(
     let (workflow_name, target_label) = {
         let db = state.db.lock().await;
         let mgr = WorkflowManager::new(&db);
-        let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
-            ApiError(ConductorError::Workflow(format!(
-                "Workflow run not found: {id}"
-            )))
-        })?;
+        let run = mgr
+            .get_workflow_run(&id)?
+            .ok_or_else(|| ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
         validate_resume_preconditions(&run.status, restart, from_step.as_deref())
             .map_err(ApiError)?;
         (run.workflow_name.clone(), run.target_label.clone())
@@ -2044,7 +2036,7 @@ mod tests {
             empty_state(),
         )
         .await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

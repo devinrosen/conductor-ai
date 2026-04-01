@@ -93,6 +93,9 @@ pub enum ConductorError {
     #[error("workflow error: {0}")]
     Workflow(String),
 
+    #[error("workflow run not found: {id}")]
+    WorkflowRunNotFound { id: String },
+
     #[error("agent config error: {0}")]
     AgentConfig(String),
 
@@ -154,6 +157,7 @@ impl ConductorError {
             Self::FeedbackNotPending { .. } => 51,
             Self::Workflow(_) => 60,
             Self::WorkflowRunAlreadyActive { .. } => 61,
+            Self::WorkflowRunNotFound { .. } => 62,
         }
     }
 }
