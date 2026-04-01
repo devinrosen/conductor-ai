@@ -79,8 +79,11 @@ pub struct WorkflowRunResponse {
 pub struct InputDeclSummary {
     pub name: String,
     pub required: bool,
+    #[serde(rename = "type")]
     pub input_type: String,
+    #[serde(rename = "defaultValue")]
     pub default: Option<String>,
+    pub description: Option<String>,
 }
 
 impl From<&InputDecl> for InputDeclSummary {
@@ -94,6 +97,7 @@ impl From<&InputDecl> for InputDeclSummary {
                 InputType::String => "string".to_string(),
             },
             default: d.default.clone(),
+            description: d.description.clone(),
         }
     }
 }
@@ -1807,5 +1811,41 @@ mod tests {
             status.is_client_error() || status.is_server_error(),
             "expected error for unknown repo; got: {status}"
         );
+    }
+
+    #[test]
+    fn test_input_decl_summary_boolean_serializes_as_type() {
+        use conductor_core::workflow::{InputDecl, InputType};
+        let decl = InputDecl {
+            name: "dry_run".to_string(),
+            required: false,
+            default: Some("false".to_string()),
+            description: Some("Whether to do a dry run".to_string()),
+            input_type: InputType::Boolean,
+        };
+        let summary = InputDeclSummary::from(&decl);
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["type"], "boolean");
+        assert_eq!(json["defaultValue"], "false");
+        assert_eq!(json["description"], "Whether to do a dry run");
+        assert!(json.get("input_type").is_none(), "input_type must not appear");
+        assert!(json.get("default").is_none(), "default must not appear");
+    }
+
+    #[test]
+    fn test_input_decl_summary_string_serializes_as_type() {
+        use conductor_core::workflow::{InputDecl, InputType};
+        let decl = InputDecl {
+            name: "branch".to_string(),
+            required: true,
+            default: None,
+            description: None,
+            input_type: InputType::String,
+        };
+        let summary = InputDeclSummary::from(&decl);
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["type"], "string");
+        assert!(json["defaultValue"].is_null());
+        assert!(json["description"].is_null());
     }
 }
