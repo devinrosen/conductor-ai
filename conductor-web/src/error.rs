@@ -20,6 +20,11 @@ impl IntoResponse for ApiError {
             ConductorError::Agent(_) | ConductorError::InvalidInput(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
+        if status.is_server_error() {
+            tracing::error!(status = status.as_u16(), error = %self.0, "request failed");
+        } else {
+            tracing::warn!(status = status.as_u16(), error = %self.0, "request error");
+        }
         let body = serde_json::json!({ "error": self.0.to_string() });
         (status, axum::Json(body)).into_response()
     }
