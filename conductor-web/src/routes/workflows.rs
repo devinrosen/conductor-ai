@@ -1828,7 +1828,10 @@ mod tests {
         assert_eq!(json["type"], "boolean");
         assert_eq!(json["defaultValue"], "false");
         assert_eq!(json["description"], "Whether to do a dry run");
-        assert!(json.get("input_type").is_none(), "input_type must not appear");
+        assert!(
+            json.get("input_type").is_none(),
+            "input_type must not appear"
+        );
         assert!(json.get("default").is_none(), "default must not appear");
     }
 
