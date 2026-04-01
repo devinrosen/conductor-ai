@@ -2036,7 +2036,7 @@ mod tests {
             empty_state(),
         )
         .await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
