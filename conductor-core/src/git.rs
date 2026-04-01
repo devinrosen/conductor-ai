@@ -3,9 +3,15 @@ use std::process::Command;
 use crate::error::{ConductorError, Result, SubprocessFailure};
 
 /// Return a `Command` for `git` rooted at `dir`.
+///
+/// Clears `GIT_DIR` and `GIT_WORK_TREE` so that git operates on the repo in
+/// `dir` rather than a parent repo. This is important when conductor-web runs
+/// inside a git hook (e.g. pre-push) which sets these env vars.
 pub(crate) fn git_in(dir: impl AsRef<std::path::Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(dir);
+    cmd.env_remove("GIT_DIR");
+    cmd.env_remove("GIT_WORK_TREE");
     cmd
 }
 
