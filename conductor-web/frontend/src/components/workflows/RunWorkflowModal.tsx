@@ -22,8 +22,8 @@ export function RunWorkflowModal({
   const [inputs, setInputs] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const input of def.inputs) {
-      if (input.input_type === "boolean") {
-        initial[input.name] = input.default ?? "false";
+      if (input.type === "boolean") {
+        initial[input.name] = input.defaultValue ?? "false";
       } else if (input.name === "ticket_id" && ticketId) {
         initial[input.name] = ticketId;
       }
@@ -85,7 +85,7 @@ export function RunWorkflowModal({
 
           {def.inputs.map((input) => (
             <div key={input.name}>
-              {input.input_type === "boolean" ? (
+              {input.type === "boolean" ? (
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"
