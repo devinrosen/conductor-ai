@@ -93,6 +93,7 @@ pub fn api_router() -> Router<AppState> {
             "/api/worktrees/{id}/agent-runs",
             get(agents::list_agent_runs),
         )
+        .route("/api/agent/runs", get(agents::list_all_agent_runs))
         .route(
             "/api/agent/latest-runs",
             get(agents::latest_runs_by_worktree),
