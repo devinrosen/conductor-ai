@@ -7,6 +7,7 @@ use conductor_core::config::{conductor_dir, ensure_dirs, load_config, save_confi
 use conductor_core::db::open_database;
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
 
 use conductor_web::assets::static_handler;
 use conductor_web::events::{ConductorEvent, EventBus};
@@ -427,6 +428,7 @@ async fn main() -> Result<()> {
 
     let app = api_router()
         .fallback(static_handler)
+        .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state);
     let addr = std::net::SocketAddr::from((host, port));
