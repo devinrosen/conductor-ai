@@ -1,6 +1,6 @@
 use super::{
-    eval_condition, execute_gate, execute_if, execute_quality_gate, execute_script, execute_unless,
-    poll_script_child, read_stdout_bounded, ScriptPollResult,
+    eval_condition, execute_call_workflow, execute_gate, execute_if, execute_quality_gate,
+    execute_script, execute_unless, poll_script_child, read_stdout_bounded, ScriptPollResult,
 };
 use crate::workflow::engine::ExecutionState;
 use crate::workflow::status::WorkflowStepStatus;
@@ -1055,4 +1055,65 @@ fn test_stepref_gate_happy_path() {
     let result = execute_gate(&mut state, &node, 0);
     approver.join().unwrap();
     assert!(result.is_ok(), "happy path should succeed: {result:?}");
+}
+
+// -----------------------------------------------------------------------
+// execute_call_workflow tests
+// -----------------------------------------------------------------------
+
+/// Verifies that execute_call_workflow populates child_run_id on the workflow step
+/// after a successful child workflow execution.
+#[test]
+fn test_execute_call_workflow_sets_child_run_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf_dir = dir.path().join(".conductor").join("workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    // Write a minimal workflow with zero steps so it completes immediately
+    // without launching any agents.
+    std::fs::write(
+        wf_dir.join("empty-child.wf"),
+        "workflow empty-child {\n  meta {\n    description = \"Empty child for testing\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n}\n",
+    )
+    .unwrap();
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let node = crate::workflow_dsl::CallWorkflowNode {
+        workflow: "empty-child".to_string(),
+        inputs: std::collections::HashMap::new(),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+    };
+
+    let result = execute_call_workflow(&mut state, &node, 0);
+    assert!(
+        result.is_ok(),
+        "execute_call_workflow should succeed: {result:?}"
+    );
+    assert!(state.all_succeeded, "all_succeeded must be true");
+
+    // Retrieve the step from the DB and assert child_run_id is populated.
+    let wf_mgr = crate::workflow::WorkflowManager::new(&conn);
+    let steps_map = wf_mgr
+        .get_steps_for_runs(&[state.workflow_run_id.as_str()])
+        .unwrap();
+    let steps = steps_map
+        .get(&state.workflow_run_id)
+        .expect("steps must exist for the parent run");
+    let wf_step = steps
+        .iter()
+        .find(|s| s.step_name == "workflow:empty-child")
+        .expect("workflow:empty-child step must be present");
+    assert!(
+        wf_step.child_run_id.is_some(),
+        "child_run_id must be populated on the workflow step"
+    );
 }

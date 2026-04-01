@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 57;
+pub const LATEST_SCHEMA_VERSION: u32 = 58;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -988,6 +988,26 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 57)?;
     }
 
+    // Migration 058: drop the FK constraint on workflow_run_steps.child_run_id
+    // so that workflow-type steps can store a workflow_runs.id value (the iOS
+    // app needs this for navigation to child workflow run detail views).
+    if version < 58 {
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_run_steps'",
+            [],
+            |row| row.get(0),
+        )?;
+        if table_exists {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!(
+                    "migrations/058_workflow_step_child_run_id_drop_fk.sql"
+                ))?;
+                Ok(())
+            })?;
+        }
+        bump_version(conn, 58)?;
+    }
+
     Ok(())
 }
 
@@ -1484,6 +1504,134 @@ mod tests {
             )
             .unwrap();
         assert_eq!(name, "ok-flow");
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 058 tests
+    // -----------------------------------------------------------------------
+
+    /// Verifies that migration 058 preserves existing rows in `workflow_run_steps`
+    /// and removes the FK constraint on `child_run_id` so that workflow-type steps
+    /// can store a `workflow_runs.id` value (not just `agent_runs.id`).
+    #[test]
+    fn test_migration_058_preserves_rows_and_drops_fk() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Minimal pre-058 schema: only the tables migration 058 touches.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY,
+                 workflow_name TEXT NOT NULL,
+                 worktree_id TEXT,
+                 parent_run_id TEXT,
+                 status TEXT NOT NULL DEFAULT 'pending',
+                 dry_run INTEGER NOT NULL DEFAULT 0,
+                 trigger TEXT NOT NULL DEFAULT 'manual',
+                 started_at TEXT NOT NULL,
+                 ended_at TEXT,
+                 result_summary TEXT,
+                 definition_snapshot TEXT,
+                 inputs TEXT,
+                 ticket_id TEXT,
+                 repo_id TEXT,
+                 parent_workflow_run_id TEXT,
+                 target_label TEXT,
+                 default_bot_name TEXT,
+                 iteration INTEGER NOT NULL DEFAULT 0,
+                 blocked_on TEXT,
+                 feature_id TEXT,
+                 feature_iteration INTEGER,
+                 triggered_by TEXT,
+                 run_id TEXT
+             );
+             CREATE TABLE agent_runs (
+                 id TEXT PRIMARY KEY,
+                 worktree_id TEXT,
+                 prompt TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'running',
+                 started_at TEXT NOT NULL
+             );
+             -- workflow_run_steps at v57: child_run_id has FK to agent_runs
+             CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate','workflow','script')),
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending'
+                                   CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
+                 child_run_id      TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 position          INTEGER NOT NULL,
+                 started_at        TEXT,
+                 ended_at          TEXT,
+                 result_text       TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT,
+                 markers_out       TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type         TEXT,
+                 gate_prompt       TEXT,
+                 gate_timeout      TEXT,
+                 gate_approved_by  TEXT,
+                 gate_approved_at  TEXT,
+                 gate_feedback     TEXT,
+                 structured_output TEXT,
+                 output_file       TEXT,
+                 gate_options      TEXT,
+                 gate_selections   TEXT
+             );
+             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run
+               ON workflow_run_steps(workflow_run_id);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '57');
+             INSERT INTO agent_runs (id, prompt, started_at)
+                 VALUES ('ar1', 'test', '2024-01-01T00:00:00Z');
+             INSERT INTO workflow_runs (id, workflow_name, trigger, started_at)
+                 VALUES ('wfr1', 'my-flow', 'manual', '2024-01-01T00:00:00Z'),
+                        ('wfr2', 'child-flow', 'manual', '2024-01-01T00:00:00Z');
+             INSERT INTO workflow_run_steps
+                 (id, workflow_run_id, step_name, role, position, child_run_id)
+                 VALUES ('s1', 'wfr1', 'workflow:child-flow', 'workflow', 0, 'ar1');",
+        )
+        .unwrap();
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        // Apply migration 058.
+        run(&conn).unwrap();
+
+        // The original step row must survive with child_run_id intact.
+        let child_id: Option<String> = conn
+            .query_row(
+                "SELECT child_run_id FROM workflow_run_steps WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("step row must survive migration 058");
+        assert_eq!(child_id.as_deref(), Some("ar1"));
+
+        // After migration, child_run_id must accept a workflow_runs.id value
+        // (the FK to agent_runs has been dropped).
+        conn.execute(
+            "INSERT INTO workflow_run_steps
+             (id, workflow_run_id, step_name, role, position, child_run_id)
+             VALUES ('s2', 'wfr1', 'workflow:another', 'workflow', 1, 'wfr2')",
+            [],
+        )
+        .expect("child_run_id must accept a workflow_runs id after migration 058");
+
+        let wf_child_id: Option<String> = conn
+            .query_row(
+                "SELECT child_run_id FROM workflow_run_steps WHERE id = 's2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(wf_child_id.as_deref(), Some("wfr2"));
     }
 
     #[test]
