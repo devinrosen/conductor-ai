@@ -1034,3 +1034,29 @@ pub async fn repo_agent_events(
 
     Ok(Json(events))
 }
+
+// ── Global agent run endpoints ────────────────────────────────────────
+
+/// Get a single agent run by its ID (globally scoped, no worktree required).
+pub async fn get_agent_run_by_id(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<AgentRun>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let run = mgr
+        .get_run(&run_id)?
+        .ok_or_else(|| ApiError(ConductorError::Agent(format!("agent run {run_id} not found"))))?;
+    Ok(Json(run))
+}
+
+/// List all feedback requests for a given agent run ID (globally scoped).
+pub async fn get_agent_run_feedback_by_run_id(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<Vec<FeedbackRequest>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let feedback = mgr.list_feedback_for_run(&run_id)?;
+    Ok(Json(feedback))
+}
