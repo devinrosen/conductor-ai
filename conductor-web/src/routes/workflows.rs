@@ -262,15 +262,15 @@ pub async fn run_workflow(
 
     // Spawn background task to run the workflow
     let wt_target_label = format!("{repo_slug}/{wt_slug}");
+    // Slot receives the real workflow run ULID once execute_workflow creates the
+    // DB record. On the error path we prefer the real ULID (so dedup aligns with
+    // any concurrent TUI notification keyed on the same ID); we fall back to the
+    // deterministic bucket key only when no run record was created at all.
+    let run_id_slot: RunIdSlot =
+        std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+    let response_slot = std::sync::Arc::clone(&run_id_slot);
     let state_clone = state.clone();
     tokio::task::spawn(async move {
-        // Slot receives the real workflow run ULID once execute_workflow creates the
-        // DB record. On the error path we prefer the real ULID (so dedup aligns with
-        // any concurrent TUI notification keyed on the same ID); we fall back to the
-        // deterministic bucket key only when no run record was created at all.
-        let run_id_slot: RunIdSlot =
-            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
-
         let result = {
             let db = state_clone.db.lock().await;
             let config = state_clone.config.read().await;
@@ -394,11 +394,23 @@ pub async fn run_workflow(
         }
     });
 
+    let run_id = tokio::task::spawn_blocking(move || {
+        let (lock, cvar) = &*response_slot;
+        let guard = lock.lock().unwrap();
+        let (guard, _) = cvar
+            .wait_timeout_while(guard, std::time::Duration::from_secs(5), |id| id.is_none())
+            .unwrap();
+        guard.clone()
+    })
+    .await
+    .unwrap_or(None);
+
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "status": "started",
             "worktree_id": worktree_id,
+            "run_id": run_id,
         })),
     ))
 }
@@ -530,11 +542,11 @@ pub async fn post_workflow_run(
         None => repo_slug.clone(),
     };
 
+    let run_id_slot: RunIdSlot =
+        std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+    let response_slot = std::sync::Arc::clone(&run_id_slot);
     let state_clone = state.clone();
     tokio::task::spawn(async move {
-        let run_id_slot: RunIdSlot =
-            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
-
         // Helper: emit a failed WorkflowRunStatusChanged event and return the run_id used.
         let emit_failed = |run_id_slot: &RunIdSlot, wt_id: Option<String>| -> String {
             let error_run_id = resolve_error_run_id(run_id_slot, &workflow_name, &target_label);
@@ -669,12 +681,24 @@ pub async fn post_workflow_run(
         }
     });
 
+    let run_id = tokio::task::spawn_blocking(move || {
+        let (lock, cvar) = &*response_slot;
+        let guard = lock.lock().unwrap();
+        let (guard, _) = cvar
+            .wait_timeout_while(guard, std::time::Duration::from_secs(5), |id| id.is_none())
+            .unwrap();
+        guard.clone()
+    })
+    .await
+    .unwrap_or(None);
+
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "status": "started",
             "worktree_id": resolved_wt_id,
             "repo_id": repo_id_for_response,
+            "run_id": run_id,
         })),
     ))
 }
@@ -1559,6 +1583,15 @@ mod tests {
             "run_workflow must return 202 Accepted"
         );
 
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            !body["run_id"].is_null(),
+            "run_workflow response must include a non-null run_id; got: {body}"
+        );
+
         // Wait deterministically for the background task to signal completion.
         tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
             .await
@@ -1732,6 +1765,15 @@ mod tests {
             response.status(),
             StatusCode::ACCEPTED,
             "repo-only workflow run must return 202 Accepted"
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            !body["run_id"].is_null(),
+            "post_workflow_run response must include a non-null run_id; got: {body}"
         );
 
         tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
