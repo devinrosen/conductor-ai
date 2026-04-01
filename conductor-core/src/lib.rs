@@ -49,6 +49,7 @@ pub(crate) mod retry;
 pub mod schema_config;
 pub mod text_util;
 pub mod tickets;
+pub mod vantage;
 pub mod workflow;
 pub mod workflow_config;
 pub(crate) mod workflow_dsl;

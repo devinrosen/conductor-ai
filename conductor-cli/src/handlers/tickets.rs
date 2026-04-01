@@ -5,10 +5,11 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::Config;
 use conductor_core::github;
 use conductor_core::github_app;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
+use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig, VantageConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
+use conductor_core::vantage;
 use conductor_core::worktree::WorktreeManager;
 
 use crate::commands::TicketCommands;
@@ -77,6 +78,29 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                                     }
                                     Err(e) => {
                                         eprintln!("  {} — invalid jira config: {e}", r.slug);
+                                    }
+                                }
+                            }
+                            "vantage" => {
+                                match serde_json::from_str::<VantageConfig>(&source.config_json) {
+                                    Ok(cfg) => {
+                                        sync_repo(
+                                            &syncer,
+                                            &r.id,
+                                            &r.slug,
+                                            "vantage",
+                                            "Vantage deliverables",
+                                            || {
+                                                vantage::sync_vantage_deliverables(
+                                                    &cfg.project_id,
+                                                    &cfg.sdlc_root,
+                                                    &r.slug,
+                                                )
+                                            },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!("  {} — invalid vantage config: {e}", r.slug);
                                     }
                                 }
                             }

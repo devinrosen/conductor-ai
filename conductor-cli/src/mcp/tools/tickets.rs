@@ -127,6 +127,14 @@ pub(super) fn tool_sync_tickets(
                         };
                     jira_acli::fetch_jira_issue(&source_id, &cfg.url)
                 }
+                "vantage" => {
+                    let cfg: conductor_core::issue_source::VantageConfig =
+                        match serde_json::from_str(&source.config_json) {
+                            Ok(c) => c,
+                            Err(e) => return tool_err(format!("vantage config parse error: {e}")),
+                        };
+                    conductor_core::vantage::fetch_vantage_deliverable(&source_id, &cfg.sdlc_root)
+                }
                 other => return tool_err(format!("Unknown source type: {other}")),
             };
             match fetch_result {
@@ -177,6 +185,21 @@ pub(super) fn tool_sync_tickets(
                         }
                     };
                 jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
+            }
+            "vantage" => {
+                let cfg: conductor_core::issue_source::VantageConfig =
+                    match serde_json::from_str(&source.config_json) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            errors.push(format!("vantage config parse error: {e}"));
+                            continue;
+                        }
+                    };
+                conductor_core::vantage::sync_vantage_deliverables(
+                    &cfg.project_id,
+                    &cfg.sdlc_root,
+                    repo_slug,
+                )
             }
             other => {
                 errors.push(format!("Unknown source type: {other}"));

@@ -7,10 +7,11 @@ use conductor_core::agent::{AgentManager, TicketAgentTotals};
 use conductor_core::error::ConductorError;
 use conductor_core::github;
 use conductor_core::github_app;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
+use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig, VantageConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{Ticket, TicketInput, TicketLabel, TicketSyncer};
+use conductor_core::vantage;
 use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
@@ -123,6 +124,19 @@ pub async fn sync_tickets(
                     if let Ok(cfg) = serde_json::from_str::<JiraConfig>(&source.config_json) {
                         let (synced, closed) = sync_source(&syncer, &repo.id, "jira", || {
                             jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
+                        });
+                        total_synced += synced;
+                        total_closed += closed;
+                    }
+                }
+                "vantage" => {
+                    if let Ok(cfg) = serde_json::from_str::<VantageConfig>(&source.config_json) {
+                        let (synced, closed) = sync_source(&syncer, &repo.id, "vantage", || {
+                            vantage::sync_vantage_deliverables(
+                                &cfg.project_id,
+                                &cfg.sdlc_root,
+                                &repo.slug,
+                            )
                         });
                         total_synced += synced;
                         total_closed += closed;

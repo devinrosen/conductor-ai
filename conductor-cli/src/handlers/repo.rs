@@ -151,9 +151,18 @@ pub fn handle_repo(command: RepoCommands, conn: &Connection, config: &Config) ->
                             anyhow::bail!(
                                 "--config is required for jira sources (e.g. --config '{{\"jql\":\"project = KEY AND status != Done\",\"url\":\"https://...\"}}')");
                         }
+                        ("vantage", Some(json)) => {
+                            let _: serde_json::Value = serde_json::from_str(&json)
+                                .map_err(|e| anyhow::anyhow!("invalid JSON config: {e}"))?;
+                            json
+                        }
+                        ("vantage", None) => {
+                            anyhow::bail!(
+                                "--config is required for vantage sources (e.g. --config '{{\"project_id\":\"PROJ-012\",\"sdlc_root\":\"/path/to/sdlc\"}}')");
+                        }
                         _ => {
                             anyhow::bail!(
-                                "unsupported source type: '{}'. Use 'github' or 'jira'.",
+                                "unsupported source type: '{}'. Use 'github', 'jira', or 'vantage'.",
                                 source_type
                             );
                         }

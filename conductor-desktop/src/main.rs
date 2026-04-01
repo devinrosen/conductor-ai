@@ -42,6 +42,7 @@ fn main() {
     commands::fixup_macos_path();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
 

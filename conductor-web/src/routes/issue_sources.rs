@@ -65,6 +65,12 @@ pub async fn create_issue_source(
                 "Jira sources require config_json with jql and url fields".to_string(),
             )
         })?,
+        "vantage" => body.config_json.clone().ok_or_else(|| {
+            conductor_core::error::ConductorError::TicketSync(
+                "Vantage sources require config_json with project_id and sdlc_root fields"
+                    .to_string(),
+            )
+        })?,
         _ => {
             return Err(ApiError(conductor_core::error::ConductorError::TicketSync(
                 format!("Unknown source type: {}", body.source_type),
