@@ -91,8 +91,8 @@ test.describe("Mobile smoke: hamburger menu open/close", () => {
     await expect(hamburger).toBeVisible({ timeout: 5_000 });
     await hamburger.click();
 
-    // Sidebar should now be visible — check for the "Activity" nav link inside it.
-    const sidebarLink = page.locator("aside").getByRole("link", { name: "Activity" });
+    // Sidebar should now be visible — check for the "Home" nav link inside it.
+    const sidebarLink = page.locator("aside").getByRole("link", { name: "Home" });
     await expect(sidebarLink).toBeVisible({ timeout: 5_000 });
 
     // Close the sidebar via the close button.
@@ -100,23 +100,28 @@ test.describe("Mobile smoke: hamburger menu open/close", () => {
     await expect(closeBtn).toBeVisible({ timeout: 5_000 });
     await closeBtn.click();
 
-    // Sidebar should be hidden again (translated off-screen).
-    await expect(sidebarLink).not.toBeVisible({ timeout: 5_000 });
+    // Sidebar should be hidden again (translated off-screen via -translate-x-full).
+    // Use toBeInViewport since transform-based hiding still has a bounding box.
+    await expect(sidebarLink).not.toBeInViewport({ timeout: 5_000 });
   });
 });
 
 test.describe("Mobile smoke: bottom tab bar navigation", () => {
-  test("Activity tab navigates to ActivityPage and shows heading", async ({ page }) => {
+  // Scope selectors to the bottom tab bar to avoid matching sidebar links.
+  const tabBar = (page: import("@playwright/test").Page) =>
+    page.locator("div.fixed.bottom-0");
+
+  test("Home tab navigates to ActivityPage and shows heading", async ({ page }) => {
     // Start at the repos page then navigate via the bottom tab bar.
     await page.goto("/repos");
 
     // The bottom tab bar is visible on mobile (md:hidden).
-    const activityTab = page.getByRole("link", { name: "Activity" });
-    await expect(activityTab).toBeVisible({ timeout: 5_000 });
-    await activityTab.click();
+    const homeTab = tabBar(page).getByRole("link", { name: "Home" });
+    await expect(homeTab).toBeVisible({ timeout: 5_000 });
+    await homeTab.click();
 
-    // ActivityPage renders an "Activity" heading.
-    await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible({
+    // ActivityPage renders a "Home" heading.
+    await expect(page.getByRole("heading", { name: "Home" })).toBeVisible({
       timeout: 10_000,
     });
     // URL should be root.
@@ -127,7 +132,7 @@ test.describe("Mobile smoke: bottom tab bar navigation", () => {
     // Start at the activity (root) page.
     await page.goto("/");
 
-    const reposTab = page.getByRole("link", { name: "Repos" });
+    const reposTab = tabBar(page).getByRole("link", { name: "Repos" });
     await expect(reposTab).toBeVisible({ timeout: 5_000 });
     await reposTab.click();
 
@@ -138,7 +143,7 @@ test.describe("Mobile smoke: bottom tab bar navigation", () => {
   test("Workflows tab navigates to WorkflowsPage and shows heading", async ({ page }) => {
     await page.goto("/");
 
-    const workflowsTab = page.getByRole("link", { name: "Workflows" });
+    const workflowsTab = tabBar(page).getByRole("link", { name: "Workflows" });
     await expect(workflowsTab).toBeVisible({ timeout: 5_000 });
     await workflowsTab.click();
 
@@ -153,11 +158,11 @@ test.describe("Mobile smoke: bottom tab bar navigation", () => {
     await page.goto("/workflows");
 
     // The active NavLink receives text-indigo-600 — check by colour via CSS class presence.
-    const workflowsTab = page.getByRole("link", { name: "Workflows" });
+    const workflowsTab = tabBar(page).getByRole("link", { name: "Workflows" });
     await expect(workflowsTab).toHaveClass(/text-indigo-600/, { timeout: 5_000 });
 
     // Other tabs should not be active.
-    const activityTab = page.getByRole("link", { name: "Activity" });
-    await expect(activityTab).not.toHaveClass(/text-indigo-600/);
+    const homeTab = tabBar(page).getByRole("link", { name: "Home" });
+    await expect(homeTab).not.toHaveClass(/text-indigo-600/);
   });
 });

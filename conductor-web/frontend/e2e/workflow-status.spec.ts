@@ -50,38 +50,41 @@ async function startTestWorkflowRun(
   );
   expect(runResp.ok()).toBeTruthy();
 
-  const runsResp = await request.get(
-    `/api/worktrees/${worktreeId}/workflows/runs`,
-  );
-  const runs = await runsResp.json();
-  expect(runs.length).toBeGreaterThan(0);
-  return runs[0].id as string;
-}
-
-/** Navigate to the worktree detail page and open the Workflows tab. */
-async function openWorkflowsTab(
-  page: Page,
-  repoId: string,
-  worktreeId: string,
-): Promise<void> {
-  await page.goto(`/repos/${repoId}/worktrees/${worktreeId}`);
-  await page.getByRole("button", { name: "Workflows" }).click();
+  // The POST returns 202 immediately — the run is created asynchronously.
+  // Poll until the run appears in the list.
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const runsResp = await request.get(
+      `/api/worktrees/${worktreeId}/workflows/runs`,
+    );
+    const runs = await runsResp.json();
+    if (runs.length > 0) {
+      return runs[0].id as string;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  throw new Error("Workflow run did not appear within timeout");
 }
 
 test.describe("Workflow status smoke", () => {
-  test("step tree expands when clicking a run row", async ({
+  test("run detail page shows step names", async ({
     page,
     request,
     testRepo,
     testWorktree,
   }) => {
-    await startTestWorkflowRun(request, testWorktree.path, testWorktree.id);
-    await openWorkflowsTab(page, testRepo.id, testWorktree.id);
+    const runId = await startTestWorkflowRun(request, testWorktree.path, testWorktree.id);
 
-    // Click the run row to expand the step tree.
-    await page.getByText("test-workflow").first().click();
+    // Wait for the workflow engine to create the step row in the DB.
+    const reached = await waitForRunStatus(request, runId, "waiting");
+    expect(reached, "run should reach 'waiting' before timeout").toBeTruthy();
 
-    // The gate step named "human_approval" should appear in the expanded tree.
+    // Navigate directly to the run detail page.
+    await page.goto(
+      `/repos/${testRepo.id}/worktrees/${testWorktree.id}/workflows/runs/${runId}`,
+    );
+
+    // The gate step named "human_approval" should appear in the steps list.
     await expect(page.getByText("human_approval")).toBeVisible({
       timeout: 10_000,
     });
@@ -104,13 +107,23 @@ test.describe("Workflow status smoke", () => {
     const reached = await waitForRunStatus(request, runId, "waiting");
     expect(reached, "run should reach 'waiting' before timeout").toBeTruthy();
 
-    // Navigate to the worktree detail page and open the Workflows tab.
-    await openWorkflowsTab(page, testRepo.id, testWorktree.id);
+    // Navigate directly to the run detail page.
+    await page.goto(
+      `/repos/${testRepo.id}/worktrees/${testWorktree.id}/workflows/runs/${runId}`,
+    );
 
-    // Expand the run row to reveal the step list.
-    await page.getByText("test-workflow").first().click();
+    // The gate step row shows a "Review" or similar button to open the gate modal.
+    // Click the step to open it, then look for the gate action button.
+    await expect(page.getByText("human_approval")).toBeVisible({
+      timeout: 10_000,
+    });
 
-    // Approve and Reject buttons should be visible for the waiting gate step.
+    // The gate step's inline button opens the gate modal.
+    const gateBtn = page.getByRole("button", { name: "Review Gate", exact: true });
+    await expect(gateBtn).toBeVisible({ timeout: 5_000 });
+    await gateBtn.click();
+
+    // Approve and Reject buttons should be visible in the gate modal.
     const approveBtn = page.getByRole("button", { name: "Approve" });
     const rejectBtn = page.getByRole("button", { name: "Reject" });
     await expect(approveBtn).toBeVisible({ timeout: 10_000 });
