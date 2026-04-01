@@ -41,6 +41,37 @@ fn resolve_error_run_id(slot: &RunIdSlot, wf_name: &str, label: &str) -> String 
     }
 }
 
+/// Wait for `run_id_slot` to be populated by the spawned workflow task, or
+/// time out after 5 seconds.
+///
+/// Uses `spawn_blocking` because `RunIdSlot` is built on `std::sync::Condvar`,
+/// which requires a blocking thread (it cannot be awaited directly in async
+/// code without parking the async runtime).
+///
+/// Returns `None` if the workflow task didn't write a run ID within 5 seconds
+/// or if the mutex was poisoned.
+async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
+    tokio::task::spawn_blocking(move || {
+        let (lock, cvar) = &*slot;
+        let guard = match lock.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::warn!("run_id_slot mutex poisoned; run_id will be null");
+                e.into_inner()
+            }
+        };
+        let (guard, timed_out) = cvar
+            .wait_timeout_while(guard, std::time::Duration::from_secs(5), |id| id.is_none())
+            .unwrap_or_else(|e| e.into_inner());
+        if timed_out.timed_out() {
+            tracing::warn!("timed out waiting for run_id; run_id will be null in response");
+        }
+        guard.clone()
+    })
+    .await
+    .unwrap_or(None)
+}
+
 /// Fire a workflow completion notification.
 ///
 /// # Calling context
@@ -262,15 +293,15 @@ pub async fn run_workflow(
 
     // Spawn background task to run the workflow
     let wt_target_label = format!("{repo_slug}/{wt_slug}");
+    // Slot receives the real workflow run ULID once execute_workflow creates the
+    // DB record. On the error path we prefer the real ULID (so dedup aligns with
+    // any concurrent TUI notification keyed on the same ID); we fall back to the
+    // deterministic bucket key only when no run record was created at all.
+    let run_id_slot: RunIdSlot =
+        std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+    let response_slot = std::sync::Arc::clone(&run_id_slot);
     let state_clone = state.clone();
     tokio::task::spawn(async move {
-        // Slot receives the real workflow run ULID once execute_workflow creates the
-        // DB record. On the error path we prefer the real ULID (so dedup aligns with
-        // any concurrent TUI notification keyed on the same ID); we fall back to the
-        // deterministic bucket key only when no run record was created at all.
-        let run_id_slot: RunIdSlot =
-            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
-
         let result = {
             let db = state_clone.db.lock().await;
             let config = state_clone.config.read().await;
@@ -394,11 +425,14 @@ pub async fn run_workflow(
         }
     });
 
+    let run_id = wait_for_run_id(response_slot).await;
+
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "status": "started",
             "worktree_id": worktree_id,
+            "run_id": run_id,
         })),
     ))
 }
@@ -530,11 +564,11 @@ pub async fn post_workflow_run(
         None => repo_slug.clone(),
     };
 
+    let run_id_slot: RunIdSlot =
+        std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+    let response_slot = std::sync::Arc::clone(&run_id_slot);
     let state_clone = state.clone();
     tokio::task::spawn(async move {
-        let run_id_slot: RunIdSlot =
-            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
-
         // Helper: emit a failed WorkflowRunStatusChanged event and return the run_id used.
         let emit_failed = |run_id_slot: &RunIdSlot, wt_id: Option<String>| -> String {
             let error_run_id = resolve_error_run_id(run_id_slot, &workflow_name, &target_label);
@@ -669,12 +703,15 @@ pub async fn post_workflow_run(
         }
     });
 
+    let run_id = wait_for_run_id(response_slot).await;
+
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "status": "started",
             "worktree_id": resolved_wt_id,
             "repo_id": repo_id_for_response,
+            "run_id": run_id,
         })),
     ))
 }
@@ -1559,6 +1596,15 @@ mod tests {
             "run_workflow must return 202 Accepted"
         );
 
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            !body["run_id"].is_null(),
+            "run_workflow response must include a non-null run_id; got: {body}"
+        );
+
         // Wait deterministically for the background task to signal completion.
         tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
             .await
@@ -1732,6 +1778,15 @@ mod tests {
             response.status(),
             StatusCode::ACCEPTED,
             "repo-only workflow run must return 202 Accepted"
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            !body["run_id"].is_null(),
+            "post_workflow_run response must include a non-null run_id; got: {body}"
         );
 
         tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
