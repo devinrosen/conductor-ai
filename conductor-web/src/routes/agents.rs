@@ -1,14 +1,14 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use conductor_core::agent::{
     parse_agent_log, AgentCreatedIssue, AgentEvent, AgentManager, AgentRun, AgentRunEvent,
-    FeedbackRequest, RunTreeTotals, TicketAgentTotals,
+    AgentRunStatus, FeedbackRequest, RunTreeTotals, TicketAgentTotals,
 };
 use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
@@ -65,6 +65,30 @@ pub async fn list_agent_runs(
     let db = state.db.lock().await;
     let mgr = AgentManager::new(&db);
     let runs = mgr.list_for_worktree(&worktree_id)?;
+    Ok(Json(runs))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ListAllAgentRunsQuery {
+    pub status: Option<String>,
+}
+
+/// List all agent runs globally, with optional `?status=` filter.
+pub async fn list_all_agent_runs(
+    State(state): State<AppState>,
+    Query(params): Query<ListAllAgentRunsQuery>,
+) -> Result<Json<Vec<AgentRun>>, ApiError> {
+    use std::str::FromStr;
+    let status: Option<AgentRunStatus> = params
+        .status
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| AgentRunStatus::from_str(s).map_err(|e| ApiError(ConductorError::InvalidInput(e))))
+        .transpose()?;
+
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let runs = mgr.list_agent_runs(None, None, status.as_ref(), 500, 0)?;
     Ok(Json(runs))
 }
 
