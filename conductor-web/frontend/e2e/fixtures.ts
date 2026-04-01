@@ -62,9 +62,15 @@ export const test = base.extend<{
     // worktrees from it.
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "conductor-e2e-"));
     try {
+      // Clear git env vars (GIT_DIR, GIT_WORK_TREE, etc.) that may be set by
+      // git hooks (e.g. pre-push), otherwise git commit operates on the main
+      // repo instead of the temp dir.
+      const cleanEnv = Object.fromEntries(
+        Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")),
+      );
       execSync(
         'git init && git config user.email "test@e2e.local" && git config user.name "E2E Test" && git commit --allow-empty -m "init"',
-        { cwd: tmpDir, stdio: "pipe" },
+        { cwd: tmpDir, stdio: "pipe", env: cleanEnv },
       );
     } catch {
       // If git init fails (unlikely in CI), the repo won't have a HEAD branch.
