@@ -543,7 +543,62 @@ workflow deploy {
             text.contains("default: false"),
             "missing default; got: {text}"
         );
+        assert!(
+            text.contains("type: string"),
+            "inputs should show type: string; got: {text}"
+        );
         // Drop wf_dir after assertions so tempdir lives long enough.
+        drop(wf_dir);
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_boolean_inputs_show_type() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow ticket-to-pr {
+    meta { description = "Turn a ticket into a PR" trigger = "manual" targets = ["worktree"] }
+    inputs {
+        ticket_id required description = "Ticket to process"
+        qualify boolean default = "false" description = "Run qualify step"
+        auto_merge boolean default = "false" description = "Auto-merge when ready"
+    }
+    call agent
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("ticket-to-pr", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .register("my-repo2", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
+        }
+
+        let result = tool_list_workflows(&db, &args_with("repo", "my-repo2"));
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        assert!(
+            text.contains("type: boolean"),
+            "boolean inputs should show type: boolean; got: {text}"
+        );
+        assert!(
+            text.contains("type: string"),
+            "string inputs should show type: string; got: {text}"
+        );
         drop(wf_dir);
     }
 

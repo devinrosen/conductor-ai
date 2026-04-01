@@ -327,6 +327,11 @@ pub(crate) fn format_workflow_def(def: &conductor_core::workflow::WorkflowDef) -
         for input in &def.inputs {
             out.push_str(&format!("  - name: {}\n", input.name));
             out.push_str(&format!("    required: {}\n", input.required));
+            let type_str = match input.input_type {
+                conductor_core::workflow::InputType::Boolean => "boolean",
+                conductor_core::workflow::InputType::String => "string",
+            };
+            out.push_str(&format!("    type: {type_str}\n"));
             if let Some(ref default) = input.default {
                 out.push_str(&format!("    default: {default}\n"));
             }
