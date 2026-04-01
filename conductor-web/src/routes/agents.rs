@@ -83,10 +83,7 @@ pub async fn list_all_agent_runs(
         .status
         .as_deref()
         .filter(|s| !s.is_empty())
-        .map(|s| {
-            AgentRunStatus::from_str(s)
-                .map_err(|e| ApiError(ConductorError::InvalidInput(e)))
-        })
+        .map(|s| AgentRunStatus::from_str(s).map_err(|e| ApiError(ConductorError::InvalidInput(e))))
         .transpose()?;
 
     let db = state.db.lock().await;
