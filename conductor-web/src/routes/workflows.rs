@@ -841,9 +841,7 @@ pub async fn get_workflow_run(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
-        ApiError(ConductorError::Workflow(format!(
-            "Workflow run not found: {id}"
-        )))
+        ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() })
     })?;
     Ok(Json(run))
 }
@@ -873,9 +871,9 @@ pub async fn get_workflow_step_log(
 
         // Verify run exists
         wf_mgr.get_workflow_run(&run_id)?.ok_or_else(|| {
-            ApiError(ConductorError::Workflow(format!(
-                "workflow run {run_id} not found"
-            )))
+            ApiError(ConductorError::WorkflowRunNotFound {
+                id: run_id.clone(),
+            })
         })?;
 
         // Find matching step — last iteration wins
@@ -938,9 +936,7 @@ pub async fn cancel_workflow(
 
     // Verify run exists
     let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
-        ApiError(ConductorError::Workflow(format!(
-            "Workflow run not found: {id}"
-        )))
+        ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() })
     })?;
 
     mgr.update_workflow_status(&id, WorkflowRunStatus::Cancelled, Some("Cancelled by user"))?;
@@ -973,9 +969,7 @@ pub async fn resume_workflow_endpoint(
         let db = state.db.lock().await;
         let mgr = WorkflowManager::new(&db);
         let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
-            ApiError(ConductorError::Workflow(format!(
-                "Workflow run not found: {id}"
-            )))
+            ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() })
         })?;
         validate_resume_preconditions(&run.status, restart, from_step.as_deref())
             .map_err(ApiError)?;
