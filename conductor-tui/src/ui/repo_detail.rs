@@ -7,7 +7,7 @@ use ratatui::Frame;
 use conductor_core::github::GithubPr;
 
 use super::helpers::{shorten_paths, visual_idx_with_headers};
-use crate::state::{AppState, ColumnFocus, RepoDetailFocus, VisualRow};
+use crate::state::{AppState, ColumnFocus, RepoDetailFocus};
 
 fn pr_group_key(pr: &GithubPr) -> &'static str {
     if pr.is_draft {
@@ -62,29 +62,14 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     let pr_height = (pr_visual_rows + 2).max(3).min(area.height / 4);
 
-    // Repo Agent pane: show if there are any repo agent events or a latest run
-    let has_repo_agent = state
-        .selected_repo_id
-        .as_ref()
-        .and_then(|id| state.data.latest_repo_agent_runs.get(id))
-        .is_some();
-    let repo_agent_height = if has_repo_agent {
-        // Status line + some events, capped at 1/4 of height
-        let event_rows = state.data.repo_agent_activity_len() as u16;
-        (event_rows + 4).max(5).min(area.height / 4)
-    } else {
-        3 // minimal empty pane
-    };
-
-    // Layout: Info | Worktrees | PRs | Tickets | RepoAgent
+    // Layout: Info | Worktrees | PRs | Tickets
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(9),
             Constraint::Length(wt_height),
             Constraint::Length(pr_height),
-            Constraint::Min(3),
-            Constraint::Length(repo_agent_height),
+            Constraint::Min(0),
         ])
         .split(area);
 
@@ -407,212 +392,4 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         pr_list_state.select(Some(visual_idx));
     }
     frame.render_stateful_widget(pr_list, layout[2], &mut pr_list_state);
-
-    // Repo Agent pane
-    render_repo_agent_pane(frame, layout[4], state);
-}
-
-fn event_style(kind: &str, theme: &crate::theme::Theme) -> Style {
-    match kind {
-        "text" => Style::default().fg(theme.label_primary),
-        "tool" => Style::default().fg(theme.label_warning),
-        "result" => Style::default().fg(theme.status_completed),
-        "system" => Style::default().fg(theme.label_secondary),
-        "error" | "tool_error" => Style::default().fg(theme.status_failed),
-        "prompt" => Style::default().fg(theme.label_info),
-        _ => Style::default(),
-    }
-}
-
-fn render_repo_agent_pane(frame: &mut Frame, area: Rect, state: &AppState) {
-    let agent_focused = state.column_focus == ColumnFocus::Content
-        && state.repo_detail_focus == RepoDetailFocus::RepoAgent;
-    let border_color = if agent_focused {
-        state.theme.border_focused
-    } else {
-        state.theme.border_inactive
-    };
-
-    let latest_run = state
-        .selected_repo_id
-        .as_ref()
-        .and_then(|id| state.data.latest_repo_agent_runs.get(id));
-
-    // Build title with action hints when focused
-    let title = if agent_focused {
-        if let Some(run) = latest_run {
-            use conductor_core::agent::AgentRunStatus;
-            match run.status {
-                AgentRunStatus::Running => " Repo Agent  p=prompt x=stop ",
-                AgentRunStatus::WaitingForFeedback => {
-                    " Repo Agent  p=prompt f=respond F=dismiss x=stop "
-                }
-                _ => " Repo Agent  p=prompt ",
-            }
-        } else {
-            " Repo Agent  p=prompt "
-        }
-    } else {
-        " Repo Agent "
-    };
-
-    let activity_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
-        .title(title);
-
-    // If no run exists, show empty placeholder
-    let Some(run) = latest_run else {
-        let empty = Paragraph::new(Span::styled(
-            "No repo agent activity — press p to prompt",
-            Style::default().fg(state.theme.label_secondary),
-        ))
-        .block(activity_block);
-        frame.render_widget(empty, area);
-        return;
-    };
-
-    // Split into status line (top) + event list (bottom)
-    let inner = activity_block.inner(area);
-    frame.render_widget(activity_block, area);
-
-    if inner.height < 2 {
-        return;
-    }
-
-    let pane_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    // Status line
-    let status_line = render_repo_agent_status(run, &state.theme);
-    frame.render_widget(Paragraph::new(status_line), pane_layout[0]);
-
-    // Event list
-    let events = &state.data.repo_agent_events;
-    if events.is_empty() {
-        let empty = Paragraph::new(Span::styled(
-            "No events yet",
-            Style::default().fg(state.theme.label_secondary),
-        ));
-        frame.render_widget(empty, pane_layout[1]);
-        return;
-    }
-
-    let repo_path = state
-        .selected_repo_id
-        .as_ref()
-        .and_then(|id| state.data.repos.iter().find(|r| &r.id == id))
-        .map(|r| r.local_path.as_str())
-        .unwrap_or("");
-
-    let mut items: Vec<ListItem> = Vec::new();
-    for row in state.data.repo_agent_visual_rows() {
-        match row {
-            VisualRow::RunSeparator(run_num, model, started_at) => {
-                let ts = started_at
-                    .get(..16)
-                    .unwrap_or(started_at)
-                    .replacen('T', " ", 1);
-                let model_str = model.unwrap_or("default");
-                let header = format!("── Run {run_num}  {ts}  {model_str} ");
-                let pad = "─".repeat(60usize.saturating_sub(header.len()));
-                items.push(ListItem::new(Line::from(Span::styled(
-                    format!("{header}{pad}"),
-                    Style::default()
-                        .fg(state.theme.label_secondary)
-                        .add_modifier(Modifier::DIM),
-                ))));
-            }
-            VisualRow::Event(ev) => {
-                let style = event_style(&ev.kind, &state.theme);
-                let display_text = shorten_paths(&ev.summary, repo_path, state.home_dir.as_deref());
-                let mut spans = vec![Span::styled(display_text, style)];
-                if let Some(dur) = ev.duration_ms() {
-                    if dur >= 100 {
-                        let dur_s = dur as f64 / 1000.0;
-                        spans.push(Span::styled(
-                            format!("  ({dur_s:.1}s)"),
-                            Style::default().fg(state.theme.label_secondary),
-                        ));
-                    }
-                }
-                items.push(ListItem::new(Line::from(spans)));
-            }
-        }
-    }
-
-    let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-
-    frame.render_stateful_widget(
-        list,
-        pane_layout[1],
-        &mut state.repo_agent_list_state.borrow_mut(),
-    );
-}
-
-fn render_repo_agent_status(
-    run: &conductor_core::agent::AgentRun,
-    theme: &crate::theme::Theme,
-) -> Line<'static> {
-    use conductor_core::agent::AgentRunStatus;
-    match run.status {
-        AgentRunStatus::Running => {
-            let turns = run.num_turns.unwrap_or(0);
-            let elapsed_ms = chrono::DateTime::parse_from_rfc3339(&run.started_at)
-                .ok()
-                .map(|start| {
-                    (chrono::Utc::now() - start.with_timezone(&chrono::Utc))
-                        .num_milliseconds()
-                        .max(0)
-                });
-            let dur_secs = elapsed_ms.unwrap_or(0) as f64 / 1000.0;
-            Line::from(vec![
-                Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
-                Span::styled("[running]", Style::default().fg(theme.status_running)),
-                Span::styled(
-                    format!(" {turns} turns · {dur_secs:.1}s"),
-                    Style::default().fg(theme.label_secondary),
-                ),
-            ])
-        }
-        AgentRunStatus::WaitingForFeedback => Line::from(vec![
-            Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
-            Span::styled(
-                "[waiting for feedback]",
-                Style::default().fg(theme.status_waiting),
-            ),
-        ]),
-        AgentRunStatus::Completed => {
-            let turns = run.num_turns.unwrap_or(0);
-            let dur_secs = run.duration_ms.unwrap_or(0) as f64 / 1000.0;
-            Line::from(vec![
-                Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
-                Span::styled("[completed]", Style::default().fg(theme.status_completed)),
-                Span::styled(
-                    format!(" {turns} turns · {dur_secs:.1}s"),
-                    Style::default().fg(theme.label_secondary),
-                ),
-            ])
-        }
-        AgentRunStatus::Failed => {
-            let mut spans = vec![
-                Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
-                Span::styled("[failed]", Style::default().fg(theme.status_failed)),
-            ];
-            if let Some(ref err) = run.result_text {
-                let truncated: String = err.chars().take(60).collect();
-                spans.push(Span::styled(
-                    format!(" {truncated}"),
-                    Style::default().fg(theme.label_secondary),
-                ));
-            }
-            Line::from(spans)
-        }
-        AgentRunStatus::Cancelled => Line::from(vec![
-            Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
-            Span::styled("[cancelled]", Style::default().fg(theme.status_cancelled)),
-        ]),
-    }
 }

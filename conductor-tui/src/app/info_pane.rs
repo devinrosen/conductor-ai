@@ -51,19 +51,6 @@ impl App {
                         }
                         url
                     }
-                    info_row::PR => {
-                        let url = self
-                            .state
-                            .find_pr_for_worktree(&wt.branch)
-                            .map(|pr| pr.url.clone())
-                            .unwrap_or_default();
-                        if url.is_empty() {
-                            self.state.status_message =
-                                Some("No PR linked to this worktree".to_string());
-                            return;
-                        }
-                        url
-                    }
                     _ => {
                         self.state.status_message = Some("Nothing to copy on this row".to_string());
                         return;
@@ -81,7 +68,13 @@ impl App {
         let row = self.state.worktree_detail_selected_row;
         match row {
             info_row::PATH => {
-                let Some(path) = self.state.selected_worktree().map(|wt| wt.path.clone()) else {
+                let Some(path) = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+                    .map(|wt| wt.path.clone())
+                else {
                     return;
                 };
                 self.open_terminal_at_path(&path);
@@ -89,7 +82,9 @@ impl App {
             info_row::TICKET => {
                 let url = self
                     .state
-                    .selected_worktree()
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
                     .and_then(|wt| wt.ticket_id.as_ref())
                     .and_then(|tid| self.state.data.ticket_map.get(tid))
                     .map(|t| t.url.clone());
@@ -104,30 +99,9 @@ impl App {
                     }
                 }
             }
-            info_row::PR => {
-                let branch = self
-                    .state
-                    .selected_worktree()
-                    .map(|wt| wt.branch.clone())
-                    .unwrap_or_default();
-                let url = self
-                    .state
-                    .find_pr_for_worktree(&branch)
-                    .map(|pr| pr.url.clone());
-                match url {
-                    Some(ref u) if !u.is_empty() => {
-                        let u = u.clone();
-                        self.open_url(&u, "PR");
-                    }
-                    _ => {
-                        self.state.status_message =
-                            Some("No PR found for this worktree's branch".to_string());
-                    }
-                }
-            }
             _ => {
                 self.state.status_message =
-                    Some("No action for this row (try Path, Ticket, or PR row)".to_string());
+                    Some("No action for this row (try Path or Ticket row)".to_string());
             }
         }
     }

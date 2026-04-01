@@ -13,8 +13,7 @@ use conductor_core::workflow::{
 };
 
 use super::common::{gate_type_icon, truncate};
-use super::helpers::{format_condition, shorten_paths};
-use crate::state::parse_target_label;
+use super::helpers::{format_condition, shorten_paths, visual_idx_with_headers};
 use crate::state::AppState;
 use crate::state::ColumnFocus;
 use crate::state::TargetType;
@@ -119,43 +118,9 @@ pub(super) fn render_defs_row_count(state: &AppState) -> usize {
             .iter()
             .collect::<std::collections::HashSet<_>>()
             .len();
-        // Also count distinct named group headers per repo.
-        let mut group_header_count = 0usize;
-        let mut prev_repo = "";
-        let mut prev_group: Option<&str> = None;
-        let fallback = String::from("?");
-        for (i, def) in state.data.workflow_defs.iter().enumerate() {
-            let slug = state
-                .data
-                .workflow_def_slugs
-                .get(i)
-                .unwrap_or(&fallback)
-                .as_str();
-            if slug != prev_repo {
-                prev_repo = slug;
-                prev_group = None;
-            }
-            if let Some(g) = def.group.as_deref() {
-                if Some(g) != prev_group {
-                    group_header_count += 1;
-                    prev_group = Some(g);
-                }
-            }
-        }
-        state.data.workflow_defs.len() + sep_count + group_header_count
+        state.data.workflow_defs.len() + sep_count
     } else {
-        // Count distinct named group headers.
-        let mut prev_group: Option<&str> = None;
-        let mut header_count = 0usize;
-        for def in &state.data.workflow_defs {
-            if let Some(g) = def.group.as_deref() {
-                if Some(g) != prev_group {
-                    header_count += 1;
-                    prev_group = Some(g);
-                }
-            }
-        }
-        state.data.workflow_defs.len() + header_count
+        state.data.workflow_defs.len()
     }
 }
 
@@ -207,7 +172,6 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
 
         let mut items: Vec<ListItem> = Vec::new();
         let mut prev_repo = "";
-        let mut prev_group: Option<&str> = None;
         for (repo_slug, def) in &defs_with_slug {
             if *repo_slug != prev_repo {
                 let fill = format!("{:─<30}", "");
@@ -218,18 +182,6 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                         .add_modifier(Modifier::BOLD),
                 )])));
                 prev_repo = repo_slug;
-                prev_group = None;
-            }
-            if let Some(g) = def.group.as_deref() {
-                if Some(g) != prev_group {
-                    items.push(ListItem::new(Line::from(vec![Span::styled(
-                        format!("  ─ {g} "),
-                        Style::default()
-                            .fg(state.theme.group_header)
-                            .add_modifier(Modifier::BOLD),
-                    )])));
-                    prev_group = Some(g);
-                }
             }
             let node_count = def.body.len();
             let input_count = def.inputs.len();
@@ -272,24 +224,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             let logical_idx = state
                 .workflow_def_index
                 .min(defs_with_slug.len().saturating_sub(1));
-            // Count both repo-slug headers and named-group headers up to logical_idx.
-            let mut headers = 0usize;
-            let mut prev_r = "";
-            let mut prev_g: Option<&str> = None;
-            for (slug, def) in defs_with_slug.iter().take(logical_idx + 1) {
-                if *slug != prev_r {
-                    headers += 1; // repo header
-                    prev_r = slug;
-                    prev_g = None;
-                }
-                if let Some(g) = def.group.as_deref() {
-                    if Some(g) != prev_g {
-                        headers += 1; // named-group header
-                        prev_g = Some(g);
-                    }
-                }
-            }
-            logical_idx + headers
+            visual_idx_with_headers(&defs_with_slug, |(slug, _)| slug.to_string(), logical_idx)
         } else {
             0
         };
@@ -318,80 +253,52 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         frame.render_stateful_widget(list, area, &mut list_state);
     } else {
-        // Worktree-scoped or repo-scoped: list with group header rows for named groups.
-        let mut items: Vec<ListItem> = Vec::new();
-        let mut prev_group: Option<&str> = None;
-        for def in &state.data.workflow_defs {
-            if let Some(g) = def.group.as_deref() {
-                if Some(g) != prev_group {
-                    items.push(ListItem::new(Line::from(vec![Span::styled(
-                        format!("─ {g} "),
-                        Style::default()
-                            .fg(state.theme.group_header)
-                            .add_modifier(Modifier::BOLD),
-                    )])));
-                    prev_group = Some(g);
+        // Worktree-scoped or repo-scoped: flat list with description and target badges.
+        let items: Vec<ListItem> = state
+            .data
+            .workflow_defs
+            .iter()
+            .map(|def| {
+                let node_count = def.body.len();
+                let input_count = def.inputs.len();
+                let (badge_sym, badge_label, badge_color) =
+                    last_run_badge(&def.name, &state.data.workflow_runs, &state.theme);
+                let badge_text = if badge_label.is_empty() {
+                    format!("  {badge_sym}")
+                } else {
+                    format!("  {badge_sym} {badge_label}")
+                };
+                let mut spans = vec![
+                    Span::styled(
+                        format!("{:<20}", def.name),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  {}", truncate(&def.description, 30)),
+                        Style::default().fg(state.theme.label_secondary),
+                    ),
+                    Span::styled(
+                        format!("  {node_count} steps"),
+                        Style::default().fg(state.theme.label_warning),
+                    ),
+                    Span::styled(badge_text, Style::default().fg(badge_color)),
+                ];
+                if !def.targets.is_empty() {
+                    let badge = format!("  [{}]", def.targets.join(", "));
+                    spans.push(Span::styled(
+                        badge,
+                        Style::default().fg(state.theme.label_accent),
+                    ));
                 }
-            }
-            let node_count = def.body.len();
-            let input_count = def.inputs.len();
-            let (badge_sym, badge_label, badge_color) =
-                last_run_badge(&def.name, &state.data.workflow_runs, &state.theme);
-            let badge_text = if badge_label.is_empty() {
-                format!("  {badge_sym}")
-            } else {
-                format!("  {badge_sym} {badge_label}")
-            };
-            let mut spans = vec![
-                Span::styled(
-                    format!("{:<20}", def.name),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("  {}", truncate(&def.description, 30)),
-                    Style::default().fg(state.theme.label_secondary),
-                ),
-                Span::styled(
-                    format!("  {node_count} steps"),
-                    Style::default().fg(state.theme.label_warning),
-                ),
-                Span::styled(badge_text, Style::default().fg(badge_color)),
-            ];
-            if !def.targets.is_empty() {
-                let badge = format!("  [{}]", def.targets.join(", "));
-                spans.push(Span::styled(
-                    badge,
-                    Style::default().fg(state.theme.label_accent),
-                ));
-            }
-            if input_count > 0 {
-                spans.push(Span::styled(
-                    format!("  {input_count} inputs"),
-                    Style::default().fg(state.theme.status_waiting),
-                ));
-            }
-            items.push(ListItem::new(Line::from(spans)));
-        }
-
-        // Compute visual_idx: logical_idx + number of named-group headers that precede it.
-        let visual_idx = if !state.data.workflow_defs.is_empty() {
-            let logical_idx = state
-                .workflow_def_index
-                .min(state.data.workflow_defs.len().saturating_sub(1));
-            let mut prev_seen_group: Option<&str> = None;
-            let mut header_count = 0usize;
-            for def in state.data.workflow_defs.iter().take(logical_idx + 1) {
-                if let Some(g) = def.group.as_deref() {
-                    if Some(g) != prev_seen_group {
-                        header_count += 1;
-                        prev_seen_group = Some(g);
-                    }
+                if input_count > 0 {
+                    spans.push(Span::styled(
+                        format!("  {input_count} inputs"),
+                        Style::default().fg(state.theme.status_waiting),
+                    ));
                 }
-            }
-            logical_idx + header_count
-        } else {
-            0
-        };
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
 
         let defs_title = if focused {
             match &context {
@@ -420,7 +327,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
 
         let mut list_state = ListState::default();
         if !state.data.workflow_defs.is_empty() {
-            list_state.select(Some(visual_idx));
+            list_state.select(Some(state.workflow_def_index));
         }
         frame.render_stateful_widget(list, area, &mut list_state);
     }
@@ -2031,14 +1938,7 @@ fn last_run_badge(
     match latest {
         None => ("—", String::new(), theme.label_secondary),
         Some(run) => {
-            let time = time_ago(&run.started_at);
-            let label = match &run.target_label {
-                None => time,
-                Some(tl) => {
-                    let (_, target_key, _) = parse_target_label(tl);
-                    format!("{time}  {target_key}")
-                }
-            };
+            let label = time_ago(&run.started_at);
             match run.status {
                 WorkflowRunStatus::Completed => ("✓", label, theme.status_completed),
                 WorkflowRunStatus::Failed => ("✗", label, theme.status_failed),
@@ -2069,7 +1969,6 @@ mod tests {
             output: None,
             with: vec![],
             bot_name: None,
-            plugin_dirs: vec![],
         })
     }
 
@@ -2100,7 +1999,6 @@ mod tests {
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
-            group: None,
             inputs: vec![],
             body,
             always: vec![],
