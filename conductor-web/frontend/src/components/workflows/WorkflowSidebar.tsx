@@ -5,6 +5,7 @@ import type { WorkflowDefSummary, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { RunWorkflowModal } from "./RunWorkflowModal";
+import { getErrorMessage } from "../../utils/errorHandling";
 
 interface WorkflowSidebarProps {
   repoId: string;
@@ -17,6 +18,7 @@ export function WorkflowSidebar({ repoId, worktreeId, ticketId }: WorkflowSideba
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [runModalDef, setRunModalDef] = useState<WorkflowDefSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -26,8 +28,11 @@ export function WorkflowSidebar({ repoId, worktreeId, ticketId }: WorkflowSideba
       ]);
       setDefs(defsData);
       setRuns(runsData);
-    } catch {
-      // silently fail
+      setError(null);
+    } catch (e) {
+      const message = getErrorMessage(e, "Failed to load workflow data");
+      setError(message);
+      console.error("Failed to fetch workflow data:", e);
     } finally {
       setLoading(false);
     }
@@ -35,21 +40,44 @@ export function WorkflowSidebar({ repoId, worktreeId, ticketId }: WorkflowSideba
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  // Only poll when there are active workflow runs
+  useEffect(() => {
+    const hasActiveRuns = runs.some((r) => r.status === "running" || r.status === "waiting");
+    if (!hasActiveRuns) return;
+
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [runs, fetchData]);
 
   const handleCancel = async (runId: string) => {
     try {
       await api.cancelWorkflow(runId);
       fetchData();
-    } catch {
-      // ignore
+    } catch (e) {
+      const message = getErrorMessage(e, "Failed to cancel workflow");
+      setError(message);
+      console.error("Failed to cancel workflow:", e);
     }
   };
 
   if (loading) {
     return <div className="p-3 text-gray-500 text-sm">Loading...</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="p-3 text-red-500 text-sm">
+        <p>{error}</p>
+        <button
+          onClick={() => { setError(null); fetchData(); }}
+          className="mt-1 text-xs text-red-400 hover:text-red-300 underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
 
   const runningCount = runs.filter((r) => r.status === "running" || r.status === "waiting").length;

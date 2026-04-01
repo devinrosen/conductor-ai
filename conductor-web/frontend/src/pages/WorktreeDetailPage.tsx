@@ -23,6 +23,8 @@ import {
 } from "../hooks/useConductorEvents";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { WorkflowSidebar } from "../components/workflows/WorkflowSidebar";
+import { getErrorMessage } from "../utils/errorHandling";
+import { getSafeUrl } from "../utils/urlValidation";
 
 export function WorktreeDetailPage() {
   const { repoId, worktreeId } = useParams<{
@@ -131,7 +133,7 @@ export function WorktreeDetailPage() {
         setChildRuns([]);
       }
     } catch (e) {
-      setPageError({ message: e instanceof Error ? e.message : "Failed to load agent data", retry: refreshAgent });
+      setPageError({ message: getErrorMessage(e, "Failed to load agent data"), retry: refreshAgent });
     }
   }, [worktreeId]);
 
@@ -194,7 +196,7 @@ export function WorktreeDetailPage() {
       await api.startAgent(worktreeId, prompt, resumeSessionId);
       await refreshAgent();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to start agent";
+      const msg = getErrorMessage(e, "Failed to start agent");
       setPageError({ message: msg, retry: () => handleAgentSubmit(prompt, resumeSessionId) });
     } finally {
       setAgentLoading(false);
@@ -222,7 +224,7 @@ export function WorktreeDetailPage() {
       await api.orchestrateAgent(worktreeId, prompt);
       await refreshAgent();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to start orchestration";
+      const msg = getErrorMessage(e, "Failed to start orchestration");
       setPageError({ message: msg, retry: () => handleOrchestrateSubmit(prompt) });
     } finally {
       setAgentLoading(false);
@@ -238,7 +240,7 @@ export function WorktreeDetailPage() {
       await api.stopAgent(worktreeId);
       await refreshAgent();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to stop agent";
+      const msg = getErrorMessage(e, "Failed to stop agent");
       setPageError({ message: msg, retry: handleStopAgent });
     } finally {
       setAgentLoading(false);
@@ -251,7 +253,7 @@ export function WorktreeDetailPage() {
       await api.deleteWorktree(worktreeId!);
       navigate(`/repos/${repoId}`);
     } catch (e) {
-      setDeleteError(e instanceof Error ? e.message : "Failed to delete worktree");
+      setDeleteError(getErrorMessage(e, "Failed to delete worktree"));
     }
   }
 
@@ -264,7 +266,7 @@ export function WorktreeDetailPage() {
       setSelectedTicketId("");
       refetchWorktrees();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to link ticket";
+      const msg = getErrorMessage(err, "Failed to link ticket");
       setPageError({ message: msg, retry: handleLinkTicket });
     } finally {
       setLinkingTicket(false);
@@ -277,7 +279,7 @@ export function WorktreeDetailPage() {
       await api.setWorktreeModel(worktreeId!, model);
       refetchWorktrees();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to save model";
+      const msg = getErrorMessage(err, "Failed to save model");
       setPageError({ message: msg });
     }
   }
@@ -314,9 +316,9 @@ export function WorktreeDetailPage() {
           <div className="flex items-center gap-3 min-w-0">
             <h2 className="text-lg font-bold text-gray-900 truncate">{worktree.branch}</h2>
             <StatusBadge status={worktree.status} />
-            {linkedTicket && (
+            {linkedTicket && getSafeUrl(linkedTicket.url) && (
               <a
-                href={linkedTicket.url}
+                href={getSafeUrl(linkedTicket.url)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-indigo-500 hover:underline shrink-0"
@@ -324,6 +326,14 @@ export function WorktreeDetailPage() {
               >
                 #{linkedTicket.source_id}
               </a>
+            )}
+            {linkedTicket && !getSafeUrl(linkedTicket.url) && (
+              <span
+                className="text-xs text-gray-500 shrink-0"
+                title={`${linkedTicket.title} (unsafe URL)`}
+              >
+                #{linkedTicket.source_id}
+              </span>
             )}
           </div>
           {isActive && (
