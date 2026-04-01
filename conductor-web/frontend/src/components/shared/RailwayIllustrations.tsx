@@ -3,8 +3,8 @@
  * Line-art style, single accent color, dark-mode native.
  */
 
-const stroke = "#4A5568";
-const accent = "#CD853F"; // brass
+const stroke = "var(--color-gray-400, #4A5568)";
+const accent = "var(--color-indigo-800, #CD853F)"; // brass
 
 export function EmptyPlatform({ size = 64 }: { size?: number }) {
   return (
