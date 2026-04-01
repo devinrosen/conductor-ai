@@ -7,8 +7,16 @@ import { useThemeId } from "../../themes/useTheme";
 
 // Per-theme repo indicator colors (cycling palette)
 const indicatorColors = [
-  "#2B5EA7", "#39B54A", "#FF9500", "#D73020", "#CD853F",
-  "#00B5AD", "#9B0056", "#6CBE45", "#B36305", "#0098D4",
+  "var(--color-blue-500, #2B5EA7)",
+  "var(--color-green-500, #39B54A)",
+  "var(--color-yellow-500, #FF9500)",
+  "var(--color-red-500, #D73020)",
+  "var(--color-indigo-800, #CD853F)",
+  "var(--color-teal-500, #00B5AD)",
+  "var(--color-pink-500, #9B0056)",
+  "var(--color-green-400, #6CBE45)",
+  "var(--color-orange-500, #B36305)",
+  "var(--color-blue-400, #0098D4)",
 ];
 
 function RepoIndicator({ index }: { index: number }) {
