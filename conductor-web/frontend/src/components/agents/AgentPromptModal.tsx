@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useId } from "react";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 import type { KnownModel } from "../../api/types";
 import { api } from "../../api/client";
 
@@ -44,48 +45,14 @@ export function AgentPromptModal({
   const [useResume, setUseResume] = useState(!!resumeSessionId);
   const [models, setModels] = useState<KnownModel[]>([]);
   const dialogRef = useRef<HTMLDivElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
+
+  useFocusTrap(dialogRef, open, onCancel);
 
   useEffect(() => {
     setPrompt(initialPrompt);
     setUseResume(!!resumeSessionId);
   }, [initialPrompt, resumeSessionId]);
-
-  useEffect(() => {
-    if (!open) return;
-
-    previousFocusRef.current = document.activeElement as HTMLElement;
-    dialogRef.current?.focus();
-
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        onCancel();
-        return;
-      }
-      if (e.key === "Tab") {
-        const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-        );
-        if (!focusable || focusable.length === 0) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    }
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      previousFocusRef.current?.focus();
-    };
-  }, [open, onCancel]);
 
   useEffect(() => {
     if (open && models.length === 0) {
@@ -105,7 +72,7 @@ export function AgentPromptModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 modal-backdrop">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 modal-backdrop" onClick={onCancel}>
       <div
         ref={dialogRef}
         role="dialog"
@@ -113,6 +80,7 @@ export function AgentPromptModal({
         aria-labelledby={titleId}
         tabIndex={-1}
         className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full mx-4 outline-none modal-panel"
+        onClick={(e) => e.stopPropagation()}
       >
         <h3 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h3>
 
@@ -174,7 +142,7 @@ export function AgentPromptModal({
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 active:scale-95 transition-transform"
           >
             Cancel
           </button>

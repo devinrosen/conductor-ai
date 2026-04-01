@@ -37,10 +37,12 @@ export function WorktreeDetailPage() {
     refetch: refetchWorktrees,
   } = useApi(() => api.listWorktrees(repoId!), [repoId]);
 
+  const { data: repos } = useApi(() => api.listRepos(), []);
   const { data: tickets, refetch: refetchTickets } = useApi(
     () => api.listTickets(repoId!),
     [repoId],
   );
+  const repo = repos?.find((r) => r.id === repoId);
 
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
@@ -81,6 +83,9 @@ export function WorktreeDetailPage() {
     { key: "d", handler: () => setDeleteConfirm(true), description: "Delete worktree", enabled: noModalsOpen },
     { key: "l", handler: () => handleLaunchClick(), description: "Launch agent", enabled: noModalsOpen },
     { key: "w", handler: () => setSidebarOpen((v) => !v), description: "Toggle workflows sidebar", enabled: noModalsOpen },
+    { key: "c", handler: () => { if (worktree) { navigator.clipboard.writeText(worktree.path); setPathCopied(true); setTimeout(() => setPathCopied(false), 2000); } }, description: "Copy worktree path", enabled: noModalsOpen },
+    { key: "a", handler: () => setActivityExpanded((v) => !v), description: "Toggle activity log", enabled: noModalsOpen },
+    { key: "Escape", handler: () => navigate(`/repos/${repoId}`), description: "Back to repo", enabled: noModalsOpen },
   ]);
 
   const worktree = worktrees?.find((w) => w.id === worktreeId);
@@ -301,7 +306,7 @@ export function WorktreeDetailPage() {
       <div className="shrink-0 space-y-2 mb-3">
         <TransitBreadcrumb stops={[
           { label: "Home", href: "/" },
-          { label: "Repo", href: `/repos/${repoId}` },
+          { label: repo?.slug ?? "Repo", href: `/repos/${repoId}` },
           { label: worktree.branch, current: true },
         ]} />
 
@@ -370,6 +375,28 @@ export function WorktreeDetailPage() {
           </span>
           <span>Created <TimeAgo date={worktree.created_at} /></span>
           {worktree.completed_at && <span>Completed <TimeAgo date={worktree.completed_at} /></span>}
+          {isActive && !linkedTicket && availableTickets && availableTickets.length > 0 && (
+            <span className="flex items-center gap-1">
+              <select
+                value={selectedTicketId}
+                onChange={(e) => setSelectedTicketId(e.target.value)}
+                aria-label="Select a ticket to link"
+                className="rounded border border-gray-300 bg-white text-gray-900 px-1 py-0.5 text-xs"
+              >
+                <option value="">Link ticket...</option>
+                {availableTickets.map((t: Ticket) => (
+                  <option key={t.id} value={t.id}>#{t.source_id}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleLinkTicket}
+                disabled={!selectedTicketId || linkingTicket}
+                className="px-1.5 py-0.5 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50 active:scale-95 transition-transform disabled:opacity-50"
+              >
+                {linkingTicket ? "..." : "Link"}
+              </button>
+            </span>
+          )}
           <span className="flex items-center gap-1">
             Model:
             {editingModel ? (
@@ -399,31 +426,7 @@ export function WorktreeDetailPage() {
       {/* ── Two-Pane Layout ── */}
       <div className="flex gap-3 flex-1 min-h-0">
         {/* Main area — agent content */}
-        <div className="flex-1 min-w-0 space-y-3 overflow-y-auto">
-          {/* Link ticket inline (compact) */}
-          {isActive && !linkedTicket && availableTickets && availableTickets.length > 0 && (
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedTicketId}
-                onChange={(e) => setSelectedTicketId(e.target.value)}
-                aria-label="Select a ticket to link"
-                className="flex-1 rounded-md border border-gray-300 bg-white text-gray-900 px-2 py-1 text-sm"
-              >
-                <option value="">Link a ticket...</option>
-                {availableTickets.map((t: Ticket) => (
-                  <option key={t.id} value={t.id}>#{t.source_id} — {t.title}</option>
-                ))}
-              </select>
-              <button
-                onClick={handleLinkTicket}
-                disabled={!selectedTicketId || linkingTicket}
-                className="px-2 py-1 text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                {linkingTicket ? "Linking..." : "Link"}
-              </button>
-            </div>
-          )}
-
+        <div className="flex-1 min-w-0 flex flex-col gap-3 overflow-y-auto">
           {/* Agent status + plan combined */}
           {agentLoading && (
             <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -437,9 +440,6 @@ export function WorktreeDetailPage() {
               run={latestRun}
               runs={agentRuns}
               childRuns={childRuns}
-              onLaunch={handleLaunchClick}
-              onOrchestrate={handleOrchestrateClick}
-              onStop={() => setStopConfirm(true)}
             />
           ) : (
             <div className="rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-500">
@@ -453,7 +453,7 @@ export function WorktreeDetailPage() {
 
           {/* Activity Log — hero element */}
           {(agentEvents.length > 0 || isRunning) && (
-            <div>
+            <div className="flex flex-col flex-1 min-h-0">
               <div className="flex items-center justify-between mb-1.5">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
                   Activity Log
@@ -527,7 +527,7 @@ export function WorktreeDetailPage() {
         {/* ── Workflow Sidebar ── */}
         {worktreeId && repoId && (
           <div
-            className={`shrink-0 border-l border-gray-200 bg-gray-900 rounded-lg transition-all duration-200 overflow-hidden ${
+            className={`shrink-0 border-l border-gray-200 bg-gray-900 rounded-lg transition-all duration-200 overflow-hidden hidden lg:block ${
               sidebarOpen ? "w-72" : "w-10"
             }`}
           >
