@@ -78,7 +78,7 @@ pub fn execute_call_workflow(
         state.wf_mgr.update_step_status(
             &step_id,
             WorkflowStepStatus::Running,
-            None,
+            Some(&prior_child.id),
             None,
             None,
             None,
@@ -118,7 +118,7 @@ pub fn execute_call_workflow(
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Completed,
-                    None,
+                    Some(result.workflow_run_id.as_str()),
                     Some(&format!("Sub-workflow '{}' completed", node.workflow)),
                     Some(&context),
                     Some(&markers_json),
@@ -160,7 +160,7 @@ pub fn execute_call_workflow(
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
-                    None,
+                    Some(result.workflow_run_id.as_str()),
                     Some(&msg),
                     None,
                     None,
@@ -179,7 +179,7 @@ pub fn execute_call_workflow(
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
-                    None,
+                    Some(&prior_child.id),
                     Some(&msg),
                     None,
                     None,
@@ -291,7 +291,7 @@ pub fn execute_call_workflow(
                     state.wf_mgr.update_step_status(
                         &step_id,
                         WorkflowStepStatus::Completed,
-                        None,
+                        Some(result.workflow_run_id.as_str()),
                         Some(&format!("Sub-workflow '{}' completed", node.workflow)),
                         Some(&context),
                         Some(&markers_json),
@@ -330,7 +330,7 @@ pub fn execute_call_workflow(
                     state.wf_mgr.update_step_status(
                         &step_id,
                         WorkflowStepStatus::Failed,
-                        None,
+                        Some(result.workflow_run_id.as_str()),
                         Some(&msg),
                         None,
                         None,

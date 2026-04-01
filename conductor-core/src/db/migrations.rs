@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 57;
+pub const LATEST_SCHEMA_VERSION: u32 = 58;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -986,6 +986,24 @@ pub fn run(conn: &Connection) -> Result<()> {
             "migrations/057_backfill_workflow_run_target_label.sql"
         ))?;
         bump_version(conn, 57)?;
+    }
+
+    // Migration 058: drop the FK constraint on workflow_run_steps.child_run_id
+    // so that workflow-type steps can store a workflow_runs.id value (the iOS
+    // app needs this for navigation to child workflow run detail views).
+    if version < 58 {
+        let table_exists: bool = conn
+            .prepare(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_run_steps' LIMIT 1",
+            )
+            .and_then(|mut s| s.exists([]))
+            .unwrap_or(false);
+        if table_exists {
+            conn.execute_batch(include_str!(
+                "migrations/058_workflow_step_child_run_id_drop_fk.sql"
+            ))?;
+        }
+        bump_version(conn, 58)?;
     }
 
     Ok(())
