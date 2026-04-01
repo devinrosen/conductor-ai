@@ -1044,9 +1044,11 @@ pub async fn get_agent_run_by_id(
 ) -> Result<Json<AgentRun>, ApiError> {
     let db = state.db.lock().await;
     let mgr = AgentManager::new(&db);
-    let run = mgr
-        .get_run(&run_id)?
-        .ok_or_else(|| ApiError(ConductorError::Agent(format!("agent run {run_id} not found"))))?;
+    let run = mgr.get_run(&run_id)?.ok_or_else(|| {
+        ApiError(ConductorError::Agent(format!(
+            "agent run {run_id} not found"
+        )))
+    })?;
     Ok(Json(run))
 }
 
