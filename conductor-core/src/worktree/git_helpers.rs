@@ -391,22 +391,35 @@ pub(super) fn validate_branch_name(name: &str) -> Result<()> {
 
 /// Detect package manager and install dependencies if applicable.
 pub(super) fn install_deps(worktree_path: &Path) {
-    if worktree_path.join("package.json").exists() {
-        // Detect lockfile to choose the right package manager
-        let pm = if worktree_path.join("bun.lockb").exists()
-            || worktree_path.join("bun.lock").exists()
-        {
-            "bun"
-        } else if worktree_path.join("pnpm-lock.yaml").exists() {
-            "pnpm"
-        } else if worktree_path.join("yarn.lock").exists() {
-            "yarn"
-        } else {
-            "npm"
-        };
-        let _ = Command::new(pm)
-            .arg("install")
-            .current_dir(worktree_path)
-            .output();
+    let pkg = worktree_path.join("package.json");
+    if !pkg.exists() {
+        return;
     }
+    // Skip if the package.json has no dependencies to install.
+    if let Ok(contents) = std::fs::read_to_string(&pkg) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&contents) {
+            let has_deps = v.get("dependencies").is_some()
+                || v.get("devDependencies").is_some()
+                || v.get("peerDependencies").is_some();
+            if !has_deps {
+                return;
+            }
+        }
+    }
+    // Detect lockfile to choose the right package manager.
+    let pm = if worktree_path.join("bun.lockb").exists()
+        || worktree_path.join("bun.lock").exists()
+    {
+        "bun"
+    } else if worktree_path.join("pnpm-lock.yaml").exists() {
+        "pnpm"
+    } else if worktree_path.join("yarn.lock").exists() {
+        "yarn"
+    } else {
+        "npm"
+    };
+    let _ = Command::new(pm)
+        .arg("install")
+        .current_dir(worktree_path)
+        .output();
 }
