@@ -1,4 +1,5 @@
 {
+  "name": "conductor-ai",
   "private": true,
   "scripts": {
     "desktop": "cd conductor-desktop && cargo tauri dev",
