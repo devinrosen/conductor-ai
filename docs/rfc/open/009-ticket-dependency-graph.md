@@ -19,11 +19,17 @@ This RFC proposes:
 
 ---
 
-## Context: Relationship to RFC 006
+## Context: Supersedes RFC 006
 
-[RFC 006](006-workflow-driven-ticket-sources.md) proposes replacing the hardcoded `github`/`jira` source dispatch with workflow-driven ticket operations. That RFC addresses *how tickets are synced*. This RFC addresses *what is stored and how it is traversed*. They are complementary: RFC 006 determines the sync mechanism, RFC 009 determines the data model the sync populates.
+[RFC 006](../closed/006-workflow-driven-ticket-sources.md) proposed replacing the hardcoded `github`/`jira` source dispatch with workflow-driven ticket operations — teams would configure `.wf` files to sync, create, and update tickets in any external system without modifying conductor's core.
 
-The `feat/vantage-ticket-source` branch adds a third hardcoded source (Vantage) using the current `match source_type` pattern. That branch exposes the fan-out problem concretely — four separate dispatch sites must be updated per new source — and is the direct motivation for the source abstraction work described in RFC 006. This RFC does not re-litigate that; it assumes RFC 006's direction and focuses on what comes after a clean source abstraction exists.
+RFC 009 supersedes RFC 006 for two reasons:
+
+**1. The dependency data model breaks the workflow-driven sync approach.** `TicketInput.blocked_by` and `TicketInput.children` are typed fields that `TicketSyncer::upsert_tickets()` resolves into `ticket_dependencies` rows within a single transaction. A sync workflow implemented as a shell script cannot participate in that transaction — it would need to call `conductor ticket upsert --dep-from ... --dep-to ...` CLI commands, turning a typed Rust interface into a fragile CLI convention.
+
+**2. A `TicketSource` trait solves the dispatch problem with less complexity.** RFC 006's primary motivation was eliminating the `match source_type` fan-out across multiple dispatch sites. A `TicketSource` trait in `conductor-core` achieves this without the infrastructure RFC 006 required (per-repo config discovery, structured workflow output format, migration path for existing sources). Adding a new built-in source becomes one Rust file implementing the trait plus a registry entry — the same effort as writing a `.wf` file, with typed guarantees and full access to the DB transaction.
+
+The `TicketSource` trait does not solve zero-code extensibility (teams still cannot add Linear without a PR). If that becomes a real user need, it warrants a fresh RFC with RFC 009's dependency model constraints in scope. RFC 006 is closed.
 
 ---
 
@@ -178,9 +184,9 @@ A project with a cycle (A blocks B, B blocks A) would deadlock the queue silentl
 
 ## Dependencies
 
-- **[RFC 006](006-workflow-driven-ticket-sources.md) — Workflow-Driven Ticket Sources:** The source abstraction (removing the hardcoded `match source_type` dispatch) should land before per-source dependency population is added. Without it, each new source requires another dispatch site for dependency sync, compounding the existing problem.
-- **`feat/vantage-ticket-source` branch:** Adds Vantage as a source. The `blocked` status currently maps to `open` in `map_vantage_status()`. Once the `ticket_dependencies` table exists, the sync should extract Vantage's blocking relationships instead of discarding them.
-- **Structured workflow outputs ([RFC 006 open question 4](006-workflow-driven-ticket-sources.md)):** `for_each_ticket` needs to know when a child run succeeded vs. failed to decide whether to unblock dependents. This requires the workflow run result to be queryable, which is already the case via `workflow_runs.status` — no new mechanism needed.
+- **`TicketSource` trait refactor:** The `match source_type` dispatch currently spans four sites in the CLI and MCP layers. The trait should land before per-source dependency population is added — it gives each source a typed `sync() -> Vec<TicketInput>` return path, which is where `blocked_by` and `children` will be populated. Without it, dependency sync requires yet another dispatch arm per source.
+- **`feat/vantage-ticket-source` branch:** Adds Vantage as a source. The `blocked` status currently maps to `open` in `map_vantage_status()`. Once the `ticket_dependencies` table exists, the sync should extract Vantage's blocking relationships into `TicketInput.blocked_by` instead of discarding them.
+- **`workflow_runs.status` queryability:** `for_each_ticket` needs to know when a child run succeeded vs. failed to decide whether to unblock dependents. This is already the case via `workflow_runs.status` — no new mechanism needed.
 
 ---
 
