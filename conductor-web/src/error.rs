@@ -2,56 +2,67 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use conductor_core::error::ConductorError;
 
-pub struct ApiError(pub ConductorError);
+pub enum ApiError {
+    Core(ConductorError),
+    Internal(String),
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match &self.0 {
-            ConductorError::RepoNotFound { .. }
-            | ConductorError::WorktreeNotFound { .. }
-            | ConductorError::TicketNotFound { .. }
-            | ConductorError::WorkflowRunNotFound { .. } => StatusCode::NOT_FOUND,
-            ConductorError::RepoAlreadyExists { .. }
-            | ConductorError::WorktreeAlreadyExists { .. }
-            | ConductorError::IssueSourceAlreadyExists { .. }
-            | ConductorError::TicketAlreadyLinked
-            | ConductorError::WorkflowRunAlreadyActive { .. } => StatusCode::CONFLICT,
-            ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
-            ConductorError::Agent(_)
-            | ConductorError::InvalidInput(_)
-            | ConductorError::UnknownSourceType(_) => StatusCode::BAD_REQUEST,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        let (status, message) = match self {
+            ApiError::Internal(msg) => {
+                tracing::error!(error = %msg, "internal request error");
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+            ApiError::Core(ref err) => {
+                let status = match err {
+                    ConductorError::RepoNotFound { .. }
+                    | ConductorError::WorktreeNotFound { .. }
+                    | ConductorError::TicketNotFound { .. }
+                    | ConductorError::WorkflowRunNotFound { .. } => StatusCode::NOT_FOUND,
+                    ConductorError::RepoAlreadyExists { .. }
+                    | ConductorError::WorktreeAlreadyExists { .. }
+                    | ConductorError::IssueSourceAlreadyExists { .. }
+                    | ConductorError::TicketAlreadyLinked
+                    | ConductorError::WorkflowRunAlreadyActive { .. } => StatusCode::CONFLICT,
+                    ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
+                    ConductorError::Agent(_)
+                    | ConductorError::InvalidInput(_)
+                    | ConductorError::UnknownSourceType(_) => StatusCode::BAD_REQUEST,
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                let msg = err.to_string();
+                if status.is_server_error() {
+                    tracing::error!(status = status.as_u16(), error = %err, "request failed");
+                } else {
+                    tracing::warn!(status = status.as_u16(), error = %err, "request error");
+                }
+                (status, msg)
+            }
         };
-        if status.is_server_error() {
-            tracing::error!(status = status.as_u16(), error = %self.0, "request failed");
-        } else {
-            tracing::warn!(status = status.as_u16(), error = %self.0, "request error");
-        }
-        let body = serde_json::json!({ "error": self.0.to_string() });
+        let body = serde_json::json!({ "error": message });
         (status, axum::Json(body)).into_response()
     }
 }
 
 impl From<ConductorError> for ApiError {
     fn from(err: ConductorError) -> Self {
-        ApiError(err)
+        ApiError::Core(err)
     }
 }
 
 impl From<rusqlite::Error> for ApiError {
     fn from(err: rusqlite::Error) -> Self {
-        ApiError(ConductorError::Database(err))
+        ApiError::Core(ConductorError::Database(err))
     }
 }
 
 impl From<tokio::task::JoinError> for ApiError {
     fn from(err: tokio::task::JoinError) -> Self {
         if err.is_panic() {
-            ApiError(ConductorError::Internal("internal server error".into()))
+            ApiError::Internal("internal server error".into())
         } else {
-            ApiError(ConductorError::Internal(format!(
-                "blocking task failed: {err}"
-            )))
+            ApiError::Internal(format!("blocking task failed: {err}"))
         }
     }
 }
@@ -63,7 +74,7 @@ mod tests {
 
     #[test]
     fn unknown_source_type_maps_to_400() {
-        let err = ApiError(ConductorError::UnknownSourceType("bogus".into()));
+        let err = ApiError::Core(ConductorError::UnknownSourceType("bogus".into()));
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -79,11 +90,14 @@ mod tests {
         let join_err = result.unwrap_err();
         assert!(join_err.is_panic(), "expected a panic JoinError");
         let api_err = ApiError::from(join_err);
-        match api_err.0 {
-            ConductorError::Internal(msg) => {
+        match api_err {
+            ApiError::Internal(msg) => {
                 assert_eq!(msg, "internal server error");
             }
-            other => panic!("expected ConductorError::Internal, got {:?}", other),
+            other => panic!(
+                "expected ApiError::Internal, got {:?}",
+                other.into_response().status()
+            ),
         }
     }
 
@@ -95,14 +109,17 @@ mod tests {
         let join_err = handle.await.unwrap_err();
         assert!(!join_err.is_panic(), "expected a cancellation JoinError");
         let api_err = ApiError::from(join_err);
-        match api_err.0 {
-            ConductorError::Internal(msg) => {
+        match api_err {
+            ApiError::Internal(msg) => {
                 assert!(
                     msg.starts_with("blocking task failed:"),
                     "unexpected message: {msg}"
                 );
             }
-            other => panic!("expected ConductorError::Internal, got {:?}", other),
+            other => panic!(
+                "expected ApiError::Internal, got {:?}",
+                other.into_response().status()
+            ),
         }
     }
 }

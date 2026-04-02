@@ -141,18 +141,13 @@ pub async fn unsubscribe_push(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::AppState;
     use axum::http::StatusCode;
-    use conductor_core::{
-        config::{Config, WebPushConfig},
-        test_helpers::create_test_conn,
-    };
+    use conductor_core::config::{Config, WebPushConfig};
+    use tempfile::NamedTempFile;
 
-    async fn setup_test_state() -> AppState {
-        // create_test_conn() runs all migrations, including the one that creates
-        // push_subscriptions (migration 052).
-        let db = create_test_conn();
-
+    fn setup_test_state() -> (AppState, NamedTempFile) {
+        let tmp = NamedTempFile::new().expect("create temp db file");
+        let db = conductor_core::db::open_database(tmp.path()).expect("open temp db");
         let config = Config {
             web_push: WebPushConfig {
                 vapid_public_key: Some("test_public_key".to_string()),
@@ -161,13 +156,13 @@ mod tests {
             },
             ..Default::default()
         };
-
-        AppState::new(db, config, std::path::PathBuf::new(), 100)
+        let db_path = tmp.path().to_path_buf();
+        (AppState::new(db, config, db_path, 100), tmp)
     }
 
     #[tokio::test]
     async fn test_get_vapid_public_key() {
-        let state = setup_test_state().await;
+        let (state, _tmp) = setup_test_state();
 
         let result = get_vapid_public_key(State(state)).await;
 
@@ -178,7 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscribe_push() {
-        let state = setup_test_state().await;
+        let (state, _tmp) = setup_test_state();
 
         let request = PushSubscribeRequest {
             endpoint: "https://example.com/push".to_string(),
@@ -197,9 +192,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_vapid_public_key_not_configured() {
-        let db = create_test_conn();
+        let tmp = NamedTempFile::new().expect("create temp db file");
+        let db = conductor_core::db::open_database(tmp.path()).expect("open temp db");
+        let db_path = tmp.path().to_path_buf();
         let config = Config::default(); // No VAPID keys configured
-        let state = AppState::new(db, config, std::path::PathBuf::new(), 100);
+        let state = AppState::new(db, config, db_path, 100);
 
         let result = get_vapid_public_key(State(state)).await;
 

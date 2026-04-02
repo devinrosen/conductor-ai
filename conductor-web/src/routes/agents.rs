@@ -83,7 +83,9 @@ pub async fn list_all_agent_runs(
         .status
         .as_deref()
         .filter(|s| !s.is_empty())
-        .map(|s| AgentRunStatus::from_str(s).map_err(|e| ApiError(ConductorError::InvalidInput(e))))
+        .map(|s| {
+            AgentRunStatus::from_str(s).map_err(|e| ApiError::Core(ConductorError::InvalidInput(e)))
+        })
         .transpose()?;
 
     let db = state.db.lock().await;
@@ -744,14 +746,14 @@ fn verify_feedback_ownership(
     feedback_id: &str,
     worktree_id: &str,
 ) -> Result<(), ApiError> {
-    let fb = mgr
-        .get_feedback(feedback_id)?
-        .ok_or_else(|| ApiError(ConductorError::Agent("feedback request not found".into())))?;
+    let fb = mgr.get_feedback(feedback_id)?.ok_or_else(|| {
+        ApiError::Core(ConductorError::Agent("feedback request not found".into()))
+    })?;
     let run = mgr
         .get_run(&fb.run_id)?
-        .ok_or_else(|| ApiError(ConductorError::Agent("agent run not found".into())))?;
+        .ok_or_else(|| ApiError::Core(ConductorError::Agent("agent run not found".into())))?;
     if run.worktree_id.as_deref() != Some(worktree_id) {
-        return Err(ApiError(ConductorError::Agent(
+        return Err(ApiError::Core(ConductorError::Agent(
             "feedback request does not belong to this worktree".into(),
         )));
     }
@@ -1045,7 +1047,7 @@ pub async fn get_agent_run_by_id(
     let db = state.db.lock().await;
     let mgr = AgentManager::new(&db);
     let run = mgr.get_run(&run_id)?.ok_or_else(|| {
-        ApiError(ConductorError::Agent(format!(
+        ApiError::Core(ConductorError::Agent(format!(
             "agent run {run_id} not found"
         )))
     })?;
