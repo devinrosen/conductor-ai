@@ -134,7 +134,10 @@ async fn main() -> Result<()> {
     let reaper_state = state.clone();
     let reaper_config = state.config.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(30),
+        );
         let mut seen_agent_statuses: std::collections::HashMap<
             String,
             conductor_core::agent::AgentRunStatus,
