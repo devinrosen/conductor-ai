@@ -1543,8 +1543,8 @@ mod tests {
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-notify-1' AND event_type = 'completed'",
-                    [],
+                    "SELECT COUNT(*) FROM notification_log WHERE entity_id = ?1 AND event_type = ?2",
+                    rusqlite::params!["run-notify-1", "completed"],
                     |r| r.get(0),
                 )
                 .unwrap();
