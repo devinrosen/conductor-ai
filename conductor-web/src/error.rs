@@ -73,6 +73,13 @@ mod tests {
     use axum::response::IntoResponse;
 
     #[test]
+    fn internal_variant_maps_to_500() {
+        let err = ApiError::Internal("something went wrong".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
     fn unknown_source_type_maps_to_400() {
         let err = ApiError::Core(ConductorError::UnknownSourceType("bogus".into()));
         let response = err.into_response();
