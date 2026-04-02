@@ -245,12 +245,7 @@ mod tests {
         // Insert a second repo so the route can be exercised
         {
             let db = state.db.lock().await;
-            db.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
-                [],
-            )
-            .unwrap();
+            conductor_core::test_helpers::insert_test_repo(&db, "r2", "other-repo", "/tmp/repo2");
         }
         // w1 belongs to r1 — requesting it under r2 must return 404
         let (status, _) = send_get("/api/repos/r2/worktrees/w1", state).await;
@@ -296,12 +291,7 @@ mod tests {
         let state = seeded_state();
         {
             let db = state.db.lock().await;
-            db.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
-                [],
-            )
-            .unwrap();
+            conductor_core::test_helpers::insert_test_repo(&db, "r2", "other-repo", "/tmp/repo2");
         }
         // w1 belongs to r1 — deleting it under r2 must return 404
         let (status, _) = send_delete("/api/repos/r2/worktrees/w1", state).await;
