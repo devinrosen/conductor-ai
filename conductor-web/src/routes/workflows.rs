@@ -1309,14 +1309,23 @@ mod tests {
         let repo_id = "01TESTREPOULID0000000000001";
         {
             let db = state.db.lock().await;
-            db.execute_batch(&format!(
+            db.execute(
                 "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES ('{repo_id}', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
-                 INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-                 VALUES ('wt1', '{repo_id}', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z');
-                 INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
-                 VALUES ('ar1', 'wt1', 'test', 'running', '2024-01-01T00:00:00Z');"
-            ))
+                 VALUES (?1, 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                rusqlite::params![repo_id],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('wt1', ?1, 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
+                rusqlite::params![repo_id],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
+                 VALUES ('ar1', 'wt1', 'test', 'running', '2024-01-01T00:00:00Z')",
+                [],
+            )
             .unwrap();
 
             let mgr = WorkflowManager::new(&db);
@@ -2081,8 +2090,15 @@ mod tests {
             // Insert a second agent run to act as the child
             db.execute(
                 "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                 VALUES ('ar2', 'w1', 'child', 'running', '2024-01-01T00:00:00Z', '/nonexistent/path/log.txt')",
-                [],
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    "ar2",
+                    "w1",
+                    "child",
+                    "running",
+                    "2024-01-01T00:00:00Z",
+                    "/nonexistent/path/log.txt"
+                ],
             )
             .unwrap();
             let mgr = WorkflowManager::new(&db);
