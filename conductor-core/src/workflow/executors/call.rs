@@ -194,8 +194,7 @@ fn execute_call_with_schema(
         let base_turns = state.total_turns;
         let base_dur = state.total_duration_ms;
         let partial_run_id = child_run.id.clone();
-        let log_path = crate::config::agent_log_dir()
-            .join(format!("{}.log", child_run.id))
+        let log_path = crate::config::agent_log_path(&child_run.id)
             .to_string_lossy()
             .into_owned();
 
