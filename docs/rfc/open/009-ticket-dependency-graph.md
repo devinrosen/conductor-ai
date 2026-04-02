@@ -220,6 +220,18 @@ Run against an epic or Vantage project deliverable, this workflow automatically:
 
 ---
 
+## Future Extension: Conflict-Score-Aware Batching
+
+Among tickets that are simultaneously ready (no dependency ordering constraint between them), `for_each_ticket` currently picks any `max_parallel` tickets. A future optimization could use **Jaccard overlap scoring** over a `ticket_impact` table to prefer low-overlap ticket pairs for the same parallel batch — minimizing merge conflict risk without changing the correctness of dependency ordering.
+
+```
+overlap(A, B) = |files(A) ∩ files(B)| / |files(A) ∪ files(B)|
+```
+
+This requires a `ticket_impact` table populated by static label-to-path mappings, AI analysis, or historical merge data — none of which are in scope for this RFC. Noted here as the natural second-order optimization once that data exists. See closed issues #432–#436 for prior design work on the impact data model.
+
+---
+
 ## Next Steps
 
 - [ ] Open a GH issue for the `ticket_dependencies` schema migration (prerequisite, self-contained)
