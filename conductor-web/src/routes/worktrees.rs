@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
 
-use conductor_core::config::{load_config, Config};
+use conductor_core::config::Config;
 use conductor_core::db::open_database;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
@@ -13,13 +13,13 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
 
-/// Open a fresh SQLite connection and load config inside a `spawn_blocking` closure.
+/// Open a fresh SQLite connection inside a `spawn_blocking` closure.
 /// Reduces boilerplate shared by all three worktree mutation handlers.
 fn open_db_and_config(
     db_path: &std::path::Path,
+    config: Config,
 ) -> conductor_core::error::Result<(rusqlite::Connection, Config)> {
     let conn = open_database(db_path)?;
-    let config = load_config()?;
     Ok((conn, config))
 }
 
@@ -81,11 +81,12 @@ pub async fn create_worktree(
         RepoManager::new(&db, &config).get_by_id(&repo_id)?.slug
     };
     let db_path = state.db_path.clone();
+    let config = state.config.read().await.clone();
     let name = body.name.clone();
     let from_branch = body.from_branch.clone();
     let ticket_id = body.ticket_id.clone();
     let wt = tokio::task::spawn_blocking(move || {
-        let (conn, config) = open_db_and_config(&db_path)?;
+        let (conn, config) = open_db_and_config(&db_path, config)?;
         let (wt, _warnings) = WorktreeManager::new(&conn, &config).create(
             &repo_slug,
             &name,
@@ -119,8 +120,9 @@ pub async fn delete_worktree(
     Path(id): Path<String>,
 ) -> Result<Json<Worktree>, ApiError> {
     let db_path = state.db_path.clone();
+    let config = state.config.read().await.clone();
     let wt = tokio::task::spawn_blocking(move || {
-        let (conn, config) = open_db_and_config(&db_path)?;
+        let (conn, config) = open_db_and_config(&db_path, config)?;
         WorktreeManager::new(&conn, &config).delete_by_id(&id)
     })
     .await??;
@@ -147,8 +149,9 @@ pub async fn delete_worktree_for_repo(
     Path((repo_id, id)): Path<(String, String)>,
 ) -> Result<Json<Worktree>, ApiError> {
     let db_path = state.db_path.clone();
+    let config = state.config.read().await.clone();
     let wt = tokio::task::spawn_blocking(move || {
-        let (conn, config) = open_db_and_config(&db_path)?;
+        let (conn, config) = open_db_and_config(&db_path, config)?;
         WorktreeManager::new(&conn, &config).delete_by_id_for_repo(&id, &repo_id)
     })
     .await??;
