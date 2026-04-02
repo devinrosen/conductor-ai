@@ -551,4 +551,28 @@ mod tests {
         assert_eq!(fetched.repo_id.as_deref(), Some("r1"));
         assert!(fetched.worktree_id.is_none());
     }
+
+    #[test]
+    fn test_create_run_with_parent_log_file() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run_with_parent(
+                Some("w1"),
+                None,
+                "Fix the bug",
+                Some("feat-test"),
+                None,
+                None,
+                None,
+                Some("/tmp/agent-logs/run.log"),
+            )
+            .unwrap();
+
+        assert_eq!(run.log_file.as_deref(), Some("/tmp/agent-logs/run.log"));
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.log_file.as_deref(), Some("/tmp/agent-logs/run.log"));
+    }
 }
