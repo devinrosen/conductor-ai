@@ -334,6 +334,7 @@ pub async fn run_workflow(
         std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
     let response_slot = std::sync::Arc::clone(&run_id_slot);
     let state_clone = state.clone();
+    let db_path = state.db_path.clone();
     tokio::task::spawn_blocking(move || {
         let def = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, &workflow_name) {
             Ok(d) => d,
@@ -348,10 +349,6 @@ pub async fn run_workflow(
             tracing::error!("Workflow input validation failed: {e}");
             return;
         }
-
-        // Use the same database path as the web server to ensure consistency.
-        // This is critical for tests where CONDUCTOR_DB_PATH may override the default.
-        let db_path = conductor_core::config::db_path();
 
         let params = conductor_core::workflow::WorkflowExecStandalone {
             config,
@@ -644,6 +641,7 @@ pub async fn post_workflow_run(
         };
 
         let notifications = state_clone.config.read().await.notifications.clone();
+        let db_path = state_clone.db_path.clone();
 
         match result {
             Ok(res) => {
@@ -653,16 +651,15 @@ pub async fn post_workflow_run(
                 let wf_name = workflow_name.clone();
                 let label = target_label.clone();
                 let notify_run_id = res.workflow_run_id.clone();
+                let db_path_ok = db_path.clone();
                 tokio::task::spawn_blocking(move || {
-                    let conn =
-                        match conductor_core::db::open_database(&conductor_core::config::db_path())
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::error!("notify: DB open failed: {e}");
-                                return;
-                            }
-                        };
+                    let conn = match conductor_core::db::open_database(&db_path_ok) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!("notify: DB open failed: {e}");
+                            return;
+                        }
+                    };
                     notify_workflow(
                         &conn,
                         &notifications,
@@ -689,15 +686,13 @@ pub async fn post_workflow_run(
                 let wf_name = workflow_name.clone();
                 let label = target_label.clone();
                 tokio::task::spawn_blocking(move || {
-                    let conn =
-                        match conductor_core::db::open_database(&conductor_core::config::db_path())
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::error!("notify: DB open failed: {e}");
-                                return;
-                            }
-                        };
+                    let conn = match conductor_core::db::open_database(&db_path) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!("notify: DB open failed: {e}");
+                            return;
+                        }
+                    };
                     notify_workflow(
                         &conn,
                         &notifications,
@@ -980,6 +975,7 @@ pub async fn resume_workflow_endpoint(
     let state_clone = state.clone();
     let run_id = id.clone();
     let notifications = config.notifications.clone();
+    let db_path = state.db_path.clone();
     tokio::task::spawn_blocking(move || {
         let params = WorkflowResumeStandalone {
             config,
@@ -993,7 +989,7 @@ pub async fn resume_workflow_endpoint(
 
         let result = conductor_core::workflow::resume_workflow_standalone(&params);
 
-        let conn = match conductor_core::db::open_database(&conductor_core::config::db_path()) {
+        let conn = match conductor_core::db::open_database(&db_path) {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("notify: DB open failed: {e}");
