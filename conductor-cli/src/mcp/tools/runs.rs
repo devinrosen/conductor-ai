@@ -336,7 +336,8 @@ pub(super) fn tool_get_step_log(
     match std::fs::read_to_string(&log_path) {
         Ok(contents) => tool_ok(contents),
         Err(e) => tool_err(format!(
-            "Log file not found for step '{step_name}' (agent run {child_run_id}): {e}"
+            "Log file not found for step '{step_name}' (agent run {child_run_id}) at '{}': {e}",
+            log_path.display()
         )),
     }
 }
@@ -1025,12 +1026,17 @@ mod tests {
         let (_f, db) = make_test_db();
         let (run_id, step_id) = make_run_with_step(&db, "build");
 
-        // Create a child agent run and link it to the step.
+        // Create a child agent run with a known nonexistent log_file path.
         let conn = open_database(&db).expect("open db");
         let agent_mgr = AgentManager::new(&conn);
         let child_run = agent_mgr
             .create_run(None, "agent", None, None)
             .expect("create child run");
+        conn.execute(
+            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
+            rusqlite::params!["/nonexistent/path/log.txt", child_run.id],
+        )
+        .expect("set log_file");
         let mgr = WorkflowManager::new(&conn);
         mgr.update_step_status(
             &step_id,
@@ -1053,6 +1059,18 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap_or("");
         assert!(text.contains("Log file not found"), "got: {text}");
+        assert!(
+            text.contains("/nonexistent/path/log.txt"),
+            "error should include log file path; got: {text}"
+        );
+        assert!(
+            text.contains("build"),
+            "error should include step name; got: {text}"
+        );
+        assert!(
+            text.contains(&child_run.id),
+            "error should include agent run id; got: {text}"
+        );
     }
 
     #[test]
