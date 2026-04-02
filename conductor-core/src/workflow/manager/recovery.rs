@@ -182,8 +182,7 @@ impl<'a> WorkflowManager<'a> {
     }
 
     /// Detect workflow runs that are stuck in `running` status because the
-    /// executor process died between steps, and auto-resume each one in a
-    /// background thread.
+    /// executor process died between steps.
     ///
     /// A run is "stuck" when ALL of the following hold:
     /// 1. `status = 'running'`
@@ -193,13 +192,11 @@ impl<'a> WorkflowManager<'a> {
     ///    current steps are terminal
     /// 4. The most recent step's `ended_at` is older than `threshold_secs`
     ///
-    /// Returns the number of runs for which a resume thread was spawned.
-    pub fn reap_stuck_workflow_runs(
-        &self,
-        config: &crate::config::Config,
-        threshold_secs: i64,
-    ) -> Result<usize> {
-        let stuck_ids: Vec<String> = query_collect(
+    /// Returns the IDs of all stuck runs. Callers are responsible for resuming
+    /// them (e.g. by spawning a thread per ID and calling
+    /// `resume_workflow_standalone`).
+    pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
+        query_collect(
             self.conn,
             "SELECT id FROM ( \
                SELECT wr.id, \
@@ -220,38 +217,7 @@ impl<'a> WorkflowManager<'a> {
                     - CAST(strftime('%s', last_step_ended) AS INTEGER)) > ?1",
             params![threshold_secs],
             |row| row.get(0),
-        )?;
-
-        if stuck_ids.is_empty() {
-            return Ok(0);
-        }
-
-        let mut resumed = 0usize;
-        for run_id in stuck_ids {
-            tracing::info!(run_id = %run_id, "Auto-resuming stuck workflow run");
-            let config_clone = config.clone();
-            let conductor_bin_dir = crate::workflow::types::resolve_conductor_bin_dir();
-            std::thread::spawn(move || {
-                let params = crate::workflow::types::WorkflowResumeStandalone {
-                    config: config_clone,
-                    workflow_run_id: run_id.clone(),
-                    model: None,
-                    from_step: None,
-                    restart: false,
-                    db_path: None,
-                    conductor_bin_dir,
-                };
-                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
-                    tracing::warn!(
-                        run_id = %run_id,
-                        "Auto-resume of stuck workflow run failed: {e}"
-                    );
-                }
-            });
-            resumed += 1;
-        }
-
-        Ok(resumed)
+        )
     }
 
     /// Find the most-recently-started child workflow run that can be resumed:

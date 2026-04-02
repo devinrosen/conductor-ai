@@ -2181,7 +2181,7 @@ fn test_get_active_steps_for_runs_empty_ids() {
 }
 
 // ---------------------------------------------------------------------------
-// reap_stuck_workflow_runs — detection logic tests
+// detect_stuck_workflow_run_ids — detection logic tests
 // ---------------------------------------------------------------------------
 
 /// Insert a workflow run in 'running' status with no parent_workflow_run_id.
@@ -2241,10 +2241,9 @@ fn test_reap_stuck_workflow_runs_detects_stale_run() {
     );
 
     let mgr = WorkflowManager::new(&conn);
-    let config = Config::default();
     // threshold_secs = 60: elapsed >> 60 → detected
-    let resumed = mgr.reap_stuck_workflow_runs(&config, 60).unwrap();
-    assert_eq!(resumed, 1, "stale run should be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert_eq!(ids.len(), 1, "stale run should be detected");
 }
 
 #[test]
@@ -2262,10 +2261,9 @@ fn test_reap_stuck_workflow_runs_skips_fresh_run() {
     .unwrap();
 
     let mgr = WorkflowManager::new(&conn);
-    let config = Config::default();
     // Very large threshold — a just-completed step should not be detected.
-    let resumed = mgr.reap_stuck_workflow_runs(&config, 999_999).unwrap();
-    assert_eq!(resumed, 0, "fresh run must not be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(999_999).unwrap();
+    assert_eq!(ids.len(), 0, "fresh run must not be detected");
 }
 
 #[test]
@@ -2275,8 +2273,8 @@ fn test_reap_stuck_workflow_runs_skips_pending_step() {
     insert_non_terminal_step(&conn, "s1", "pending-run", "pending");
 
     let mgr = WorkflowManager::new(&conn);
-    let resumed = mgr.reap_stuck_workflow_runs(&Config::default(), 0).unwrap();
-    assert_eq!(resumed, 0, "run with pending step must not be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "run with pending step must not be detected");
 }
 
 #[test]
@@ -2286,8 +2284,8 @@ fn test_reap_stuck_workflow_runs_skips_running_step() {
     insert_non_terminal_step(&conn, "s1", "running-step-run", "running");
 
     let mgr = WorkflowManager::new(&conn);
-    let resumed = mgr.reap_stuck_workflow_runs(&Config::default(), 0).unwrap();
-    assert_eq!(resumed, 0, "run with running step must not be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "run with running step must not be detected");
 }
 
 #[test]
@@ -2297,8 +2295,8 @@ fn test_reap_stuck_workflow_runs_skips_waiting_step() {
     insert_non_terminal_step(&conn, "s1", "waiting-step-run", "waiting");
 
     let mgr = WorkflowManager::new(&conn);
-    let resumed = mgr.reap_stuck_workflow_runs(&Config::default(), 0).unwrap();
-    assert_eq!(resumed, 0, "run with waiting step must not be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "run with waiting step must not be detected");
 }
 
 #[test]
@@ -2321,8 +2319,8 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     insert_terminal_step(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
-    let resumed = mgr.reap_stuck_workflow_runs(&Config::default(), 0).unwrap();
-    assert_eq!(resumed, 0, "sub-workflow must not be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "sub-workflow must not be detected");
 }
 
 #[test]
@@ -2354,8 +2352,8 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
     );
 
     let mgr = WorkflowManager::new(&conn);
-    let resumed = mgr.reap_stuck_workflow_runs(&Config::default(), 0).unwrap();
-    assert_eq!(resumed, 0, "non-running status runs must not be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "non-running status runs must not be detected");
 }
 
 #[test]
@@ -2365,8 +2363,8 @@ fn test_reap_stuck_workflow_runs_skips_no_steps() {
     // No steps inserted → last_step_ended IS NULL → skipped by SQL guard.
 
     let mgr = WorkflowManager::new(&conn);
-    let resumed = mgr.reap_stuck_workflow_runs(&Config::default(), 0).unwrap();
-    assert_eq!(resumed, 0, "run with no steps must not be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "run with no steps must not be detected");
 }
 
 #[test]
@@ -2380,8 +2378,6 @@ fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
     insert_terminal_step(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
-    let resumed = mgr
-        .reap_stuck_workflow_runs(&Config::default(), 60)
-        .unwrap();
-    assert_eq!(resumed, 3, "all 3 stuck runs should be detected");
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert_eq!(ids.len(), 3, "all 3 stuck runs should be detected");
 }
