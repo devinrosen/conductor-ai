@@ -1,7 +1,8 @@
 # RFC 006: Workflow-Driven Ticket Sources
 
-**Status:** Draft
+**Status:** Closed — superseded by [RFC 009](../open/009-ticket-dependency-graph.md)
 **Date:** 2026-03-16
+**Closed:** 2026-04-01
 **Author:** Devin
 **Closes:** [#146](https://github.com/devinrosen/conductor-ai/issues/146)
 
