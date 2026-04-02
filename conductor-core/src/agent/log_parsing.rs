@@ -415,9 +415,7 @@ pub(crate) fn scan_partial_token_usage(path: &str) -> (i64, i64, i64, i64) {
         if value.get("type").and_then(|v| v.as_str()) != Some("assistant") {
             continue;
         }
-        let usage = value
-            .get("message")
-            .and_then(|m| m.get("usage"));
+        let usage = value.get("message").and_then(|m| m.get("usage"));
         let Some(usage) = usage else {
             continue;
         };
@@ -427,10 +425,16 @@ pub(crate) fn scan_partial_token_usage(path: &str) -> (i64, i64, i64, i64) {
         if let Some(v) = usage.get("output_tokens").and_then(|v| v.as_i64()) {
             output += v;
         }
-        if let Some(v) = usage.get("cache_read_input_tokens").and_then(|v| v.as_i64()) {
+        if let Some(v) = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_i64())
+        {
             cache_read += v;
         }
-        if let Some(v) = usage.get("cache_creation_input_tokens").and_then(|v| v.as_i64()) {
+        if let Some(v) = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_i64())
+        {
             cache_creation += v;
         }
     }
