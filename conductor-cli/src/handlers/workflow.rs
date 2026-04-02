@@ -17,6 +17,14 @@ pub fn handle_workflow(
     conn: &Connection,
     config: &Config,
 ) -> Result<()> {
+    // Reap stuck workflow runs before handling any workflow command.
+    {
+        let wf_mgr = WorkflowManager::new(conn);
+        if let Err(e) = wf_mgr.reap_stuck_workflow_runs(config, 60) {
+            eprintln!("Warning: reap_stuck_workflow_runs failed: {e}");
+        }
+    }
+
     match command {
         WorkflowCommands::Runs { repo, worktree } => {
             let repo_mgr = RepoManager::new(conn, config);

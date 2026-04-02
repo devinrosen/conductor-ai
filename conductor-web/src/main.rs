@@ -118,6 +118,13 @@ async fn main() -> Result<()> {
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed on startup: {e}"),
         }
+        match wf_mgr.reap_stuck_workflow_runs(&config, 60) {
+            Ok(n) if n > 0 => {
+                tracing::info!("Auto-resuming {n} stuck workflow run(s) on startup")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("reap_stuck_workflow_runs failed on startup: {e}"),
+        }
     }
 
     let state = AppState {
@@ -176,6 +183,11 @@ async fn main() -> Result<()> {
                 }
                 let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
                 wf_mgr.reap_orphaned_workflow_runs()?;
+                match wf_mgr.reap_stuck_workflow_runs(&cfg, 60) {
+                    Ok(n) if n > 0 => tracing::info!("Auto-resuming {n} stuck workflow run(s)"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reap_stuck_workflow_runs failed: {e}"),
+                }
 
                 // Detect agent run terminal transitions and fire notifications.
                 let latest_runs = mgr.latest_runs_by_worktree()?;

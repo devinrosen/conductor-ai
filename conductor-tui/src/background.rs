@@ -339,6 +339,11 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed: {e}"),
             }
+            match wf_mgr.reap_stuck_workflow_runs(&config, 60) {
+                Ok(n) if n > 0 => tracing::info!("Auto-resuming {n} stuck workflow run(s)"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_stuck_workflow_runs failed: {e}"),
+            }
         }
     }
 
