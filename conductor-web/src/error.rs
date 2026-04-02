@@ -44,6 +44,14 @@ impl From<rusqlite::Error> for ApiError {
     }
 }
 
+impl From<tokio::task::JoinError> for ApiError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        ApiError(ConductorError::Internal(format!(
+            "blocking task failed: {err}"
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -119,6 +119,9 @@ pub enum ConductorError {
 
     #[error("unknown ticket source type: {0}")]
     UnknownSourceType(String),
+
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl ConductorError {
@@ -162,6 +165,7 @@ impl ConductorError {
             Self::WorkflowRunAlreadyActive { .. } => 61,
             Self::WorkflowRunNotFound { .. } => 62,
             Self::UnknownSourceType(_) => 27,
+            Self::Internal(_) => 1,
         }
     }
 }
