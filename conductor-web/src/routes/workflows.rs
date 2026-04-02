@@ -2020,22 +2020,29 @@ mod tests {
 
     // --- get_workflow_step_log tests ---
 
-    /// Seed the minimum FK chain needed for workflow run tests.
+    /// Seed the minimum FK chain needed for workflow run tests via AgentManager.
+    /// Returns the generated run id.
     fn insert_agent_run(
         db: &rusqlite::Connection,
-        id: &str,
         worktree_id: &str,
         prompt: &str,
         status: &str,
-        started_at: &str,
         log_file: &str,
-    ) {
-        db.execute(
-            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![id, worktree_id, prompt, status, started_at, log_file],
-        )
-        .unwrap();
+    ) -> String {
+        use conductor_core::agent::AgentManager;
+        let mgr = AgentManager::new(db);
+        let run = mgr
+            .create_run(Some(worktree_id), prompt, None, None)
+            .expect("create agent run");
+        mgr.update_run_log_file(&run.id, log_file)
+            .expect("set log_file");
+        if status == "completed" {
+            mgr.update_run_completed(
+                &run.id, None, None, None, None, None, None, None, None, None,
+            )
+            .expect("complete run");
+        }
+        run.id
     }
 
     async fn seed_workflow_fixtures(state: &AppState) -> String {
@@ -2105,15 +2112,7 @@ mod tests {
         {
             let db = state.db.lock().await;
             // Insert a second agent run to act as the child
-            insert_agent_run(
-                &db,
-                "ar2",
-                "w1",
-                "child",
-                "running",
-                "2024-01-01T00:00:00Z",
-                "/nonexistent/path/log.txt",
-            );
+            let ar2 = insert_agent_run(&db, "w1", "child", "running", "/nonexistent/path/log.txt");
             let mgr = WorkflowManager::new(&db);
             let step_id = mgr
                 .insert_step(&run_id, "my-step", "actor", false, 0, 0)
@@ -2121,7 +2120,7 @@ mod tests {
             mgr.update_step_status(
                 &step_id,
                 conductor_core::workflow::WorkflowStepStatus::Running,
-                Some("ar2"),
+                Some(&ar2),
                 None,
                 None,
                 None,
@@ -2152,15 +2151,7 @@ mod tests {
 
         {
             let db = state.db.lock().await;
-            insert_agent_run(
-                &db,
-                "ar2",
-                "w1",
-                "child",
-                "running",
-                "2024-01-01T00:00:00Z",
-                &log_path,
-            );
+            let ar2 = insert_agent_run(&db, "w1", "child", "running", &log_path);
             let mgr = WorkflowManager::new(&db);
             let step_id = mgr
                 .insert_step(&run_id, "my-step", "actor", false, 0, 0)
@@ -2168,7 +2159,7 @@ mod tests {
             mgr.update_step_status(
                 &step_id,
                 conductor_core::workflow::WorkflowStepStatus::Running,
-                Some("ar2"),
+                Some(&ar2),
                 None,
                 None,
                 None,
@@ -2202,25 +2193,9 @@ mod tests {
         {
             let db = state.db.lock().await;
             // Agent run for iteration 0
-            insert_agent_run(
-                &db,
-                "ar-iter0",
-                "w1",
-                "child-iter0",
-                "completed",
-                "2024-01-01T00:00:00Z",
-                &path0,
-            );
+            let ar_iter0 = insert_agent_run(&db, "w1", "child-iter0", "completed", &path0);
             // Agent run for iteration 1
-            insert_agent_run(
-                &db,
-                "ar-iter1",
-                "w1",
-                "child-iter1",
-                "running",
-                "2024-01-01T00:00:01Z",
-                &path1,
-            );
+            let ar_iter1 = insert_agent_run(&db, "w1", "child-iter1", "running", &path1);
             let mgr = WorkflowManager::new(&db);
             // Insert iteration 0 step
             let step0_id = mgr
@@ -2229,7 +2204,7 @@ mod tests {
             mgr.update_step_status(
                 &step0_id,
                 conductor_core::workflow::WorkflowStepStatus::Completed,
-                Some("ar-iter0"),
+                Some(&ar_iter0),
                 None,
                 None,
                 None,
@@ -2243,7 +2218,7 @@ mod tests {
             mgr.update_step_status(
                 &step1_id,
                 conductor_core::workflow::WorkflowStepStatus::Running,
-                Some("ar-iter1"),
+                Some(&ar_iter1),
                 None,
                 None,
                 None,
@@ -2279,20 +2254,12 @@ mod tests {
 
         {
             let db = state.db.lock().await;
-            for (id, path, iter) in [
-                ("ar-3i-0", path0.as_str(), 0i64),
-                ("ar-3i-1", path1.as_str(), 1i64),
-                ("ar-3i-2", path2.as_str(), 2i64),
+            for (path, iter) in [
+                (path0.as_str(), 0i64),
+                (path1.as_str(), 1i64),
+                (path2.as_str(), 2i64),
             ] {
-                insert_agent_run(
-                    &db,
-                    id,
-                    "w1",
-                    "child",
-                    "completed",
-                    "2024-01-01T00:00:00Z",
-                    path,
-                );
+                let run_id_iter = insert_agent_run(&db, "w1", "child", "completed", path);
                 let mgr = WorkflowManager::new(&db);
                 let step_id = mgr
                     .insert_step(&run_id, "tri-step", "actor", false, 0, iter)
@@ -2300,7 +2267,7 @@ mod tests {
                 mgr.update_step_status(
                     &step_id,
                     conductor_core::workflow::WorkflowStepStatus::Completed,
-                    Some(id),
+                    Some(&run_id_iter),
                     None,
                     None,
                     None,
@@ -2337,15 +2304,7 @@ mod tests {
         {
             let db = state.db.lock().await;
             // build step (iteration 0)
-            insert_agent_run(
-                &db,
-                "ar-iso-build",
-                "w1",
-                "build",
-                "completed",
-                "2024-01-01T00:00:00Z",
-                &path_build,
-            );
+            let ar_iso_build = insert_agent_run(&db, "w1", "build", "completed", &path_build);
             let mgr = WorkflowManager::new(&db);
             let build_step_id = mgr
                 .insert_step(&run_id, "build", "actor", false, 0, 0)
@@ -2353,7 +2312,7 @@ mod tests {
             mgr.update_step_status(
                 &build_step_id,
                 conductor_core::workflow::WorkflowStepStatus::Completed,
-                Some("ar-iso-build"),
+                Some(&ar_iso_build),
                 None,
                 None,
                 None,
@@ -2362,22 +2321,14 @@ mod tests {
             .unwrap();
 
             // deploy step iteration 0
-            insert_agent_run(
-                &db,
-                "ar-iso-dep0",
-                "w1",
-                "deploy0",
-                "completed",
-                "2024-01-01T00:00:01Z",
-                &path_deploy0,
-            );
+            let ar_iso_dep0 = insert_agent_run(&db, "w1", "deploy0", "completed", &path_deploy0);
             let dep0_id = mgr
                 .insert_step(&run_id, "deploy", "actor", false, 0, 0)
                 .unwrap();
             mgr.update_step_status(
                 &dep0_id,
                 conductor_core::workflow::WorkflowStepStatus::Completed,
-                Some("ar-iso-dep0"),
+                Some(&ar_iso_dep0),
                 None,
                 None,
                 None,
@@ -2386,22 +2337,14 @@ mod tests {
             .unwrap();
 
             // deploy step iteration 1
-            insert_agent_run(
-                &db,
-                "ar-iso-dep1",
-                "w1",
-                "deploy1",
-                "running",
-                "2024-01-01T00:00:02Z",
-                &path_deploy1,
-            );
+            let ar_iso_dep1 = insert_agent_run(&db, "w1", "deploy1", "running", &path_deploy1);
             let dep1_id = mgr
                 .insert_step(&run_id, "deploy", "actor", false, 0, 1)
                 .unwrap();
             mgr.update_step_status(
                 &dep1_id,
                 conductor_core::workflow::WorkflowStepStatus::Running,
-                Some("ar-iso-dep1"),
+                Some(&ar_iso_dep1),
                 None,
                 None,
                 None,

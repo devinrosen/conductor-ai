@@ -397,14 +397,12 @@ mod tests {
     /// Helper: create an agent run and set its log_file in one shot. Returns the run id.
     fn create_run_with_log(conn: &rusqlite::Connection, log_path: &str) -> String {
         use conductor_core::agent::AgentManager;
-        let run = AgentManager::new(conn)
+        let mgr = AgentManager::new(conn);
+        let run = mgr
             .create_run(None, "agent", None, None)
             .expect("create agent run");
-        conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params![log_path, run.id],
-        )
-        .expect("set log_file");
+        mgr.update_run_log_file(&run.id, log_path)
+            .expect("set log_file");
         run.id
     }
 
