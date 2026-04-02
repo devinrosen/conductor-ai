@@ -1182,23 +1182,13 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use conductor_core::config::Config;
     use conductor_core::workflow::WorkflowStepStatus;
     use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
     use crate::events::EventBus;
     use crate::routes::api_router;
-
-    fn empty_state() -> AppState {
-        let conn = conductor_core::test_helpers::create_test_conn();
-        AppState {
-            db: Arc::new(Mutex::new(conn)),
-            config: Arc::new(RwLock::new(Config::default())),
-            events: EventBus::new(1),
-            workflow_done_notify: None,
-        }
-    }
+    use crate::test_helpers::{empty_state, seeded_state, seeded_state_with_agent_run};
 
     async fn get_response(uri: &str, state: AppState) -> (StatusCode, serde_json::Value) {
         let app = api_router().with_state(state);
@@ -1309,24 +1299,15 @@ mod tests {
         let repo_id = "01TESTREPOULID0000000000001";
         {
             let db = state.db.lock().await;
-            db.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES (?1, 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-                rusqlite::params![repo_id],
-            )
-            .unwrap();
-            db.execute(
-                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-                 VALUES ('wt1', ?1, 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
-                rusqlite::params![repo_id],
-            )
-            .unwrap();
-            db.execute(
-                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
-                 VALUES ('ar1', 'wt1', 'test', 'running', '2024-01-01T00:00:00Z')",
-                [],
-            )
-            .unwrap();
+            conductor_core::test_helpers::insert_test_repo(&db, repo_id, "test-repo", "/tmp/repo");
+            conductor_core::test_helpers::insert_test_worktree(
+                &db,
+                "wt1",
+                repo_id,
+                "feat-test",
+                "/tmp/ws/feat-test",
+            );
+            conductor_core::test_helpers::insert_test_agent_run(&db, "ar1", "wt1");
 
             let mgr = WorkflowManager::new(&db);
             let run = mgr
@@ -1356,21 +1337,9 @@ mod tests {
 
     #[tokio::test]
     async fn active_steps_attached_filters_to_running_and_waiting() {
-        let state = empty_state();
+        let state = seeded_state_with_agent_run();
         {
             let db = state.db.lock().await;
-
-            // Seed the minimum fixtures required by the FK chain:
-            // workflow_runs.parent_run_id → agent_runs.id → worktrees.id → repos.id
-            db.execute_batch(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
-                 INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-                 VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z');
-                 INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
-                 VALUES ('ar1', 'w1', 'test', 'running', '2024-01-01T00:00:00Z');",
-            )
-            .unwrap();
 
             let mgr = WorkflowManager::new(&db);
             // worktree_id = None so the run is visible without an active worktree join
@@ -1648,34 +1617,14 @@ mod tests {
         };
         {
             let db = state.db.lock().await;
-            db.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "r1",
-                    "test-repo",
-                    wt_path,
-                    "https://github.com/test/repo.git",
-                    "/tmp/ws",
-                    "2024-01-01T00:00:00Z"
-                ],
-            )
-            .unwrap();
-            db.execute(
-                "INSERT INTO worktrees \
-                 (id, repo_id, slug, branch, path, status, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
-                    "w1",
-                    "r1",
-                    "feat-test",
-                    "feat/test",
-                    wt_path,
-                    "active",
-                    "2024-01-01T00:00:00Z"
-                ],
-            )
-            .unwrap();
+            conductor_core::test_helpers::insert_test_repo(&db, "r1", "test-repo", &wt_path);
+            conductor_core::test_helpers::insert_test_worktree(
+                &db,
+                "w1",
+                "r1",
+                "feat-test",
+                &wt_path,
+            );
         }
 
         let app = api_router().with_state(state.clone());
@@ -1760,16 +1709,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_workflow_run_unknown_worktree_returns_error() {
-        let state = empty_state();
-        {
-            let db = state.db.lock().await;
-            db.execute_batch(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES ('r1', 'test-repo', '/tmp/repo', \
-                         'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-            )
-            .unwrap();
-        }
+        let state = seeded_state();
         let app = api_router().with_state(state);
         let response = app
             .oneshot(
@@ -1798,16 +1738,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_workflow_run_unknown_workflow_returns_error() {
-        let state = empty_state();
-        {
-            let db = state.db.lock().await;
-            db.execute_batch(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES ('r1', 'test-repo', '/tmp/repo', \
-                         'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-            )
-            .unwrap();
-        }
+        let state = seeded_state();
         let app = api_router().with_state(state);
         let response = app
             .oneshot(
@@ -1852,19 +1783,7 @@ mod tests {
         };
         {
             let db = state.db.lock().await;
-            db.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "r1",
-                    "test-repo",
-                    repo_path,
-                    "https://github.com/test/repo.git",
-                    "/tmp/ws",
-                    "2024-01-01T00:00:00Z"
-                ],
-            )
-            .unwrap();
+            conductor_core::test_helpers::insert_test_repo(&db, "r1", "test-repo", &repo_path);
         }
 
         let app = api_router().with_state(state.clone());
@@ -2051,15 +1970,15 @@ mod tests {
 
     async fn seed_workflow_fixtures(state: &AppState) -> String {
         let db = state.db.lock().await;
-        db.execute_batch(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-             VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
-             INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-             VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z');
-             INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
-             VALUES ('ar1', 'w1', 'test', 'running', '2024-01-01T00:00:00Z');",
-        )
-        .unwrap();
+        conductor_core::test_helpers::insert_test_repo(&db, "r1", "test-repo", "/tmp/repo");
+        conductor_core::test_helpers::insert_test_worktree(
+            &db,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        conductor_core::test_helpers::insert_test_agent_run(&db, "ar1", "w1");
         let mgr = WorkflowManager::new(&db);
         mgr.create_workflow_run("test-wf", None, "ar1", false, "manual", None)
             .unwrap()
