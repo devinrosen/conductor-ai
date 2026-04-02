@@ -696,6 +696,50 @@ fn test_reap_stale_worktrees_handles_abandoned() {
     assert!(completed_at.is_some());
 }
 
+#[test]
+fn test_reap_stale_worktrees_removes_deregistered_path() {
+    // Simulate a git-deregistered worktree: the directory exists on disk but
+    // git no longer tracks it (git worktree prune was run externally).
+    // reap_stale_worktrees() must delete the directory and not loop forever.
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+
+    let tmp = TempDir::new().unwrap();
+    let deregistered_path = tmp.path().join("deregistered-wt");
+    fs::create_dir_all(&deregistered_path).unwrap();
+    assert!(deregistered_path.exists());
+
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('wt-dereg', 'r1', 'feat-dereg', 'feat/dereg', ?1, 'merged', '2024-01-01T00:00:00Z')",
+        params![deregistered_path.to_str().unwrap()],
+    )
+    .unwrap();
+
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    // First call: directory should be removed and completed_at backfilled
+    let reaped = mgr.reap_stale_worktrees().unwrap();
+    assert_eq!(reaped, 1);
+    assert!(
+        !deregistered_path.exists(),
+        "directory should have been removed by fs fallback"
+    );
+
+    let completed_at: Option<String> = conn
+        .query_row(
+            "SELECT completed_at FROM worktrees WHERE id = 'wt-dereg'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(completed_at.is_some());
+
+    // Second call: nothing left to reap — confirms the loop is broken
+    let reaped2 = mgr.reap_stale_worktrees().unwrap();
+    assert_eq!(reaped2, 0, "should not loop: nothing to reap on second call");
+}
+
 // ── parse_pr_view_output tests ────────────────────────────────────────────
 
 #[test]

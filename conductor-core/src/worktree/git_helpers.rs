@@ -168,6 +168,23 @@ pub(super) fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch:
             }
             Ok(_) => {}
         }
+        // Fallback: if git worktree remove didn't delete the directory (e.g. git had
+        // already deregistered this worktree externally via `git worktree prune`),
+        // force-remove it with fs. Safe here because remove_git_artifacts is only
+        // called for terminal-state worktrees (merged/abandoned).
+        if Path::new(worktree_path).exists() {
+            tracing::warn!(
+                worktree = worktree_path,
+                "git worktree remove did not delete directory; removing with fs::remove_dir_all"
+            );
+            if let Err(e) = std::fs::remove_dir_all(worktree_path) {
+                tracing::warn!(
+                    worktree = worktree_path,
+                    error = %e,
+                    "fs::remove_dir_all also failed; directory may still exist"
+                );
+            }
+        }
     } else {
         tracing::debug!(
             repo = repo_path,
