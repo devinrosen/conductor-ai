@@ -372,8 +372,8 @@ mod tests {
             state,
         )
         .await;
-        // Git will fail since /tmp/repo is not a git repo — expect an error, not 201 and not a panic.
-        assert_ne!(status, StatusCode::CREATED);
+        // Git will fail since /tmp/repo is not a git repo — expect 500, not 201 and not a panic.
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]

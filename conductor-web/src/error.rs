@@ -46,9 +46,13 @@ impl From<rusqlite::Error> for ApiError {
 
 impl From<tokio::task::JoinError> for ApiError {
     fn from(err: tokio::task::JoinError) -> Self {
-        ApiError(ConductorError::Internal(format!(
-            "blocking task failed: {err}"
-        )))
+        if err.is_panic() {
+            ApiError(ConductorError::Internal("internal server error".into()))
+        } else {
+            ApiError(ConductorError::Internal(format!(
+                "blocking task failed: {err}"
+            )))
+        }
     }
 }
 
