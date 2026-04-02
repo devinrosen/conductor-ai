@@ -118,6 +118,24 @@ impl ExecutionState<'_> {
             self.worktree_slug.as_str()
         }
     }
+
+    /// Persist the current accumulated metrics to the workflow run row.
+    ///
+    /// Call sites that need best-effort (non-fatal) flushing should wrap this
+    /// in `if let Err(e) = state.flush_metrics()`.  Fatal call sites use `?`.
+    pub(super) fn flush_metrics(&self) -> crate::error::Result<()> {
+        self.wf_mgr.persist_workflow_metrics(
+            &self.workflow_run_id,
+            self.total_input_tokens,
+            self.total_output_tokens,
+            self.total_cache_read_input_tokens,
+            self.total_cache_creation_input_tokens,
+            self.total_turns,
+            self.total_cost,
+            self.total_duration_ms,
+            self.model.as_deref(),
+        )
+    }
 }
 
 /// Resolve a schema by name using the standard search order.
@@ -534,17 +552,7 @@ pub(super) fn run_workflow_engine(
             WorkflowRunStatus::Completed,
             Some(&summary),
         )?;
-        state.wf_mgr.persist_workflow_metrics(
-            &wf_run_id,
-            state.total_input_tokens,
-            state.total_output_tokens,
-            state.total_cache_read_input_tokens,
-            state.total_cache_creation_input_tokens,
-            state.total_turns,
-            state.total_cost,
-            state.total_duration_ms,
-            state.model.as_deref(),
-        )?;
+        state.flush_metrics()?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
     } else {
         state
@@ -555,17 +563,7 @@ pub(super) fn run_workflow_engine(
             WorkflowRunStatus::Failed,
             Some(&summary),
         )?;
-        state.wf_mgr.persist_workflow_metrics(
-            &wf_run_id,
-            state.total_input_tokens,
-            state.total_output_tokens,
-            state.total_cache_read_input_tokens,
-            state.total_cache_creation_input_tokens,
-            state.total_turns,
-            state.total_cost,
-            state.total_duration_ms,
-            state.model.as_deref(),
-        )?;
+        state.flush_metrics()?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
     }
 
@@ -1155,17 +1153,7 @@ pub(super) fn record_step_success(
     }
 
     // Best-effort mid-run metrics flush — non-fatal
-    if let Err(e) = state.wf_mgr.persist_workflow_metrics(
-        &state.workflow_run_id,
-        state.total_input_tokens,
-        state.total_output_tokens,
-        state.total_cache_read_input_tokens,
-        state.total_cache_creation_input_tokens,
-        state.total_turns,
-        state.total_cost,
-        state.total_duration_ms,
-        state.model.as_deref(),
-    ) {
+    if let Err(e) = state.flush_metrics() {
         tracing::warn!("Failed to flush mid-run metrics: {e}");
     }
 
