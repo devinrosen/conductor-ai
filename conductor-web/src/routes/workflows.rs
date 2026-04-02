@@ -653,15 +653,13 @@ pub async fn post_workflow_run(
                 let notify_run_id = res.workflow_run_id.clone();
                 let db_path_ok = db_path.clone();
                 tokio::task::spawn_blocking(move || {
-                    let conn =
-                        match conductor_core::db::open_database(&db_path_ok)
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::error!("notify: DB open failed: {e}");
-                                return;
-                            }
-                        };
+                    let conn = match conductor_core::db::open_database(&db_path_ok) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!("notify: DB open failed: {e}");
+                            return;
+                        }
+                    };
                     notify_workflow(
                         &conn,
                         &notifications,
@@ -688,15 +686,13 @@ pub async fn post_workflow_run(
                 let wf_name = workflow_name.clone();
                 let label = target_label.clone();
                 tokio::task::spawn_blocking(move || {
-                    let conn =
-                        match conductor_core::db::open_database(&db_path)
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::error!("notify: DB open failed: {e}");
-                                return;
-                            }
-                        };
+                    let conn = match conductor_core::db::open_database(&db_path) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!("notify: DB open failed: {e}");
+                            return;
+                        }
+                    };
                     notify_workflow(
                         &conn,
                         &notifications,
