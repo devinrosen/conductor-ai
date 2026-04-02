@@ -1154,6 +1154,21 @@ pub(super) fn record_step_success(
         state.total_cache_creation_input_tokens += t;
     }
 
+    // Best-effort mid-run metrics flush — non-fatal
+    if let Err(e) = state.wf_mgr.persist_workflow_metrics(
+        &state.workflow_run_id,
+        state.total_input_tokens,
+        state.total_output_tokens,
+        state.total_cache_read_input_tokens,
+        state.total_cache_creation_input_tokens,
+        state.total_turns,
+        state.total_cost,
+        state.total_duration_ms,
+        state.model.as_deref(),
+    ) {
+        tracing::warn!("Failed to flush mid-run metrics: {e}");
+    }
+
     let markers_for_ctx = markers.clone();
     let structured_output_for_ctx = structured_output.clone();
     let output_file_for_ctx = output_file.clone();

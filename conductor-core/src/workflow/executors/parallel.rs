@@ -332,6 +332,35 @@ pub fn execute_parallel(
                         if let Some(dur) = run.duration_ms {
                             state.total_duration_ms += dur;
                         }
+                        if let Some(t) = run.input_tokens {
+                            state.total_input_tokens += t;
+                        }
+                        if let Some(t) = run.output_tokens {
+                            state.total_output_tokens += t;
+                        }
+                        if let Some(t) = run.cache_read_input_tokens {
+                            state.total_cache_read_input_tokens += t;
+                        }
+                        if let Some(t) = run.cache_creation_input_tokens {
+                            state.total_cache_creation_input_tokens += t;
+                        }
+
+                        // Best-effort mid-run metrics flush after each parallel agent
+                        if let Err(e) = state.wf_mgr.persist_workflow_metrics(
+                            &state.workflow_run_id,
+                            state.total_input_tokens,
+                            state.total_output_tokens,
+                            state.total_cache_read_input_tokens,
+                            state.total_cache_creation_input_tokens,
+                            state.total_turns,
+                            state.total_cost,
+                            state.total_duration_ms,
+                            state.model.as_deref(),
+                        ) {
+                            tracing::warn!(
+                                "Failed to flush mid-run metrics after parallel agent: {e}"
+                            );
+                        }
 
                         tracing::info!(
                             "parallel: '{}' {} (cost=${:.4})",
