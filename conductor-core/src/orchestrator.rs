@@ -192,6 +192,7 @@ pub fn orchestrate_run(
             orch_config.poll_interval,
             orch_config.child_timeout,
             None,
+            None,
         );
 
         match result {
@@ -595,6 +596,7 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_secs(1),
             None,
+            None,
         );
         assert!(result.is_ok());
         let completed = result.unwrap();
@@ -616,6 +618,7 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_secs(1),
             None,
+            None,
         );
         assert!(result.is_ok());
         let failed = result.unwrap();
@@ -636,6 +639,7 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_secs(1),
             None,
+            None,
         );
         assert!(result.is_ok());
         let cancelled = result.unwrap();
@@ -651,6 +655,7 @@ mod tests {
             "nonexistent-id",
             Duration::from_millis(10),
             Duration::from_secs(1),
+            None,
             None,
         );
         assert!(result.is_err());
@@ -674,6 +679,7 @@ mod tests {
             &run.id,
             Duration::from_millis(10),
             Duration::from_millis(50), // very short timeout
+            None,
             None,
         );
         assert!(result.is_err());

@@ -216,6 +216,7 @@ pub fn poll_child_completion(
     poll_interval: Duration,
     timeout: Duration,
     shutdown: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    on_tick: Option<&dyn Fn()>,
 ) -> std::result::Result<AgentRun, PollError> {
     let start = std::time::Instant::now();
     // Track cumulative time spent waiting for feedback so we can exclude it
@@ -276,6 +277,9 @@ pub fn poll_child_completion(
             }
         }
 
+        if let Some(f) = on_tick {
+            f();
+        }
         thread::sleep(poll_interval);
     }
 }
