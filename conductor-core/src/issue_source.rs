@@ -26,6 +26,13 @@ pub struct JiraConfig {
     pub url: String,
 }
 
+/// Configuration for a Vantage (SDLC) issue source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VantageConfig {
+    pub project_id: String,
+    pub sdlc_root: String,
+}
+
 pub struct IssueSourceManager<'a> {
     conn: &'a Connection,
 }

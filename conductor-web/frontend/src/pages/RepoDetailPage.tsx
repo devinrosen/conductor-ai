@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
-import type { AgentRun, Ticket } from "../api/types";
+import type { AgentRun, Ticket, WorkflowRun } from "../api/types";
 import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
@@ -16,6 +16,8 @@ import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
 import { ModelPicker } from "../components/shared/ModelPicker";
+import { buildTicketTree } from "../utils/ticketDeps";
+import { deriveWorktreeSlug } from "../utils/worktreeUtils";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -145,7 +147,76 @@ export function RepoDetailPage() {
   const [editingModel, setEditingModel] = useState(false);
   const highlightIssues = useOnboardingHighlight("issue-sources");
   const [settingsOpen, setSettingsOpen] = useState(highlightIssues);
+  const [startingWorkflow, setStartingWorkflow] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Fetch active workflow runs for this repo to show running indicators on tickets
+  const { data: activeWorkflowRuns, refetch: refetchWorkflowRuns } = useApi(
+    () => api.listAllWorkflowRuns(["running", "pending", "waiting"]),
+    [],
+  );
+
+  // Build ticket dependency tree
+  const ticketTree = useMemo(
+    () => (tickets ? buildTicketTree(tickets) : null),
+    [tickets],
+  );
+
+  // Map worktree_id -> active workflow run status (for ticket running indicators)
+  const workflowStatusByWorktreeId = useMemo(() => {
+    const m = new Map<string, WorkflowRun["status"]>();
+    if (!activeWorkflowRuns) return m;
+    for (const run of activeWorkflowRuns) {
+      if (run.repo_id === repoId && run.worktree_id) {
+        m.set(run.worktree_id, run.status);
+      }
+    }
+    return m;
+  }, [activeWorkflowRuns, repoId]);
+
+  // Map ticket source_id -> workflow status (via worktree linkage)
+  const workflowStatusByTicketSourceId = useMemo(() => {
+    const m = new Map<string, WorkflowRun["status"]>();
+    if (!worktrees || !workflowStatusByWorktreeId.size) return m;
+    for (const wt of worktrees) {
+      const status = workflowStatusByWorktreeId.get(wt.id);
+      if (!status) continue;
+      if (tickets) {
+        for (const t of tickets) {
+          if (t.source_type === "vantage" && wt.slug.toLowerCase().startsWith(t.source_id.toLowerCase())) {
+            m.set(t.source_id, status);
+          }
+        }
+      }
+    }
+    return m;
+  }, [worktrees, workflowStatusByWorktreeId, tickets]);
+
+  async function handleStartTicketToPr(ticket: Ticket) {
+    if (startingWorkflow) return;
+    setStartingWorkflow(ticket.id);
+    try {
+      const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title);
+      const wt = await api.createWorktree(repoId!, {
+        name: wtName,
+        ticket_id: ticket.id,
+      });
+      await api.runWorkflow(wt.id, {
+        name: "ticket-to-pr",
+        inputs: {
+          ticket_id: ticket.source_id,
+          qualify: "true",
+          auto_merge: "false",
+        },
+      });
+      refetchWorktrees();
+      refetchWorkflowRuns();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to start workflow");
+    } finally {
+      setStartingWorkflow(null);
+    }
+  }
 
   async function handleSyncTickets() {
     setSyncing(true);
@@ -241,6 +312,30 @@ export function RepoDetailPage() {
     { key: "d", handler: deleteSelectedWt, description: "Delete selected worktree", enabled: selectedIndex >= 0 && noModalOpen },
     { key: "Escape", handler: handleEscape, description: "Close / deselect" },
   ]);
+
+  function renderTicketRows(ticketList: Ticket[], depth: number): React.ReactNode[] {
+    const rows: React.ReactNode[] = [];
+    for (const t of ticketList) {
+      const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | undefined;
+      rows.push(
+        <TicketRow
+          key={`${t.id}-d${depth}`}
+          ticket={t}
+          agentTotals={ticketTotals?.[t.id]}
+          onClick={setSelectedTicket}
+          depth={depth}
+          blocked={ticketTree?.blocked.has(t.id) ?? false}
+          workflowStatus={wfStatus ?? null}
+          onStartWorkflow={handleStartTicketToPr}
+        />,
+      );
+      const children = ticketTree?.childMap.get(t.source_id);
+      if (children && children.length > 0) {
+        rows.push(...renderTicketRows(children, depth + 1));
+      }
+    }
+    return rows;
+  }
 
   if (!repo) {
     return (
@@ -609,7 +704,7 @@ export function RepoDetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {tickets.map((t) => (
+                  {ticketTree ? renderTicketRows(ticketTree.roots, 0) : tickets.map((t) => (
                     <TicketRow
                       key={t.id}
                       ticket={t}
@@ -633,6 +728,14 @@ export function RepoDetailPage() {
           </>
         )}
       </section>
+
+      {/* Error Banner */}
+      {actionError && (
+        <div className="px-3 py-2 text-sm text-red-700 bg-red-50 rounded-md border border-red-200 flex items-center justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} className="text-red-500 hover:text-red-700 text-xs ml-2">Dismiss</button>
+        </div>
+      )}
 
       {/* Dialogs */}
       {selectedTicket && (

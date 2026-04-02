@@ -11,14 +11,41 @@ interface TicketRowProps {
   selected?: boolean;
   index?: number;
   labelColorMap?: Record<string, string>;
+  depth?: number;
+  blocked?: boolean;
+  workflowStatus?: "running" | "pending" | "waiting" | null;
+  onStartWorkflow?: (ticket: Ticket) => void;
 }
 
-export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, index, labelColorMap }: TicketRowProps) {
+export function TicketRow({
+  ticket,
+  agentTotals,
+  repoSlug,
+  onClick,
+  selected,
+  index,
+  labelColorMap,
+  depth = 0,
+  blocked = false,
+  workflowStatus,
+  onStartWorkflow,
+}: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
+  const isActive = workflowStatus === "running" || workflowStatus === "pending" || workflowStatus === "waiting";
+  const canStart =
+    !blocked &&
+    !isActive &&
+    ticket.source_type === "vantage" &&
+    ticket.state === "open" &&
+    onStartWorkflow;
+
   return (
     <tr
-      className={`cursor-pointer hover:bg-gray-50 ${selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}`}
-      onClick={() => onClick(ticket)}
+      className={[
+        blocked ? "opacity-50 cursor-default" : "cursor-pointer hover:bg-gray-50",
+        selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : "",
+      ].join(" ")}
+      onClick={() => !blocked && onClick(ticket)}
       data-list-index={index}
     >
       {repoSlug !== undefined && (
@@ -28,8 +55,18 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
           </span>
         </td>
       )}
-      <td className="px-3 py-1.5">
-        <span className="text-indigo-600">{ticket.source_id}</span>
+      <td className="px-3 py-1.5 whitespace-nowrap">
+        <span className="inline-flex items-center gap-1">
+          {depth > 0 && (
+            <span className="text-gray-400 text-[10px]" style={{ marginLeft: `${(depth - 1) * 0.75}rem` }}>&#8627;</span>
+          )}
+          {blocked && (
+            <svg className="w-3 h-3 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
+            </svg>
+          )}
+          <span className={depth > 0 ? "text-indigo-400" : "text-indigo-600"}>{ticket.source_id}</span>
+        </span>
       </td>
       <td className="px-3 py-1.5 text-gray-900">{ticket.title}</td>
       <td className="px-3 py-1.5">
@@ -61,8 +98,31 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
       <td className="px-3 py-1.5 text-xs text-gray-500">
         {ticket.assignee ?? "-"}
       </td>
-      <td className="px-3 py-1.5 text-xs text-purple-600 whitespace-nowrap">
-        {agentTotals ? formatTicketTotalsFull(agentTotals) : ""}
+      <td className="px-3 py-1.5 text-xs whitespace-nowrap">
+        {isActive ? (
+          <span className="inline-flex items-center gap-1.5 text-amber-600">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+            </span>
+            Running
+          </span>
+        ) : canStart ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartWorkflow!(ticket);
+            }}
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition-transform"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6.3 2.84A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.27l9.344-5.891a1.5 1.5 0 000-2.538L6.3 2.841z" />
+            </svg>
+            Start
+          </button>
+        ) : agentTotals ? (
+          <span className="text-purple-600">{formatTicketTotalsFull(agentTotals)}</span>
+        ) : null}
       </td>
     </tr>
   );
