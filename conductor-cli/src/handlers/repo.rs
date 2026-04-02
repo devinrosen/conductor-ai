@@ -123,8 +123,11 @@ pub fn handle_repo(command: RepoCommands, conn: &Connection, config: &Config) ->
                 } => {
                     let repo = repo_mgr.get_by_slug(&slug)?;
 
-                    let config_str =
-                        TicketSource::default_config(&source_type, config_json.as_deref(), &repo.remote_url)?;
+                    let config_str = TicketSource::default_config(
+                        &source_type,
+                        config_json.as_deref(),
+                        &repo.remote_url,
+                    )?;
 
                     let source = source_mgr.add(&repo.id, &source_type, &config_str, &slug)?;
                     println!(

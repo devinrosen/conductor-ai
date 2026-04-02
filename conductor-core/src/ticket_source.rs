@@ -27,9 +27,8 @@ impl TicketSource {
                 Ok(Self::GitHub(cfg))
             }
             "jira" => {
-                let cfg = serde_json::from_str::<JiraConfig>(&s.config_json).map_err(|e| {
-                    ConductorError::TicketSync(format!("invalid jira config: {e}"))
-                })?;
+                let cfg = serde_json::from_str::<JiraConfig>(&s.config_json)
+                    .map_err(|e| ConductorError::TicketSync(format!("invalid jira config: {e}")))?;
                 Ok(Self::Jira(cfg))
             }
             other => Err(ConductorError::UnknownSourceType(other.to_string())),
