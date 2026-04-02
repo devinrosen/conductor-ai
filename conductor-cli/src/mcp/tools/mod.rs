@@ -256,7 +256,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_workflows",
-            "List available workflow definitions for a repo. Returns workflow names, descriptions, trigger types, and input schemas (name, required, default, description for each input). \
+            "List available workflow definitions for a repo. Returns workflow names, descriptions, trigger types, targets, group, and input schemas (name, required, default, description for each input). \
              Full workflow definitions also available at `conductor://workflows/{repo}`.",
             schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
         ),

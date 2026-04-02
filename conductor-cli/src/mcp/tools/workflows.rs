@@ -651,6 +651,90 @@ workflow w {
     }
 
     #[test]
+    fn test_dispatch_list_workflows_includes_targets() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow deploy {
+    meta { description = "Deploy" trigger = "manual" targets = ["worktree"] }
+    call deployer
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("deploy", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .register("my-repo-tgt", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
+        }
+
+        let result = tool_list_workflows(&db, &args_with("repo", "my-repo-tgt"));
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        assert!(
+            text.contains("targets: [worktree]"),
+            "missing targets field; got: {text}"
+        );
+        drop(wf_dir);
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_includes_group() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow review {
+    meta { description = "Review PR" trigger = "manual" group = "MyGroup" }
+    call reviewer
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("review", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .register("my-repo-grp", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
+        }
+
+        let result = tool_list_workflows(&db, &args_with("repo", "my-repo-grp"));
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        assert!(
+            text.contains("group: MyGroup"),
+            "missing group field; got: {text}"
+        );
+        drop(wf_dir);
+    }
+
+    #[test]
     fn test_dispatch_run_workflow_missing_args() {
         let (_f, db) = make_test_db();
         // Missing both "workflow" and "repo"
