@@ -61,10 +61,9 @@ pub(super) fn tool_sync_tickets(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::github;
     use conductor_core::issue_source::IssueSourceManager;
-    use conductor_core::jira_acli;
     use conductor_core::repo::RepoManager;
+    use conductor_core::ticket_source::TicketSource;
     use conductor_core::tickets::TicketSyncer;
     use conductor_core::worktree::WorktreeManager;
 
@@ -104,31 +103,11 @@ pub(super) fn tool_sync_tickets(
             if source.source_type != source_type {
                 continue;
             }
-            let fetch_result = match source.source_type.as_str() {
-                "github" => {
-                    let cfg: conductor_core::issue_source::GitHubConfig =
-                        match serde_json::from_str(&source.config_json) {
-                            Ok(c) => c,
-                            Err(e) => return tool_err(format!("github config parse error: {e}")),
-                        };
-                    let issue_number: i64 = match source_id.parse() {
-                        Ok(n) => n,
-                        Err(_) => {
-                            return tool_err(format!("invalid GitHub issue number: {source_id}"))
-                        }
-                    };
-                    github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
-                }
-                "jira" => {
-                    let cfg: conductor_core::issue_source::JiraConfig =
-                        match serde_json::from_str(&source.config_json) {
-                            Ok(c) => c,
-                            Err(e) => return tool_err(format!("jira config parse error: {e}")),
-                        };
-                    jira_acli::fetch_jira_issue(&source_id, &cfg.url)
-                }
-                other => return tool_err(format!("Unknown source type: {other}")),
+            let ts = match TicketSource::from_issue_source(source) {
+                Ok(t) => t,
+                Err(e) => return tool_err(e.to_string()),
             };
+            let fetch_result = ts.fetch_one(&source_id);
             match fetch_result {
                 Ok(ticket) => {
                     if let Err(e) = syncer.upsert_tickets(&repo.id, &[ticket]) {
@@ -155,34 +134,14 @@ pub(super) fn tool_sync_tickets(
     let mut errors = Vec::new();
 
     for source in sources {
-        let fetch_result = match source.source_type.as_str() {
-            "github" => {
-                let cfg: conductor_core::issue_source::GitHubConfig =
-                    match serde_json::from_str(&source.config_json) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            errors.push(format!("github config parse error: {e}"));
-                            continue;
-                        }
-                    };
-                github::sync_github_issues(&cfg.owner, &cfg.repo, None)
-            }
-            "jira" => {
-                let cfg: conductor_core::issue_source::JiraConfig =
-                    match serde_json::from_str(&source.config_json) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            errors.push(format!("jira config parse error: {e}"));
-                            continue;
-                        }
-                    };
-                jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-            }
-            other => {
-                errors.push(format!("Unknown source type: {other}"));
+        let ts = match TicketSource::from_issue_source(&source) {
+            Ok(t) => t,
+            Err(e) => {
+                errors.push(e.to_string());
                 continue;
             }
         };
+        let fetch_result = ts.sync(None);
         match fetch_result {
             Ok(tickets) => {
                 let (synced, closed) =

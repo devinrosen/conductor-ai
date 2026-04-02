@@ -5,9 +5,9 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::Config;
 use conductor_core::github;
 use conductor_core::github_app;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
-use conductor_core::jira_acli;
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
+use conductor_core::ticket_source::TicketSource;
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
 
@@ -41,47 +41,24 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                     }
                 } else {
                     for source in sources {
-                        match source.source_type.as_str() {
-                            "github" => {
-                                match serde_json::from_str::<GitHubConfig>(&source.config_json) {
-                                    Ok(cfg) => {
-                                        sync_repo(
-                                            &syncer,
-                                            &r.id,
-                                            &r.slug,
-                                            "github",
-                                            "GitHub issues",
-                                            || {
-                                                github::sync_github_issues(
-                                                    &cfg.owner, &cfg.repo, token,
-                                                )
-                                            },
-                                        );
-                                    }
-                                    Err(e) => {
-                                        eprintln!("  {} — invalid github config: {e}", r.slug);
-                                    }
-                                }
+                        match TicketSource::from_issue_source(&source) {
+                            Ok(ts) => {
+                                let label = match ts.source_type_str() {
+                                    "github" => "GitHub issues",
+                                    "jira" => "Jira issues",
+                                    other => other,
+                                };
+                                sync_repo(
+                                    &syncer,
+                                    &r.id,
+                                    &r.slug,
+                                    ts.source_type_str(),
+                                    label,
+                                    || ts.sync(token),
+                                );
                             }
-                            "jira" => {
-                                match serde_json::from_str::<JiraConfig>(&source.config_json) {
-                                    Ok(cfg) => {
-                                        sync_repo(
-                                            &syncer,
-                                            &r.id,
-                                            &r.slug,
-                                            "jira",
-                                            "Jira issues",
-                                            || jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url),
-                                        );
-                                    }
-                                    Err(e) => {
-                                        eprintln!("  {} — invalid jira config: {e}", r.slug);
-                                    }
-                                }
-                            }
-                            other => {
-                                eprintln!("  {} — unknown source type: {other}", r.slug);
+                            Err(e) => {
+                                eprintln!("  {} — {e}", r.slug);
                             }
                         }
                     }

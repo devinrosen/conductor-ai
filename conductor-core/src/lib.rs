@@ -48,6 +48,7 @@ pub mod repo;
 pub(crate) mod retry;
 pub mod schema_config;
 pub mod text_util;
+pub mod ticket_source;
 pub mod tickets;
 pub mod workflow;
 pub mod workflow_config;

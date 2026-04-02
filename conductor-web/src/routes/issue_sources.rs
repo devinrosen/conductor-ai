@@ -3,9 +3,9 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
 
-use conductor_core::github::parse_github_remote;
 use conductor_core::issue_source::{IssueSource, IssueSourceManager};
 use conductor_core::repo::RepoManager;
+use conductor_core::ticket_source::TicketSource;
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -44,40 +44,11 @@ pub async fn create_issue_source(
         }
     })?;
 
-    let config_json = match body.source_type.as_str() {
-        "github" => {
-            if let Some(ref json) = body.config_json {
-                json.clone()
-            } else {
-                // Auto-infer from remote URL
-                let (owner, repo_name) = parse_github_remote(&repo.remote_url).ok_or_else(
-                    || {
-                        conductor_core::error::ConductorError::TicketSync(
-                            "Cannot infer GitHub owner/repo from remote URL. Provide config_json manually.".to_string(),
-                        )
-                    },
-                )?;
-                serde_json::json!({"owner": owner, "repo": repo_name}).to_string()
-            }
-        }
-        "jira" => body.config_json.clone().ok_or_else(|| {
-            conductor_core::error::ConductorError::TicketSync(
-                "Jira sources require config_json with jql and url fields".to_string(),
-            )
-        })?,
-        _ => {
-            return Err(ApiError(conductor_core::error::ConductorError::TicketSync(
-                format!("Unknown source type: {}", body.source_type),
-            )));
-        }
-    };
-
-    // Validate JSON
-    serde_json::from_str::<serde_json::Value>(&config_json).map_err(|e| {
-        ApiError(conductor_core::error::ConductorError::TicketSync(format!(
-            "Invalid config JSON: {e}"
-        )))
-    })?;
+    let config_json = TicketSource::default_config(
+        &body.source_type,
+        body.config_json.as_deref(),
+        &repo.remote_url,
+    )?;
 
     let source_mgr = IssueSourceManager::new(&db);
     let source = source_mgr.add(&repo_id, &body.source_type, &config_json, &repo.slug)?;
