@@ -116,6 +116,9 @@ pub enum ConductorError {
 
     #[error("feature '{name}' is still active. Run `conductor feature close {repo} {name}` first")]
     FeatureStillActive { repo: String, name: String },
+
+    #[error("unknown ticket source type: {0}")]
+    UnknownSourceType(String),
 }
 
 impl ConductorError {
@@ -158,6 +161,7 @@ impl ConductorError {
             Self::Workflow(_) => 60,
             Self::WorkflowRunAlreadyActive { .. } => 61,
             Self::WorkflowRunNotFound { .. } => 62,
+            Self::UnknownSourceType(_) => 27,
         }
     }
 }

@@ -3,8 +3,9 @@ use rusqlite::Connection;
 
 use conductor_core::config::Config;
 use conductor_core::github;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager};
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
+use conductor_core::ticket_source::TicketSource;
 
 use crate::commands::{RepoCommands, SourceCommands};
 
@@ -122,42 +123,11 @@ pub fn handle_repo(command: RepoCommands, conn: &Connection, config: &Config) ->
                 } => {
                     let repo = repo_mgr.get_by_slug(&slug)?;
 
-                    let config_str = match (source_type.as_str(), config_json) {
-                        ("github", Some(json)) => {
-                            // Validate it's valid JSON
-                            let _: serde_json::Value = serde_json::from_str(&json)
-                                .map_err(|e| anyhow::anyhow!("invalid JSON config: {e}"))?;
-                            json
-                        }
-                        ("github", None) => {
-                            // Auto-infer from remote URL
-                            let (owner, name) =
-                                github::parse_github_remote(&repo.remote_url).ok_or_else(
-                                    || {
-                                        anyhow::anyhow!(
-                                            "cannot infer GitHub config from remote URL: {}. Use --config to specify manually.",
-                                            repo.remote_url
-                                        )
-                                    },
-                                )?;
-                            serde_json::to_string(&GitHubConfig { owner, repo: name })?
-                        }
-                        ("jira", Some(json)) => {
-                            let _: serde_json::Value = serde_json::from_str(&json)
-                                .map_err(|e| anyhow::anyhow!("invalid JSON config: {e}"))?;
-                            json
-                        }
-                        ("jira", None) => {
-                            anyhow::bail!(
-                                "--config is required for jira sources (e.g. --config '{{\"jql\":\"project = KEY AND status != Done\",\"url\":\"https://...\"}}')");
-                        }
-                        _ => {
-                            anyhow::bail!(
-                                "unsupported source type: '{}'. Use 'github' or 'jira'.",
-                                source_type
-                            );
-                        }
-                    };
+                    let config_str = TicketSource::default_config(
+                        &source_type,
+                        config_json.as_deref(),
+                        &repo.remote_url,
+                    )?;
 
                     let source = source_mgr.add(&repo.id, &source_type, &config_str, &slug)?;
                     println!(

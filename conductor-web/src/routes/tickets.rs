@@ -7,9 +7,9 @@ use conductor_core::agent::{AgentManager, TicketAgentTotals};
 use conductor_core::error::ConductorError;
 use conductor_core::github;
 use conductor_core::github_app;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
-use conductor_core::jira_acli;
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
+use conductor_core::ticket_source::TicketSource;
 use conductor_core::tickets::{Ticket, TicketInput, TicketLabel, TicketSyncer};
 use conductor_core::worktree::{Worktree, WorktreeManager};
 
@@ -109,26 +109,12 @@ pub async fn sync_tickets(
         }
     } else {
         for source in sources {
-            match source.source_type.as_str() {
-                "github" => {
-                    if let Ok(cfg) = serde_json::from_str::<GitHubConfig>(&source.config_json) {
-                        let (synced, closed) = sync_source(&syncer, &repo.id, "github", || {
-                            github::sync_github_issues(&cfg.owner, &cfg.repo, token)
-                        });
-                        total_synced += synced;
-                        total_closed += closed;
-                    }
-                }
-                "jira" => {
-                    if let Ok(cfg) = serde_json::from_str::<JiraConfig>(&source.config_json) {
-                        let (synced, closed) = sync_source(&syncer, &repo.id, "jira", || {
-                            jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-                        });
-                        total_synced += synced;
-                        total_closed += closed;
-                    }
-                }
-                _ => {}
+            if let Ok(ts) = TicketSource::from_issue_source(&source) {
+                let source_type_str = ts.source_type_str();
+                let (synced, closed) =
+                    sync_source(&syncer, &repo.id, source_type_str, || ts.sync(token));
+                total_synced += synced;
+                total_closed += closed;
             }
         }
     }

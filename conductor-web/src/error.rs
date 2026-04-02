@@ -17,7 +17,9 @@ impl IntoResponse for ApiError {
             | ConductorError::TicketAlreadyLinked
             | ConductorError::WorkflowRunAlreadyActive { .. } => StatusCode::CONFLICT,
             ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
-            ConductorError::Agent(_) | ConductorError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+            ConductorError::Agent(_)
+            | ConductorError::InvalidInput(_)
+            | ConductorError::UnknownSourceType(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status.is_server_error() {
@@ -39,5 +41,18 @@ impl From<ConductorError> for ApiError {
 impl From<rusqlite::Error> for ApiError {
     fn from(err: rusqlite::Error) -> Self {
         ApiError(ConductorError::Database(err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn unknown_source_type_maps_to_400() {
+        let err = ApiError(ConductorError::UnknownSourceType("bogus".into()));
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
