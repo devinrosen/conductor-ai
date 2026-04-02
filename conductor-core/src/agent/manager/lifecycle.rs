@@ -15,7 +15,16 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(worktree_id, None, prompt, tmux_window, model, None, None, None)
+        self.create_run_with_parent(
+            worktree_id,
+            None,
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Create a run scoped to a repo (no worktree). Used for read-only repo agents.
@@ -26,7 +35,16 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(None, Some(repo_id), prompt, tmux_window, model, None, None, None)
+        self.create_run_with_parent(
+            None,
+            Some(repo_id),
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn create_child_run(
