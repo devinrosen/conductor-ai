@@ -203,36 +203,11 @@ pub(crate) fn make_workflow_run(
     status: WorkflowRunStatus,
     summary: Option<&str>,
 ) -> WorkflowRun {
-    WorkflowRun {
-        id: id.to_string(),
-        workflow_name: "test".to_string(),
-        worktree_id: None,
-        parent_run_id: String::new(),
-        status,
-        dry_run: false,
-        trigger: "manual".to_string(),
-        started_at: "2026-01-01T00:00:00Z".to_string(),
-        ended_at: None,
-        result_summary: summary.map(|s| s.to_string()),
-        definition_snapshot: None,
-        inputs: std::collections::HashMap::new(),
-        ticket_id: None,
-        repo_id: None,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        blocked_on: None,
-        feature_id: None,
-        total_input_tokens: None,
-        total_output_tokens: None,
-        total_cache_read_input_tokens: None,
-        total_cache_creation_input_tokens: None,
-        total_turns: None,
-        total_cost_usd: None,
-        total_duration_ms: None,
-        model: None,
-    }
+    let mut run = make_wf_run_full(id, status, None);
+    run.workflow_name = "test".to_string();
+    run.parent_run_id = String::new();
+    run.result_summary = summary.map(|s| s.to_string());
+    run
 }
 
 pub(crate) fn make_iter_step(

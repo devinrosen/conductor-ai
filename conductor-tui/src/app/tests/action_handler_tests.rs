@@ -159,36 +159,14 @@ workflow my-wf {
 }
 "#;
 
-    let mut run = conductor_core::workflow::WorkflowRun {
-        id: "run-abc".to_string(),
-        workflow_name: "my-wf".to_string(),
-        worktree_id: None,
-        parent_run_id: String::new(),
-        status: conductor_core::workflow::WorkflowRunStatus::Running,
-        dry_run: false,
-        trigger: "manual".to_string(),
-        started_at: "2026-01-01T00:00:00Z".to_string(),
-        ended_at: None,
-        result_summary: None,
-        definition_snapshot: Some(snapshot.to_string()),
-        inputs: std::collections::HashMap::new(),
-        ticket_id: None,
-        repo_id: None,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        blocked_on: None,
-        feature_id: None,
-        total_input_tokens: None,
-        total_output_tokens: None,
-        total_cache_read_input_tokens: None,
-        total_cache_creation_input_tokens: None,
-        total_turns: None,
-        total_cost_usd: None,
-        total_duration_ms: None,
-        model: None,
-    };
+    let mut run = crate::state::tests::make_wf_run_full(
+        "run-abc",
+        conductor_core::workflow::WorkflowRunStatus::Running,
+        None,
+    );
+    run.workflow_name = "my-wf".to_string();
+    run.parent_run_id = String::new();
+    run.definition_snapshot = Some(snapshot.to_string());
     run.inputs
         .insert("pr_url".to_string(), "https://example.com".to_string());
 

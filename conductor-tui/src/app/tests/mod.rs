@@ -105,36 +105,15 @@ fn make_test_app() -> App {
 }
 
 fn make_test_run(id: &str) -> conductor_core::workflow::WorkflowRun {
-    conductor_core::workflow::WorkflowRun {
-        id: id.into(),
-        workflow_name: "test".into(),
-        worktree_id: Some("w1".into()),
-        parent_run_id: String::new(),
-        status: conductor_core::workflow::WorkflowRunStatus::Running,
-        dry_run: false,
-        trigger: "manual".into(),
-        started_at: "2026-01-01T00:00:00Z".into(),
-        ended_at: None,
-        result_summary: None,
-        definition_snapshot: None,
-        inputs: std::collections::HashMap::new(),
-        ticket_id: None,
-        repo_id: None,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        blocked_on: None,
-        feature_id: None,
-        total_input_tokens: None,
-        total_output_tokens: None,
-        total_cache_read_input_tokens: None,
-        total_cache_creation_input_tokens: None,
-        total_turns: None,
-        total_cost_usd: None,
-        total_duration_ms: None,
-        model: None,
-    }
+    let mut run = crate::state::tests::make_wf_run_full(
+        id,
+        conductor_core::workflow::WorkflowRunStatus::Running,
+        None,
+    );
+    run.workflow_name = "test".into();
+    run.worktree_id = Some("w1".into());
+    run.parent_run_id = String::new();
+    run
 }
 
 #[test]
