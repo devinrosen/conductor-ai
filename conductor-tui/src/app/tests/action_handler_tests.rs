@@ -180,6 +180,14 @@ workflow my-wf {
         iteration: 0,
         blocked_on: None,
         feature_id: None,
+        total_input_tokens: None,
+        total_output_tokens: None,
+        total_cache_read_input_tokens: None,
+        total_cache_creation_input_tokens: None,
+        total_turns: None,
+        total_cost_usd: None,
+        total_duration_ms: None,
+        model: None,
     };
     run.inputs
         .insert("pr_url".to_string(), "https://example.com".to_string());

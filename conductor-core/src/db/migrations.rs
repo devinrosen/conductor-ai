@@ -1005,9 +1005,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     //  total_cache_creation_input_tokens, total_turns, total_cost_usd,
     //  total_duration_ms, model). All nullable — no backfill required.
     if version < 59 {
-        conn.execute_batch(include_str!(
-            "migrations/059_workflow_run_token_usage.sql"
-        ))?;
+        conn.execute_batch(include_str!("migrations/059_workflow_run_token_usage.sql"))?;
         bump_version(conn, 59)?;
     }
 
