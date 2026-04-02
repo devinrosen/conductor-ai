@@ -1182,34 +1182,13 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use conductor_core::config::Config;
     use conductor_core::workflow::WorkflowStepStatus;
     use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
     use crate::events::EventBus;
     use crate::routes::api_router;
-
-    fn empty_state() -> AppState {
-        let conn = conductor_core::test_helpers::create_test_conn();
-        AppState {
-            db: Arc::new(Mutex::new(conn)),
-            config: Arc::new(RwLock::new(Config::default())),
-            events: EventBus::new(1),
-            workflow_done_notify: None,
-        }
-    }
-
-    /// AppState with repo `r1` + worktree `w1` pre-seeded (mirrors `worktrees.rs`).
-    fn seeded_state() -> AppState {
-        let conn = conductor_core::test_helpers::setup_db();
-        AppState {
-            db: Arc::new(Mutex::new(conn)),
-            config: Arc::new(RwLock::new(Config::default())),
-            events: EventBus::new(1),
-            workflow_done_notify: None,
-        }
-    }
+    use crate::test_helpers::{empty_state, seeded_state, seeded_state_with_agent_run};
 
     async fn get_response(uri: &str, state: AppState) -> (StatusCode, serde_json::Value) {
         let app = api_router().with_state(state);
@@ -1358,13 +1337,9 @@ mod tests {
 
     #[tokio::test]
     async fn active_steps_attached_filters_to_running_and_waiting() {
-        let state = seeded_state();
+        let state = seeded_state_with_agent_run();
         {
             let db = state.db.lock().await;
-
-            // Seed the agent_run required by the FK chain:
-            // workflow_runs.parent_run_id → agent_runs.id → worktrees.id → repos.id
-            conductor_core::test_helpers::insert_test_agent_run(&db, "ar1", "w1");
 
             let mgr = WorkflowManager::new(&db);
             // worktree_id = None so the run is visible without an active worktree join

@@ -178,27 +178,13 @@ pub async fn link_ticket(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use conductor_core::config::Config;
-    use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
-    use crate::events::EventBus;
     use crate::routes::api_router;
-
-    fn seeded_state() -> AppState {
-        // setup_db provides: repo r1 (slug test-repo), worktree w1 (feat-test, active)
-        let conn = conductor_core::test_helpers::setup_db();
-        AppState {
-            db: Arc::new(Mutex::new(conn)),
-            config: Arc::new(RwLock::new(Config::default())),
-            events: EventBus::new(1),
-            workflow_done_notify: None,
-        }
-    }
+    use crate::test_helpers::seeded_state;
 
     async fn send_get(uri: &str, state: AppState) -> (StatusCode, Vec<u8>) {
         let app = api_router().with_state(state);
