@@ -219,10 +219,7 @@ mod tests {
             let code = variant.exit_code();
             let name = format!("{:?}", variant);
             if let Some(existing) = seen.get(&code) {
-                panic!(
-                    "duplicate exit code {}: {} and {}",
-                    code, existing, name
-                );
+                panic!("duplicate exit code {}: {} and {}", code, existing, name);
             }
             seen.insert(code, name);
         }
