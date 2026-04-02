@@ -13,7 +13,6 @@ use crate::tickets::TicketInput;
 /// those deliverables aren't actionable yet.
 const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] =
     &["ready", "dispatched", "running", "completed", "failed"];
-
 /// Sync deliverables from a Vantage SDLC project, filtered to those whose
 /// `codebase` field matches the given `repo_slug`.
 /// Returns a list of normalized TicketInputs ready for upsert.
@@ -260,6 +259,7 @@ fn run_sdlc(sdlc_root: &str, args: &[&str]) -> Result<std::process::Output> {
             "sdlc exited with status {code}: {detail}"
         )));
     }
+    }
 
     Ok(output)
 }
@@ -473,7 +473,6 @@ fn parse_vantage_deliverable(d: &serde_json::Value) -> TicketInput {
                 .collect()
         })
         .unwrap_or_default();
-
     TicketInput {
         source_type: "vantage".to_string(),
         source_id: id,

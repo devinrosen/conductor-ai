@@ -308,6 +308,11 @@ export function RepoDetailPage() {
         from_branch: fromBranch,
       });
       const result = await api.runWorkflow(wt.id, {
+      const wt = await api.createWorktree(repoId!, {
+        name: wtName,
+        ticket_id: ticket.id,
+      });
+      await api.runWorkflow(wt.id, {
         name: "ticket-to-pr",
         inputs: {
           ticket_id: ticket.source_id,
