@@ -141,6 +141,7 @@ pub struct WorkflowDefSummary {
     pub inputs: Vec<InputDeclSummary>,
     pub node_count: usize,
     pub group: Option<String>,
+    pub targets: Vec<String>,
 }
 
 impl From<&WorkflowDef> for WorkflowDefSummary {
@@ -152,6 +153,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
             node_count: def.body.len(),
             group: def.group.clone(),
+            targets: def.targets.clone(),
         }
     }
 }
@@ -2283,5 +2285,51 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["log"], "deploy iteration 1 log");
+    }
+
+    #[test]
+    fn workflow_def_summary_includes_targets() {
+        use conductor_core::workflow::{WorkflowDef, WorkflowTrigger};
+
+        let def = WorkflowDef {
+            name: "test-wf".to_string(),
+            description: "A test workflow".to_string(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec!["repo".to_string(), "worktree".to_string()],
+            group: None,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: "test.wf".to_string(),
+        };
+
+        let summary = WorkflowDefSummary::from(&def);
+        assert_eq!(summary.targets, vec!["repo", "worktree"]);
+
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["targets"], serde_json::json!(["repo", "worktree"]));
+    }
+
+    #[test]
+    fn workflow_def_summary_empty_targets() {
+        use conductor_core::workflow::{WorkflowDef, WorkflowTrigger};
+
+        let def = WorkflowDef {
+            name: "all-contexts-wf".to_string(),
+            description: "Applies to all contexts".to_string(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            group: None,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: "all-contexts.wf".to_string(),
+        };
+
+        let summary = WorkflowDefSummary::from(&def);
+        assert!(summary.targets.is_empty());
+
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["targets"], serde_json::json!([]));
     }
 }
