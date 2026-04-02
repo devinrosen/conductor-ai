@@ -2260,4 +2260,170 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["log"], "iteration 1 log");
     }
+
+    #[tokio::test]
+    async fn step_log_three_iterations_returns_last() {
+        let state = empty_state();
+        let run_id = seed_workflow_fixtures(&state).await;
+
+        let log_iter0 = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(log_iter0.path(), "iteration 0 log").unwrap();
+        let log_iter1 = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(log_iter1.path(), "iteration 1 log").unwrap();
+        let log_iter2 = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(log_iter2.path(), "iteration 2 log").unwrap();
+        let path0 = log_iter0.path().to_str().unwrap().to_string();
+        let path1 = log_iter1.path().to_str().unwrap().to_string();
+        let path2 = log_iter2.path().to_str().unwrap().to_string();
+
+        {
+            let db = state.db.lock().await;
+            for (id, path, iter) in [
+                ("ar-3i-0", path0.as_str(), 0i64),
+                ("ar-3i-1", path1.as_str(), 1i64),
+                ("ar-3i-2", path2.as_str(), 2i64),
+            ] {
+                db.execute(
+                    "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![id, "w1", "child", "completed", "2024-01-01T00:00:00Z", path],
+                )
+                .unwrap();
+                let mgr = WorkflowManager::new(&db);
+                let step_id = mgr
+                    .insert_step(&run_id, "tri-step", "actor", false, 0, iter)
+                    .unwrap();
+                mgr.update_step_status(
+                    &step_id,
+                    conductor_core::workflow::WorkflowStepStatus::Completed,
+                    Some(id),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            }
+        }
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/tri-step/log"),
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["log"], "iteration 2 log");
+    }
+
+    #[tokio::test]
+    async fn step_log_multi_step_name_isolation() {
+        let state = empty_state();
+        let run_id = seed_workflow_fixtures(&state).await;
+
+        let log_build = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(log_build.path(), "build step log").unwrap();
+        let log_deploy0 = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(log_deploy0.path(), "deploy iteration 0 log").unwrap();
+        let log_deploy1 = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(log_deploy1.path(), "deploy iteration 1 log").unwrap();
+        let path_build = log_build.path().to_str().unwrap().to_string();
+        let path_deploy0 = log_deploy0.path().to_str().unwrap().to_string();
+        let path_deploy1 = log_deploy1.path().to_str().unwrap().to_string();
+
+        {
+            let db = state.db.lock().await;
+            // build step (iteration 0)
+            db.execute(
+                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    "ar-iso-build",
+                    "w1",
+                    "build",
+                    "completed",
+                    "2024-01-01T00:00:00Z",
+                    path_build
+                ],
+            )
+            .unwrap();
+            let mgr = WorkflowManager::new(&db);
+            let build_step_id = mgr
+                .insert_step(&run_id, "build", "actor", false, 0, 0)
+                .unwrap();
+            mgr.update_step_status(
+                &build_step_id,
+                conductor_core::workflow::WorkflowStepStatus::Completed,
+                Some("ar-iso-build"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+            // deploy step iteration 0
+            db.execute(
+                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    "ar-iso-dep0",
+                    "w1",
+                    "deploy0",
+                    "completed",
+                    "2024-01-01T00:00:01Z",
+                    path_deploy0
+                ],
+            )
+            .unwrap();
+            let dep0_id = mgr
+                .insert_step(&run_id, "deploy", "actor", false, 0, 0)
+                .unwrap();
+            mgr.update_step_status(
+                &dep0_id,
+                conductor_core::workflow::WorkflowStepStatus::Completed,
+                Some("ar-iso-dep0"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+            // deploy step iteration 1
+            db.execute(
+                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    "ar-iso-dep1",
+                    "w1",
+                    "deploy1",
+                    "running",
+                    "2024-01-01T00:00:02Z",
+                    path_deploy1
+                ],
+            )
+            .unwrap();
+            let dep1_id = mgr
+                .insert_step(&run_id, "deploy", "actor", false, 0, 1)
+                .unwrap();
+            mgr.update_step_status(
+                &dep1_id,
+                conductor_core::workflow::WorkflowStepStatus::Running,
+                Some("ar-iso-dep1"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/deploy/log"),
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["log"], "deploy iteration 1 log");
+    }
 }
