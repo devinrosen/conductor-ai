@@ -1214,7 +1214,11 @@ mod tests {
             result.is_error,
             Some(true),
             "get_step_log should succeed; got: {:?}",
-            result.content.first().and_then(|c| c.as_text()).map(|t| &t.text)
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
         );
         let text = result.content[0]
             .as_text()
@@ -1330,7 +1334,11 @@ mod tests {
             result.is_error,
             Some(true),
             "get_step_log should succeed; got: {:?}",
-            result.content.first().and_then(|c| c.as_text()).map(|t| &t.text)
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
         );
         let text = result.content[0]
             .as_text()
