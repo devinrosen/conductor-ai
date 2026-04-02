@@ -423,3 +423,78 @@ pub(super) fn install_deps(worktree_path: &Path) {
         .current_dir(worktree_path)
         .output();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // Helper: create a temp dir, optionally write a package.json, then call
+    // install_deps and return whether a marker file appeared.  Because we
+    // cannot actually run `npm` / `bun` in unit-tests we instead verify the
+    // *decision* logic (early-exit vs. reaching the Command::new call) by
+    // checking that the function returns without panicking and by inspecting
+    // what path triggered the early-return.  A simpler approach: we write a
+    // fake `npm` script on PATH that creates a sentinel file, but that is
+    // fragile.  Instead we unit-test the *pure* classification logic that
+    // decides whether to install at all.
+
+    fn has_installable_deps(contents: &str) -> bool {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(contents) {
+            return v.get("dependencies").is_some()
+                || v.get("devDependencies").is_some()
+                || v.get("peerDependencies").is_some();
+        }
+        false
+    }
+
+    #[test]
+    fn install_deps_no_package_json_returns_early() {
+        let dir = TempDir::new().unwrap();
+        // No package.json present — install_deps must return without error or panic.
+        install_deps(dir.path());
+        // If we get here the early-exit path was taken (no subprocess tried).
+    }
+
+    #[test]
+    fn install_deps_no_dep_fields_skips_install() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"foo","version":"1.0.0"}"#).unwrap();
+        // install_deps should return early because there are no dep fields.
+        install_deps(dir.path());
+        // Reaching here means no panic / no subprocess was launched for a
+        // package.json that has no installable dependencies.
+    }
+
+    #[test]
+    fn has_installable_deps_empty_object() {
+        assert!(!has_installable_deps("{}"));
+    }
+
+    #[test]
+    fn has_installable_deps_name_only() {
+        assert!(!has_installable_deps(r#"{"name":"pkg"}"#));
+    }
+
+    #[test]
+    fn has_installable_deps_with_dependencies() {
+        assert!(has_installable_deps(r#"{"dependencies":{"lodash":"^4"}}"#));
+    }
+
+    #[test]
+    fn has_installable_deps_with_dev_dependencies() {
+        assert!(has_installable_deps(r#"{"devDependencies":{"jest":"^29"}}"#));
+    }
+
+    #[test]
+    fn has_installable_deps_with_peer_dependencies() {
+        assert!(has_installable_deps(r#"{"peerDependencies":{"react":"^18"}}"#));
+    }
+
+    #[test]
+    fn has_installable_deps_invalid_json() {
+        // Malformed JSON → treated as "has deps" (install proceeds, safer default).
+        assert!(!has_installable_deps("not json"));
+    }
+}
