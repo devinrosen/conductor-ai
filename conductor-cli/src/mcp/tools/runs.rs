@@ -394,6 +394,18 @@ mod tests {
         run.id
     }
 
+    /// Helper: create an agent run and set its log_file in one shot. Returns the run id.
+    fn create_run_with_log(conn: &rusqlite::Connection, log_path: &str) -> String {
+        use conductor_core::agent::AgentManager;
+        let mgr = AgentManager::new(conn);
+        let run = mgr
+            .create_run(None, "agent", None, None)
+            .expect("create agent run");
+        mgr.update_run_log_file(&run.id, log_path)
+            .expect("set log_file");
+        run.id
+    }
+
     /// Helper: create a workflow run with one step. Returns (run_id, step_id).
     fn make_run_with_step(db_path: &std::path::Path, step_name: &str) -> (String, String) {
         use conductor_core::agent::AgentManager;
@@ -1076,7 +1088,6 @@ mod tests {
     #[test]
     fn test_dispatch_get_step_log_success() {
         // Happy path: step has child_run linked to an agent run with a log file.
-        use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
         use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
         use std::io::Write as _;
@@ -1090,24 +1101,14 @@ mod tests {
         writeln!(log_file.as_file(), "agent log line 2").expect("write");
         let log_path = log_file.path().to_str().unwrap().to_string();
 
-        // Create a child agent run with the log_file path stored.
         let conn = open_database(&db).expect("open db");
-        let agent_mgr = AgentManager::new(&conn);
-        let child_run = agent_mgr
-            .create_run(None, "agent", None, None)
-            .expect("create child run");
-        // Store the log file path on the agent run.
-        conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params![log_path, child_run.id],
-        )
-        .expect("update log_file");
+        let child_run_id = create_run_with_log(&conn, &log_path);
 
         let mgr = WorkflowManager::new(&conn);
         mgr.update_step_status(
             &step_id,
             WorkflowStepStatus::Completed,
-            Some(&child_run.id),
+            Some(&child_run_id),
             Some("done"),
             None,
             None,
@@ -1138,5 +1139,182 @@ mod tests {
             .unwrap_or("");
         assert!(text.contains("agent log line 1"), "got: {text}");
         assert!(text.contains("agent log line 2"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_multi_iteration_returns_last() {
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+        use std::io::Write as _;
+
+        let (_f, db) = make_test_db();
+        let (run_id, step0_id) = make_run_with_step(&db, "build");
+
+        // Write log files for each iteration.
+        let log_iter0 = tempfile::NamedTempFile::new().expect("temp log iter0");
+        writeln!(log_iter0.as_file(), "iteration 0 log").expect("write iter0");
+        let log_iter1 = tempfile::NamedTempFile::new().expect("temp log iter1");
+        writeln!(log_iter1.as_file(), "iteration 1 log").expect("write iter1");
+        let path0 = log_iter0.path().to_str().unwrap().to_string();
+        let path1 = log_iter1.path().to_str().unwrap().to_string();
+
+        let conn = open_database(&db).expect("open db");
+        let child0_id = create_run_with_log(&conn, &path0);
+
+        let mgr = WorkflowManager::new(&conn);
+        mgr.update_step_status(
+            &step0_id,
+            WorkflowStepStatus::Completed,
+            Some(&child0_id),
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .expect("update step0");
+
+        // Insert iteration 1 for the same step_name.
+        let step1_id = mgr
+            .insert_step(&run_id, "build", "actor", false, 0, 1)
+            .expect("insert step iter1");
+        let child1_id = create_run_with_log(&conn, &path1);
+        mgr.update_step_status(
+            &step1_id,
+            WorkflowStepStatus::Running,
+            Some(&child1_id),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("update step1");
+
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run_id));
+        args.insert("step_name".to_string(), Value::String("build".to_string()));
+        let result = tool_get_step_log(&db, &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "get_step_log should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("iteration 1 log"),
+            "expected iteration 1 log, got: {text}"
+        );
+        assert!(
+            !text.contains("iteration 0 log"),
+            "should not contain iteration 0 log, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_multi_step_name_isolation() {
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+        use std::io::Write as _;
+
+        let (_f, db) = make_test_db();
+        let (run_id, build_step_id) = make_run_with_step(&db, "build");
+
+        // Write log files.
+        let log_build = tempfile::NamedTempFile::new().expect("temp log build");
+        writeln!(log_build.as_file(), "build step log").expect("write build");
+        let log_test0 = tempfile::NamedTempFile::new().expect("temp log test iter0");
+        writeln!(log_test0.as_file(), "test iteration 0 log").expect("write test0");
+        let log_test1 = tempfile::NamedTempFile::new().expect("temp log test iter1");
+        writeln!(log_test1.as_file(), "test iteration 1 log").expect("write test1");
+        let path_build = log_build.path().to_str().unwrap().to_string();
+        let path_test0 = log_test0.path().to_str().unwrap().to_string();
+        let path_test1 = log_test1.path().to_str().unwrap().to_string();
+
+        let conn = open_database(&db).expect("open db");
+        let mgr = WorkflowManager::new(&conn);
+
+        // Link build step to its agent run.
+        let child_build_id = create_run_with_log(&conn, &path_build);
+        mgr.update_step_status(
+            &build_step_id,
+            WorkflowStepStatus::Completed,
+            Some(&child_build_id),
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .expect("update build step");
+
+        // Insert test step iteration 0.
+        let test_step0_id = mgr
+            .insert_step(&run_id, "test", "actor", false, 0, 0)
+            .expect("insert test step iter0");
+        let child_test0_id = create_run_with_log(&conn, &path_test0);
+        mgr.update_step_status(
+            &test_step0_id,
+            WorkflowStepStatus::Completed,
+            Some(&child_test0_id),
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .expect("update test step 0");
+
+        // Insert test step iteration 1.
+        let test_step1_id = mgr
+            .insert_step(&run_id, "test", "actor", false, 0, 1)
+            .expect("insert test step iter1");
+        let child_test1_id = create_run_with_log(&conn, &path_test1);
+        mgr.update_step_status(
+            &test_step1_id,
+            WorkflowStepStatus::Running,
+            Some(&child_test1_id),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("update test step 1");
+
+        // Request the "test" step log — should get iteration 1, not "build".
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run_id));
+        args.insert("step_name".to_string(), Value::String("test".to_string()));
+        let result = tool_get_step_log(&db, &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "get_step_log should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("test iteration 1 log"),
+            "expected test iteration 1 log, got: {text}"
+        );
+        assert!(
+            !text.contains("build step log"),
+            "should not contain build step log, got: {text}"
+        );
+        assert!(
+            !text.contains("test iteration 0 log"),
+            "should not contain test iteration 0 log, got: {text}"
+        );
     }
 }
