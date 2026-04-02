@@ -340,6 +340,12 @@ pub(crate) fn format_workflow_def(def: &conductor_core::workflow::WorkflowDef) -
             }
         }
     }
+    if !def.targets.is_empty() {
+        out.push_str(&format!("targets: [{}]\n", def.targets.join(", ")));
+    }
+    if let Some(ref group) = def.group {
+        out.push_str(&format!("group: {group}\n"));
+    }
     out.push('\n');
     out
 }
