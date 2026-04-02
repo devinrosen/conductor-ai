@@ -542,6 +542,10 @@ impl RepoConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate CONDUCTOR_DB_PATH to prevent races.
+    static DB_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_auto_start_agent_default() {
@@ -1127,8 +1131,8 @@ bot_name = "my-bot"
 
     #[test]
     fn test_db_path_env_override() {
+        let _guard = DB_PATH_ENV_LOCK.lock().unwrap();
         let custom = "/tmp/conductor-test-db-path-override.db";
-        // Safety: no other test touches CONDUCTOR_DB_PATH
         unsafe {
             std::env::set_var("CONDUCTOR_DB_PATH", custom);
         }
@@ -1141,6 +1145,7 @@ bot_name = "my-bot"
 
     #[test]
     fn test_db_path_empty_env_falls_back_to_default() {
+        let _guard = DB_PATH_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("CONDUCTOR_DB_PATH", "");
         }
