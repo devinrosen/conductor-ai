@@ -14,7 +14,6 @@ use conductor_core::workflow::{
 
 use super::common::{gate_type_icon, truncate};
 use super::helpers::{format_condition, shorten_paths};
-use crate::state::parse_target_label;
 use crate::state::AppState;
 use crate::state::ColumnFocus;
 use crate::state::TargetType;
@@ -233,13 +232,6 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             }
             let node_count = def.body.len();
             let input_count = def.inputs.len();
-            let (badge_sym, badge_label, badge_color) =
-                last_run_badge(&def.name, &state.data.workflow_runs, &state.theme);
-            let badge_text = if badge_label.is_empty() {
-                format!("  {badge_sym}")
-            } else {
-                format!("  {badge_sym} {badge_label}")
-            };
             let mut spans = vec![
                 Span::raw("  \u{2514} "),
                 Span::styled(
@@ -250,7 +242,6 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("  {node_count} steps"),
                     Style::default().fg(state.theme.label_warning),
                 ),
-                Span::styled(badge_text, Style::default().fg(badge_color)),
             ];
             if !def.targets.is_empty() {
                 let badge = format!("  [{}]", def.targets.join(", "));
@@ -335,13 +326,6 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             }
             let node_count = def.body.len();
             let input_count = def.inputs.len();
-            let (badge_sym, badge_label, badge_color) =
-                last_run_badge(&def.name, &state.data.workflow_runs, &state.theme);
-            let badge_text = if badge_label.is_empty() {
-                format!("  {badge_sym}")
-            } else {
-                format!("  {badge_sym} {badge_label}")
-            };
             let mut spans = vec![
                 Span::styled(
                     format!("{:<20}", def.name),
@@ -355,7 +339,6 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("  {node_count} steps"),
                     Style::default().fg(state.theme.label_warning),
                 ),
-                Span::styled(badge_text, Style::default().fg(badge_color)),
             ];
             if !def.targets.is_empty() {
                 let badge = format!("  [{}]", def.targets.join(", "));
@@ -1974,26 +1957,6 @@ fn format_duration(start: &str, end: &str) -> String {
     }
 }
 
-/// Returns a human-readable relative time string, e.g. "5m ago", "2h ago", "1d ago".
-fn time_ago(ts: &str) -> String {
-    let Ok(t) = chrono::DateTime::parse_from_rfc3339(ts) else {
-        return "?".to_string();
-    };
-    let secs = chrono::Utc::now()
-        .signed_duration_since(t)
-        .num_seconds()
-        .max(0);
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
-    } else {
-        format!("{}d ago", secs / 86400)
-    }
-}
-
 fn ordinal_suffix(n: i64) -> &'static str {
     let m100 = n % 100;
     if m100 == 11 || m100 == 12 || m100 == 13 {
@@ -2015,37 +1978,6 @@ fn push_iteration_badge(spans: &mut Vec<Span<'static>>, max_iteration: i64, acce
             format!("  {}{} iteration", n, ordinal_suffix(n)),
             Style::default().fg(accent_color),
         ));
-    }
-}
-
-fn last_run_badge(
-    def_name: &str,
-    runs: &[WorkflowRun],
-    theme: &Theme,
-) -> (&'static str, String, Color) {
-    let latest = runs
-        .iter()
-        .filter(|r| r.workflow_name == def_name)
-        .max_by(|a, b| a.started_at.cmp(&b.started_at));
-
-    match latest {
-        None => ("—", String::new(), theme.label_secondary),
-        Some(run) => {
-            let time = time_ago(&run.started_at);
-            let label = match &run.target_label {
-                None => time,
-                Some(tl) => {
-                    let (_, target_key, _) = parse_target_label(tl);
-                    format!("{time}  {target_key}")
-                }
-            };
-            match run.status {
-                WorkflowRunStatus::Completed => ("✓", label, theme.status_completed),
-                WorkflowRunStatus::Failed => ("✗", label, theme.status_failed),
-                WorkflowRunStatus::Running => ("▶", label, theme.label_accent),
-                _ => ("—", label, theme.label_secondary),
-            }
-        }
     }
 }
 
