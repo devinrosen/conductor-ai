@@ -129,8 +129,8 @@ impl ConductorError {
     ///   1      = unspecified / anyhow fallthrough
     ///   10-19  = infrastructure (DB, I/O)
     ///   20-29  = user input / entity-not-found errors
-    ///   30-39  = subprocess / external tool failures
-    ///   40-49  = configuration errors
+    ///   30-39  = subprocess / external tool failures (33 = entity state / precondition error)
+    ///   40-49  = configuration errors (43 = unknown/invalid config value type)
     ///   50-59  = agent subsystem
     ///   60-69  = workflow subsystem
     ///
@@ -149,7 +149,7 @@ impl ConductorError {
             Self::InvalidInput(_) => 27,
             Self::FeatureNotFound { .. } => 28,
             Self::FeatureAlreadyExists { .. } => 29,
-            Self::FeatureStillActive { .. } => 29,
+            Self::FeatureStillActive { .. } => 33,
             Self::Git(_) => 30,
             Self::GhCli(_) => 31,
             Self::TicketSync(_) => 32,
@@ -161,7 +161,7 @@ impl ConductorError {
             Self::Workflow(_) => 60,
             Self::WorkflowRunAlreadyActive { .. } => 61,
             Self::WorkflowRunNotFound { .. } => 62,
-            Self::UnknownSourceType(_) => 27,
+            Self::UnknownSourceType(_) => 43,
         }
     }
 }
