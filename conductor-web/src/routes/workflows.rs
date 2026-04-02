@@ -445,6 +445,15 @@ pub async fn run_workflow(
     ))
 }
 
+fn check_no_active_run(wf_mgr: &WorkflowManager<'_>, wt_id: &str) -> Result<(), ApiError> {
+    if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
+        return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
+            name: active.workflow_name,
+        }));
+    }
+    Ok(())
+}
+
 /// POST /api/workflows/runs
 pub async fn post_workflow_run(
     State(state): State<AppState>,
@@ -478,18 +487,14 @@ pub async fn post_workflow_run(
         };
 
         // Route based on which target fields are present
+        let wf_mgr = WorkflowManager::new(&db);
         let (wt_path, wt_slug, wt_ticket_id, resolved_wt_id, wt_model) =
             if let Some(ref wt_id) = req.worktree {
                 // Worktree path: validate ownership
                 let wt = wt_mgr.get_by_id_for_repo(wt_id, &repo.id)?;
 
                 // Reject if a top-level workflow run is already active on this worktree
-                let wf_mgr = WorkflowManager::new(&db);
-                if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
-                    return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
-                        name: active.workflow_name,
-                    }));
-                }
+                check_no_active_run(&wf_mgr, wt_id)?;
 
                 let path = wt.path.clone();
                 let slug = wt.slug.clone();
@@ -511,12 +516,7 @@ pub async fn post_workflow_run(
                     })?;
 
                 // Reject if a top-level workflow run is already active on this worktree
-                let wf_mgr = WorkflowManager::new(&db);
-                if let Some(active) = wf_mgr.get_active_run_for_worktree(&active_wt.id)? {
-                    return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
-                        name: active.workflow_name,
-                    }));
-                }
+                check_no_active_run(&wf_mgr, &active_wt.id)?;
 
                 let path = active_wt.path.clone();
                 let slug = active_wt.slug.clone();
