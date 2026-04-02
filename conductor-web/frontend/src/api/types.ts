@@ -199,6 +199,7 @@ export interface WorkflowDefSummary {
   inputs: { name: string; required: boolean; type: string; defaultValue: string | null; description: string | null }[];
   node_count: number;
   group: string | null;
+  targets: string[];
 }
 
 export interface WorkflowRun {

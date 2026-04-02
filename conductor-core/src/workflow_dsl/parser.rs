@@ -367,13 +367,6 @@ impl Parser {
 
         self.expect(&Token::RBrace)?;
 
-        if targets.is_empty() {
-            return Err(format!(
-                "workflow '{name}' is missing a required `targets` field in its meta block.\n\
-                 Add at least one target, e.g.: targets = [\"worktree\"]"
-            ));
-        }
-
         Ok(WorkflowDef {
             name,
             description,

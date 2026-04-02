@@ -509,3 +509,24 @@ workflow lint-fix {
         _ => panic!("Expected Script node"),
     }
 }
+
+#[test]
+fn test_parse_workflow_without_targets_defaults_to_empty() {
+    let input = r#"
+workflow no-targets {
+  meta {
+    description = "Workflow without targets block"
+    trigger     = "manual"
+  }
+
+  call do-something
+}
+"#;
+    let def = parse_workflow_str(input, "no-targets.wf").unwrap();
+    assert_eq!(def.name, "no-targets");
+    assert!(
+        def.targets.is_empty(),
+        "expected targets to be empty when omitted from meta, got {:?}",
+        def.targets
+    );
+}
