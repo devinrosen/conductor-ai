@@ -2021,6 +2021,23 @@ mod tests {
     // --- get_workflow_step_log tests ---
 
     /// Seed the minimum FK chain needed for workflow run tests.
+    fn insert_agent_run(
+        db: &rusqlite::Connection,
+        id: &str,
+        worktree_id: &str,
+        prompt: &str,
+        status: &str,
+        started_at: &str,
+        log_file: &str,
+    ) {
+        db.execute(
+            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, worktree_id, prompt, status, started_at, log_file],
+        )
+        .unwrap();
+    }
+
     async fn seed_workflow_fixtures(state: &AppState) -> String {
         let db = state.db.lock().await;
         db.execute_batch(
@@ -2088,19 +2105,15 @@ mod tests {
         {
             let db = state.db.lock().await;
             // Insert a second agent run to act as the child
-            db.execute(
-                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "ar2",
-                    "w1",
-                    "child",
-                    "running",
-                    "2024-01-01T00:00:00Z",
-                    "/nonexistent/path/log.txt"
-                ],
-            )
-            .unwrap();
+            insert_agent_run(
+                &db,
+                "ar2",
+                "w1",
+                "child",
+                "running",
+                "2024-01-01T00:00:00Z",
+                "/nonexistent/path/log.txt",
+            );
             let mgr = WorkflowManager::new(&db);
             let step_id = mgr
                 .insert_step(&run_id, "my-step", "actor", false, 0, 0)
@@ -2139,19 +2152,15 @@ mod tests {
 
         {
             let db = state.db.lock().await;
-            db.execute(
-                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "ar2",
-                    "w1",
-                    "child",
-                    "running",
-                    "2024-01-01T00:00:00Z",
-                    log_path
-                ],
-            )
-            .unwrap();
+            insert_agent_run(
+                &db,
+                "ar2",
+                "w1",
+                "child",
+                "running",
+                "2024-01-01T00:00:00Z",
+                &log_path,
+            );
             let mgr = WorkflowManager::new(&db);
             let step_id = mgr
                 .insert_step(&run_id, "my-step", "actor", false, 0, 0)
@@ -2193,33 +2202,25 @@ mod tests {
         {
             let db = state.db.lock().await;
             // Agent run for iteration 0
-            db.execute(
-                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "ar-iter0",
-                    "w1",
-                    "child-iter0",
-                    "completed",
-                    "2024-01-01T00:00:00Z",
-                    path0
-                ],
-            )
-            .unwrap();
+            insert_agent_run(
+                &db,
+                "ar-iter0",
+                "w1",
+                "child-iter0",
+                "completed",
+                "2024-01-01T00:00:00Z",
+                &path0,
+            );
             // Agent run for iteration 1
-            db.execute(
-                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "ar-iter1",
-                    "w1",
-                    "child-iter1",
-                    "running",
-                    "2024-01-01T00:00:01Z",
-                    path1
-                ],
-            )
-            .unwrap();
+            insert_agent_run(
+                &db,
+                "ar-iter1",
+                "w1",
+                "child-iter1",
+                "running",
+                "2024-01-01T00:00:01Z",
+                &path1,
+            );
             let mgr = WorkflowManager::new(&db);
             // Insert iteration 0 step
             let step0_id = mgr
@@ -2283,12 +2284,15 @@ mod tests {
                 ("ar-3i-1", path1.as_str(), 1i64),
                 ("ar-3i-2", path2.as_str(), 2i64),
             ] {
-                db.execute(
-                    "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    rusqlite::params![id, "w1", "child", "completed", "2024-01-01T00:00:00Z", path],
-                )
-                .unwrap();
+                insert_agent_run(
+                    &db,
+                    id,
+                    "w1",
+                    "child",
+                    "completed",
+                    "2024-01-01T00:00:00Z",
+                    path,
+                );
                 let mgr = WorkflowManager::new(&db);
                 let step_id = mgr
                     .insert_step(&run_id, "tri-step", "actor", false, 0, iter)
@@ -2333,19 +2337,15 @@ mod tests {
         {
             let db = state.db.lock().await;
             // build step (iteration 0)
-            db.execute(
-                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "ar-iso-build",
-                    "w1",
-                    "build",
-                    "completed",
-                    "2024-01-01T00:00:00Z",
-                    path_build
-                ],
-            )
-            .unwrap();
+            insert_agent_run(
+                &db,
+                "ar-iso-build",
+                "w1",
+                "build",
+                "completed",
+                "2024-01-01T00:00:00Z",
+                &path_build,
+            );
             let mgr = WorkflowManager::new(&db);
             let build_step_id = mgr
                 .insert_step(&run_id, "build", "actor", false, 0, 0)
@@ -2362,19 +2362,15 @@ mod tests {
             .unwrap();
 
             // deploy step iteration 0
-            db.execute(
-                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "ar-iso-dep0",
-                    "w1",
-                    "deploy0",
-                    "completed",
-                    "2024-01-01T00:00:01Z",
-                    path_deploy0
-                ],
-            )
-            .unwrap();
+            insert_agent_run(
+                &db,
+                "ar-iso-dep0",
+                "w1",
+                "deploy0",
+                "completed",
+                "2024-01-01T00:00:01Z",
+                &path_deploy0,
+            );
             let dep0_id = mgr
                 .insert_step(&run_id, "deploy", "actor", false, 0, 0)
                 .unwrap();
@@ -2390,19 +2386,15 @@ mod tests {
             .unwrap();
 
             // deploy step iteration 1
-            db.execute(
-                "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, log_file) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    "ar-iso-dep1",
-                    "w1",
-                    "deploy1",
-                    "running",
-                    "2024-01-01T00:00:02Z",
-                    path_deploy1
-                ],
-            )
-            .unwrap();
+            insert_agent_run(
+                &db,
+                "ar-iso-dep1",
+                "w1",
+                "deploy1",
+                "running",
+                "2024-01-01T00:00:02Z",
+                &path_deploy1,
+            );
             let dep1_id = mgr
                 .insert_step(&run_id, "deploy", "actor", false, 0, 1)
                 .unwrap();

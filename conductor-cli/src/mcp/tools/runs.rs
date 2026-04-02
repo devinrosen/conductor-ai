@@ -394,6 +394,20 @@ mod tests {
         run.id
     }
 
+    /// Helper: create an agent run and set its log_file in one shot. Returns the run id.
+    fn create_run_with_log(conn: &rusqlite::Connection, log_path: &str) -> String {
+        use conductor_core::agent::AgentManager;
+        let run = AgentManager::new(conn)
+            .create_run(None, "agent", None, None)
+            .expect("create agent run");
+        conn.execute(
+            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
+            rusqlite::params![log_path, run.id],
+        )
+        .expect("set log_file");
+        run.id
+    }
+
     /// Helper: create a workflow run with one step. Returns (run_id, step_id).
     fn make_run_with_step(db_path: &std::path::Path, step_name: &str) -> (String, String) {
         use conductor_core::agent::AgentManager;
@@ -1076,7 +1090,6 @@ mod tests {
     #[test]
     fn test_dispatch_get_step_log_success() {
         // Happy path: step has child_run linked to an agent run with a log file.
-        use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
         use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
         use std::io::Write as _;
@@ -1090,24 +1103,14 @@ mod tests {
         writeln!(log_file.as_file(), "agent log line 2").expect("write");
         let log_path = log_file.path().to_str().unwrap().to_string();
 
-        // Create a child agent run with the log_file path stored.
         let conn = open_database(&db).expect("open db");
-        let agent_mgr = AgentManager::new(&conn);
-        let child_run = agent_mgr
-            .create_run(None, "agent", None, None)
-            .expect("create child run");
-        // Store the log file path on the agent run.
-        conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params![log_path, child_run.id],
-        )
-        .expect("update log_file");
+        let child_run_id = create_run_with_log(&conn, &log_path);
 
         let mgr = WorkflowManager::new(&conn);
         mgr.update_step_status(
             &step_id,
             WorkflowStepStatus::Completed,
-            Some(&child_run.id),
+            Some(&child_run_id),
             Some("done"),
             None,
             None,
@@ -1142,7 +1145,6 @@ mod tests {
 
     #[test]
     fn test_dispatch_get_step_log_multi_iteration_returns_last() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
         use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
         use std::io::Write as _;
@@ -1159,23 +1161,13 @@ mod tests {
         let path1 = log_iter1.path().to_str().unwrap().to_string();
 
         let conn = open_database(&db).expect("open db");
-        let agent_mgr = AgentManager::new(&conn);
-
-        // Agent run for iteration 0
-        let child0 = agent_mgr
-            .create_run(None, "agent", None, None)
-            .expect("create child run 0");
-        conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params![path0, child0.id],
-        )
-        .expect("set log_file iter0");
+        let child0_id = create_run_with_log(&conn, &path0);
 
         let mgr = WorkflowManager::new(&conn);
         mgr.update_step_status(
             &step0_id,
             WorkflowStepStatus::Completed,
-            Some(&child0.id),
+            Some(&child0_id),
             Some("done"),
             None,
             None,
@@ -1187,18 +1179,11 @@ mod tests {
         let step1_id = mgr
             .insert_step(&run_id, "build", "actor", false, 0, 1)
             .expect("insert step iter1");
-        let child1 = agent_mgr
-            .create_run(None, "agent", None, None)
-            .expect("create child run 1");
-        conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params![path1, child1.id],
-        )
-        .expect("set log_file iter1");
+        let child1_id = create_run_with_log(&conn, &path1);
         mgr.update_step_status(
             &step1_id,
             WorkflowStepStatus::Running,
-            Some(&child1.id),
+            Some(&child1_id),
             None,
             None,
             None,
@@ -1236,7 +1221,6 @@ mod tests {
 
     #[test]
     fn test_dispatch_get_step_log_multi_step_name_isolation() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
         use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
         use std::io::Write as _;
@@ -1256,22 +1240,14 @@ mod tests {
         let path_test1 = log_test1.path().to_str().unwrap().to_string();
 
         let conn = open_database(&db).expect("open db");
-        let agent_mgr = AgentManager::new(&conn);
         let mgr = WorkflowManager::new(&conn);
 
         // Link build step to its agent run.
-        let child_build = agent_mgr
-            .create_run(None, "agent", None, None)
-            .expect("create build child run");
-        conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params![path_build, child_build.id],
-        )
-        .expect("set build log_file");
+        let child_build_id = create_run_with_log(&conn, &path_build);
         mgr.update_step_status(
             &build_step_id,
             WorkflowStepStatus::Completed,
-            Some(&child_build.id),
+            Some(&child_build_id),
             Some("done"),
             None,
             None,
@@ -1283,18 +1259,11 @@ mod tests {
         let test_step0_id = mgr
             .insert_step(&run_id, "test", "actor", false, 0, 0)
             .expect("insert test step iter0");
-        let child_test0 = agent_mgr
-            .create_run(None, "agent", None, None)
-            .expect("create test child run 0");
-        conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params![path_test0, child_test0.id],
-        )
-        .expect("set test0 log_file");
+        let child_test0_id = create_run_with_log(&conn, &path_test0);
         mgr.update_step_status(
             &test_step0_id,
             WorkflowStepStatus::Completed,
-            Some(&child_test0.id),
+            Some(&child_test0_id),
             Some("done"),
             None,
             None,
@@ -1306,18 +1275,11 @@ mod tests {
         let test_step1_id = mgr
             .insert_step(&run_id, "test", "actor", false, 0, 1)
             .expect("insert test step iter1");
-        let child_test1 = agent_mgr
-            .create_run(None, "agent", None, None)
-            .expect("create test child run 1");
-        conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params![path_test1, child_test1.id],
-        )
-        .expect("set test1 log_file");
+        let child_test1_id = create_run_with_log(&conn, &path_test1);
         mgr.update_step_status(
             &test_step1_id,
             WorkflowStepStatus::Running,
-            Some(&child_test1.id),
+            Some(&child_test1_id),
             None,
             None,
             None,
