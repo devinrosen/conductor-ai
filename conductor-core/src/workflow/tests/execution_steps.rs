@@ -79,30 +79,9 @@ fn test_parallel_agent_completion_accumulates_tokens() {
     let loaded_a = agent_mgr.get_run(&run_a.id).unwrap().unwrap();
     let loaded_b = agent_mgr.get_run(&run_b.id).unwrap().unwrap();
 
-    // Simulate the accumulation logic in execute_parallel (lines 326-346).
-    for run in [&loaded_a, &loaded_b] {
-        if let Some(cost) = run.cost_usd {
-            state.total_cost += cost;
-        }
-        if let Some(turns) = run.num_turns {
-            state.total_turns += turns;
-        }
-        if let Some(dur) = run.duration_ms {
-            state.total_duration_ms += dur;
-        }
-        if let Some(t) = run.input_tokens {
-            state.total_input_tokens += t;
-        }
-        if let Some(t) = run.output_tokens {
-            state.total_output_tokens += t;
-        }
-        if let Some(t) = run.cache_read_input_tokens {
-            state.total_cache_read_input_tokens += t;
-        }
-        if let Some(t) = run.cache_creation_input_tokens {
-            state.total_cache_creation_input_tokens += t;
-        }
-    }
+    // Exercise the production accumulation method used by execute_parallel.
+    state.accumulate_agent_run(&loaded_a);
+    state.accumulate_agent_run(&loaded_b);
 
     // Verify all four token counters were accumulated correctly.
     assert_eq!(state.total_input_tokens, 180);

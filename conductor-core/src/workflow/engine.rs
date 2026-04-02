@@ -119,6 +119,35 @@ impl ExecutionState<'_> {
         }
     }
 
+    /// Accumulate metrics from a completed agent run into this execution state.
+    ///
+    /// Centralises the per-field `if let Some` pattern so parallel.rs and any
+    /// other executor that processes agent runs call this instead of duplicating
+    /// the loop.
+    pub(super) fn accumulate_agent_run(&mut self, run: &crate::agent::AgentRun) {
+        if let Some(cost) = run.cost_usd {
+            self.total_cost += cost;
+        }
+        if let Some(turns) = run.num_turns {
+            self.total_turns += turns;
+        }
+        if let Some(dur) = run.duration_ms {
+            self.total_duration_ms += dur;
+        }
+        if let Some(t) = run.input_tokens {
+            self.total_input_tokens += t;
+        }
+        if let Some(t) = run.output_tokens {
+            self.total_output_tokens += t;
+        }
+        if let Some(t) = run.cache_read_input_tokens {
+            self.total_cache_read_input_tokens += t;
+        }
+        if let Some(t) = run.cache_creation_input_tokens {
+            self.total_cache_creation_input_tokens += t;
+        }
+    }
+
     /// Persist the current accumulated metrics to the workflow run row.
     ///
     /// Call sites that need best-effort (non-fatal) flushing should wrap this

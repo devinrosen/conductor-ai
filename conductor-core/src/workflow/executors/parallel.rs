@@ -323,27 +323,7 @@ pub fn execute_parallel(
                             );
                         }
 
-                        if let Some(cost) = run.cost_usd {
-                            state.total_cost += cost;
-                        }
-                        if let Some(turns) = run.num_turns {
-                            state.total_turns += turns;
-                        }
-                        if let Some(dur) = run.duration_ms {
-                            state.total_duration_ms += dur;
-                        }
-                        if let Some(t) = run.input_tokens {
-                            state.total_input_tokens += t;
-                        }
-                        if let Some(t) = run.output_tokens {
-                            state.total_output_tokens += t;
-                        }
-                        if let Some(t) = run.cache_read_input_tokens {
-                            state.total_cache_read_input_tokens += t;
-                        }
-                        if let Some(t) = run.cache_creation_input_tokens {
-                            state.total_cache_creation_input_tokens += t;
-                        }
+                        state.accumulate_agent_run(run);
 
                         // Best-effort mid-run metrics flush after each parallel agent
                         if let Err(e) = state.flush_metrics() {
