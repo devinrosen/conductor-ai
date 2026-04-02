@@ -207,6 +207,37 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Update token counts for a running agent run (best-effort, idempotent).
+    ///
+    /// Uses assignment (`=`) semantics — not increment — so repeated calls are
+    /// safe.  Each call provides cumulative totals read from the log file, so
+    /// using `+=` would multiply-count tokens.  The final [`update_run_completed`]
+    /// call overwrites these columns with the authoritative values from the
+    /// `result` event.
+    pub fn update_run_tokens_partial(
+        &self,
+        run_id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_input_tokens: i64,
+        cache_creation_input_tokens: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs \
+             SET input_tokens = ?1, output_tokens = ?2, \
+                 cache_read_input_tokens = ?3, cache_creation_input_tokens = ?4 \
+             WHERE id = ?5",
+            rusqlite::params![
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                run_id,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn update_run_log_file(&self, run_id: &str, path: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
@@ -424,6 +455,86 @@ mod tests {
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.model.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn test_update_run_tokens_partial_writes_values() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        assert!(run.input_tokens.is_none());
+
+        mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.input_tokens, Some(100));
+        assert_eq!(fetched.output_tokens, Some(50));
+        assert_eq!(fetched.cache_read_input_tokens, Some(20));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(10));
+        // Status must remain Running — partial update must not touch status
+        assert_eq!(
+            fetched.status,
+            crate::agent::status::AgentRunStatus::Running
+        );
+    }
+
+    #[test]
+    fn test_update_run_tokens_partial_overwrites_not_accumulates() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+
+        mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
+            .unwrap();
+        // Second call with larger cumulative totals — must overwrite, not add
+        mgr.update_run_tokens_partial(&run.id, 200, 80, 30, 15)
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.input_tokens, Some(200));
+        assert_eq!(fetched.output_tokens, Some(80));
+        assert_eq!(fetched.cache_read_input_tokens, Some(30));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(15));
+    }
+
+    #[test]
+    fn test_update_run_completed_overwrites_partial_tokens() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
+            .unwrap();
+
+        // Authoritative final values from result event
+        mgr.update_run_completed(
+            &run.id,
+            None,
+            Some("Done"),
+            Some(0.01),
+            Some(3),
+            Some(5000),
+            Some(999),
+            Some(888),
+            Some(777),
+            Some(666),
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.input_tokens, Some(999));
+        assert_eq!(fetched.output_tokens, Some(888));
+        assert_eq!(fetched.cache_read_input_tokens, Some(777));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(666));
     }
 
     #[test]

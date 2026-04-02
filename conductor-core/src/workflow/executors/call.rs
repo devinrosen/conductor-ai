@@ -181,6 +181,49 @@ fn execute_call_with_schema(
             continue;
         }
 
+        // Capture pre-step base totals and references for the tick closure.
+        // All i64/f64 fields are Copy; &Connection is Copy (pointer copy).
+        let conn = state.conn;
+        let wf_run_id = state.workflow_run_id.clone();
+        let model_str = state.model.clone();
+        let base_input = state.total_input_tokens;
+        let base_output = state.total_output_tokens;
+        let base_cr = state.total_cache_read_input_tokens;
+        let base_cc = state.total_cache_creation_input_tokens;
+        let base_cost = state.total_cost;
+        let base_turns = state.total_turns;
+        let base_dur = state.total_duration_ms;
+        let partial_run_id = child_run.id.clone();
+        let log_path = crate::config::agent_log_path(&child_run.id)
+            .to_string_lossy()
+            .into_owned();
+
+        let on_tick = move || {
+            let (step_in, step_out, step_cr, step_cc) =
+                crate::agent::log_parsing::scan_partial_token_usage(&log_path);
+            if step_in == 0 && step_out == 0 && step_cr == 0 && step_cc == 0 {
+                return;
+            }
+            let _ = crate::agent::AgentManager::new(conn).update_run_tokens_partial(
+                &partial_run_id,
+                step_in,
+                step_out,
+                step_cr,
+                step_cc,
+            );
+            let _ = crate::workflow::manager::WorkflowManager::new(conn).persist_workflow_metrics(
+                &wf_run_id,
+                base_input + step_in,
+                base_output + step_out,
+                base_cr + step_cr,
+                base_cc + step_cc,
+                base_turns,
+                base_cost,
+                base_dur,
+                model_str.as_deref(),
+            );
+        };
+
         // Poll for completion
         match crate::agent_runtime::poll_child_completion(
             state.conn,
@@ -188,6 +231,7 @@ fn execute_call_with_schema(
             state.exec_config.poll_interval,
             state.exec_config.step_timeout,
             state.exec_config.shutdown.as_ref(),
+            Some(&on_tick),
         ) {
             Ok(completed_run) => {
                 let succeeded = completed_run.status == AgentRunStatus::Completed;

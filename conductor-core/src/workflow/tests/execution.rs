@@ -38,6 +38,7 @@ fn test_poll_child_completion_already_completed() {
         Duration::from_millis(10),
         Duration::from_secs(1),
         None,
+        None,
     );
     assert!(result.is_ok());
     assert_eq!(result.unwrap().status, AgentRunStatus::Completed);
@@ -55,6 +56,7 @@ fn test_poll_child_completion_timeout() {
         &run.id,
         Duration::from_millis(10),
         Duration::from_millis(50),
+        None,
         None,
     );
     assert!(result.is_err());
@@ -81,6 +83,7 @@ fn test_poll_child_completion_shutdown() {
         Duration::from_millis(10),
         Duration::from_secs(5),
         Some(&flag),
+        None,
     );
     assert!(result.is_err());
     assert!(matches!(
