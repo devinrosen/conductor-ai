@@ -2042,7 +2042,9 @@ mod tests {
             )
             .expect("complete run");
         } else if status != "running" {
-            panic!("insert_agent_run: unsupported status {status:?}; use \"running\" or \"completed\"");
+            panic!(
+                "insert_agent_run: unsupported status {status:?}; use \"running\" or \"completed\""
+            );
         }
         run.id
     }
