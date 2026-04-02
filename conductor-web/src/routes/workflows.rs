@@ -2289,7 +2289,7 @@ mod tests {
 
     #[test]
     fn workflow_def_summary_includes_targets() {
-        use conductor_core::workflow_dsl::types::{WorkflowDef, WorkflowTrigger};
+        use conductor_core::workflow::{WorkflowDef, WorkflowTrigger};
 
         let def = WorkflowDef {
             name: "test-wf".to_string(),
@@ -2312,7 +2312,7 @@ mod tests {
 
     #[test]
     fn workflow_def_summary_empty_targets() {
-        use conductor_core::workflow_dsl::types::{WorkflowDef, WorkflowTrigger};
+        use conductor_core::workflow::{WorkflowDef, WorkflowTrigger};
 
         let def = WorkflowDef {
             name: "all-contexts-wf".to_string(),
