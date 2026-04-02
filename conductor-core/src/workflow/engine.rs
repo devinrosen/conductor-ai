@@ -82,6 +82,10 @@ pub(super) struct ExecutionState<'a> {
     pub total_cost: f64,
     pub total_turns: i64,
     pub total_duration_ms: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cache_read_input_tokens: i64,
+    pub total_cache_creation_input_tokens: i64,
     pub last_gate_feedback: Option<String>,
     /// Block-level output schema name inherited from an enclosing `do {}` block.
     pub block_output: Option<String>,
@@ -451,6 +455,10 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         total_cost: 0.0,
         total_turns: 0,
         total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
         last_gate_feedback: None,
         block_output: None,
         block_with: Vec::new(),
@@ -516,15 +524,26 @@ pub(super) fn run_workflow_engine(
             Some(state.total_cost),
             Some(state.total_turns),
             Some(state.total_duration_ms),
-            None,
-            None,
-            None,
-            None,
+            Some(state.total_input_tokens),
+            Some(state.total_output_tokens),
+            Some(state.total_cache_read_input_tokens),
+            Some(state.total_cache_creation_input_tokens),
         )?;
         state.wf_mgr.update_workflow_status(
             &wf_run_id,
             WorkflowRunStatus::Completed,
             Some(&summary),
+        )?;
+        state.wf_mgr.persist_workflow_metrics(
+            &wf_run_id,
+            state.total_input_tokens,
+            state.total_output_tokens,
+            state.total_cache_read_input_tokens,
+            state.total_cache_creation_input_tokens,
+            state.total_turns,
+            state.total_cost,
+            state.total_duration_ms,
+            state.model.as_deref(),
         )?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
     } else {
@@ -535,6 +554,17 @@ pub(super) fn run_workflow_engine(
             &wf_run_id,
             WorkflowRunStatus::Failed,
             Some(&summary),
+        )?;
+        state.wf_mgr.persist_workflow_metrics(
+            &wf_run_id,
+            state.total_input_tokens,
+            state.total_output_tokens,
+            state.total_cache_read_input_tokens,
+            state.total_cache_creation_input_tokens,
+            state.total_turns,
+            state.total_cost,
+            state.total_duration_ms,
+            state.model.as_deref(),
         )?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
     }
@@ -565,6 +595,10 @@ pub(super) fn run_workflow_engine(
         total_cost: state.total_cost,
         total_turns: state.total_turns,
         total_duration_ms: state.total_duration_ms,
+        total_input_tokens: state.total_input_tokens,
+        total_output_tokens: state.total_output_tokens,
+        total_cache_read_input_tokens: state.total_cache_read_input_tokens,
+        total_cache_creation_input_tokens: state.total_cache_creation_input_tokens,
     })
 }
 
@@ -967,6 +1001,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         total_cost: 0.0,
         total_turns: 0,
         total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
         last_gate_feedback: None,
         block_output: None,
         block_with: Vec::new(),
@@ -1083,6 +1121,10 @@ pub(super) fn record_step_success(
     cost_usd: Option<f64>,
     num_turns: Option<i64>,
     duration_ms: Option<i64>,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    cache_read_input_tokens: Option<i64>,
+    cache_creation_input_tokens: Option<i64>,
     markers: Vec<String>,
     context: String,
     child_run_id: Option<String>,
@@ -1098,6 +1140,18 @@ pub(super) fn record_step_success(
     }
     if let Some(dur) = duration_ms {
         state.total_duration_ms += dur;
+    }
+    if let Some(t) = input_tokens {
+        state.total_input_tokens += t;
+    }
+    if let Some(t) = output_tokens {
+        state.total_output_tokens += t;
+    }
+    if let Some(t) = cache_read_input_tokens {
+        state.total_cache_read_input_tokens += t;
+    }
+    if let Some(t) = cache_creation_input_tokens {
+        state.total_cache_creation_input_tokens += t;
     }
 
     let markers_for_ctx = markers.clone();
@@ -1276,6 +1330,18 @@ pub(super) fn restore_completed_step(
             }
             if let Some(dur) = run.duration_ms {
                 state.total_duration_ms += dur;
+            }
+            if let Some(t) = run.input_tokens {
+                state.total_input_tokens += t;
+            }
+            if let Some(t) = run.output_tokens {
+                state.total_output_tokens += t;
+            }
+            if let Some(t) = run.cache_read_input_tokens {
+                state.total_cache_read_input_tokens += t;
+            }
+            if let Some(t) = run.cache_creation_input_tokens {
+                state.total_cache_creation_input_tokens += t;
             }
         } else {
             tracing::warn!(

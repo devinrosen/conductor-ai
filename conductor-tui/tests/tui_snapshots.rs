@@ -319,6 +319,14 @@ fn snap_workflow_run_detail_with_steps() {
         iteration: 0,
         blocked_on: None,
         feature_id: None,
+        total_input_tokens: None,
+        total_output_tokens: None,
+        total_cache_read_input_tokens: None,
+        total_cache_creation_input_tokens: None,
+        total_turns: None,
+        total_cost_usd: None,
+        total_duration_ms: None,
+        model: None,
     };
 
     let steps = vec![

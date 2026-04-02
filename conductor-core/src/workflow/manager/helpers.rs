@@ -54,6 +54,14 @@ pub(in crate::workflow) fn row_to_workflow_run(
         })
     });
     let feature_id: Option<String> = row.get(19)?;
+    let total_input_tokens: Option<i64> = row.get(20)?;
+    let total_output_tokens: Option<i64> = row.get(21)?;
+    let total_cache_read_input_tokens: Option<i64> = row.get(22)?;
+    let total_cache_creation_input_tokens: Option<i64> = row.get(23)?;
+    let total_turns: Option<i64> = row.get(24)?;
+    let total_cost_usd: Option<f64> = row.get(25)?;
+    let total_duration_ms: Option<i64> = row.get(26)?;
+    let model: Option<String> = row.get(27)?;
     Ok(WorkflowRun {
         id,
         workflow_name: row.get(1)?,
@@ -75,6 +83,14 @@ pub(in crate::workflow) fn row_to_workflow_run(
         iteration,
         blocked_on,
         feature_id,
+        total_input_tokens,
+        total_output_tokens,
+        total_cache_read_input_tokens,
+        total_cache_creation_input_tokens,
+        total_turns,
+        total_cost_usd,
+        total_duration_ms,
+        model,
     })
 }
 

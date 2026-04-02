@@ -99,6 +99,14 @@ impl<'a> WorkflowManager<'a> {
             iteration: 0,
             blocked_on: None,
             feature_id: feature_id.map(String::from),
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
         })
     }
 
@@ -251,6 +259,50 @@ impl<'a> WorkflowManager<'a> {
         }
 
         self.update_workflow_status(run_id, WorkflowRunStatus::Cancelled, Some(reason))
+    }
+
+    /// Persist aggregated metrics for a completed (or failed) workflow run.
+    ///
+    /// Called after the terminal status transition so metrics are recorded even when
+    /// the run fails.  Uses a separate UPDATE to avoid touching the existing
+    /// `update_workflow_status` signature (which is called in many test fixtures).
+    #[allow(clippy::too_many_arguments)]
+    pub fn persist_workflow_metrics(
+        &self,
+        workflow_run_id: &str,
+        total_input_tokens: i64,
+        total_output_tokens: i64,
+        total_cache_read_input_tokens: i64,
+        total_cache_creation_input_tokens: i64,
+        total_turns: i64,
+        total_cost_usd: f64,
+        total_duration_ms: i64,
+        model: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_runs SET \
+             total_input_tokens = ?1, \
+             total_output_tokens = ?2, \
+             total_cache_read_input_tokens = ?3, \
+             total_cache_creation_input_tokens = ?4, \
+             total_turns = ?5, \
+             total_cost_usd = ?6, \
+             total_duration_ms = ?7, \
+             model = ?8 \
+             WHERE id = ?9",
+            params![
+                total_input_tokens,
+                total_output_tokens,
+                total_cache_read_input_tokens,
+                total_cache_creation_input_tokens,
+                total_turns,
+                total_cost_usd,
+                total_duration_ms,
+                model,
+                workflow_run_id,
+            ],
+        )?;
+        Ok(())
     }
 
     /// Mark a workflow run as failed and also fail its parent agent run.

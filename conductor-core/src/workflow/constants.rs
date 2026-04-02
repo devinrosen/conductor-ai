@@ -16,7 +16,9 @@ pub(super) static STEP_COLUMNS_WITH_PREFIX: std::sync::LazyLock<String> =
 pub(super) const RUN_COLUMNS: &str =
     "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
      started_at, ended_at, result_summary, definition_snapshot, inputs, ticket_id, repo_id, \
-     parent_workflow_run_id, target_label, default_bot_name, iteration, blocked_on, feature_id";
+     parent_workflow_run_id, target_label, default_bot_name, iteration, blocked_on, feature_id, \
+     total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \
+     total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model";
 
 /// Instruction appended to every agent prompt for structured output.
 pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"
