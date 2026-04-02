@@ -167,3 +167,77 @@ impl ConductorError {
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn all_variants() -> Vec<ConductorError> {
+        vec![
+            ConductorError::Database(rusqlite::Error::InvalidQuery),
+            ConductorError::Io(std::io::Error::other("io")),
+            ConductorError::RepoNotFound { slug: "r".into() },
+            ConductorError::RepoAlreadyExists { slug: "r".into() },
+            ConductorError::WorktreeNotFound { slug: "w".into() },
+            ConductorError::WorktreeAlreadyExists { slug: "w".into() },
+            ConductorError::IssueSourceAlreadyExists {
+                repo_slug: "r".into(),
+                source_type: "github".into(),
+            },
+            ConductorError::TicketNotFound { id: "t".into() },
+            ConductorError::TicketAlreadyLinked,
+            ConductorError::InvalidInput("bad".into()),
+            ConductorError::FeatureNotFound { name: "f".into() },
+            ConductorError::FeatureAlreadyExists { name: "f".into() },
+            ConductorError::FeatureStillActive {
+                repo: "r".into(),
+                name: "f".into(),
+            },
+            ConductorError::Git(SubprocessFailure::from_message("git", "err".into())),
+            ConductorError::GhCli(SubprocessFailure::from_message("gh", "err".into())),
+            ConductorError::TicketSync("sync".into()),
+            ConductorError::Config("cfg".into()),
+            ConductorError::AgentConfig("acfg".into()),
+            ConductorError::Schema("schema".into()),
+            ConductorError::Agent("agent".into()),
+            ConductorError::FeedbackNotPending {
+                id: "id".into(),
+                status: "done".into(),
+            },
+            ConductorError::Workflow("wf".into()),
+            ConductorError::WorkflowRunAlreadyActive { name: "wf".into() },
+            ConductorError::WorkflowRunNotFound { id: "id".into() },
+            ConductorError::UnknownSourceType("jira".into()),
+        ]
+    }
+
+    #[test]
+    fn exit_codes_are_unique() {
+        let mut seen: HashMap<i32, String> = HashMap::new();
+        for variant in all_variants() {
+            let code = variant.exit_code();
+            let name = format!("{:?}", variant);
+            if let Some(existing) = seen.get(&code) {
+                panic!(
+                    "duplicate exit code {}: {} and {}",
+                    code, existing, name
+                );
+            }
+            seen.insert(code, name);
+        }
+    }
+
+    #[test]
+    fn invalid_input_and_unknown_source_type_have_distinct_exit_codes() {
+        let invalid_input = ConductorError::InvalidInput("x".into()).exit_code();
+        let unknown_source = ConductorError::UnknownSourceType("x".into()).exit_code();
+        assert_ne!(
+            invalid_input, unknown_source,
+            "InvalidInput (exit {}) and UnknownSourceType (exit {}) must have distinct exit codes",
+            invalid_input, unknown_source
+        );
+        assert_eq!(invalid_input, 27);
+        assert_eq!(unknown_source, 43);
+    }
+}
