@@ -323,14 +323,13 @@ pub fn execute_parallel(
                             );
                         }
 
-                        if let Some(cost) = run.cost_usd {
-                            state.total_cost += cost;
-                        }
-                        if let Some(turns) = run.num_turns {
-                            state.total_turns += turns;
-                        }
-                        if let Some(dur) = run.duration_ms {
-                            state.total_duration_ms += dur;
+                        state.accumulate_agent_run(run);
+
+                        // Best-effort mid-run metrics flush after each parallel agent
+                        if let Err(e) = state.flush_metrics() {
+                            tracing::warn!(
+                                "Failed to flush mid-run metrics after parallel agent: {e}"
+                            );
                         }
 
                         tracing::info!(

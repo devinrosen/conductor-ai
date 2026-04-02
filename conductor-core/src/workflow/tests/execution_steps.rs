@@ -5,6 +5,97 @@ use crate::workflow_dsl::{
     WorkflowNode,
 };
 
+/// Verify that the token accumulation path exercised after each parallel agent
+/// completion (execute_parallel lines 335–346) correctly increments all four
+/// token counters on the ExecutionState, and that flush_metrics persists them
+/// to the DB without error.
+#[test]
+fn test_parallel_agent_completion_accumulates_tokens() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+
+    // Create two "completed" agent runs that simulate parallel agent results.
+    let run_a = agent_mgr
+        .create_run(Some("w1"), "reviewer-a", None, None)
+        .unwrap();
+    agent_mgr
+        .update_run_completed(
+            &run_a.id,
+            None,
+            Some("done"),
+            Some(0.05),
+            Some(3),
+            Some(4000),
+            Some(100), // input_tokens
+            Some(50),  // output_tokens
+            Some(20),  // cache_read_input_tokens
+            Some(10),  // cache_creation_input_tokens
+        )
+        .unwrap();
+
+    let run_b = agent_mgr
+        .create_run(Some("w1"), "reviewer-b", None, None)
+        .unwrap();
+    agent_mgr
+        .update_run_completed(
+            &run_b.id,
+            None,
+            Some("done"),
+            Some(0.03),
+            Some(2),
+            Some(2000),
+            Some(80), // input_tokens
+            Some(40), // output_tokens
+            Some(15), // cache_read_input_tokens
+            Some(5),  // cache_creation_input_tokens
+        )
+        .unwrap();
+
+    // Build a state with a real workflow run so flush_metrics has a valid row.
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .create_workflow_run(
+            "test-parallel",
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+    let mut state = ExecutionState {
+        workflow_run_id: run.id.clone(),
+        worktree_id: Some("w1".to_string()),
+        ..make_test_state(&conn)
+    };
+    // Patch in the wf_mgr that points at the same conn so flush_metrics can
+    // find the workflow_run row.
+    state.wf_mgr = WorkflowManager::new(&conn);
+
+    // Re-fetch runs to get filled-in token fields.
+    let loaded_a = agent_mgr.get_run(&run_a.id).unwrap().unwrap();
+    let loaded_b = agent_mgr.get_run(&run_b.id).unwrap().unwrap();
+
+    // Exercise the production accumulation method used by execute_parallel.
+    state.accumulate_agent_run(&loaded_a);
+    state.accumulate_agent_run(&loaded_b);
+
+    // Verify all four token counters were accumulated correctly.
+    assert_eq!(state.total_input_tokens, 180);
+    assert_eq!(state.total_output_tokens, 90);
+    assert_eq!(state.total_cache_read_input_tokens, 35);
+    assert_eq!(state.total_cache_creation_input_tokens, 15);
+    assert_eq!(state.total_turns, 5);
+    assert!((state.total_cost - 0.08).abs() < 0.001);
+    assert_eq!(state.total_duration_ms, 6000);
+
+    // flush_metrics must persist the totals without error.
+    state.flush_metrics().unwrap();
+}
+
 #[test]
 fn test_execute_unless_marker_absent_runs_body() {
     let conn = setup_db();
