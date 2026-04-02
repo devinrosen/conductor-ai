@@ -27,6 +27,7 @@ async fn spawn_test_server_with_setup(setup: impl Fn(&Connection)) -> String {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(Config::default())),
         events: EventBus::new(64),
+        db_path: std::path::PathBuf::new(),
         workflow_done_notify: None,
     };
 

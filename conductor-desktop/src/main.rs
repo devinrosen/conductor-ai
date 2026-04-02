@@ -66,7 +66,7 @@ fn main() {
             });
 
             // Build the conductor-web AppState for the embedded HTTP server.
-            let web_state = conductor_web::state::AppState::new(conn, config, 64);
+            let web_state = conductor_web::state::AppState::new(conn, config, db_path_val, 64);
 
             // Channel to receive the bound port (or error) from the server thread.
             let (port_tx, port_rx) = std::sync::mpsc::channel::<Result<u16, String>>();

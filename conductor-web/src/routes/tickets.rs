@@ -215,6 +215,7 @@ mod tests {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(Config::default())),
             events: EventBus::new(1),
+            db_path: std::path::PathBuf::new(),
             workflow_done_notify: None,
         }
     }

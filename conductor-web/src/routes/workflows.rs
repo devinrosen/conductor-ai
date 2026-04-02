@@ -1190,7 +1190,20 @@ mod tests {
 
     use crate::events::EventBus;
     use crate::routes::api_router;
-    use crate::test_helpers::{empty_state, seeded_state, seeded_state_with_agent_run};
+    use crate::test_helpers as th;
+
+    // Workflow tests never exercise the worktree create/delete spawn_blocking
+    // paths, so db_path does not need to point to a live file. These wrappers
+    // drop the NamedTempFile immediately, which is safe here.
+    fn empty_state() -> AppState {
+        th::empty_state().0
+    }
+    fn seeded_state() -> AppState {
+        th::seeded_state().0
+    }
+    fn seeded_state_with_agent_run() -> AppState {
+        th::seeded_state_with_agent_run().0
+    }
 
     async fn get_response(uri: &str, state: AppState) -> (StatusCode, serde_json::Value) {
         let app = api_router().with_state(state);
@@ -1615,6 +1628,7 @@ mod tests {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(conductor_core::config::Config::default())),
             events: EventBus::new(1),
+            db_path: test_db_path.clone(),
             workflow_done_notify: Some(Arc::clone(&notify)),
         };
         {

@@ -162,7 +162,7 @@ mod tests {
             ..Default::default()
         };
 
-        AppState::new(db, config, 100)
+        AppState::new(db, config, std::path::PathBuf::new(), 100)
     }
 
     #[tokio::test]
@@ -199,7 +199,7 @@ mod tests {
     async fn test_get_vapid_public_key_not_configured() {
         let db = create_test_conn();
         let config = Config::default(); // No VAPID keys configured
-        let state = AppState::new(db, config, 100);
+        let state = AppState::new(db, config, std::path::PathBuf::new(), 100);
 
         let result = get_vapid_public_key(State(state)).await;
 
