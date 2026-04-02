@@ -239,7 +239,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("  {node_count} steps"),
+                    format!("  \u{25b8}{node_count}"),
                     Style::default().fg(state.theme.label_warning),
                 ),
             ];
@@ -252,7 +252,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             }
             if input_count > 0 {
                 spans.push(Span::styled(
-                    format!("  {input_count} inputs"),
+                    format!("  \u{25be}{input_count}"),
                     Style::default().fg(state.theme.status_waiting),
                 ));
             }
@@ -332,11 +332,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("  {}", truncate(&def.description, 30)),
-                    Style::default().fg(state.theme.label_secondary),
-                ),
-                Span::styled(
-                    format!("  {node_count} steps"),
+                    format!("  \u{25b8}{node_count}"),
                     Style::default().fg(state.theme.label_warning),
                 ),
             ];
@@ -349,7 +345,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             }
             if input_count > 0 {
                 spans.push(Span::styled(
-                    format!("  {input_count} inputs"),
+                    format!("  \u{25be}{input_count}"),
                     Style::default().fg(state.theme.status_waiting),
                 ));
             }
