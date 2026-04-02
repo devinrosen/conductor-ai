@@ -2041,6 +2041,8 @@ mod tests {
                 &run.id, None, None, None, None, None, None, None, None, None,
             )
             .expect("complete run");
+        } else if status != "running" {
+            panic!("insert_agent_run: unsupported status {status:?}; use \"running\" or \"completed\"");
         }
         run.id
     }
