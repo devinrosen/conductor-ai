@@ -43,3 +43,16 @@ impl From<rusqlite::Error> for ApiError {
         ApiError(ConductorError::Database(err))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn unknown_source_type_maps_to_400() {
+        let err = ApiError(ConductorError::UnknownSourceType("bogus".into()));
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}

@@ -85,7 +85,7 @@ impl TicketSource {
         remote_url: &str,
     ) -> Result<String> {
         match (source_type, config_json) {
-            ("github", Some(json)) => {
+            ("github" | "jira", Some(json)) => {
                 serde_json::from_str::<serde_json::Value>(json).map_err(|e| {
                     ConductorError::InvalidInput(format!("invalid JSON config: {e}"))
                 })?;
@@ -101,12 +101,6 @@ impl TicketSource {
                 serde_json::to_string(&GitHubConfig { owner, repo }).map_err(|e| {
                     ConductorError::Config(format!("failed to serialize github config: {e}"))
                 })
-            }
-            ("jira", Some(json)) => {
-                serde_json::from_str::<serde_json::Value>(json).map_err(|e| {
-                    ConductorError::InvalidInput(format!("invalid JSON config: {e}"))
-                })?;
-                Ok(json.to_string())
             }
             ("jira", None) => Err(ConductorError::InvalidInput(
                 "--config is required for jira sources \
