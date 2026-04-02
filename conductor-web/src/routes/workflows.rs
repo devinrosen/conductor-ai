@@ -282,7 +282,7 @@ pub async fn run_workflow(
         // Reject if a top-level workflow run is already active on this worktree
         let wf_mgr = WorkflowManager::new(&db);
         if let Some(active) = wf_mgr.get_active_run_for_worktree(&worktree_id)? {
-            return Err(ApiError(ConductorError::WorkflowRunAlreadyActive {
+            return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
                 name: active.workflow_name,
             }));
         }
@@ -477,7 +477,7 @@ pub async fn post_workflow_run(
             Err(conductor_core::error::ConductorError::RepoNotFound { .. }) => {
                 repo_mgr.get_by_slug(&req.repo)?
             }
-            Err(e) => return Err(ApiError(e)),
+            Err(e) => return Err(ApiError::Core(e)),
         };
 
         // Route based on which target fields are present
@@ -489,7 +489,7 @@ pub async fn post_workflow_run(
                 // Reject if a top-level workflow run is already active on this worktree
                 let wf_mgr = WorkflowManager::new(&db);
                 if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
-                    return Err(ApiError(ConductorError::WorkflowRunAlreadyActive {
+                    return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
                         name: active.workflow_name,
                     }));
                 }
@@ -507,7 +507,7 @@ pub async fn post_workflow_run(
                     .into_iter()
                     .find(|wt| wt.repo_id == repo.id && wt.is_active())
                     .ok_or_else(|| {
-                        ApiError(ConductorError::InvalidInput(format!(
+                        ApiError::Core(ConductorError::InvalidInput(format!(
                             "no active worktree found for ticket {ticket_id} in repo {}",
                             repo.slug
                         )))
@@ -516,7 +516,7 @@ pub async fn post_workflow_run(
                 // Reject if a top-level workflow run is already active on this worktree
                 let wf_mgr = WorkflowManager::new(&db);
                 if let Some(active) = wf_mgr.get_active_run_for_worktree(&active_wt.id)? {
-                    return Err(ApiError(ConductorError::WorkflowRunAlreadyActive {
+                    return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
                         name: active.workflow_name,
                     }));
                 }
@@ -752,18 +752,18 @@ pub async fn list_all_workflow_runs_handler(
             .map(|token| {
                 let trimmed = token.trim();
                 if trimmed.is_empty() {
-                    return Err(ApiError(ConductorError::InvalidInput(
+                    return Err(ApiError::Core(ConductorError::InvalidInput(
                         "empty status token in list".to_string(),
                     )));
                 }
                 WorkflowRunStatus::from_str(trimmed)
-                    .map_err(|e| ApiError(ConductorError::InvalidInput(e)))
+                    .map_err(|e| ApiError::Core(ConductorError::InvalidInput(e)))
             })
             .collect::<Result<Vec<_>, _>>()?
     };
 
     if !raw.is_empty() && statuses.is_empty() {
-        return Err(ApiError(ConductorError::InvalidInput(
+        return Err(ApiError::Core(ConductorError::InvalidInput(
             "status filter yielded no valid values — did you pass only commas?".into(),
         )));
     }
@@ -844,7 +844,7 @@ pub async fn get_workflow_run(
     let mgr = WorkflowManager::new(&db);
     let run = mgr
         .get_workflow_run(&id)?
-        .ok_or_else(|| ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
+        .ok_or_else(|| ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
     Ok(Json(run))
 }
 
@@ -872,9 +872,9 @@ pub async fn get_workflow_step_log(
         let wf_mgr = WorkflowManager::new(&db);
 
         // Verify run exists
-        wf_mgr
-            .get_workflow_run(&run_id)?
-            .ok_or_else(|| ApiError(ConductorError::WorkflowRunNotFound { id: run_id.clone() }))?;
+        wf_mgr.get_workflow_run(&run_id)?.ok_or_else(|| {
+            ApiError::Core(ConductorError::WorkflowRunNotFound { id: run_id.clone() })
+        })?;
 
         // Find matching step — last iteration wins
         let steps = wf_mgr.get_workflow_steps(&run_id)?;
@@ -883,14 +883,14 @@ pub async fn get_workflow_step_log(
             .filter(|s| s.step_name == step_name)
             .max_by_key(|s| s.iteration)
             .ok_or_else(|| {
-                ApiError(ConductorError::Workflow(format!(
+                ApiError::Core(ConductorError::Workflow(format!(
                     "step '{step_name}' not found in run '{run_id}'"
                 )))
             })?;
 
         // Gate/skipped steps have no child_run_id
         let child_run_id = step.child_run_id.ok_or_else(|| {
-            ApiError(ConductorError::Workflow(format!(
+            ApiError::Core(ConductorError::Workflow(format!(
                 "step '{step_name}' has no agent run (gate or skipped step)"
             )))
         })?;
@@ -906,7 +906,7 @@ pub async fn get_workflow_step_log(
 
     // Non-blocking async file read — does not block the tokio worker thread
     let log = tokio::fs::read_to_string(&log_path).await.map_err(|e| {
-        ApiError(ConductorError::Workflow(format!(
+        ApiError::Core(ConductorError::Workflow(format!(
             "failed to read log file '{}' for run '{run_id}' step '{step_name}': {e}",
             log_path.display()
         )))
@@ -937,7 +937,7 @@ pub async fn cancel_workflow(
     // Verify run exists
     let run = mgr
         .get_workflow_run(&id)?
-        .ok_or_else(|| ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
+        .ok_or_else(|| ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
 
     mgr.update_workflow_status(&id, WorkflowRunStatus::Cancelled, Some("Cancelled by user"))?;
 
@@ -968,11 +968,11 @@ pub async fn resume_workflow_endpoint(
     let (workflow_name, target_label) = {
         let db = state.db.lock().await;
         let mgr = WorkflowManager::new(&db);
-        let run = mgr
-            .get_workflow_run(&id)?
-            .ok_or_else(|| ApiError(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
+        let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
+            ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() })
+        })?;
         validate_resume_preconditions(&run.status, restart, from_step.as_deref())
-            .map_err(ApiError)?;
+            .map_err(ApiError::Core)?;
         (run.workflow_name.clone(), run.target_label.clone())
     }; // DB lock released here
 
@@ -1056,7 +1056,7 @@ pub async fn approve_gate(
     let mgr = WorkflowManager::new(&db);
 
     let step = mgr.find_waiting_gate(&id)?.ok_or_else(|| {
-        ApiError(ConductorError::Workflow(
+        ApiError::Core(ConductorError::Workflow(
             "No waiting gate found for this workflow run".to_string(),
         ))
     })?;
@@ -1091,7 +1091,7 @@ pub async fn reject_gate(
     let mgr = WorkflowManager::new(&db);
 
     let step = mgr.find_waiting_gate(&id)?.ok_or_else(|| {
-        ApiError(ConductorError::Workflow(
+        ApiError::Core(ConductorError::Workflow(
             "No waiting gate found for this workflow run".to_string(),
         ))
     })?;
@@ -1147,7 +1147,7 @@ pub async fn instantiate_template(
     };
 
     let tmpl = get_embedded_template(&req.template).ok_or_else(|| {
-        ApiError(ConductorError::InvalidInput(format!(
+        ApiError::Core(ConductorError::InvalidInput(format!(
             "Template '{}' not found",
             req.template
         )))
@@ -1190,7 +1190,20 @@ mod tests {
 
     use crate::events::EventBus;
     use crate::routes::api_router;
-    use crate::test_helpers::{empty_state, seeded_state, seeded_state_with_agent_run};
+    use crate::test_helpers as th;
+
+    // Workflow tests never exercise the worktree create/delete spawn_blocking
+    // paths, so db_path does not need to point to a live file. These wrappers
+    // drop the NamedTempFile immediately, which is safe here.
+    fn empty_state() -> AppState {
+        th::empty_state().0
+    }
+    fn seeded_state() -> AppState {
+        th::seeded_state().0
+    }
+    fn seeded_state_with_agent_run() -> AppState {
+        th::seeded_state_with_agent_run().0
+    }
 
     async fn get_response(uri: &str, state: AppState) -> (StatusCode, serde_json::Value) {
         let app = api_router().with_state(state);
@@ -1615,6 +1628,7 @@ mod tests {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(conductor_core::config::Config::default())),
             events: EventBus::new(1),
+            db_path: test_db_path.clone(),
             workflow_done_notify: Some(Arc::clone(&notify)),
         };
         {

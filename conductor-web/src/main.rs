@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::http::HeaderValue;
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{conductor_dir, ensure_dirs, load_config, save_config};
+use conductor_core::config::{conductor_dir, db_path, ensure_dirs, load_config, save_config};
 use conductor_core::db::open_database;
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
@@ -124,6 +124,7 @@ async fn main() -> Result<()> {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(config)),
         events: EventBus::new(64),
+        db_path: db_path(),
         workflow_done_notify: None,
     };
 

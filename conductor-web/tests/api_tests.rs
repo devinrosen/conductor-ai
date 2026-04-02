@@ -19,14 +19,20 @@ async fn spawn_test_server() -> String {
 }
 
 /// Spawn a test server with a DB setup callback invoked after migrations.
+/// Uses a file-backed SQLite database so that `db_path` on `AppState` points to a
+/// live file — routes that open their own connection inside `spawn_blocking` will
+/// see the same data as the shared `db` handle.
 async fn spawn_test_server_with_setup(setup: impl Fn(&Connection)) -> String {
-    let conn = conductor_core::test_helpers::create_test_conn();
+    let tmp = tempfile::NamedTempFile::new().expect("create temp db");
+    let db_path = tmp.path().to_path_buf();
+    let conn = conductor_core::db::open_database(&db_path).expect("open temp db");
     setup(&conn);
 
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(Config::default())),
         events: EventBus::new(64),
+        db_path,
         workflow_done_notify: None,
     };
 
@@ -36,6 +42,9 @@ async fn spawn_test_server_with_setup(setup: impl Fn(&Connection)) -> String {
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
+        // Keep `tmp` alive for the lifetime of the server so the temp file is not
+        // deleted while the server is running.
+        let _tmp = tmp;
         axum::serve(listener, app).await.unwrap();
     });
 
