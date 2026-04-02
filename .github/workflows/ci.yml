@@ -47,7 +47,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: cd conductor-web/frontend && bun install && bun run build
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: cargo test -p conductor-core --features test-helpers
+      - run: cargo test --workspace --exclude conductor-core
 
   validate-workflows:
     name: Validate Workflows
