@@ -737,7 +737,10 @@ fn test_reap_stale_worktrees_removes_deregistered_path() {
 
     // Second call: nothing left to reap — confirms the loop is broken
     let reaped2 = mgr.reap_stale_worktrees().unwrap();
-    assert_eq!(reaped2, 0, "should not loop: nothing to reap on second call");
+    assert_eq!(
+        reaped2, 0,
+        "should not loop: nothing to reap on second call"
+    );
 }
 
 // ── parse_pr_view_output tests ────────────────────────────────────────────
