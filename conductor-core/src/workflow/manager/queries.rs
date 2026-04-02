@@ -293,9 +293,9 @@ impl<'a> WorkflowManager<'a> {
                 &format!(
                     "SELECT {RUN_COLUMNS} FROM workflow_runs \
                      WHERE worktree_id = ?1 AND status = ?2 \
-                     ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
+                     ORDER BY started_at DESC LIMIT ?3 OFFSET ?4"
                 ),
-                params![worktree_id, status_str],
+                params![worktree_id, status_str, limit as i64, offset as i64],
                 row_to_workflow_run,
             )
         } else {
@@ -309,14 +309,12 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_all_workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
-            &format!(
-                "SELECT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
-                 ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
-            ),
-            params![],
+            "SELECT workflow_runs.* \
+             FROM workflow_runs \
+             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+             WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
+             ORDER BY workflow_runs.started_at DESC LIMIT ?1",
+            params![limit as i64],
             row_to_workflow_run,
         )
     }
@@ -372,28 +370,24 @@ impl<'a> WorkflowManager<'a> {
             let status_str = s.to_string();
             query_collect(
                 self.conn,
-                &format!(
-                    "SELECT workflow_runs.* \
-                     FROM workflow_runs \
-                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-                       AND workflow_runs.status = ?1 \
-                     ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
-                ),
-                params![status_str],
+                "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+                   AND workflow_runs.status = ?1 \
+                 ORDER BY workflow_runs.started_at DESC LIMIT ?2 OFFSET ?3",
+                params![status_str, limit as i64, offset as i64],
                 row_to_workflow_run,
             )
         } else {
             query_collect(
                 self.conn,
-                &format!(
-                    "SELECT workflow_runs.* \
-                     FROM workflow_runs \
-                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
-                     ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
-                ),
-                params![],
+                "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
+                 ORDER BY workflow_runs.started_at DESC LIMIT ?1 OFFSET ?2",
+                params![limit as i64, offset as i64],
                 row_to_workflow_run,
             )
         }
@@ -411,15 +405,13 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
-            &format!(
-                "SELECT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE workflow_runs.repo_id = ?1 \
-                   AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-                 ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
-            ),
-            params![repo_id],
+            "SELECT workflow_runs.* \
+             FROM workflow_runs \
+             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+             WHERE workflow_runs.repo_id = ?1 \
+               AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+             ORDER BY workflow_runs.started_at DESC LIMIT ?2 OFFSET ?3",
+            params![repo_id, limit as i64, offset as i64],
             row_to_workflow_run,
         )
     }
@@ -437,9 +429,9 @@ impl<'a> WorkflowManager<'a> {
             &format!(
                 "SELECT {RUN_COLUMNS} FROM workflow_runs \
                  WHERE worktree_id = ?1 \
-                 ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
+                 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3"
             ),
-            params![worktree_id],
+            params![worktree_id, limit as i64, offset as i64],
             row_to_workflow_run,
         )
     }
@@ -453,9 +445,9 @@ impl<'a> WorkflowManager<'a> {
             &format!(
                 "SELECT {RUN_COLUMNS} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
-                 ORDER BY started_at DESC LIMIT {limit}"
+                 ORDER BY started_at DESC LIMIT ?1"
             ),
-            params![],
+            params![limit as i64],
             row_to_workflow_run,
         )
     }
