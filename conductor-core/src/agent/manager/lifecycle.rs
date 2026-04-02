@@ -15,7 +15,16 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(worktree_id, None, prompt, tmux_window, model, None, None)
+        self.create_run_with_parent(
+            worktree_id,
+            None,
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Create a run scoped to a repo (no worktree). Used for read-only repo agents.
@@ -26,7 +35,16 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(None, Some(repo_id), prompt, tmux_window, model, None, None)
+        self.create_run_with_parent(
+            None,
+            Some(repo_id),
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn create_child_run(
@@ -46,6 +64,7 @@ impl<'a> AgentManager<'a> {
             model,
             Some(parent_run_id),
             bot_name,
+            None,
         )
     }
 
@@ -59,6 +78,7 @@ impl<'a> AgentManager<'a> {
         model: Option<&str>,
         parent_run_id: Option<&str>,
         bot_name: Option<&str>,
+        log_file: Option<&str>,
     ) -> Result<AgentRun> {
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
@@ -77,7 +97,7 @@ impl<'a> AgentManager<'a> {
             started_at: now.clone(),
             ended_at: None,
             tmux_window: tmux_window.map(String::from),
-            log_file: None,
+            log_file: log_file.map(String::from),
             model: model.map(String::from),
             plan: None,
             parent_run_id: parent_run_id.map(String::from),
@@ -89,8 +109,8 @@ impl<'a> AgentManager<'a> {
         };
 
         self.conn.execute(
-            "INSERT INTO agent_runs (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, parent_run_id, bot_name) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO agent_runs (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, parent_run_id, bot_name, log_file) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 run.id,
                 run.worktree_id,
@@ -101,7 +121,8 @@ impl<'a> AgentManager<'a> {
                 run.tmux_window,
                 run.model,
                 run.parent_run_id,
-                run.bot_name
+                run.bot_name,
+                run.log_file
             ],
         )?;
 
@@ -220,6 +241,7 @@ impl<'a> AgentManager<'a> {
             original.model.as_deref(),
             Some(run_id),
             original.bot_name.as_deref(),
+            None,
         )
     }
 }
@@ -528,5 +550,29 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.repo_id.as_deref(), Some("r1"));
         assert!(fetched.worktree_id.is_none());
+    }
+
+    #[test]
+    fn test_create_run_with_parent_log_file() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run_with_parent(
+                Some("w1"),
+                None,
+                "Fix the bug",
+                Some("feat-test"),
+                None,
+                None,
+                None,
+                Some("/tmp/agent-logs/run.log"),
+            )
+            .unwrap();
+
+        assert_eq!(run.log_file.as_deref(), Some("/tmp/agent-logs/run.log"));
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.log_file.as_deref(), Some("/tmp/agent-logs/run.log"));
     }
 }
