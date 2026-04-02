@@ -145,50 +145,66 @@ pub(super) fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Resu
 /// Both operations are best-effort: failures are logged but not propagated because the
 /// worktree or branch may already be gone (e.g. manually removed).
 pub(super) fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
-    match git_in(repo_path)
-        .args(["worktree", "remove", worktree_path, "--force"])
-        .output()
-    {
-        Ok(o) if !o.status.success() => {
-            tracing::warn!(
-                repo = repo_path,
-                worktree = worktree_path,
-                stderr = %String::from_utf8_lossy(&o.stderr).trim(),
-                "git worktree remove failed"
-            );
+    if Path::new(worktree_path).exists() {
+        match git_in(repo_path)
+            .args(["worktree", "remove", worktree_path, "--force"])
+            .output()
+        {
+            Ok(o) if !o.status.success() => {
+                tracing::warn!(
+                    repo = repo_path,
+                    worktree = worktree_path,
+                    stderr = %String::from_utf8_lossy(&o.stderr).trim(),
+                    "git worktree remove failed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    repo = repo_path,
+                    worktree = worktree_path,
+                    error = %e,
+                    "failed to run git worktree remove"
+                );
+            }
+            Ok(_) => {}
         }
-        Err(e) => {
-            tracing::warn!(
-                repo = repo_path,
-                worktree = worktree_path,
-                error = %e,
-                "failed to run git worktree remove"
-            );
-        }
-        Ok(_) => {}
+    } else {
+        tracing::debug!(
+            repo = repo_path,
+            worktree = worktree_path,
+            "worktree path already gone, skipping git worktree remove"
+        );
     }
 
-    match git_in(repo_path)
-        .args(["branch", "-D", "--", branch])
-        .output()
-    {
-        Ok(o) if !o.status.success() => {
-            tracing::warn!(
-                repo = repo_path,
-                branch = branch,
-                stderr = %String::from_utf8_lossy(&o.stderr).trim(),
-                "git branch -D failed"
-            );
+    if branch_exists(repo_path, branch) {
+        match git_in(repo_path)
+            .args(["branch", "-D", "--", branch])
+            .output()
+        {
+            Ok(o) if !o.status.success() => {
+                tracing::warn!(
+                    repo = repo_path,
+                    branch = branch,
+                    stderr = %String::from_utf8_lossy(&o.stderr).trim(),
+                    "git branch -D failed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    repo = repo_path,
+                    branch = branch,
+                    error = %e,
+                    "failed to run git branch -D"
+                );
+            }
+            Ok(_) => {}
         }
-        Err(e) => {
-            tracing::warn!(
-                repo = repo_path,
-                branch = branch,
-                error = %e,
-                "failed to run git branch -D"
-            );
-        }
-        Ok(_) => {}
+    } else {
+        tracing::debug!(
+            repo = repo_path,
+            branch = branch,
+            "branch already gone, skipping git branch -D"
+        );
     }
 }
 
