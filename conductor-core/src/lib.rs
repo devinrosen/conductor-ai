@@ -61,5 +61,5 @@ pub fn new_id() -> String {
     ulid::Ulid::new().to_string()
 }
 
-#[cfg(any(test, feature = "test-helpers"))]
+#[cfg(feature = "test-helpers")]
 pub mod test_helpers;
