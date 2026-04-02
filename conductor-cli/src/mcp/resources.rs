@@ -408,6 +408,32 @@ fn format_run_detail(
     if let Some(branch) = worktree_branch {
         out.push_str(&format!("worktree_branch: {branch}\n"));
     }
+    // Aggregated usage metrics (populated on completion)
+    let has_metrics = run.total_cost_usd.is_some()
+        || run.total_turns.is_some()
+        || run.total_duration_ms.is_some()
+        || run.total_input_tokens.is_some();
+    if has_metrics {
+        out.push('\n');
+        if let (Some(cost), Some(turns), Some(dur_ms)) =
+            (run.total_cost_usd, run.total_turns, run.total_duration_ms)
+        {
+            out.push_str(&format!(
+                "cost: ${cost:.4}   turns: {turns}   duration: {:.1}s\n",
+                dur_ms as f64 / 1000.0
+            ));
+        }
+        if let (Some(inp), Some(out_t)) = (run.total_input_tokens, run.total_output_tokens) {
+            let cache_read = run.total_cache_read_input_tokens.unwrap_or(0);
+            let cache_create = run.total_cache_creation_input_tokens.unwrap_or(0);
+            out.push_str(&format!(
+                "tokens: {inp} in / {out_t} out (cache: {cache_read} read / {cache_create} created)\n"
+            ));
+        }
+        if let Some(ref model) = run.model {
+            out.push_str(&format!("model: {model}\n"));
+        }
+    }
     out.push_str("\nsteps:\n");
     for step in steps {
         out.push_str(&format!(

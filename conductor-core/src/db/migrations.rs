@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 58;
+pub const LATEST_SCHEMA_VERSION: u32 = 59;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -998,6 +998,17 @@ pub fn run(conn: &Connection) -> Result<()> {
             })?;
         }
         bump_version(conn, 58)?;
+    }
+
+    // Migration 059: add 8 aggregated metrics columns to workflow_runs
+    // (total_input_tokens, total_output_tokens, total_cache_read_input_tokens,
+    //  total_cache_creation_input_tokens, total_turns, total_cost_usd,
+    //  total_duration_ms, model). All nullable — no backfill required.
+    if version < 59 {
+        conn.execute_batch(include_str!(
+            "migrations/059_workflow_run_token_usage.sql"
+        ))?;
+        bump_version(conn, 59)?;
     }
 
     Ok(())

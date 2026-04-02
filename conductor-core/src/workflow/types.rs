@@ -76,6 +76,15 @@ pub struct WorkflowRun {
     pub blocked_on: Option<BlockedOn>,
     /// Optional feature ID linking this run to a feature branch.
     pub feature_id: Option<String>,
+    // Aggregated metrics (populated at run completion)
+    pub total_input_tokens: Option<i64>,
+    pub total_output_tokens: Option<i64>,
+    pub total_cache_read_input_tokens: Option<i64>,
+    pub total_cache_creation_input_tokens: Option<i64>,
+    pub total_turns: Option<i64>,
+    pub total_cost_usd: Option<f64>,
+    pub total_duration_ms: Option<i64>,
+    pub model: Option<String>,
 }
 
 impl WorkflowRun {
@@ -271,6 +280,10 @@ pub struct WorkflowResult {
     pub total_cost: f64,
     pub total_turns: i64,
     pub total_duration_ms: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cache_read_input_tokens: i64,
+    pub total_cache_creation_input_tokens: i64,
 }
 
 /// Result of a single step execution (kept in memory during execution).
