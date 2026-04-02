@@ -181,6 +181,45 @@ impl<'a> WorkflowManager<'a> {
         Ok(reaped)
     }
 
+    /// Detect workflow runs that are stuck in `running` status because the
+    /// executor process died between steps.
+    ///
+    /// A run is "stuck" when ALL of the following hold:
+    /// 1. `status = 'running'`
+    /// 2. `parent_workflow_run_id IS NULL` (root runs only — sub-workflows are
+    ///    driven by their parent engine loop)
+    /// 3. No step has `status IN ('running', 'pending', 'waiting')` — all
+    ///    current steps are terminal
+    /// 4. The most recent step's `ended_at` is older than `threshold_secs`
+    ///
+    /// Returns the IDs of all stuck runs. Callers are responsible for resuming
+    /// them (e.g. by spawning a thread per ID and calling
+    /// `resume_workflow_standalone`).
+    pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
+        query_collect(
+            self.conn,
+            "SELECT id FROM ( \
+               SELECT wr.id, \
+                 (SELECT MAX(ended_at) \
+                  FROM workflow_run_steps wrs2 \
+                  WHERE wrs2.workflow_run_id = wr.id) AS last_step_ended \
+               FROM workflow_runs wr \
+               WHERE wr.status = 'running' \
+                 AND wr.parent_workflow_run_id IS NULL \
+                 AND NOT EXISTS ( \
+                   SELECT 1 FROM workflow_run_steps wrs \
+                   WHERE wrs.workflow_run_id = wr.id \
+                     AND wrs.status IN ('running', 'pending', 'waiting') \
+                 ) \
+             ) \
+             WHERE last_step_ended IS NOT NULL \
+               AND (CAST(strftime('%s', 'now') AS INTEGER) \
+                    - CAST(strftime('%s', last_step_ended) AS INTEGER)) > ?1",
+            params![threshold_secs],
+            |row| row.get(0),
+        )
+    }
+
     /// Find the most-recently-started child workflow run that can be resumed:
     /// failed, pending, waiting, or timed_out status for the given parent + child
     /// workflow name. Returns `None` if no such run exists.
