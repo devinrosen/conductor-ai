@@ -26,10 +26,10 @@ fn test_parallel_agent_completion_accumulates_tokens() {
             Some(0.05),
             Some(3),
             Some(4000),
-            Some(100),  // input_tokens
-            Some(50),   // output_tokens
-            Some(20),   // cache_read_input_tokens
-            Some(10),   // cache_creation_input_tokens
+            Some(100), // input_tokens
+            Some(50),  // output_tokens
+            Some(20),  // cache_read_input_tokens
+            Some(10),  // cache_creation_input_tokens
         )
         .unwrap();
 
@@ -44,10 +44,10 @@ fn test_parallel_agent_completion_accumulates_tokens() {
             Some(0.03),
             Some(2),
             Some(2000),
-            Some(80),   // input_tokens
-            Some(40),   // output_tokens
-            Some(15),   // cache_read_input_tokens
-            Some(5),    // cache_creation_input_tokens
+            Some(80), // input_tokens
+            Some(40), // output_tokens
+            Some(15), // cache_read_input_tokens
+            Some(5),  // cache_creation_input_tokens
         )
         .unwrap();
 
@@ -57,7 +57,14 @@ fn test_parallel_agent_completion_accumulates_tokens() {
         .unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
-        .create_workflow_run("test-parallel", Some("w1"), &parent.id, false, "manual", None)
+        .create_workflow_run(
+            "test-parallel",
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            None,
+        )
         .unwrap();
     let mut state = ExecutionState {
         workflow_run_id: run.id.clone(),
