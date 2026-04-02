@@ -966,15 +966,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     // Migration 056: add gate_options and gate_selections columns to
     // workflow_run_steps for dynamic multi-select gate support.
     if version < 56 {
-        let table_exists: bool = conn
-            .prepare(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_run_steps' LIMIT 1",
-            )
-            .and_then(|mut s| s.exists([]))
-            .unwrap_or(false);
-        if table_exists {
-            conn.execute_batch(include_str!("migrations/056_gate_options.sql"))?;
-        }
+        conn.execute_batch(include_str!("migrations/056_gate_options.sql"))?;
         bump_version(conn, 56)?;
     }
 
@@ -1091,6 +1083,36 @@ mod tests {
                 definition_snapshot TEXT,
                 inputs              TEXT
             );
+            -- workflow_run_steps at version 26: columns from migrations 020, 021, 023.
+            -- Migration 037 does a table swap, so this minimal form is intentional.
+            CREATE TABLE workflow_run_steps (
+                id                TEXT PRIMARY KEY,
+                workflow_run_id   TEXT NOT NULL,
+                step_name         TEXT NOT NULL,
+                role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate')),
+                can_commit        INTEGER NOT NULL DEFAULT 0,
+                condition_expr    TEXT,
+                status            TEXT NOT NULL DEFAULT 'pending',
+                child_run_id      TEXT,
+                position          INTEGER NOT NULL DEFAULT 0,
+                started_at        TEXT,
+                ended_at          TEXT,
+                result_text       TEXT,
+                condition_met     INTEGER,
+                iteration         INTEGER NOT NULL DEFAULT 0,
+                parallel_group_id TEXT,
+                context_out       TEXT,
+                markers_out       TEXT,
+                retry_count       INTEGER NOT NULL DEFAULT 0,
+                gate_type         TEXT,
+                gate_prompt       TEXT,
+                gate_timeout      TEXT,
+                gate_approved_by  TEXT,
+                gate_approved_at  TEXT,
+                gate_feedback     TEXT,
+                structured_output TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);
             INSERT INTO _conductor_meta VALUES ('schema_version', '26');
             INSERT INTO repos VALUES ('r1', 'test-repo', '/tmp/repo',
                 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z', NULL);
@@ -1658,6 +1680,128 @@ mod tests {
         assert!(
             msg.contains("cargo build"),
             "error should suggest rebuilding, got: {msg}"
+        );
+    }
+
+    /// Verifies that migration 056 adds `gate_options` and `gate_selections`
+    /// columns to `workflow_run_steps` unconditionally.
+    ///
+    /// Builds a minimal schema positioned at version 55 (with `workflow_run_steps`
+    /// as it exists at that point, without the new columns), then runs migration 056
+    /// and asserts both columns appear.
+    #[test]
+    fn test_migration_056_adds_gate_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Minimal schema at v55: only the tables and columns that exist at that
+        // version.  workflow_run_steps has the full v46 DDL (output_file included,
+        // added by migration 037) but NOT gate_options/gate_selections.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE repos (
+                 id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE,
+                 local_path TEXT NOT NULL, remote_url TEXT NOT NULL,
+                 workspace_dir TEXT NOT NULL, created_at TEXT NOT NULL
+             );
+             CREATE TABLE worktrees (
+                 id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
+                 slug TEXT NOT NULL, branch TEXT NOT NULL, path TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,
+                 base_branch TEXT NOT NULL DEFAULT 'main'
+             );
+             CREATE TABLE agent_runs (
+                 id TEXT PRIMARY KEY, worktree_id TEXT,
+                 prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running',
+                 started_at TEXT NOT NULL
+             );
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY, workflow_name TEXT NOT NULL,
+                 worktree_id TEXT, parent_run_id TEXT NOT NULL DEFAULT '',
+                 status TEXT NOT NULL DEFAULT 'pending',
+                 dry_run INTEGER NOT NULL DEFAULT 0,
+                 trigger TEXT NOT NULL DEFAULT 'manual',
+                 started_at TEXT NOT NULL,
+                 target_label TEXT
+             );
+             -- workflow_run_steps at v55: all columns through migration 039,
+             -- but NOT gate_options/gate_selections (added by 056).
+             -- Must match the SELECT list used by migration 058's table swap.
+             CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL DEFAULT 'actor',
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending',
+                 child_run_id      TEXT,
+                 position          INTEGER NOT NULL DEFAULT 0,
+                 started_at        TEXT,
+                 ended_at          TEXT,
+                 result_text       TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT,
+                 markers_out       TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type         TEXT,
+                 gate_prompt       TEXT,
+                 gate_timeout      TEXT,
+                 gate_approved_by  TEXT,
+                 gate_approved_at  TEXT,
+                 gate_feedback     TEXT,
+                 structured_output TEXT,
+                 output_file       TEXT
+             );
+             INSERT INTO _conductor_meta VALUES ('schema_version', '55');",
+        )
+        .unwrap();
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        // Before migration 056: neither column should exist.
+        let col_names: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(workflow_run_steps)")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert!(
+            !col_names.contains(&"gate_options".to_string()),
+            "gate_options must not exist before migration 056"
+        );
+        assert!(
+            !col_names.contains(&"gate_selections".to_string()),
+            "gate_selections must not exist before migration 056"
+        );
+
+        // Apply migration 056 (and anything beyond, though the DB has no other
+        // tables needed by later migrations — they are no-ops for this test's
+        // purpose because they touch different tables).
+        run(&conn).unwrap();
+
+        // After migration 056: both columns must exist.
+        let col_names_after: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(workflow_run_steps)")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert!(
+            col_names_after.contains(&"gate_options".to_string()),
+            "gate_options must exist after migration 056"
+        );
+        assert!(
+            col_names_after.contains(&"gate_selections".to_string()),
+            "gate_selections must exist after migration 056"
         );
     }
 }
