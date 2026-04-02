@@ -122,8 +122,7 @@ async fn main() -> Result<()> {
             Ok(ids) if !ids.is_empty() => {
                 let n = ids.len();
                 tracing::info!("Auto-resuming {n} stuck workflow run(s) on startup");
-                let conductor_bin_dir =
-                    conductor_core::workflow::resolve_conductor_bin_dir();
+                let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                 for run_id in ids {
                     let config_clone = config.clone();
                     let bin_dir = conductor_bin_dir.clone();
@@ -219,20 +218,17 @@ async fn main() -> Result<()> {
                             let cfg_clone = (*cfg).clone();
                             let bin_dir = conductor_bin_dir.clone();
                             std::thread::spawn(move || {
-                                let params =
-                                    conductor_core::workflow::WorkflowResumeStandalone {
-                                        config: cfg_clone,
-                                        workflow_run_id: run_id.clone(),
-                                        model: None,
-                                        from_step: None,
-                                        restart: false,
-                                        db_path: None,
-                                        conductor_bin_dir: bin_dir,
-                                    };
+                                let params = conductor_core::workflow::WorkflowResumeStandalone {
+                                    config: cfg_clone,
+                                    workflow_run_id: run_id.clone(),
+                                    model: None,
+                                    from_step: None,
+                                    restart: false,
+                                    db_path: None,
+                                    conductor_bin_dir: bin_dir,
+                                };
                                 if let Err(e) =
-                                    conductor_core::workflow::resume_workflow_standalone(
-                                        &params,
-                                    )
+                                    conductor_core::workflow::resume_workflow_standalone(&params)
                                 {
                                     tracing::warn!(
                                         run_id = %run_id,

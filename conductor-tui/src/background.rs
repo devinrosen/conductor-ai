@@ -343,8 +343,7 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(ids) if !ids.is_empty() => {
                     let n = ids.len();
                     tracing::info!("Auto-resuming {n} stuck workflow run(s)");
-                    let conductor_bin_dir =
-                        conductor_core::workflow::resolve_conductor_bin_dir();
+                    let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                     for run_id in ids {
                         let config_clone = config.clone();
                         let bin_dir = conductor_bin_dir.clone();

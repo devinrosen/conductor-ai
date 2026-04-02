@@ -22,8 +22,7 @@ pub fn handle_workflow(
         let wf_mgr = WorkflowManager::new(conn);
         match wf_mgr.detect_stuck_workflow_run_ids(60) {
             Ok(ids) if !ids.is_empty() => {
-                let conductor_bin_dir =
-                    conductor_core::workflow::resolve_conductor_bin_dir();
+                let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                 for run_id in ids {
                     let config_clone = config.clone();
                     let bin_dir = conductor_bin_dir.clone();
