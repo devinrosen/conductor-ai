@@ -905,7 +905,7 @@ pub async fn get_workflow_step_log(
     // Non-blocking async file read — does not block the tokio worker thread
     let log = tokio::fs::read_to_string(&log_path).await.map_err(|e| {
         ApiError(ConductorError::Workflow(format!(
-            "failed to read log file '{}': {e}",
+            "failed to read log file '{}' for run '{run_id}' step '{step_name}': {e}",
             log_path.display()
         )))
     })?;
@@ -2100,12 +2100,15 @@ mod tests {
             )
             .unwrap();
         }
-        let (status, _) = get_response(
+        let (status, body) = get_response(
             &format!("/api/workflows/runs/{run_id}/steps/my-step/log"),
             state,
         )
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_error_contains(&body, "/nonexistent/path/log.txt");
+        assert_error_contains(&body, &run_id);
+        assert_error_contains(&body, "my-step");
     }
 
     #[tokio::test]

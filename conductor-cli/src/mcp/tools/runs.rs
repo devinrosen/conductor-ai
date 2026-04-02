@@ -336,7 +336,8 @@ pub(super) fn tool_get_step_log(
     match std::fs::read_to_string(&log_path) {
         Ok(contents) => tool_ok(contents),
         Err(e) => tool_err(format!(
-            "Log file not found for step '{step_name}' (agent run {child_run_id}): {e}"
+            "Log file not found for step '{step_name}' (agent run {child_run_id}) at '{}': {e}",
+            log_path.display()
         )),
     }
 }
