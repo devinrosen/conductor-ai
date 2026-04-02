@@ -407,8 +407,7 @@ pub(super) fn install_deps(worktree_path: &Path) {
         }
     }
     // Detect lockfile to choose the right package manager.
-    let pm = if worktree_path.join("bun.lockb").exists()
-        || worktree_path.join("bun.lock").exists()
+    let pm = if worktree_path.join("bun.lockb").exists() || worktree_path.join("bun.lock").exists()
     {
         "bun"
     } else if worktree_path.join("pnpm-lock.yaml").exists() {
@@ -460,7 +459,11 @@ mod tests {
     #[test]
     fn install_deps_no_dep_fields_skips_install() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("package.json"), r#"{"name":"foo","version":"1.0.0"}"#).unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"foo","version":"1.0.0"}"#,
+        )
+        .unwrap();
         // install_deps should return early because there are no dep fields.
         install_deps(dir.path());
         // Reaching here means no panic / no subprocess was launched for a
@@ -484,12 +487,16 @@ mod tests {
 
     #[test]
     fn has_installable_deps_with_dev_dependencies() {
-        assert!(has_installable_deps(r#"{"devDependencies":{"jest":"^29"}}"#));
+        assert!(has_installable_deps(
+            r#"{"devDependencies":{"jest":"^29"}}"#
+        ));
     }
 
     #[test]
     fn has_installable_deps_with_peer_dependencies() {
-        assert!(has_installable_deps(r#"{"peerDependencies":{"react":"^18"}}"#));
+        assert!(has_installable_deps(
+            r#"{"peerDependencies":{"react":"^18"}}"#
+        ));
     }
 
     #[test]
