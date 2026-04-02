@@ -67,4 +67,42 @@ mod tests {
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
+
+    #[tokio::test]
+    async fn join_error_panic_sanitized_to_generic_message() {
+        // Verify that a panicking spawn_blocking task does NOT leak the panic
+        // payload (e.g. internal file paths) into the ApiError message.
+        let result = tokio::task::spawn_blocking(|| -> () {
+            panic!("secret internal path: /home/user/.conductor/conductor.db");
+        })
+        .await;
+        let join_err = result.unwrap_err();
+        assert!(join_err.is_panic(), "expected a panic JoinError");
+        let api_err = ApiError::from(join_err);
+        match api_err.0 {
+            ConductorError::Internal(msg) => {
+                assert_eq!(msg, "internal server error");
+            }
+            other => panic!("expected ConductorError::Internal, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn join_error_cancellation_includes_context() {
+        // Verify the non-panic path includes diagnostic context.
+        let handle = tokio::task::spawn(async {});
+        handle.abort();
+        let join_err = handle.await.unwrap_err();
+        assert!(!join_err.is_panic(), "expected a cancellation JoinError");
+        let api_err = ApiError::from(join_err);
+        match api_err.0 {
+            ConductorError::Internal(msg) => {
+                assert!(
+                    msg.starts_with("blocking task failed:"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("expected ConductorError::Internal, got {:?}", other),
+        }
+    }
 }
