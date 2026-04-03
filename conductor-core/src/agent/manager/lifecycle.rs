@@ -24,6 +24,7 @@ impl<'a> AgentManager<'a> {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -41,6 +42,7 @@ impl<'a> AgentManager<'a> {
             prompt,
             tmux_window,
             model,
+            None,
             None,
             None,
             None,
@@ -65,6 +67,51 @@ impl<'a> AgentManager<'a> {
             Some(parent_run_id),
             bot_name,
             None,
+            None,
+        )
+    }
+
+    /// Create a worktree-scoped run linked to a conversation.
+    pub fn create_run_for_conversation(
+        &self,
+        worktree_id: &str,
+        prompt: &str,
+        tmux_window: Option<&str>,
+        model: Option<&str>,
+        conversation_id: &str,
+    ) -> Result<AgentRun> {
+        self.create_run_with_parent(
+            Some(worktree_id),
+            None,
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+            Some(conversation_id),
+        )
+    }
+
+    /// Create a repo-scoped run linked to a conversation.
+    pub fn create_repo_run_for_conversation(
+        &self,
+        repo_id: &str,
+        prompt: &str,
+        tmux_window: Option<&str>,
+        model: Option<&str>,
+        conversation_id: &str,
+    ) -> Result<AgentRun> {
+        self.create_run_with_parent(
+            None,
+            Some(repo_id),
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+            Some(conversation_id),
         )
     }
 
@@ -79,6 +126,7 @@ impl<'a> AgentManager<'a> {
         parent_run_id: Option<&str>,
         bot_name: Option<&str>,
         log_file: Option<&str>,
+        conversation_id: Option<&str>,
     ) -> Result<AgentRun> {
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
@@ -106,11 +154,14 @@ impl<'a> AgentManager<'a> {
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
             bot_name: bot_name.map(String::from),
+            conversation_id: conversation_id.map(String::from),
         };
 
         self.conn.execute(
-            "INSERT INTO agent_runs (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, parent_run_id, bot_name, log_file) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO agent_runs \
+             (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, \
+              parent_run_id, bot_name, log_file, conversation_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 run.id,
                 run.worktree_id,
@@ -122,7 +173,8 @@ impl<'a> AgentManager<'a> {
                 run.model,
                 run.parent_run_id,
                 run.bot_name,
-                run.log_file
+                run.log_file,
+                run.conversation_id,
             ],
         )?;
 
@@ -272,6 +324,7 @@ impl<'a> AgentManager<'a> {
             original.model.as_deref(),
             Some(run_id),
             original.bot_name.as_deref(),
+            None,
             None,
         )
     }
@@ -678,6 +731,7 @@ mod tests {
                 None,
                 None,
                 Some("/tmp/agent-logs/run.log"),
+                None,
             )
             .unwrap();
 

@@ -23,7 +23,7 @@ use crate::state::AppState;
 
 /// Spawn a tmux window on a blocking thread and mark the agent run as failed
 /// if the spawn panics or returns an error.
-async fn spawn_tmux_blocking(
+pub(super) async fn spawn_tmux_blocking(
     state: &AppState,
     run_id: &str,
     args: Vec<Cow<'static, str>>,
@@ -1063,4 +1063,39 @@ pub async fn get_agent_run_feedback_by_run_id(
     let mgr = AgentManager::new(&db);
     let feedback = mgr.list_feedback_for_run(&run_id)?;
     Ok(Json(feedback))
+}
+
+/// Get parsed agent events for a single run by ID — scope-agnostic.
+///
+/// Checks DB-persisted events first; falls back to log-file parsing for older runs.
+pub async fn get_agent_run_events_by_id(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<Vec<AgentEventResponse>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+
+    let db_events = mgr.list_events_for_run(&run_id)?;
+    if !db_events.is_empty() {
+        return Ok(Json(
+            db_events
+                .into_iter()
+                .map(AgentEventResponse::from)
+                .collect(),
+        ));
+    }
+
+    // Fall back to log-file parsing for runs without persisted DB events.
+    let events = mgr
+        .get_run(&run_id)?
+        .and_then(|r| r.log_file)
+        .map(|path| {
+            parse_agent_log(&path)
+                .into_iter()
+                .map(AgentEventResponse::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(Json(events))
 }

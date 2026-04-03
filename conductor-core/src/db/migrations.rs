@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 59;
+pub const LATEST_SCHEMA_VERSION: u32 = 61;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1007,6 +1007,28 @@ pub fn run(conn: &Connection) -> Result<()> {
     if version < 59 {
         conn.execute_batch(include_str!("migrations/059_workflow_run_token_usage.sql"))?;
         bump_version(conn, 59)?;
+    }
+
+    // Migration 060: create conversations table for repo/worktree-scoped agent chat.
+    if version < 60 {
+        let has_table: bool = conn.prepare("SELECT 1 FROM conversations LIMIT 0").is_ok();
+        if !has_table {
+            conn.execute_batch(include_str!("migrations/060_conversations.sql"))?;
+        }
+        bump_version(conn, 60)?;
+    }
+
+    // Migration 061: add conversation_id FK to agent_runs.
+    if version < 61 {
+        let has_col: bool = conn
+            .prepare("SELECT conversation_id FROM agent_runs LIMIT 0")
+            .is_ok();
+        if !has_col {
+            conn.execute_batch(include_str!(
+                "migrations/061_agent_runs_conversation_id.sql"
+            ))?;
+        }
+        bump_version(conn, 61)?;
     }
 
     Ok(())

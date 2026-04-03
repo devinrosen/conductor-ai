@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod conversations;
 pub mod events;
 pub mod features;
 pub mod issue_sources;
@@ -98,6 +99,27 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/agent/runs/{id}/feedback",
             get(agents::get_agent_run_feedback_by_run_id),
+        )
+        .route(
+            "/api/agent/runs/{id}/events",
+            get(agents::get_agent_run_events_by_id),
+        )
+        // Conversations
+        .route(
+            "/api/conversations",
+            get(conversations::list_conversations).post(conversations::create_conversation),
+        )
+        .route(
+            "/api/conversations/{id}",
+            get(conversations::get_conversation),
+        )
+        .route(
+            "/api/conversations/{id}/message",
+            post(conversations::send_message),
+        )
+        .route(
+            "/api/conversations/{id}/message/{run_id}/respond",
+            post(conversations::respond_to_run_feedback),
         )
         .route(
             "/api/agent/latest-runs",
