@@ -5,6 +5,17 @@ use serde_json::Value;
 
 use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
 
+fn parse_comma_arg(args: &serde_json::Map<String, Value>, key: &str) -> Vec<String> {
+    get_arg(args, key)
+        .map(|s| {
+            s.split(',')
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(super) fn tool_list_tickets(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
@@ -14,14 +25,7 @@ pub(super) fn tool_list_tickets(
 
     let repo_slug = require_arg!(args, "repo");
 
-    let labels: Vec<String> = get_arg(args, "label")
-        .map(|s| {
-            s.split(',')
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+    let labels = parse_comma_arg(args, "label");
     let search = get_arg(args, "search").map(|s| s.to_string());
     let include_closed = get_arg(args, "include_closed") == Some("true");
 
@@ -181,30 +185,11 @@ pub(super) fn tool_upsert_ticket(
     let state = require_arg!(args, "state");
     let body = get_arg(args, "body").unwrap_or("").to_string();
     let url = get_arg(args, "url").unwrap_or("").to_string();
-    let labels_raw = get_arg(args, "labels").unwrap_or("");
-    let labels: Vec<String> = labels_raw
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let labels = parse_comma_arg(args, "labels");
     let assignee = get_arg(args, "assignee").map(|s| s.to_string());
     let priority = get_arg(args, "priority").map(|s| s.to_string());
-    let blocked_by: Vec<String> = get_arg(args, "blocked_by")
-        .map(|s| {
-            s.split(',')
-                .map(|id| id.trim().to_string())
-                .filter(|id| !id.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-    let children: Vec<String> = get_arg(args, "children")
-        .map(|s| {
-            s.split(',')
-                .map(|id| id.trim().to_string())
-                .filter(|id| !id.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+    let blocked_by = parse_comma_arg(args, "blocked_by");
+    let children = parse_comma_arg(args, "children");
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,

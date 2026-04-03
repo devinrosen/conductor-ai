@@ -194,12 +194,20 @@ impl<'a> TicketSyncer<'a> {
             ticket_ids.push((ticket, ticket_id));
         }
 
+        // Build a source_id → internal ULID map from the first pass for O(1) lookups.
+        let id_map: HashMap<&str, &str> = ticket_ids
+            .iter()
+            .map(|(t, id)| (t.source_id.as_str(), id.as_str()))
+            .collect();
+
         // Second pass: write ticket_dependencies. All tickets are already upserted above,
         // so forward references within the same batch resolve correctly.
         for (ticket, ticket_id) in &ticket_ids {
             // Clear stale dependency rows owned by this ticket before re-inserting.
+            // Scope the blocks delete to dep_type='blocks' to avoid removing parent_of rows
+            // written by other tickets during incremental syncs.
             tx.execute(
-                "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1",
+                "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'blocks'",
                 params![ticket_id],
             )?;
             tx.execute(
@@ -209,14 +217,21 @@ impl<'a> TicketSyncer<'a> {
 
             // blocked_by: another ticket blocks this one → (blocker_id, ticket_id, 'blocks')
             for src in &ticket.blocked_by {
-                let blocker_id: Option<String> = match tx.query_row(
-                    "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                    params![repo_id, ticket.source_type, src],
-                    |row| row.get(0),
-                ) {
-                    Ok(id) => Some(id),
-                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
-                    Err(e) => return Err(ConductorError::Database(e)),
+                let blocker_id: Option<String> = if let Some(&id) = id_map.get(src.as_str()) {
+                    Some(id.to_string())
+                } else {
+                    match tx.query_row(
+                        "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+                        params![repo_id, ticket.source_type, src],
+                        |row| row.get(0),
+                    ) {
+                        Ok(id) => Some(id),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                        Err(e) => return Err(ConductorError::TicketSync(format!(
+                            "ticket {}: blocked_by lookup for source_id={} (dep_type=blocks): {}",
+                            ticket.source_id, src, e
+                        ))),
+                    }
                 };
                 match blocker_id {
                     Some(id) => {
@@ -233,14 +248,21 @@ impl<'a> TicketSyncer<'a> {
 
             // children: this ticket is parent of another → (ticket_id, child_id, 'parent_of')
             for src in &ticket.children {
-                let child_id: Option<String> = match tx.query_row(
-                    "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                    params![repo_id, ticket.source_type, src],
-                    |row| row.get(0),
-                ) {
-                    Ok(id) => Some(id),
-                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
-                    Err(e) => return Err(ConductorError::Database(e)),
+                let child_id: Option<String> = if let Some(&id) = id_map.get(src.as_str()) {
+                    Some(id.to_string())
+                } else {
+                    match tx.query_row(
+                        "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+                        params![repo_id, ticket.source_type, src],
+                        |row| row.get(0),
+                    ) {
+                        Ok(id) => Some(id),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                        Err(e) => return Err(ConductorError::TicketSync(format!(
+                            "ticket {}: children lookup for source_id={} (dep_type=parent_of): {}",
+                            ticket.source_id, src, e
+                        ))),
+                    }
                 };
                 match child_id {
                     Some(id) => {
@@ -2214,6 +2236,28 @@ mod tests {
             dep_count(&conn),
             1,
             "second upsert should not duplicate the dependency row"
+        );
+    }
+
+    #[test]
+    fn test_upsert_clears_stale_children() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is parent of ticket "2"
+        let t2 = make_ticket("2", "Child");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1);
+
+        // Re-upsert ticket "1" with empty children — stale row must be removed
+        let t1_clear = make_ticket("1", "Parent");
+        syncer.upsert_tickets("r1", &[t1_clear]).unwrap();
+        assert_eq!(
+            dep_count(&conn),
+            0,
+            "stale children dependency row should be removed"
         );
     }
 }
