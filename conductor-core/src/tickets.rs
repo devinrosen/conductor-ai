@@ -417,6 +417,104 @@ impl<'a> TicketSyncer<'a> {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// Return open tickets that have no unresolved blockers and no active workflow run.
+    ///
+    /// A blocker is considered unresolved when its ticket state is not `'closed'`
+    /// OR its most recent workflow run status is not `'completed'`.
+    /// Active workflow run statuses are `'running'` and `'waiting'` (the actual DB values;
+    /// RFC 009 uses `'waiting_for_feedback'`/`'paused'` which are not DB-level values).
+    ///
+    /// Parameters:
+    /// - `repo_id`: scoped to a single repo (required).
+    /// - `root_ticket_id`: when provided, only return direct children of this ticket ULID.
+    /// - `label`: when provided, only return tickets with this label.
+    /// - `limit`: cap the number of returned tickets.
+    pub fn get_ready_tickets(
+        &self,
+        repo_id: &str,
+        root_ticket_id: Option<&str>,
+        label: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Ticket>> {
+        let select = "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
+                      t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
+                      FROM tickets t";
+
+        let mut conditions: Vec<String> = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        // Always scope to the requested repo.
+        conditions.push("t.repo_id = ?".to_string());
+        param_values.push(Box::new(repo_id.to_string()));
+
+        // Exclude closed tickets.
+        conditions.push("t.state != 'closed'".to_string());
+
+        // Exclude tickets that have an unresolved blocker.
+        // A blocker is unresolved when:
+        //   - the blocker ticket is not closed, OR
+        //   - the blocker's most recent workflow run is not completed
+        //     (COALESCE treats "no run" as completed — blocking is state-based by default).
+        conditions.push(
+            "NOT EXISTS (\
+               SELECT 1 FROM ticket_dependencies dep \
+               JOIN tickets blocker ON blocker.id = dep.from_ticket_id \
+               LEFT JOIN workflow_runs wr ON wr.ticket_id = blocker.id \
+               WHERE dep.to_ticket_id = t.id \
+                 AND dep.dep_type = 'blocks' \
+                 AND (blocker.state != 'closed' OR COALESCE(wr.status, 'completed') != 'completed')\
+             )"
+            .to_string(),
+        );
+
+        // Exclude tickets that have an active workflow run.
+        // Uses 'running' and 'waiting' — the actual DB CHECK constraint values.
+        conditions.push(
+            "NOT EXISTS (\
+               SELECT 1 FROM workflow_runs wr \
+               WHERE wr.ticket_id = t.id \
+                 AND wr.status IN ('running', 'waiting')\
+             )"
+            .to_string(),
+        );
+
+        // Optional: scope to direct children of root_ticket_id.
+        if let Some(root_id) = root_ticket_id {
+            conditions.push(
+                "EXISTS (\
+                   SELECT 1 FROM ticket_dependencies pd \
+                   WHERE pd.from_ticket_id = ? \
+                     AND pd.to_ticket_id = t.id \
+                     AND pd.dep_type = 'parent_of'\
+                 )"
+                .to_string(),
+            );
+            param_values.push(Box::new(root_id.to_string()));
+        }
+
+        // Optional: label filter.
+        if let Some(lbl) = label {
+            conditions.push(
+                "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
+                    .to_string(),
+            );
+            param_values.push(Box::new(lbl.to_string()));
+        }
+
+        let order = "ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC";
+        let limit_clause = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
+        let sql = format!(
+            "{select} WHERE {} {order}{limit_clause}",
+            conditions.join(" AND ")
+        );
+
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Link a ticket to a worktree.
     /// Returns an error if the worktree already has a linked ticket.
     pub fn link_to_worktree(&self, ticket_id: &str, worktree_id: &str) -> Result<()> {
@@ -2294,5 +2392,163 @@ mod tests {
             1,
             "parent_of row must survive a separate blocked_by clear for the child ticket"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // get_ready_tickets tests
+    // -----------------------------------------------------------------------
+
+    fn insert_workflow_run(conn: &Connection, id: &str, ticket_id: &str, status: &str) {
+        // Insert a minimal agent_run to satisfy the parent_run_id FK.
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_runs (id, worktree_id, prompt, status, started_at) \
+             VALUES ('ar-stub', 'w1', 'stub', 'completed', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_runs (id, workflow_name, parent_run_id, status, started_at, ticket_id, repo_id) \
+             VALUES (?1, 'test-wf', 'ar-stub', ?2, '2024-01-01T00:00:00Z', ?3, 'r1')",
+            rusqlite::params![id, status, ticket_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_get_ready_tickets_no_deps() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "Ready")])
+            .unwrap();
+
+        let results = syncer.get_ready_tickets("r1", None, None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_blocked_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "2" blocks ticket "1" (open blocker → not ready)
+        let t2 = make_ticket("2", "Blocker open");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        let results = syncer.get_ready_tickets("r1", None, None, None).unwrap();
+        let ids: Vec<&str> = results.iter().map(|t| t.source_id.as_str()).collect();
+        assert!(ids.contains(&"2"), "blocker itself should be ready");
+        assert!(!ids.contains(&"1"), "blocked ticket must be excluded");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_blocker_closed_included() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "2" blocks ticket "1", but blocker is closed
+        let t2 = make_ticket("2", "Blocker closed");
+        let mut t1 = make_ticket("1", "Was blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        // Close the blocker
+        syncer
+            .close_missing_tickets("r1", "github", &["1"])
+            .unwrap();
+
+        let results = syncer.get_ready_tickets("r1", None, None, None).unwrap();
+        let ids: Vec<&str> = results.iter().map(|t| t.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"1"),
+            "ticket with closed blocker must be included"
+        );
+    }
+
+    #[test]
+    fn test_get_ready_tickets_active_run_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "In progress")])
+            .unwrap();
+
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_workflow_run(&conn, "wr1", &ticket_id, "running");
+
+        let results = syncer.get_ready_tickets("r1", None, None, None).unwrap();
+        assert!(
+            results.iter().all(|t| t.source_id != "1"),
+            "ticket with running workflow run must be excluded"
+        );
+    }
+
+    #[test]
+    fn test_get_ready_tickets_root_scope() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "1" is parent of "2" and "3"; "4" is unrelated
+        let t2 = make_ticket("2", "Child A");
+        let t3 = make_ticket("3", "Child B");
+        let t4 = make_ticket("4", "Unrelated");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string(), "3".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t3, t4, t1]).unwrap();
+
+        let parent_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let results = syncer
+            .get_ready_tickets("r1", Some(&parent_id), None, None)
+            .unwrap();
+        let ids: Vec<&str> = results.iter().map(|t| t.source_id.as_str()).collect();
+        assert!(ids.contains(&"2"), "child 2 should be included");
+        assert!(ids.contains(&"3"), "child 3 should be included");
+        assert!(!ids.contains(&"4"), "unrelated ticket must be excluded");
+        assert!(!ids.contains(&"1"), "parent itself must be excluded");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_label_filter() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let mut t1 = make_ticket("1", "Labelled");
+        t1.label_details = vec![TicketLabelInput {
+            name: "ready".to_string(),
+            color: None,
+        }];
+        let t2 = make_ticket("2", "No label");
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        let results = syncer
+            .get_ready_tickets("r1", None, Some("ready"), None)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_limit() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets: Vec<TicketInput> = (1..=5)
+            .map(|i| make_ticket(&i.to_string(), &format!("Issue {i}")))
+            .collect();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let results = syncer.get_ready_tickets("r1", None, None, Some(2)).unwrap();
+        assert_eq!(results.len(), 2, "limit must cap results to 2");
     }
 }
