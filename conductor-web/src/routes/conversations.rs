@@ -294,7 +294,9 @@ mod tests {
     /// Seed a conversation, a run linked to it (with a pending feedback request),
     /// and a second unrelated conversation+run. Returns
     /// `(conv1_id, run1_id, feedback1_id, conv2_id, run2_id, feedback2_id)`.
-    fn seed_conversations(conn: &rusqlite::Connection) -> (String, String, String, String, String, String) {
+    fn seed_conversations(
+        conn: &rusqlite::Connection,
+    ) -> (String, String, String, String, String, String) {
         let mgr = conductor_core::conversation::ConversationManager::new(conn);
         let agent_mgr = conductor_core::agent::AgentManager::new(conn);
 
@@ -302,13 +304,17 @@ mod tests {
         let run1 = agent_mgr
             .create_repo_run_for_conversation("r1", "q1", None, None, &conv1.id)
             .unwrap();
-        let fb1 = agent_mgr.request_feedback(&run1.id, "approve?", None).unwrap();
+        let fb1 = agent_mgr
+            .request_feedback(&run1.id, "approve?", None)
+            .unwrap();
 
         let conv2 = mgr.create(ConversationScope::Repo, "r1").unwrap();
         let run2 = agent_mgr
             .create_repo_run_for_conversation("r1", "q2", None, None, &conv2.id)
             .unwrap();
-        let fb2 = agent_mgr.request_feedback(&run2.id, "approve?", None).unwrap();
+        let fb2 = agent_mgr
+            .request_feedback(&run2.id, "approve?", None)
+            .unwrap();
 
         (conv1.id, run1.id, fb1.id, conv2.id, run2.id, fb2.id)
     }
