@@ -5,11 +5,15 @@ use conductor_core::error::ConductorError;
 pub enum ApiError {
     Core(ConductorError),
     Internal(String),
+    NotFound(String),
+    Forbidden(String),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             ApiError::Internal(msg) => {
                 tracing::error!(error = %msg, "internal request error");
                 (StatusCode::INTERNAL_SERVER_ERROR, msg)
@@ -84,6 +88,20 @@ mod tests {
         let err = ApiError::Core(ConductorError::UnknownSourceType("bogus".into()));
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn not_found_variant_maps_to_404() {
+        let err = ApiError::NotFound("resource not found".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn forbidden_variant_maps_to_403() {
+        let err = ApiError::Forbidden("access denied".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

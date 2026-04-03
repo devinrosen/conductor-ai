@@ -188,15 +188,7 @@ pub async fn send_message(
 
     spawn_tmux_blocking(&state, &run.id, args, window_name).await?;
 
-    // Fetch the full run record to return to the caller.
-    let full_run = {
-        let db = state.db.lock().await;
-        AgentManager::new(&db)
-            .get_run(&run.id)?
-            .ok_or_else(|| ConductorError::Agent(format!("agent run {} not found", run.id)))?
-    };
-
-    Ok((StatusCode::CREATED, Json(full_run)))
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
 /// POST /api/conversations/{id}/feedback — submit feedback for a run using an
@@ -213,12 +205,21 @@ pub async fn respond_to_feedback(
     // Validate the run belongs to this conversation.
     let run = agent_mgr
         .get_run(&body.run_id)?
-        .ok_or_else(|| ConductorError::Agent(format!("agent run {} not found", body.run_id)))?;
+        .ok_or_else(|| ApiError::NotFound(format!("agent run {} not found", body.run_id)))?;
     if run.conversation_id.as_deref() != Some(&conversation_id) {
-        return Err(ConductorError::Agent(
+        return Err(ApiError::Forbidden(
             "agent run does not belong to this conversation".to_string(),
-        )
-        .into());
+        ));
+    }
+
+    // Validate the feedback belongs to the authorized run (prevents IDOR).
+    let feedback = agent_mgr
+        .get_feedback(&body.feedback_id)?
+        .ok_or_else(|| ApiError::NotFound(format!("feedback {} not found", body.feedback_id)))?;
+    if feedback.run_id != body.run_id {
+        return Err(ApiError::Forbidden(
+            "feedback request does not belong to the specified run".to_string(),
+        ));
     }
 
     agent_mgr.submit_feedback(&body.feedback_id, &body.response)?;
@@ -239,12 +240,11 @@ pub async fn respond_to_run_feedback(
     // Validate the run belongs to this conversation.
     let run = agent_mgr
         .get_run(&run_id)?
-        .ok_or_else(|| ConductorError::Agent(format!("agent run {run_id} not found")))?;
+        .ok_or_else(|| ApiError::NotFound(format!("agent run {run_id} not found")))?;
     if run.conversation_id.as_deref() != Some(&conversation_id) {
-        return Err(ConductorError::Agent(
+        return Err(ApiError::Forbidden(
             "agent run does not belong to this conversation".to_string(),
-        )
-        .into());
+        ));
     }
 
     // Find the pending feedback request for this run.
@@ -262,4 +262,125 @@ pub async fn respond_to_run_feedback(
         .ok_or_else(|| ConductorError::Agent(format!("agent run {run_id} not found")))?;
 
     Ok(Json(updated_run))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use crate::routes::api_router;
+    use crate::test_helpers::seeded_state;
+
+    async fn send_post_json(uri: &str, body: serde_json::Value, state: AppState) -> StatusCode {
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response.status()
+    }
+
+    /// Seed a conversation, a run linked to it (with a pending feedback request),
+    /// and a second unrelated conversation+run. Returns
+    /// `(conv1_id, run1_id, feedback1_id, conv2_id, run2_id, feedback2_id)`.
+    fn seed_conversations(conn: &rusqlite::Connection) -> (String, String, String, String, String, String) {
+        let mgr = conductor_core::conversation::ConversationManager::new(conn);
+        let agent_mgr = conductor_core::agent::AgentManager::new(conn);
+
+        let conv1 = mgr.create(ConversationScope::Repo, "r1").unwrap();
+        let run1 = agent_mgr
+            .create_repo_run_for_conversation("r1", "q1", None, None, &conv1.id)
+            .unwrap();
+        let fb1 = agent_mgr.request_feedback(&run1.id, "approve?", None).unwrap();
+
+        let conv2 = mgr.create(ConversationScope::Repo, "r1").unwrap();
+        let run2 = agent_mgr
+            .create_repo_run_for_conversation("r1", "q2", None, None, &conv2.id)
+            .unwrap();
+        let fb2 = agent_mgr.request_feedback(&run2.id, "approve?", None).unwrap();
+
+        (conv1.id, run1.id, fb1.id, conv2.id, run2.id, fb2.id)
+    }
+
+    #[tokio::test]
+    async fn respond_to_feedback_returns_404_for_unknown_run() {
+        let (state, _tmp) = seeded_state();
+        {
+            let db = state.db.lock().await;
+            seed_conversations(&db);
+        }
+        let body = serde_json::json!({
+            "run_id": "nonexistent-run",
+            "feedback_id": "nonexistent-fb",
+            "response": "yes"
+        });
+        let status = send_post_json("/api/conversations/any-conv/feedback", body, state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn respond_to_feedback_returns_403_when_run_belongs_to_other_conversation() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, fb1_id, _conv2_id, _run2_id, _fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        // run1 belongs to conv1; pass conv2's ID as the path parameter
+        let body = serde_json::json!({
+            "run_id": run1_id,
+            "feedback_id": fb1_id,
+            "response": "yes"
+        });
+        let uri = "/api/conversations/wrong-conv-id/feedback";
+        let status = send_post_json(uri, body, state).await;
+        // Verify conv1_id is not used as the path parameter
+        assert_ne!(conv1_id, "wrong-conv-id");
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn respond_to_feedback_returns_403_when_feedback_belongs_to_other_run() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, _fb1_id, _conv2_id, _run2_id, fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        // fb2 belongs to run2, not run1 — IDOR attempt
+        let body = serde_json::json!({
+            "run_id": run1_id,
+            "feedback_id": fb2_id,
+            "response": "yes"
+        });
+        let uri = format!("/api/conversations/{conv1_id}/feedback");
+        let status = send_post_json(&uri, body, state).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn respond_to_feedback_returns_200_for_valid_request() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, fb1_id, _conv2_id, _run2_id, _fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        let body = serde_json::json!({
+            "run_id": run1_id,
+            "feedback_id": fb1_id,
+            "response": "yes"
+        });
+        let uri = format!("/api/conversations/{conv1_id}/feedback");
+        let status = send_post_json(&uri, body, state).await;
+        assert_eq!(status, StatusCode::OK);
+    }
 }
