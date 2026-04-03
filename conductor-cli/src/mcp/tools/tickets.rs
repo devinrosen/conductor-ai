@@ -264,7 +264,13 @@ pub(super) fn tool_get_ready_tickets(
     let repo_slug = require_arg!(args, "repo");
     let root_ticket_id = get_arg(args, "root_ticket_id").map(|s| s.to_string());
     let label = get_arg(args, "label").map(|s| s.to_string());
-    let limit = get_arg(args, "limit").and_then(|s| s.parse::<u32>().ok());
+    let limit = match get_arg(args, "limit") {
+        Some(s) => match s.parse::<u32>() {
+            Ok(n) => Some(n),
+            Err(_) => return tool_err(format!("`limit` must be a non-negative integer, got {s:?}")),
+        },
+        None => None,
+    };
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,

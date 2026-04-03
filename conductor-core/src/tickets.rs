@@ -358,6 +358,31 @@ impl<'a> TicketSyncer<'a> {
         Ok(tickets)
     }
 
+    /// Shared SELECT clause for ticket queries.
+    fn ticket_select() -> &'static str {
+        "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
+         t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
+         FROM tickets t"
+    }
+
+    /// Shared label EXISTS subquery fragment (requires one `?` param bound to the label value).
+    fn label_exists_subquery() -> &'static str {
+        "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
+    }
+
+    /// Execute a ticket SELECT query with the given SQL and boxed parameters.
+    fn execute_ticket_query(
+        &self,
+        sql: &str,
+        param_values: Vec<Box<dyn rusqlite::types::ToSql>>,
+    ) -> Result<Vec<Ticket>> {
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// List tickets with optional filtering. Open-only by default.
     ///
     /// Filters are applied in SQL:
@@ -370,9 +395,7 @@ impl<'a> TicketSyncer<'a> {
         repo_id: Option<&str>,
         filter: &TicketFilter,
     ) -> Result<Vec<Ticket>> {
-        let select = "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
-                      t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
-                      FROM tickets t";
+        let select = Self::ticket_select();
 
         let mut conditions: Vec<String> = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -387,10 +410,7 @@ impl<'a> TicketSyncer<'a> {
         }
 
         for label in &filter.labels {
-            conditions.push(
-                "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
-                    .to_string(),
-            );
+            conditions.push(Self::label_exists_subquery().to_string());
             param_values.push(Box::new(label.clone()));
         }
 
@@ -410,11 +430,7 @@ impl<'a> TicketSyncer<'a> {
             )
         };
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        self.execute_ticket_query(&sql, param_values)
     }
 
     /// Return open tickets that have no unresolved blockers and no active workflow run.
@@ -436,9 +452,7 @@ impl<'a> TicketSyncer<'a> {
         label: Option<&str>,
         limit: Option<u32>,
     ) -> Result<Vec<Ticket>> {
-        let select = "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
-                      t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
-                      FROM tickets t";
+        let select = Self::ticket_select();
 
         let mut conditions: Vec<String> = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -455,14 +469,21 @@ impl<'a> TicketSyncer<'a> {
         //   - the blocker ticket is not closed, OR
         //   - the blocker's most recent workflow run is not completed
         //     (COALESCE treats "no run" as completed — blocking is state-based by default).
+        // The correlated subquery selects only the latest run to avoid false positives
+        // from old failed/cancelled runs on an otherwise-completed blocker.
         conditions.push(
             "NOT EXISTS (\
                SELECT 1 FROM ticket_dependencies dep \
                JOIN tickets blocker ON blocker.id = dep.from_ticket_id \
-               LEFT JOIN workflow_runs wr ON wr.ticket_id = blocker.id \
                WHERE dep.to_ticket_id = t.id \
                  AND dep.dep_type = 'blocks' \
-                 AND (blocker.state != 'closed' OR COALESCE(wr.status, 'completed') != 'completed')\
+                 AND (\
+                   blocker.state != 'closed' \
+                   OR COALESCE(\
+                     (SELECT status FROM workflow_runs WHERE ticket_id = blocker.id ORDER BY started_at DESC LIMIT 1),\
+                     'completed'\
+                   ) != 'completed'\
+                 )\
              )"
             .to_string(),
         );
@@ -494,10 +515,7 @@ impl<'a> TicketSyncer<'a> {
 
         // Optional: label filter.
         if let Some(lbl) = label {
-            conditions.push(
-                "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
-                    .to_string(),
-            );
+            conditions.push(Self::label_exists_subquery().to_string());
             param_values.push(Box::new(lbl.to_string()));
         }
 
@@ -508,11 +526,7 @@ impl<'a> TicketSyncer<'a> {
             conditions.join(" AND ")
         );
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        self.execute_ticket_query(&sql, param_values)
     }
 
     /// Link a ticket to a worktree.
@@ -2486,6 +2500,28 @@ mod tests {
         assert!(
             results.iter().all(|t| t.source_id != "1"),
             "ticket with running workflow run must be excluded"
+        );
+    }
+
+    #[test]
+    fn test_get_ready_tickets_waiting_run_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "Waiting")])
+            .unwrap();
+
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_workflow_run(&conn, "wr1", &ticket_id, "waiting");
+
+        let results = syncer.get_ready_tickets("r1", None, None, None).unwrap();
+        assert!(
+            results.iter().all(|t| t.source_id != "1"),
+            "ticket with waiting workflow run must be excluded"
         );
     }
 
