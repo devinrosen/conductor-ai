@@ -191,6 +191,8 @@ mod tests {
                 url: String::new(),
                 raw_json: "{}".to_string(),
                 label_details: vec![],
+                blocked_by: vec![],
+                children: vec![],
             },
             TicketInput {
                 source_type: "github".to_string(),
@@ -204,6 +206,8 @@ mod tests {
                 url: String::new(),
                 raw_json: "{}".to_string(),
                 label_details: vec![],
+                blocked_by: vec![],
+                children: vec![],
             },
         ];
         syncer.upsert_tickets("r1", &tickets).unwrap();
