@@ -72,6 +72,18 @@ impl<'a> AgentManager<'a> {
         Ok(runs)
     }
 
+    /// List all agent runs for a conversation, oldest first.
+    pub fn list_for_conversation(&self, conversation_id: &str) -> Result<Vec<AgentRun>> {
+        let mut runs = query_collect(
+            self.conn,
+            &format!("{AGENT_RUN_SELECT} WHERE conversation_id = ?1 ORDER BY started_at ASC"),
+            params![conversation_id],
+            row_to_agent_run,
+        )?;
+        self.populate_plans(&mut runs)?;
+        Ok(runs)
+    }
+
     /// List all agent runs for a repo (across all its worktrees), newest first.
     pub fn list_for_repo(&self, repo_id: &str) -> Result<Vec<AgentRun>> {
         // Cannot use AGENT_RUN_SELECT here: the JOIN requires the `a.` alias.

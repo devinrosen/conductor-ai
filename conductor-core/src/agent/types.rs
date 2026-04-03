@@ -66,6 +66,8 @@ pub struct AgentRun {
     pub cache_creation_input_tokens: Option<i64>,
     /// GitHub App bot identity used for this run (matches `[github.apps.<name>]`).
     pub bot_name: Option<String>,
+    /// Conversation this run belongs to (if created via the conversation API).
+    pub conversation_id: Option<String>,
 }
 
 impl AgentRun {
