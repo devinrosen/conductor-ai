@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use conductor_core::agent::AgentManager;
 use conductor_core::agent::AgentRun;
@@ -37,13 +37,15 @@ pub struct SendMessageRequest {
     pub prompt: String,
 }
 
-#[derive(Serialize)]
-pub struct SendMessageResponse {
-    pub agent_run_id: String,
+#[derive(Deserialize)]
+pub struct RespondToFeedbackRequest {
+    pub response: String,
 }
 
 #[derive(Deserialize)]
-pub struct RespondToFeedbackRequest {
+pub struct RespondToFeedbackByIdRequest {
+    pub run_id: String,
+    pub feedback_id: String,
     pub response: String,
 }
 
@@ -84,16 +86,16 @@ pub async fn get_conversation(
     Ok(Json(conversation))
 }
 
-/// POST /api/conversations/{id}/message — send a message to a conversation.
+/// POST /api/conversations/{id}/messages — send a message to a conversation.
 ///
 /// Creates a new agent run, with automatic session resumption from the last
-/// completed run. Returns `{ agent_run_id }` immediately; the agent runs
-/// asynchronously.
+/// completed run. Returns the full `AgentRun` object immediately; the agent
+/// runs asynchronously.
 pub async fn send_message(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
     Json(body): Json<SendMessageRequest>,
-) -> Result<(StatusCode, Json<SendMessageResponse>), ApiError> {
+) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
     // Phase 1: all DB work under the async lock.
     let (run, resume_session_id, working_dir, permission_mode, model, window_name) = {
         let db = state.db.lock().await;
@@ -186,15 +188,45 @@ pub async fn send_message(
 
     spawn_tmux_blocking(&state, &run.id, args, window_name).await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(SendMessageResponse {
-            agent_run_id: run.id,
-        }),
-    ))
+    // Fetch the full run record to return to the caller.
+    let full_run = {
+        let db = state.db.lock().await;
+        AgentManager::new(&db)
+            .get_run(&run.id)?
+            .ok_or_else(|| ConductorError::Agent(format!("agent run {} not found", run.id)))?
+    };
+
+    Ok((StatusCode::CREATED, Json(full_run)))
 }
 
-/// POST /api/conversations/{id}/message/{run_id}/respond — respond to a
+/// POST /api/conversations/{id}/feedback — submit feedback for a run using an
+/// explicit feedback_id. This is the mobile-client entrypoint; the run_id is
+/// used only to verify the run belongs to the conversation.
+pub async fn respond_to_feedback(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+    Json(body): Json<RespondToFeedbackByIdRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let db = state.db.lock().await;
+    let agent_mgr = AgentManager::new(&db);
+
+    // Validate the run belongs to this conversation.
+    let run = agent_mgr
+        .get_run(&body.run_id)?
+        .ok_or_else(|| ConductorError::Agent(format!("agent run {} not found", body.run_id)))?;
+    if run.conversation_id.as_deref() != Some(&conversation_id) {
+        return Err(ConductorError::Agent(
+            "agent run does not belong to this conversation".to_string(),
+        )
+        .into());
+    }
+
+    agent_mgr.submit_feedback(&body.feedback_id, &body.response)?;
+
+    Ok((StatusCode::OK, Json(serde_json::json!({}))))
+}
+
+/// POST /api/conversations/{id}/messages/{run_id}/respond — respond to a
 /// human-in-the-loop feedback request for a specific run.
 pub async fn respond_to_run_feedback(
     State(state): State<AppState>,
