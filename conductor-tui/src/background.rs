@@ -1172,6 +1172,8 @@ mod tests {
             url: "https://example.com".into(),
             raw_json: "{}".into(),
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
         };
 
         let action = sync_repo(&syncer, "r1", "test-repo", "github", || Ok(vec![ticket]));
@@ -1219,6 +1221,8 @@ mod tests {
             url: "https://example.com".into(),
             raw_json: "{}".into(),
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
         };
 
         let action = sync_repo(&syncer, "nonexistent-repo", "test-repo", "github", || {
