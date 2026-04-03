@@ -25,6 +25,7 @@ import { useHotkeys } from "../hooks/useHotkeys";
 import { WorkflowSidebar } from "../components/workflows/WorkflowSidebar";
 import { getErrorMessage } from "../utils/errorHandling";
 import { getSafeUrl } from "../utils/urlValidation";
+import { useRepos } from "../components/layout/AppShell";
 
 export function WorktreeDetailPage() {
   const { repoId, worktreeId } = useParams<{
@@ -39,7 +40,7 @@ export function WorktreeDetailPage() {
     refetch: refetchWorktrees,
   } = useApi(() => api.listWorktrees(repoId!), [repoId]);
 
-  const { data: repos } = useApi(() => api.listRepos(), []);
+  const { repos } = useRepos();
   const { data: ticketList, refetch: refetchTickets } = useApi(
     () => api.listTickets(repoId!),
     [repoId],
@@ -85,7 +86,17 @@ export function WorktreeDetailPage() {
     { key: "d", handler: () => setDeleteConfirm(true), description: "Delete worktree", enabled: noModalsOpen },
     { key: "l", handler: () => handleLaunchClick(), description: "Launch agent", enabled: noModalsOpen },
     { key: "w", handler: () => setSidebarOpen((v) => !v), description: "Toggle workflows sidebar", enabled: noModalsOpen },
-    { key: "c", handler: () => { if (worktree) { navigator.clipboard.writeText(worktree.path); setPathCopied(true); setTimeout(() => setPathCopied(false), 2000); } }, description: "Copy worktree path", enabled: noModalsOpen },
+    { key: "c", handler: async () => {
+      if (worktree) {
+        try {
+          await navigator.clipboard.writeText(worktree.path);
+          setPathCopied(true);
+          setTimeout(() => setPathCopied(false), 2000);
+        } catch {
+          // Clipboard write failed - don't show copied state
+        }
+      }
+    }, description: "Copy worktree path", enabled: noModalsOpen },
     { key: "a", handler: () => setActivityExpanded((v) => !v), description: "Toggle activity log", enabled: noModalsOpen },
     { key: "Escape", handler: () => navigate(`/repos/${repoId}`), description: "Back to repo", enabled: noModalsOpen },
   ]);
@@ -178,13 +189,14 @@ export function WorktreeDetailPage() {
 
   async function handleLaunchClick() {
     if (!worktreeId) return;
+    setPageError(null);
     try {
       const info = await api.getAgentPrompt(worktreeId);
       setPromptInfo({ prompt: info.prompt, resumeSessionId: info.resume_session_id });
       setPromptModalOpen(true);
-    } catch {
-      setPromptInfo({ prompt: "", resumeSessionId: null });
-      setPromptModalOpen(true);
+    } catch (e) {
+      const msg = getErrorMessage(e, "Failed to load agent prompt");
+      setPageError({ message: msg, retry: handleLaunchClick });
     }
   }
 

@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useId, useCallback } from "react";
-import { useFocusTrap } from "../../hooks/useFocusTrap";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { BaseModal, useModalTitleId } from "../shared/BaseModal";
 import { api } from "../../api/client";
 import type { FeedbackRequest } from "../../api/types";
 
@@ -23,8 +23,7 @@ export function AgentFeedbackModal({
   const [error, setError] = useState<string | null>(null);
   const [remainingSecs, setRemainingSecs] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const titleId = useId();
+  const titleId = useModalTitleId();
 
   const handleDismiss = useCallback(async () => {
     if (!feedback) {
@@ -38,8 +37,6 @@ export function AgentFeedbackModal({
     }
     onClose();
   }, [feedback, worktreeId, onClose]);
-
-  useFocusTrap(dialogRef, open, handleDismiss);
 
   useEffect(() => {
     if (!open) {
@@ -115,21 +112,15 @@ export function AgentFeedbackModal({
     });
   }
 
-  if (!open) return null;
-
   const ft = feedback?.feedback_type ?? "text";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 modal-backdrop" onClick={handleDismiss}>
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4 outline-none modal-panel"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <BaseModal
+      open={open}
+      onClose={handleDismiss}
+      className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4 outline-none modal-panel"
+    >
+      <div>
         <div className="px-6 py-4 border-b border-gray-200">
           <h3 id={titleId} className="text-lg font-semibold text-gray-900">
             Agent Awaiting Feedback
@@ -273,6 +264,6 @@ export function AgentFeedbackModal({
           </button>
         </div>
       </div>
-    </div>
+    </BaseModal>
   );
 }

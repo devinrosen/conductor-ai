@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef, useId } from "react";
-import { useFocusTrap } from "../../hooks/useFocusTrap";
+import { useState, useEffect, useMemo } from "react";
+import { BaseModal, useModalTitleId } from "../shared/BaseModal";
 import type { KnownModel } from "../../api/types";
 import { api } from "../../api/client";
 
@@ -44,10 +44,7 @@ export function AgentPromptModal({
   const [prompt, setPrompt] = useState(initialPrompt);
   const [useResume, setUseResume] = useState(!!resumeSessionId);
   const [models, setModels] = useState<KnownModel[]>([]);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const titleId = useId();
-
-  useFocusTrap(dialogRef, open, onCancel);
+  const titleId = useModalTitleId();
 
   useEffect(() => {
     setPrompt(initialPrompt);
@@ -63,8 +60,6 @@ export function AgentPromptModal({
   // Live model suggestion based on prompt text
   const suggested = useMemo(() => suggestModel(prompt), [prompt]);
 
-  if (!open) return null;
-
   function handleSubmit() {
     const trimmed = prompt.trim();
     if (!trimmed) return;
@@ -72,16 +67,12 @@ export function AgentPromptModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 modal-backdrop" onClick={onCancel}>
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full mx-4 outline-none modal-panel"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <BaseModal
+      open={open}
+      onClose={onCancel}
+      className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full mx-4 outline-none modal-panel"
+    >
+      <div>
         <h3 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h3>
 
         {resumeSessionId && (
@@ -156,6 +147,6 @@ export function AgentPromptModal({
           </button>
         </div>
       </div>
-    </div>
+    </BaseModal>
   );
 }
