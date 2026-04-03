@@ -104,12 +104,31 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
     }
 
     for dep_id in &dep_ids {
+/// Look up a ticket's Vantage dependencies and return the branch of the first
+/// parent that has an active worktree.  Returns `None` if the ticket has no
+/// resolvable parent branch (non-Vantage, no deps, or no parent worktree).
+///
+/// This function parses `raw_json` directly; swap to a `ticket_dependencies`
+/// table query once RFC 009 lands.
+fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> Option<String> {
+    let syncer = TicketSyncer::new(conn);
+    let ticket = syncer.get_by_id(ticket_id).ok()?;
+
+    if ticket.source_type != "vantage" {
+        return None;
+    }
+
+    let raw: serde_json::Value = serde_json::from_str(&ticket.raw_json).ok()?;
+    let deps = raw.get("dependencies")?.as_array()?;
+
+    for dep_id in deps.iter().filter_map(|v| v.as_str()) {
         let parent = match syncer.get_by_source_id(repo_id, dep_id) {
             Ok(t) => t,
             Err(_) => continue,
         };
         // Find an active worktree for this parent ticket
         let worktrees: Vec<Worktree> = match query_collect(
+        let worktrees: Vec<Worktree> = query_collect(
             conn,
             &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
             params![&parent.id],
@@ -121,6 +140,7 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
                 continue;
             }
         };
+        ).ok().unwrap_or_default();
         if let Some(wt) = worktrees
             .iter()
             .find(|w| w.status == WorktreeStatus::Active)
@@ -283,6 +303,8 @@ impl<'a> WorktreeManager<'a> {
             } else if let Some(parent_branch) = ticket_id
                 .as_deref()
                 .and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
+            } else if let Some(parent_branch) =
+                ticket_id.and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
             {
                 parent_branch
             } else {
@@ -318,6 +340,7 @@ impl<'a> WorktreeManager<'a> {
                 .unwrap_or(false);
             let warnings =
                 ensure_base_up_to_date(&repo.local_path, &base, force_dirty, pre_verified_clean)?;
+            let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",

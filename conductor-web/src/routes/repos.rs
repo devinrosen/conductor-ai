@@ -262,5 +262,8 @@ pub async fn list_prs(
             vec![]
         }
     };
+    let prs = tokio::task::spawn_blocking(move || list_open_prs(&remote_url).unwrap_or_default())
+        .await
+        .unwrap_or_default();
     Ok(Json(prs))
 }

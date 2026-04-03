@@ -1,4 +1,5 @@
 import type { GithubPr, Ticket, TicketDependencies, Worktree } from "../api/types";
+import type { GithubPr, Ticket, Worktree } from "../api/types";
 
 interface DepInfo {
   dependencies: string[];
@@ -40,6 +41,11 @@ export interface TicketTree {
  * - A ticket is "blocked" if any blocker in `blocked_by` is not closed.
  * - A blocked ticket is "unlocked" if every blocker has a PR with review_decision "APPROVED".
  * - Non-vantage tickets without apiDeps are always roots.
+ * - Vantage tickets with `dependencies` are nested under their parents.
+ * - A ticket is "blocked" if any dependency exists in the list and is not closed.
+ * - A blocked ticket is "unlocked" if every blocking parent has a PR with review_decision "APPROVED".
+ * - Tickets with multiple dependencies appear under each parent.
+ * - Non-vantage tickets are always roots.
  */
 export function buildTicketTree(
   tickets: Ticket[],
@@ -48,6 +54,8 @@ export function buildTicketTree(
   apiDeps?: Record<string, TicketDependencies>,
 ): TicketTree {
   // Index tickets by source_id and by id for fast lookup
+): TicketTree {
+  // Index tickets by source_id for fast lookup
   const bySourceId = new Map<string, Ticket>();
   const byId = new Map<string, Ticket>();
 
@@ -63,6 +71,11 @@ export function buildTicketTree(
   // Track which blocking parents each ticket has (for unlock computation)
   // Value is the parent ticket IDs (conductor id)
   const blockingParentIds = new Map<string, string[]>(); // ticket id → blocker ticket ids
+  // Track which parents block each ticket (for unlock computation)
+  const blockingParents = new Map<string, string[]>(); // ticket id → parent source_ids
+
+  for (const t of tickets) {
+    if (t.source_type !== "vantage") continue;
 
   if (apiDeps) {
     // API-provided deps path: works for all source types
@@ -72,6 +85,7 @@ export function buildTicketTree(
     const deps = depsMap.get(t.source_id)!;
     let isBlocked = false;
     let nestedUnder: string | null = null;
+    const blockers: string[] = [];
 
       // Nest under parent if present and open
       if (deps.parent && byId.has(deps.parent.id) && deps.parent.state !== "closed") {
@@ -91,6 +105,7 @@ export function buildTicketTree(
       // Blocked if any parent is not closed
       if (parent.state !== "closed") {
         isBlocked = true;
+        blockers.push(depId);
         // Nest under the first open parent
         if (!nestedUnder) {
           nestedUnder = depId;
@@ -154,6 +169,7 @@ export function buildTicketTree(
 
     if (isBlocked) {
       blocked.add(t.id);
+      blockingParents.set(t.id, blockers);
     }
   }
 
@@ -184,6 +200,13 @@ export function buildTicketTree(
 
       const allApproved = parentIds.every((parentId) => {
         const branch = wtBranchByTicketId.get(parentId);
+      const parents = blockingParents.get(ticketId);
+      if (!parents?.length) continue;
+
+      const allApproved = parents.every((parentSourceId) => {
+        const parent = bySourceId.get(parentSourceId);
+        if (!parent) return false;
+        const branch = wtBranchByTicketId.get(parent.id);
         if (!branch) return false;
         const pr = prByBranch.get(branch);
         return pr?.review_decision === "APPROVED";

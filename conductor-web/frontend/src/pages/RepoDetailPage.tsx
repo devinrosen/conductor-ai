@@ -279,6 +279,8 @@ export function RepoDetailPage() {
           )
         : null,
     [tickets, worktrees, prs, ticketDependencies],
+    () => (tickets ? buildTicketTree(tickets, worktrees ?? undefined, prs ?? undefined) : null),
+    [tickets, worktrees, prs],
   );
 
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display
@@ -304,6 +306,8 @@ export function RepoDetailPage() {
   // Map worktree_id -> active workflow run status (for ticket running indicators)
   const workflowStatusByWorktreeId = useMemo(() => {
     const m = new Map<string, WorkflowRun["status"]>();
+  const workflowRunByWorktreeId = useMemo(() => {
+    const m = new Map<string, WorkflowRun>();
     if (!activeWorkflowRuns) return m;
     const priority = (s: string) =>
       s === "running" || s === "pending" || s === "waiting" ? 3 : s === "completed" ? 2 : 1;
@@ -315,6 +319,7 @@ export function RepoDetailPage() {
             (priority(run.status) === priority(existing.status) && run.started_at > existing.started_at)) {
           m.set(run.worktree_id, run);
         }
+        m.set(run.worktree_id, run);
       }
     }
     return m;

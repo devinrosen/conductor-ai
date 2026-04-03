@@ -74,17 +74,61 @@ fn resolve_vantage_context(
     conn: &Connection,
     state: &ExecutionState<'_>,
 ) -> Option<VantageContext> {
-    let ticket_id = state.ticket_id.as_ref()?;
-    let ticket = crate::tickets::TicketSyncer::new(conn)
-        .get_by_id(ticket_id)
-        .ok()?;
+    let ticket_id = match state.ticket_id.as_ref() {
+        Some(id) => id,
+        None => {
+            tracing::debug!("Vantage context: no ticket_id on workflow state");
+            return None;
+        }
+    };
+    let ticket = match crate::tickets::TicketSyncer::new(conn).get_by_id(ticket_id) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to look up ticket {ticket_id}: {e}");
+            return None;
+        }
+    };
     if ticket.source_type != "vantage" {
+        tracing::debug!(
+            "Vantage context: ticket {} is source_type={}, not vantage",
+            ticket_id,
+            ticket.source_type
+        );
         return None;
     }
-    let repo_id = state.repo_id.as_ref()?;
-    let sources = IssueSourceManager::new(conn).list(repo_id).ok()?;
-    let vantage_source = sources.iter().find(|s| s.source_type == "vantage")?;
-    let cfg: VantageConfig = serde_json::from_str(&vantage_source.config_json).ok()?;
+    let repo_id = match state.repo_id.as_ref() {
+        Some(id) => id,
+        None => {
+            tracing::debug!("Vantage context: no repo_id on workflow state");
+            return None;
+        }
+    };
+    let sources = match IssueSourceManager::new(conn).list(repo_id) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to list issue sources: {e}");
+            return None;
+        }
+    };
+    let vantage_source = match sources.iter().find(|s| s.source_type == "vantage") {
+        Some(s) => s,
+        None => {
+            tracing::debug!("Vantage context: no vantage issue source for repo {repo_id}");
+            return None;
+        }
+    };
+    let cfg: VantageConfig = match serde_json::from_str(&vantage_source.config_json) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to parse config: {e}");
+            return None;
+        }
+    };
+    tracing::info!(
+        "Vantage context resolved: deliverable={}, sdlc_root={}",
+        ticket.source_id,
+        cfg.sdlc_root
+    );
     Some(VantageContext {
         deliverable_id: ticket.source_id,
         sdlc_root: cfg.sdlc_root,
