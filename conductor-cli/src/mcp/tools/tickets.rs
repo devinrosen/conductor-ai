@@ -267,7 +267,9 @@ pub(super) fn tool_get_ready_tickets(
     let limit = match get_arg(args, "limit") {
         Some(s) => match s.parse::<u32>() {
             Ok(n) => Some(n),
-            Err(_) => return tool_err(format!("`limit` must be a non-negative integer, got {s:?}")),
+            Err(_) => {
+                return tool_err(format!("`limit` must be a non-negative integer, got {s:?}"))
+            }
         },
         None => None,
     };
