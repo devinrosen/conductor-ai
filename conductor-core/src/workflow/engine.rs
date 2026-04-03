@@ -11,6 +11,8 @@ use crate::schema_config::{OutputSchema, SchemaIssue};
 use crate::workflow_dsl::{self, WorkflowDef, WorkflowNode};
 use crate::worktree::WorktreeManager;
 
+use crate::issue_source::{IssueSourceManager, VantageConfig};
+
 use super::manager::WorkflowManager;
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 use super::types::{
@@ -50,6 +52,35 @@ pub(super) struct ResumeContext {
     /// Pre-loaded child agent runs keyed by run ID, avoiding N+1 queries
     /// when accumulating costs during restore.
     pub child_runs: HashMap<String, crate::agent::AgentRun>,
+}
+
+/// Vantage context needed to write back pipeline status.
+struct VantageContext {
+    deliverable_id: String,
+    sdlc_root: String,
+}
+
+/// If the workflow's ticket is a Vantage deliverable, resolve the sdlc_root
+/// so we can write back pipeline status.
+fn resolve_vantage_context(
+    conn: &Connection,
+    state: &ExecutionState<'_>,
+) -> Option<VantageContext> {
+    let ticket_id = state.ticket_id.as_ref()?;
+    let ticket = crate::tickets::TicketSyncer::new(conn)
+        .get_by_id(ticket_id)
+        .ok()?;
+    if ticket.source_type != "vantage" {
+        return None;
+    }
+    let repo_id = state.repo_id.as_ref()?;
+    let sources = IssueSourceManager::new(conn).list(repo_id).ok()?;
+    let vantage_source = sources.iter().find(|s| s.source_type == "vantage")?;
+    let cfg: VantageConfig = serde_json::from_str(&vantage_source.config_json).ok()?;
+    Some(VantageContext {
+        deliverable_id: ticket.source_id,
+        sdlc_root: cfg.sdlc_root,
+    })
 }
 
 /// Mutable runtime state for a workflow execution.
@@ -528,6 +559,18 @@ pub(super) fn run_workflow_engine(
     state: &mut ExecutionState<'_>,
     workflow: &WorkflowDef,
 ) -> Result<WorkflowResult> {
+    // Notify Vantage on dispatch (best-effort — don't fail the workflow)
+    let vantage_ctx = resolve_vantage_context(state.conn, state);
+    if let Some(ref ctx) = vantage_ctx {
+        if let Err(e) = crate::vantage::notify_dispatched(
+            &ctx.deliverable_id,
+            &ctx.sdlc_root,
+            &state.workflow_run_id,
+        ) {
+            tracing::warn!("Vantage dispatch notification failed: {e}");
+        }
+    }
+
     // Execute main body
     let mut body_error: Option<String> = None;
     let body_result = execute_nodes(state, &workflow.body);
@@ -583,6 +626,24 @@ pub(super) fn run_workflow_engine(
         )?;
         state.flush_metrics()?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
+
+        // Notify Vantage of completion (best-effort)
+        if let Some(ref ctx) = vantage_ctx {
+            let pr_url = state.inputs.get("pr_url").map(|s| s.as_str());
+            let wt_slug = if state.worktree_slug.is_empty() {
+                None
+            } else {
+                Some(state.worktree_slug.as_str())
+            };
+            if let Err(e) = crate::vantage::notify_completed(
+                &ctx.deliverable_id,
+                &ctx.sdlc_root,
+                pr_url,
+                wt_slug,
+            ) {
+                tracing::warn!("Vantage completion notification failed: {e}");
+            }
+        }
     } else {
         state
             .agent_mgr
@@ -594,6 +655,15 @@ pub(super) fn run_workflow_engine(
         )?;
         state.flush_metrics()?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
+
+        // Notify Vantage of failure (best-effort)
+        if let Some(ref ctx) = vantage_ctx {
+            if let Err(e) =
+                crate::vantage::notify_failed(&ctx.deliverable_id, &ctx.sdlc_root, &summary)
+            {
+                tracing::warn!("Vantage failure notification failed: {e}");
+            }
+        }
     }
 
     tracing::info!(

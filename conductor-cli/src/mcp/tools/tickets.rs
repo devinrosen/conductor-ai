@@ -141,7 +141,7 @@ pub(super) fn tool_sync_tickets(
                 continue;
             }
         };
-        let fetch_result = ts.sync(None);
+        let fetch_result = ts.sync(None, Some(&repo.slug));
         match fetch_result {
             Ok(tickets) => {
                 let (synced, closed) =

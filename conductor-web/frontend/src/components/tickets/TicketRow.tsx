@@ -15,6 +15,33 @@ interface TicketRowProps {
   blocked?: boolean;
   workflowStatus?: "running" | "pending" | "waiting" | null;
   onStartWorkflow?: (ticket: Ticket) => void;
+  showPipeline?: boolean;
+  hideStateAndLabels?: boolean;
+  hasChildren?: boolean;
+  collapsed?: boolean;
+  onToggleCollapse?: (ticketId: string) => void;
+}
+
+const PIPELINE_DOT_COLORS: Record<string, string> = {
+  ready: "bg-emerald-400",
+  dispatched: "bg-blue-400",
+  running: "bg-amber-400",
+  completed: "bg-green-500",
+  failed: "bg-red-500",
+};
+
+function PipelineIndicator({ rawJson }: { rawJson: string }) {
+  try {
+    const parsed = JSON.parse(rawJson);
+    const status = parsed?.conductor?.status;
+    if (!status) return null;
+    const dot = PIPELINE_DOT_COLORS[status] ?? "bg-gray-400";
+    return (
+      <span className={`inline-block w-2.5 h-2.5 rounded-full ${dot}`} title={status} />
+    );
+  } catch {
+    return null;
+  }
 }
 
 export function TicketRow({
@@ -29,6 +56,11 @@ export function TicketRow({
   blocked = false,
   workflowStatus,
   onStartWorkflow,
+  showPipeline = false,
+  hideStateAndLabels = false,
+  hasChildren = false,
+  collapsed = false,
+  onToggleCollapse,
 }: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
   const isActive = workflowStatus === "running" || workflowStatus === "pending" || workflowStatus === "waiting";
@@ -60,6 +92,17 @@ export function TicketRow({
           {depth > 0 && (
             <span className="text-gray-400 text-[10px]" style={{ marginLeft: `${(depth - 1) * 0.75}rem` }}>&#8627;</span>
           )}
+          {hasChildren && onToggleCollapse && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleCollapse(ticket.source_id);
+              }}
+              className="text-gray-400 hover:text-gray-600 text-[10px] w-3 text-center"
+            >
+              {collapsed ? "▶" : "▼"}
+            </button>
+          )}
           {blocked && (
             <svg className="w-3 h-3 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
@@ -69,35 +112,44 @@ export function TicketRow({
         </span>
       </td>
       <td className="px-3 py-1.5 text-gray-900">{ticket.title}</td>
-      <td className="px-3 py-1.5">
-        <StatusBadge status={ticket.state} />
-      </td>
-      <td className="px-3 py-1.5">
-        <div className="flex flex-wrap gap-1">
-          {labels.map((l) => {
-            const bg = labelColorMap?.[l];
-            return bg ? (
-              <span
-                key={l}
-                className="px-1.5 py-0.5 text-xs rounded"
-                style={{ backgroundColor: bg, color: labelTextColor(bg) }}
-              >
-                {l}
-              </span>
-            ) : (
-              <span
-                key={l}
-                className="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600"
-              >
-                {l}
-              </span>
-            );
-          })}
-        </div>
-      </td>
+      {!hideStateAndLabels && (
+        <td className="px-3 py-1.5">
+          <StatusBadge status={ticket.state} />
+        </td>
+      )}
+      {!hideStateAndLabels && (
+        <td className="px-3 py-1.5">
+          <div className="flex flex-wrap gap-1">
+            {labels.map((l) => {
+              const bg = labelColorMap?.[l];
+              return bg ? (
+                <span
+                  key={l}
+                  className="px-1.5 py-0.5 text-xs rounded"
+                  style={{ backgroundColor: bg, color: labelTextColor(bg) }}
+                >
+                  {l}
+                </span>
+              ) : (
+                <span
+                  key={l}
+                  className="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600"
+                >
+                  {l}
+                </span>
+              );
+            })}
+          </div>
+        </td>
+      )}
       <td className="px-3 py-1.5 text-xs text-gray-500">
         {ticket.assignee ?? "-"}
       </td>
+      {showPipeline && (
+        <td className="px-3 py-1.5 text-center">
+          <PipelineIndicator rawJson={ticket.raw_json} />
+        </td>
+      )}
       <td className="px-3 py-1.5 text-xs whitespace-nowrap">
         {isActive ? (
           <span className="inline-flex items-center gap-1.5 text-amber-600">

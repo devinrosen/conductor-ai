@@ -3,6 +3,12 @@ use std::process::Command;
 use crate::error::{ConductorError, Result};
 use crate::tickets::TicketInput;
 
+/// Conductor pipeline statuses that should be synced into Conductor.
+/// Pre-ready states (pending_audit, audited, enriching) are excluded —
+/// those deliverables aren't actionable yet.
+const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] =
+    &["ready", "dispatched", "running", "completed", "failed"];
+
 /// Sync deliverables from a Vantage SDLC project, filtered to those whose
 /// `codebase` field matches the given `repo_slug`.
 /// Returns a list of normalized TicketInputs ready for upsert.
@@ -41,8 +47,18 @@ pub fn sync_vantage_deliverables(
             tracing::debug!("Vantage sync: skipping {id} (codebase={codebase:?} != {repo_slug:?})");
             continue;
         }
+        // Only sync conductor-mode deliverables in actionable pipeline states
+        let exec_mode = item["execution_mode"].as_str().unwrap_or("");
+        let conductor_status = item["conductor"]["status"].as_str().unwrap_or("");
+        if exec_mode != "conductor" || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status) {
+            skipped += 1;
+            tracing::debug!(
+                "Vantage sync: skipping {id} (execution_mode={exec_mode:?}, conductor.status={conductor_status:?})"
+            );
+            continue;
+        }
         let status = item["status"].as_str().unwrap_or("");
-        tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?})");
+        tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?}, conductor.status={conductor_status:?})");
         // Fetch full detail for each deliverable (list output lacks body)
         match fetch_vantage_deliverable(id, sdlc_root) {
             Ok(ticket) => tickets.push(ticket),
@@ -53,7 +69,7 @@ pub fn sync_vantage_deliverables(
     }
 
     tracing::info!(
-        "Vantage sync: matched {} deliverables, skipped {skipped} (codebase mismatch)",
+        "Vantage sync: matched {} deliverables, skipped {skipped} (filtered out)",
         tickets.len(),
     );
 
@@ -103,6 +119,77 @@ fn run_sdlc(sdlc_root: &str, args: &[&str]) -> Result<std::process::Output> {
     }
 
     Ok(output)
+}
+
+/// Update Vantage conductor status to "dispatched" when a workflow starts.
+pub fn notify_dispatched(
+    deliverable_id: &str,
+    sdlc_root: &str,
+    workflow_run_id: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    run_sdlc(
+        sdlc_root,
+        &[
+            "deliverable",
+            "set",
+            deliverable_id,
+            &format!("conductor.status=dispatched"),
+            &format!("conductor.dispatched_at={now}"),
+            &format!("conductor.workflow_run_id={workflow_run_id}"),
+        ],
+    )?;
+    tracing::info!("Vantage: marked {deliverable_id} as dispatched (run={workflow_run_id})");
+    Ok(())
+}
+
+/// Update Vantage conductor status to "completed" when a workflow succeeds.
+pub fn notify_completed(
+    deliverable_id: &str,
+    sdlc_root: &str,
+    pr_url: Option<&str>,
+    worktree_slug: Option<&str>,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut args = vec![
+        "deliverable",
+        "set",
+        deliverable_id,
+        "conductor.status=completed",
+    ];
+    let completed_at = format!("conductor.completed_at={now}");
+    args.push(&completed_at);
+    let pr_arg;
+    if let Some(url) = pr_url {
+        pr_arg = format!("conductor.pr_url={url}");
+        args.push(&pr_arg);
+    }
+    let wt_arg;
+    if let Some(slug) = worktree_slug {
+        wt_arg = format!("conductor.worktree_slug={slug}");
+        args.push(&wt_arg);
+    }
+    run_sdlc(sdlc_root, &args)?;
+    tracing::info!("Vantage: marked {deliverable_id} as completed");
+    Ok(())
+}
+
+/// Update Vantage conductor status to "failed" when a workflow fails.
+pub fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
+    let escaped_reason = reason.replace('"', "'");
+    let reason_arg = format!("conductor.failed_reason={escaped_reason}");
+    run_sdlc(
+        sdlc_root,
+        &[
+            "deliverable",
+            "set",
+            deliverable_id,
+            "conductor.status=failed",
+            &reason_arg,
+        ],
+    )?;
+    tracing::info!("Vantage: marked {deliverable_id} as failed");
+    Ok(())
 }
 
 /// Parse a Vantage deliverable JSON object into a TicketInput.

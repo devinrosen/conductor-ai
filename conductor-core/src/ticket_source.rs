@@ -1,8 +1,9 @@
 use crate::error::{ConductorError, Result};
 use crate::github;
-use crate::issue_source::{GitHubConfig, IssueSource, JiraConfig};
+use crate::issue_source::{GitHubConfig, IssueSource, JiraConfig, VantageConfig};
 use crate::jira_acli;
 use crate::tickets::TicketInput;
+use crate::vantage;
 
 /// Typed dispatch for ticket sources.
 ///
@@ -13,6 +14,7 @@ use crate::tickets::TicketInput;
 pub enum TicketSource {
     GitHub(GitHubConfig),
     Jira(JiraConfig),
+    Vantage(VantageConfig),
 }
 
 impl TicketSource {
@@ -32,6 +34,12 @@ impl TicketSource {
                     .map_err(|e| ConductorError::TicketSync(format!("invalid jira config: {e}")))?;
                 Ok(Self::Jira(cfg))
             }
+            "vantage" => {
+                let cfg = serde_json::from_str::<VantageConfig>(&s.config_json).map_err(|e| {
+                    ConductorError::TicketSync(format!("invalid vantage config: {e}"))
+                })?;
+                Ok(Self::Vantage(cfg))
+            }
             other => Err(ConductorError::UnknownSourceType(other.to_string())),
         }
     }
@@ -39,10 +47,19 @@ impl TicketSource {
     /// Sync all tickets for this source.
     ///
     /// `token` is an optional auth token passed to GitHub syncs; Jira ignores it.
-    pub fn sync(&self, token: Option<&str>) -> Result<Vec<TicketInput>> {
+    /// Sync all tickets for this source.
+    ///
+    /// `token` is an optional auth token passed to GitHub syncs; Jira/Vantage ignore it.
+    /// `repo_slug` is required for Vantage to filter by codebase; others ignore it.
+    pub fn sync(&self, token: Option<&str>, repo_slug: Option<&str>) -> Result<Vec<TicketInput>> {
         match self {
             Self::GitHub(cfg) => github::sync_github_issues(&cfg.owner, &cfg.repo, token),
             Self::Jira(cfg) => jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url),
+            Self::Vantage(cfg) => vantage::sync_vantage_deliverables(
+                &cfg.project_id,
+                &cfg.sdlc_root,
+                repo_slug.unwrap_or(""),
+            ),
         }
     }
 
@@ -60,6 +77,7 @@ impl TicketSource {
                 github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
             }
             Self::Jira(cfg) => jira_acli::fetch_jira_issue(source_id, &cfg.url),
+            Self::Vantage(cfg) => vantage::fetch_vantage_deliverable(source_id, &cfg.sdlc_root),
         }
     }
 
@@ -70,6 +88,7 @@ impl TicketSource {
         match self {
             Self::GitHub(_) => "github",
             Self::Jira(_) => "jira",
+            Self::Vantage(_) => "vantage",
         }
     }
 
@@ -86,7 +105,7 @@ impl TicketSource {
         remote_url: &str,
     ) -> Result<String> {
         match (source_type, config_json) {
-            ("github" | "jira", Some(json)) => {
+            ("github" | "jira" | "vantage", Some(json)) => {
                 serde_json::from_str::<serde_json::Value>(json).map_err(|e| {
                     ConductorError::InvalidInput(format!("invalid JSON config: {e}"))
                 })?;
@@ -106,6 +125,11 @@ impl TicketSource {
             ("jira", None) => Err(ConductorError::InvalidInput(
                 "--config is required for jira sources \
                  (e.g. --config '{\"jql\":\"project = KEY AND status != Done\",\"url\":\"https://...\"}')"
+                    .to_string(),
+            )),
+            ("vantage", None) => Err(ConductorError::InvalidInput(
+                "--config is required for vantage sources \
+                 (e.g. --config '{\"project_id\":\"PROJ-001\",\"sdlc_root\":\"/path/to/sdlc\"}')"
                     .to_string(),
             )),
             (other, _) => Err(ConductorError::UnknownSourceType(other.to_string())),

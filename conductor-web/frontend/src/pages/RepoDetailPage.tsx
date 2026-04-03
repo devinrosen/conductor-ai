@@ -12,6 +12,8 @@ import { RepoAgentRunCard } from "../components/agents/RepoAgentRunCard";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
 import { StatusBadge } from "../components/shared/StatusBadge";
+import { ColumnHeader, type SortDirection } from "../components/shared/ColumnHeader";
+import { parseLabels } from "../utils/ticketUtils";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -61,6 +63,95 @@ export function RepoDetailPage() {
     loading: sourcesLoading,
     refetch: refetchSources,
   } = useApi(() => api.listIssueSources(repoId!), [repoId]);
+
+  const hasVantage = issueSources?.some((s) => s.source_type === "vantage") ?? false;
+  const allVantage = (issueSources?.length ?? 0) > 0 && issueSources!.every((s) => s.source_type === "vantage");
+
+  // Ticket table sort/filter state
+  type TicketSortColumn = "source_id" | "title" | "state" | "assignee" | "pipeline" | null;
+  const [ticketSortColumn, setTicketSortColumn] = useState<TicketSortColumn>(null);
+  const [ticketSortDir, setTicketSortDir] = useState<SortDirection>(null);
+  const [ticketColumnFilters, setTicketColumnFilters] = useState<Record<string, Set<string>>>({});
+
+  function getTicketPipelineStatus(ticket: Ticket): string {
+    try {
+      return JSON.parse(ticket.raw_json)?.conductor?.status ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  const ticketFilterOptions = useMemo(() => {
+    if (!tickets) return {};
+    const states = new Set<string>();
+    const assignees = new Set<string>();
+    const labels = new Set<string>();
+    const pipelines = new Set<string>();
+    for (const t of tickets) {
+      states.add(t.state);
+      if (t.assignee) assignees.add(t.assignee);
+      for (const l of parseLabels(t.labels)) labels.add(l);
+      const ps = getTicketPipelineStatus(t);
+      if (ps) pipelines.add(ps);
+    }
+    return {
+      state: Array.from(states).sort(),
+      assignee: Array.from(assignees).sort(),
+      labels: Array.from(labels).sort(),
+      pipeline: Array.from(pipelines).sort(),
+    };
+  }, [tickets]);
+
+  const sortedFilteredTickets = useMemo(() => {
+    if (!tickets) return [];
+    let result = [...tickets];
+
+    // Column filters
+    for (const [col, values] of Object.entries(ticketColumnFilters)) {
+      if (values.size === 0) continue;
+      result = result.filter((t) => {
+        switch (col) {
+          case "state": return values.has(t.state);
+          case "assignee": return values.has(t.assignee ?? "");
+          case "labels": return parseLabels(t.labels).some((l) => values.has(l));
+          case "pipeline": return values.has(getTicketPipelineStatus(t));
+          default: return true;
+        }
+      });
+    }
+
+    // Sort
+    if (ticketSortColumn && ticketSortDir) {
+      const dir = ticketSortDir === "asc" ? 1 : -1;
+      result.sort((a, b) => {
+        let va = "";
+        let vb = "";
+        switch (ticketSortColumn) {
+          case "source_id": va = a.source_id; vb = b.source_id; break;
+          case "title": va = a.title; vb = b.title; break;
+          case "state": va = a.state; vb = b.state; break;
+          case "assignee": va = a.assignee ?? ""; vb = b.assignee ?? ""; break;
+          case "pipeline": va = getTicketPipelineStatus(a); vb = getTicketPipelineStatus(b); break;
+        }
+        return va.localeCompare(vb) * dir;
+      });
+    }
+
+    return result;
+  }, [tickets, ticketColumnFilters, ticketSortColumn, ticketSortDir]);
+
+  function handleTicketSort(col: string, dir: SortDirection) {
+    setTicketSortColumn(dir ? (col as TicketSortColumn) : null);
+    setTicketSortDir(dir);
+  }
+
+  function handleTicketFilter(col: string, values: Set<string>) {
+    setTicketColumnFilters((prev) => ({ ...prev, [col]: values }));
+  }
+
+  function ticketSortDirFor(col: string): SortDirection {
+    return ticketSortColumn === col ? ticketSortDir : null;
+  }
 
   const {
     data: repoAgentRuns,
@@ -143,6 +234,16 @@ export function RepoDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [unregisterRepoConfirm, setUnregisterRepoConfirm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+
+  const toggleCollapse = useCallback((sourceId: string) => {
+    setCollapsedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(sourceId)) next.delete(sourceId);
+      else next.add(sourceId);
+      return next;
+    });
+  }, []);
   const [createWtOpen, setCreateWtOpen] = useState(false);
   const [editingModel, setEditingModel] = useState(false);
   const highlightIssues = useOnboardingHighlight("issue-sources");
@@ -161,6 +262,13 @@ export function RepoDetailPage() {
     () => (tickets ? buildTicketTree(tickets) : null),
     [tickets],
   );
+
+  // Map ticket internal id → source_id (e.g. "D-160") for worktree display
+  const ticketSourceIdMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of tickets ?? []) m.set(t.id, t.source_id);
+    return m;
+  }, [tickets]);
 
   // Map worktree_id -> active workflow run status (for ticket running indicators)
   const workflowStatusByWorktreeId = useMemo(() => {
@@ -316,6 +424,9 @@ export function RepoDetailPage() {
   function renderTicketRows(ticketList: Ticket[], depth: number): React.ReactNode[] {
     const rows: React.ReactNode[] = [];
     for (const t of ticketList) {
+      const children = ticketTree?.childMap.get(t.source_id);
+      const hasChildren = !!children && children.length > 0;
+      const isCollapsed = collapsedNodes.has(t.source_id);
       const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | undefined;
       rows.push(
         <TicketRow
@@ -327,10 +438,14 @@ export function RepoDetailPage() {
           blocked={ticketTree?.blocked.has(t.id) ?? false}
           workflowStatus={wfStatus ?? null}
           onStartWorkflow={handleStartTicketToPr}
+          showPipeline={hasVantage}
+          hideStateAndLabels={allVantage}
+          hasChildren={hasChildren}
+          collapsed={isCollapsed}
+          onToggleCollapse={toggleCollapse}
         />,
       );
-      const children = ticketTree?.childMap.get(t.source_id);
-      if (children && children.length > 0) {
+      if (hasChildren && !isCollapsed) {
         rows.push(...renderTicketRows(children, depth + 1));
       }
     }
@@ -621,9 +736,9 @@ export function RepoDetailPage() {
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
                 <tr>
                   <th className="px-4 py-2">Branch</th>
+                  <th className="px-4 py-2">Ticket</th>
                   <th className="px-4 py-2">Status</th>
                   <th className="px-4 py-2">Agent</th>
-                  <th className="px-4 py-2">Path</th>
                   <th className="px-4 py-2">Created</th>
                   <th className="px-4 py-2"></th>
                 </tr>
@@ -637,6 +752,7 @@ export function RepoDetailPage() {
                     onDelete={setDeleteTarget}
                     selected={index === selectedIndex}
                     index={index}
+                    ticketSourceId={wt.ticket_id ? ticketSourceIdMap.get(wt.ticket_id) : null}
                   />
                 ))}
               </tbody>
@@ -693,23 +809,26 @@ export function RepoDetailPage() {
           <>
             <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
               <table className="w-full text-sm min-w-[480px]">
-                <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                <thead className="bg-gray-50 text-left text-gray-500">
                   <tr>
-                    <th className="px-4 py-2">#</th>
-                    <th className="px-4 py-2">Title</th>
-                    <th className="px-4 py-2">State</th>
-                    <th className="px-4 py-2">Labels</th>
-                    <th className="px-4 py-2">Assignee</th>
-                    <th className="px-4 py-2">Agent</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase">#</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase">Title</th>
+                    {!allVantage && <ColumnHeader label="State" columnKey="state" sortDirection={ticketSortDirFor("state")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.state} activeFilters={ticketColumnFilters.state} onFilter={handleTicketFilter} />}
+                    {!allVantage && <ColumnHeader label="Labels" columnKey="labels" sortDirection={null} onSort={() => {}} filterOptions={ticketFilterOptions.labels} activeFilters={ticketColumnFilters.labels} onFilter={handleTicketFilter} />}
+                    <ColumnHeader label="Assignee" columnKey="assignee" sortDirection={ticketSortDirFor("assignee")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.assignee} activeFilters={ticketColumnFilters.assignee} onFilter={handleTicketFilter} />
+                    {hasVantage && <ColumnHeader label="Pipeline" columnKey="pipeline" sortDirection={ticketSortDirFor("pipeline")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.pipeline} activeFilters={ticketColumnFilters.pipeline} onFilter={handleTicketFilter} />}
+                    <th className="px-4 py-2 text-xs font-medium uppercase">Agent</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {ticketTree ? renderTicketRows(ticketTree.roots, 0) : tickets.map((t) => (
+                  {ticketTree ? renderTicketRows(ticketTree.roots, 0) : sortedFilteredTickets.map((t) => (
                     <TicketRow
                       key={t.id}
                       ticket={t}
                       agentTotals={ticketTotals?.[t.id]}
                       onClick={setSelectedTicket}
+                      showPipeline={hasVantage}
+                      hideStateAndLabels={allVantage}
                     />
                   ))}
                 </tbody>

@@ -57,23 +57,27 @@ export function buildTicketTree(tickets: Ticket[]): TicketTree {
 
     const deps = depsMap.get(t.source_id)!;
     let isBlocked = false;
+    let nestedUnder: string | null = null;
 
     for (const depId of deps.dependencies) {
       const parent = bySourceId.get(depId);
       if (!parent) continue; // dependency not in this list — don't block
 
-      // This ticket depends on a parent in the list
-      hasParentInList.add(t.source_id);
-
-      // Add to parent's children
-      const children = childMap.get(depId) ?? [];
-      children.push(t);
-      childMap.set(depId, children);
-
-      // Blocked if parent is not closed
+      // Blocked if any parent is not closed
       if (parent.state !== "closed") {
         isBlocked = true;
+        // Nest under the first open parent
+        if (!nestedUnder) {
+          nestedUnder = depId;
+        }
       }
+    }
+
+    if (nestedUnder) {
+      hasParentInList.add(t.source_id);
+      const children = childMap.get(nestedUnder) ?? [];
+      children.push(t);
+      childMap.set(nestedUnder, children);
     }
 
     if (isBlocked) {
@@ -81,7 +85,7 @@ export function buildTicketTree(tickets: Ticket[]): TicketTree {
     }
   }
 
-  // Roots: tickets that have no parent in the list
+  // Roots: tickets that have no parent in the list (or all parents are closed)
   const roots = tickets.filter(
     (t) => t.source_type !== "vantage" || !hasParentInList.has(t.source_id),
   );
