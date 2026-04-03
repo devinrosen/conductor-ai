@@ -26,6 +26,7 @@ export function WorktreeRow({
   const activeStep = workflowRun?.active_steps?.find(
     (s) => s.status === "running" || s.status === "waiting",
   );
+  const isRunning = latestRun?.status === "running" || latestRun?.status === "waiting_for_feedback";
 
   return (
     <tr
@@ -77,6 +78,15 @@ export function WorktreeRow({
             </svg>
             {workflowRun!.workflow_name} failed
           </span>
+          <span className="inline-flex items-center gap-1.5 text-xs text-amber-600">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+            </span>
+            {latestRun!.status === "waiting_for_feedback" ? "Waiting" : "Running"}
+          </span>
+        ) : latestRun ? (
+          <span className="text-xs text-gray-500">{latestRun.status}</span>
         ) : null}
       </td>
       <td className="px-4 py-2 text-gray-500">

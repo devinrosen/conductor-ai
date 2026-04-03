@@ -69,6 +69,9 @@ export function buildTicketTree(
     for (const t of tickets) {
       const deps = apiDeps[t.id];
       if (!deps) continue;
+    const deps = depsMap.get(t.source_id)!;
+    let isBlocked = false;
+    let nestedUnder: string | null = null;
 
       // Nest under parent if present and open
       if (deps.parent && byId.has(deps.parent.id) && deps.parent.state !== "closed") {
@@ -85,6 +88,13 @@ export function buildTicketTree(
       if (activeBlockers.length > 0) {
         blocked.add(t.id);
         blockingParentIds.set(t.id, activeBlockers.map((b) => b.id));
+      // Blocked if any parent is not closed
+      if (parent.state !== "closed") {
+        isBlocked = true;
+        // Nest under the first open parent
+        if (!nestedUnder) {
+          nestedUnder = depId;
+        }
       }
     }
   } else {
@@ -135,6 +145,22 @@ export function buildTicketTree(
 
   // Roots: tickets that have no parent in the list
   const roots = tickets.filter((t) => !hasParentInList.has(t.source_id));
+    if (nestedUnder) {
+      hasParentInList.add(t.source_id);
+      const children = childMap.get(nestedUnder) ?? [];
+      children.push(t);
+      childMap.set(nestedUnder, children);
+    }
+
+    if (isBlocked) {
+      blocked.add(t.id);
+    }
+  }
+
+  // Roots: tickets that have no parent in the list (or all parents are closed)
+  const roots = tickets.filter(
+    (t) => t.source_type !== "vantage" || !hasParentInList.has(t.source_id),
+  );
 
   // Compute unlocked set: blocked tickets whose blocking parents all have approved PRs
   const unlocked = new Set<string>();

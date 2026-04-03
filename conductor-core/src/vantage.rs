@@ -63,10 +63,24 @@ pub fn sync_vantage_deliverables(
             || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status.as_str())
         {
             skipped_mode_or_status += 1;
+        // Only sync conductor-mode deliverables in actionable pipeline states
+        let exec_mode = item["execution_mode"].as_str().unwrap_or("");
+        let conductor_status = item["conductor"]["status"].as_str().unwrap_or("");
+        if exec_mode != "conductor" || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status) {
+            skipped += 1;
             tracing::debug!(
                 "Vantage sync: skipping {id} (execution_mode={exec_mode:?}, conductor.status={conductor_status:?})"
             );
             continue;
+        }
+        let status = item["status"].as_str().unwrap_or("");
+        tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?}, conductor.status={conductor_status:?})");
+        // Fetch full detail for each deliverable (list output lacks body)
+        match fetch_vantage_deliverable(id, sdlc_root) {
+            Ok(ticket) => tickets.push(ticket),
+            Err(e) => {
+                tracing::warn!("Failed to fetch Vantage deliverable {id}: {e}");
+            }
         }
         let status = item["status"].as_str().unwrap_or("");
         tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?}, conductor.status={conductor_status:?})");
@@ -103,6 +117,10 @@ pub fn sync_vantage_deliverables(
             tickets.len(),
         );
     }
+    tracing::info!(
+        "Vantage sync: matched {} deliverables, skipped {skipped} (filtered out)",
+        tickets.len(),
+    );
 
     Ok(tickets)
 }
@@ -266,6 +284,11 @@ fn run_sdlc(sdlc_root: &str, args: &[&str]) -> Result<std::process::Output> {
 
 /// Update Vantage conductor status to "dispatched" when a workflow starts.
 fn notify_dispatched(deliverable_id: &str, sdlc_root: &str, workflow_run_id: &str) -> Result<()> {
+pub fn notify_dispatched(
+    deliverable_id: &str,
+    sdlc_root: &str,
+    workflow_run_id: &str,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     run_sdlc(
         sdlc_root,
@@ -275,6 +298,8 @@ fn notify_dispatched(deliverable_id: &str, sdlc_root: &str, workflow_run_id: &st
             "--",
             deliverable_id,
             "conductor.status=dispatched",
+            deliverable_id,
+            &format!("conductor.status=dispatched"),
             &format!("conductor.dispatched_at={now}"),
             &format!("conductor.workflow_run_id={workflow_run_id}"),
         ],
@@ -285,6 +310,7 @@ fn notify_dispatched(deliverable_id: &str, sdlc_root: &str, workflow_run_id: &st
 
 /// Update Vantage conductor status to "completed" when a workflow succeeds.
 fn notify_completed(
+pub fn notify_completed(
     deliverable_id: &str,
     sdlc_root: &str,
     pr_url: Option<&str>,
@@ -318,6 +344,9 @@ fn notify_completed(
 /// Update Vantage conductor status to "failed" when a workflow fails.
 fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
     let reason_arg = format!("conductor.failed_reason={reason}");
+pub fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
+    let escaped_reason = reason.replace('"', "'");
+    let reason_arg = format!("conductor.failed_reason={escaped_reason}");
     run_sdlc(
         sdlc_root,
         &[
