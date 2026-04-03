@@ -253,7 +253,7 @@ export function RepoDetailPage() {
 
   // Fetch active workflow runs for this repo to show running indicators on tickets
   const { data: activeWorkflowRuns, refetch: refetchWorkflowRuns } = useApi(
-    () => api.listAllWorkflowRuns(["running", "pending", "waiting"]),
+    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed"]),
     [],
   );
 
@@ -309,7 +309,7 @@ export function RepoDetailPage() {
         name: wtName,
         ticket_id: ticket.id,
       });
-      await api.runWorkflow(wt.id, {
+      const result = await api.runWorkflow(wt.id, {
         name: "ticket-to-pr",
         inputs: {
           ticket_id: ticket.source_id,
@@ -319,6 +319,24 @@ export function RepoDetailPage() {
       });
       refetchWorktrees();
       refetchWorkflowRuns();
+
+      // Poll for early failure — workflows that fail during init (schema validation,
+      // missing agents, etc.) complete before the first poll would normally catch them.
+      if (result.run_id) {
+        setTimeout(async () => {
+          try {
+            const run = await api.getWorkflowRun(result.run_id);
+            if (run?.status === "failed") {
+              setActionError(
+                `Workflow failed: ${run.result_summary || "unknown error"}`,
+              );
+              refetchWorkflowRuns();
+            }
+          } catch {
+            // Ignore poll errors
+          }
+        }, 3000);
+      }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to start workflow");
     } finally {
@@ -427,7 +445,7 @@ export function RepoDetailPage() {
       const children = ticketTree?.childMap.get(t.source_id);
       const hasChildren = !!children && children.length > 0;
       const isCollapsed = collapsedNodes.has(t.source_id);
-      const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | undefined;
+      const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | "failed" | "completed" | undefined;
       rows.push(
         <TicketRow
           key={`${t.id}-d${depth}`}
