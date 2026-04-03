@@ -189,6 +189,22 @@ pub(super) fn tool_upsert_ticket(
         .collect();
     let assignee = get_arg(args, "assignee").map(|s| s.to_string());
     let priority = get_arg(args, "priority").map(|s| s.to_string());
+    let blocked_by: Vec<String> = get_arg(args, "blocked_by")
+        .map(|s| {
+            s.split(',')
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let children: Vec<String> = get_arg(args, "children")
+        .map(|s| {
+            s.split(',')
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
@@ -211,6 +227,8 @@ pub(super) fn tool_upsert_ticket(
         priority,
         url,
         raw_json: "{}".to_string(),
+        blocked_by,
+        children,
     };
 
     let syncer = TicketSyncer::new(&conn);
@@ -405,6 +423,8 @@ mod tests {
             url: "https://github.com/x/y/issues/42".to_string(),
             raw_json: "{}".to_string(),
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
         };
         let syncer = TicketSyncer::new(&conn);
         syncer.sync_and_close_tickets(&repo.id, "github", &[ticket]);

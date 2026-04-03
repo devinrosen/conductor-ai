@@ -44,6 +44,12 @@ pub struct TicketInput {
     /// Label details (name + color) for populating the ticket_labels join table.
     /// Pass `vec![]` for sources that do not supply color data.
     pub label_details: Vec<TicketLabelInput>,
+    /// Source IDs (within the same source_type) of tickets that block this one.
+    /// Resolved to internal ULIDs and written to ticket_dependencies during upsert.
+    pub blocked_by: Vec<String>,
+    /// Source IDs of child tickets (this ticket is the parent).
+    /// Resolved to internal ULIDs and written to ticket_dependencies during upsert.
+    pub children: Vec<String>,
 }
 
 const VALID_TICKET_STATES: &[&str] = &["open", "in_progress", "closed"];
@@ -135,6 +141,8 @@ impl<'a> TicketSyncer<'a> {
         let tx = self.conn.unchecked_transaction()?;
         let now = Utc::now().to_rfc3339();
 
+        // First pass: upsert tickets and their labels, collecting internal IDs.
+        let mut ticket_ids: Vec<(&TicketInput, String)> = Vec::with_capacity(tickets.len());
         for ticket in tickets {
             let id = crate::new_id();
             let labels_json = ticket.labels_json();
@@ -182,6 +190,69 @@ impl<'a> TicketSyncer<'a> {
                     "INSERT OR REPLACE INTO ticket_labels (ticket_id, label, color) VALUES (?1, ?2, ?3)",
                     params![ticket_id, ld.name, ld.color],
                 )?;
+            }
+            ticket_ids.push((ticket, ticket_id));
+        }
+
+        // Second pass: write ticket_dependencies. All tickets are already upserted above,
+        // so forward references within the same batch resolve correctly.
+        for (ticket, ticket_id) in &ticket_ids {
+            // Clear stale dependency rows owned by this ticket before re-inserting.
+            tx.execute(
+                "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1",
+                params![ticket_id],
+            )?;
+            tx.execute(
+                "DELETE FROM ticket_dependencies WHERE from_ticket_id = ?1 AND dep_type = 'parent_of'",
+                params![ticket_id],
+            )?;
+
+            // blocked_by: another ticket blocks this one → (blocker_id, ticket_id, 'blocks')
+            for src in &ticket.blocked_by {
+                let blocker_id: Option<String> = match tx.query_row(
+                    "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+                    params![repo_id, ticket.source_type, src],
+                    |row| row.get(0),
+                ) {
+                    Ok(id) => Some(id),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                    Err(e) => return Err(ConductorError::Database(e)),
+                };
+                match blocker_id {
+                    Some(id) => {
+                        tx.execute(
+                            "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
+                            params![id, ticket_id],
+                        )?;
+                    }
+                    None => {
+                        warn!("ticket dependency source_id {} not found, skipping", src);
+                    }
+                }
+            }
+
+            // children: this ticket is parent of another → (ticket_id, child_id, 'parent_of')
+            for src in &ticket.children {
+                let child_id: Option<String> = match tx.query_row(
+                    "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+                    params![repo_id, ticket.source_type, src],
+                    |row| row.get(0),
+                ) {
+                    Ok(id) => Some(id),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                    Err(e) => return Err(ConductorError::Database(e)),
+                };
+                match child_id {
+                    Some(id) => {
+                        tx.execute(
+                            "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+                            params![ticket_id, id],
+                        )?;
+                    }
+                    None => {
+                        warn!("ticket dependency source_id {} not found, skipping", src);
+                    }
+                }
             }
         }
 
@@ -687,6 +758,8 @@ mod tests {
             url: String::new(),
             raw_json: "{}".to_string(),
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
         }
     }
 
@@ -1630,6 +1703,8 @@ mod tests {
             url: String::new(),
             raw_json: "{}".to_string(),
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
         }
     }
 
@@ -2003,5 +2078,142 @@ mod tests {
         let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
         // Numeric IDs first (descending), then non-numeric (string descending)
         assert_eq!(ids, vec!["100", "5", "PROJ-3", "PROJ-10"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // ticket_dependencies tests
+    // -----------------------------------------------------------------------
+
+    fn dep_row(conn: &Connection) -> Option<(String, String, String)> {
+        conn.query_row(
+            "SELECT from_ticket_id, to_ticket_id, dep_type FROM ticket_dependencies LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .ok()
+    }
+
+    fn dep_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM ticket_dependencies", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn test_upsert_blocked_by_writes_dependency() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "2" blocks ticket "1"
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        let id1: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let id2: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let row = dep_row(&conn).expect("expected one dependency row");
+        assert_eq!(row.0, id2, "from_ticket_id should be the blocker (2)");
+        assert_eq!(row.1, id1, "to_ticket_id should be the blocked ticket (1)");
+        assert_eq!(row.2, "blocks");
+    }
+
+    #[test]
+    fn test_upsert_children_writes_dependency() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "1" is parent of ticket "2"
+        let t2 = make_ticket("2", "Child");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        let id1: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let id2: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let row = dep_row(&conn).expect("expected one dependency row");
+        assert_eq!(row.0, id1, "from_ticket_id should be the parent (1)");
+        assert_eq!(row.1, id2, "to_ticket_id should be the child (2)");
+        assert_eq!(row.2, "parent_of");
+    }
+
+    #[test]
+    fn test_upsert_clears_stale_dependencies() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is blocked by ticket "2"
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1);
+
+        // Re-upsert ticket "1" with empty blocked_by — stale row must be removed
+        let t1_clear = make_ticket("1", "Blocked");
+        syncer.upsert_tickets("r1", &[t1_clear]).unwrap();
+        assert_eq!(
+            dep_count(&conn),
+            0,
+            "stale dependency row should be removed"
+        );
+    }
+
+    #[test]
+    fn test_upsert_unknown_source_id_skipped() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let mut t1 = make_ticket("1", "Ticket");
+        t1.blocked_by = vec!["nonexistent".to_string()];
+
+        // Should not panic; unresolvable source IDs are silently skipped
+        syncer.upsert_tickets("r1", &[t1]).unwrap();
+        assert_eq!(
+            dep_count(&conn),
+            0,
+            "unresolvable source_id should produce no row"
+        );
+    }
+
+    #[test]
+    fn test_upsert_dependency_idempotent() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Upsert the same batch twice — each time re-construct the inputs
+        for _ in 0..2 {
+            let t2 = make_ticket("2", "Blocker");
+            let mut t1 = make_ticket("1", "Blocked");
+            t1.blocked_by = vec!["2".to_string()];
+            syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        }
+
+        assert_eq!(
+            dep_count(&conn),
+            1,
+            "second upsert should not duplicate the dependency row"
+        );
     }
 }
