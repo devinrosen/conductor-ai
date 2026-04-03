@@ -127,6 +127,39 @@ const CLOSED_TICKET_ARTIFACTS_SQL: &str = "SELECT r.local_path, w.path, w.branch
        AND w.ticket_id IS NOT NULL
        AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')";
 
+/// Look up the internal ULID for a dependency ticket by its source_id.
+/// Checks `id_map` first (O(1) in-batch lookup) then falls back to a DB query.
+/// Returns `None` if the ticket does not exist; the caller is responsible for
+/// warning and skipping the dependency in that case.
+fn resolve_dep_ticket_id(
+    id_map: &HashMap<&str, &str>,
+    tx: &rusqlite::Transaction<'_>,
+    repo_id: &str,
+    source_type: &str,
+    src: &str,
+    owner_source_id: &str,
+    context: &str,
+) -> Result<Option<String>> {
+    if let Some(&id) = id_map.get(src) {
+        return Ok(Some(id.to_string()));
+    }
+    match tx.query_row(
+        "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+        params![repo_id, source_type, src],
+        |row| row.get(0),
+    ) {
+        Ok(id) => Ok(Some(id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            warn!("ticket dependency source_id {} not found, skipping", src);
+            Ok(None)
+        }
+        Err(e) => Err(ConductorError::TicketSync(format!(
+            "ticket {}: {} lookup for source_id={}: {}",
+            owner_source_id, context, src, e
+        ))),
+    }
+}
+
 impl<'a> TicketSyncer<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
@@ -217,63 +250,39 @@ impl<'a> TicketSyncer<'a> {
 
             // blocked_by: another ticket blocks this one → (blocker_id, ticket_id, 'blocks')
             for src in &ticket.blocked_by {
-                let blocker_id: Option<String> = if let Some(&id) = id_map.get(src.as_str()) {
-                    Some(id.to_string())
-                } else {
-                    match tx.query_row(
-                        "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                        params![repo_id, ticket.source_type, src],
-                        |row| row.get(0),
-                    ) {
-                        Ok(id) => Some(id),
-                        Err(rusqlite::Error::QueryReturnedNoRows) => None,
-                        Err(e) => return Err(ConductorError::TicketSync(format!(
-                            "ticket {}: blocked_by lookup for source_id={} (dep_type=blocks): {}",
-                            ticket.source_id, src, e
-                        ))),
-                    }
-                };
-                match blocker_id {
-                    Some(id) => {
-                        tx.execute(
-                            "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
-                            params![id, ticket_id],
-                        )?;
-                    }
-                    None => {
-                        warn!("ticket dependency source_id {} not found, skipping", src);
-                    }
+                let blocker_id = resolve_dep_ticket_id(
+                    &id_map,
+                    &tx,
+                    repo_id,
+                    &ticket.source_type,
+                    src,
+                    &ticket.source_id,
+                    "blocked_by",
+                )?;
+                if let Some(id) = blocker_id {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
+                        params![id, ticket_id],
+                    )?;
                 }
             }
 
             // children: this ticket is parent of another → (ticket_id, child_id, 'parent_of')
             for src in &ticket.children {
-                let child_id: Option<String> = if let Some(&id) = id_map.get(src.as_str()) {
-                    Some(id.to_string())
-                } else {
-                    match tx.query_row(
-                        "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                        params![repo_id, ticket.source_type, src],
-                        |row| row.get(0),
-                    ) {
-                        Ok(id) => Some(id),
-                        Err(rusqlite::Error::QueryReturnedNoRows) => None,
-                        Err(e) => return Err(ConductorError::TicketSync(format!(
-                            "ticket {}: children lookup for source_id={} (dep_type=parent_of): {}",
-                            ticket.source_id, src, e
-                        ))),
-                    }
-                };
-                match child_id {
-                    Some(id) => {
-                        tx.execute(
-                            "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
-                            params![ticket_id, id],
-                        )?;
-                    }
-                    None => {
-                        warn!("ticket dependency source_id {} not found, skipping", src);
-                    }
+                let child_id = resolve_dep_ticket_id(
+                    &id_map,
+                    &tx,
+                    repo_id,
+                    &ticket.source_type,
+                    src,
+                    &ticket.source_id,
+                    "children",
+                )?;
+                if let Some(id) = child_id {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+                        params![ticket_id, id],
+                    )?;
                 }
             }
         }
@@ -2258,6 +2267,32 @@ mod tests {
             dep_count(&conn),
             0,
             "stale children dependency row should be removed"
+        );
+    }
+
+    #[test]
+    fn test_blocks_delete_does_not_contaminate_parent_of() {
+        // Regression test: stale-clear DELETE for dep_type='blocks' must not remove
+        // parent_of rows written by a different ticket during an incremental sync.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Batch 1: ticket "B" is the parent of ticket "A" → writes parent_of(B→A)
+        let ta = make_ticket("A", "Child");
+        let mut tb = make_ticket("B", "Parent");
+        tb.children = vec!["A".to_string()];
+        syncer.upsert_tickets("r1", &[ta, tb]).unwrap();
+        assert_eq!(dep_count(&conn), 1, "setup: one parent_of row expected");
+
+        // Batch 2: re-upsert ticket "A" alone with empty blocked_by.
+        // The stale-clear for blocks scoped to to_ticket_id=A should NOT remove
+        // the parent_of row where A is the child (from_ticket_id=B, to_ticket_id=A).
+        let ta_clear = make_ticket("A", "Child");
+        syncer.upsert_tickets("r1", &[ta_clear]).unwrap();
+        assert_eq!(
+            dep_count(&conn),
+            1,
+            "parent_of row must survive a separate blocked_by clear for the child ticket"
         );
     }
 }
