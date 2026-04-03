@@ -263,6 +263,7 @@ export function RepoDetailPage() {
   // Fetch active workflow runs for this repo to show running indicators on tickets
   const { data: activeWorkflowRuns, refetch: refetchWorkflowRuns } = useApi(
     () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed", "completed"]),
+    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed"]),
     [],
   );
 
@@ -358,7 +359,7 @@ export function RepoDetailPage() {
         name: wtName,
         ticket_id: ticket.id,
       });
-      await api.runWorkflow(wt.id, {
+      const result = await api.runWorkflow(wt.id, {
         name: "ticket-to-pr",
         inputs: {
           ticket_id: ticket.source_id,
