@@ -299,7 +299,7 @@ pub fn notify_dispatched(
             deliverable_id,
             "conductor.status=dispatched",
             deliverable_id,
-            &format!("conductor.status=dispatched"),
+            "conductor.status=dispatched",
             &format!("conductor.dispatched_at={now}"),
             &format!("conductor.workflow_run_id={workflow_run_id}"),
         ],
