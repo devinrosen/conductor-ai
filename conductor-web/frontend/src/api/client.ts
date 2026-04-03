@@ -8,6 +8,7 @@ import type {
   TicketDetail,
   CreateRepoRequest,
   CreateWorktreeRequest,
+  GithubPr,
   SyncResult,
   AgentRun,
   AgentEvent,
@@ -59,6 +60,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ model }),
     }),
+
+  // PRs
+  listPrs: (repoId: string) => request<GithubPr[]>(`/repos/${repoId}/prs`),
 
   // Worktrees
   listAllWorktrees: (showCompleted = false) =>

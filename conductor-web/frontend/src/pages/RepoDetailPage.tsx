@@ -49,7 +49,9 @@ export function RepoDetailPage() {
     refetch: refetchTickets,
   } = useApi(() => api.listTickets(repoId!, showClosedTickets), [repoId, showClosedTickets]);
 
-  const { data: latestRuns, refetch: refetchRuns } = useApi(
+  const { data: prs } = useApi(() => api.listPrs(repoId!), [repoId]);
+
+  const { refetch: refetchRuns } = useApi(
     () => api.latestRunsByWorktreeForRepo(repoId!),
     [repoId],
   );
@@ -259,8 +261,8 @@ export function RepoDetailPage() {
 
   // Build ticket dependency tree
   const ticketTree = useMemo(
-    () => (tickets ? buildTicketTree(tickets) : null),
-    [tickets],
+    () => (tickets ? buildTicketTree(tickets, worktrees ?? undefined, prs ?? undefined) : null),
+    [tickets, worktrees, prs],
   );
 
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display
@@ -270,13 +272,23 @@ export function RepoDetailPage() {
     return m;
   }, [tickets]);
 
-  // Map worktree_id -> active workflow run status (for ticket running indicators)
-  const workflowStatusByWorktreeId = useMemo(() => {
-    const m = new Map<string, WorkflowRun["status"]>();
+  // Set of ticket IDs that already have a worktree
+  const ticketsWithWorktree = useMemo(() => {
+    const s = new Set<string>();
+    for (const wt of worktrees ?? []) {
+      if (wt.ticket_id) s.add(wt.ticket_id);
+    }
+    return s;
+  }, [worktrees]);
+
+  // Map worktree_id -> workflow run (for both worktree table and ticket indicators)
+  const workflowRunByWorktreeId = useMemo(() => {
+    const m = new Map<string, WorkflowRun>();
     if (!activeWorkflowRuns) return m;
     for (const run of activeWorkflowRuns) {
-      if (run.repo_id === repoId && run.worktree_id) {
-        m.set(run.worktree_id, run.status);
+      // Only top-level runs (no parent workflow), scoped to this repo
+      if (run.repo_id === repoId && run.worktree_id && !run.parent_workflow_run_id) {
+        m.set(run.worktree_id, run);
       }
     }
     return m;
@@ -285,20 +297,19 @@ export function RepoDetailPage() {
   // Map ticket source_id -> workflow status (via worktree linkage)
   const workflowStatusByTicketSourceId = useMemo(() => {
     const m = new Map<string, WorkflowRun["status"]>();
-    if (!worktrees || !workflowStatusByWorktreeId.size) return m;
+    if (!worktrees || !workflowRunByWorktreeId.size) return m;
     for (const wt of worktrees) {
-      const status = workflowStatusByWorktreeId.get(wt.id);
-      if (!status) continue;
-      if (tickets) {
-        for (const t of tickets) {
-          if (t.source_type === "vantage" && wt.slug.toLowerCase().startsWith(t.source_id.toLowerCase())) {
-            m.set(t.source_id, status);
-          }
+      const run = workflowRunByWorktreeId.get(wt.id);
+      if (!run) continue;
+      if (tickets && wt.ticket_id) {
+        const ticket = tickets.find((t) => t.id === wt.ticket_id);
+        if (ticket) {
+          m.set(ticket.source_id, run.status);
         }
       }
     }
     return m;
-  }, [worktrees, workflowStatusByWorktreeId, tickets]);
+  }, [worktrees, workflowRunByWorktreeId, tickets]);
 
   async function handleStartTicketToPr(ticket: Ticket) {
     if (startingWorkflow) return;
@@ -454,6 +465,7 @@ export function RepoDetailPage() {
           onClick={setSelectedTicket}
           depth={depth}
           blocked={ticketTree?.blocked.has(t.id) ?? false}
+          unlocked={ticketTree?.unlocked.has(t.id) ?? false}
           workflowStatus={wfStatus ?? null}
           onStartWorkflow={handleStartTicketToPr}
           showPipeline={hasVantage}
@@ -461,6 +473,7 @@ export function RepoDetailPage() {
           hasChildren={hasChildren}
           collapsed={isCollapsed}
           onToggleCollapse={toggleCollapse}
+          hasWorktree={ticketsWithWorktree.has(t.id)}
         />,
       );
       if (hasChildren && !isCollapsed) {
@@ -756,7 +769,7 @@ export function RepoDetailPage() {
                   <th className="px-4 py-2">Branch</th>
                   <th className="px-4 py-2">Ticket</th>
                   <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2">Agent</th>
+                  <th className="px-4 py-2">Workflow</th>
                   <th className="px-4 py-2">Created</th>
                   <th className="px-4 py-2"></th>
                 </tr>
@@ -766,7 +779,7 @@ export function RepoDetailPage() {
                   <WorktreeRow
                     key={wt.id}
                     worktree={wt}
-                    latestRun={latestRuns?.[wt.id]}
+                    workflowRun={workflowRunByWorktreeId.get(wt.id)}
                     onDelete={setDeleteTarget}
                     selected={index === selectedIndex}
                     index={index}

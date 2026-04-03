@@ -51,6 +51,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/github/repos",
             get(repos::discover_github_repos_handler),
         )
+        // PRs
+        .route("/api/repos/{id}/prs", get(repos::list_prs))
         // Worktrees
         .route("/api/worktrees", get(worktrees::list_all_worktrees))
         .route(

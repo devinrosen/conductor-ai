@@ -13,6 +13,7 @@ interface TicketRowProps {
   labelColorMap?: Record<string, string>;
   depth?: number;
   blocked?: boolean;
+  unlocked?: boolean;
   workflowStatus?: "running" | "pending" | "waiting" | "failed" | "completed" | null;
   onStartWorkflow?: (ticket: Ticket) => void;
   showPipeline?: boolean;
@@ -20,6 +21,7 @@ interface TicketRowProps {
   hasChildren?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: (ticketId: string) => void;
+  hasWorktree?: boolean;
 }
 
 const PIPELINE_DOT_COLORS: Record<string, string> = {
@@ -54,6 +56,7 @@ export function TicketRow({
   labelColorMap,
   depth = 0,
   blocked = false,
+  unlocked = false,
   workflowStatus,
   onStartWorkflow,
   showPipeline = false,
@@ -61,12 +64,14 @@ export function TicketRow({
   hasChildren = false,
   collapsed = false,
   onToggleCollapse,
+  hasWorktree = false,
 }: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
   const isActive = workflowStatus === "running" || workflowStatus === "pending" || workflowStatus === "waiting";
   const canStart =
-    !blocked &&
+    (!blocked || unlocked) &&
     !isActive &&
+    !hasWorktree &&
     ticket.source_type === "vantage" &&
     ticket.state === "open" &&
     onStartWorkflow;
@@ -74,10 +79,10 @@ export function TicketRow({
   return (
     <tr
       className={[
-        blocked ? "opacity-50 cursor-default" : "cursor-pointer hover:bg-gray-50",
+        blocked && !unlocked ? "opacity-50 cursor-default" : "cursor-pointer hover:bg-gray-50",
         selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : "",
       ].join(" ")}
-      onClick={() => !blocked && onClick(ticket)}
+      onClick={() => (!blocked || unlocked) && onClick(ticket)}
       data-list-index={index}
     >
       {repoSlug !== undefined && (
@@ -103,10 +108,19 @@ export function TicketRow({
               {collapsed ? "▶" : "▼"}
             </button>
           )}
-          {blocked && (
-            <svg className="w-3 h-3 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
-            </svg>
+          {blocked && !unlocked && (
+            <span title="Blocked — waiting on parent">
+              <svg className="w-3 h-3 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
+              </svg>
+            </span>
+          )}
+          {blocked && unlocked && (
+            <span title="Unlocked — parent PR approved">
+              <svg className="w-3 h-3 text-emerald-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5a3 3 0 016 0v.5a.75.75 0 001.5 0v-.5A4.5 4.5 0 0010 1z" />
+              </svg>
+            </span>
           )}
           <span className={depth > 0 ? "text-indigo-400" : "text-indigo-600"}>{ticket.source_id}</span>
         </span>

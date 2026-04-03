@@ -1,24 +1,31 @@
 import { Link } from "react-router";
-import type { Worktree, AgentRun } from "../../api/types";
+import type { Worktree, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 
 export function WorktreeRow({
   worktree,
-  latestRun,
+  workflowRun,
   onDelete,
   selected,
   index,
   ticketSourceId,
 }: {
   worktree: Worktree;
-  latestRun?: AgentRun;
+  workflowRun?: WorkflowRun | null;
   onDelete: (id: string) => void;
   selected?: boolean;
   index?: number;
   ticketSourceId?: string | null;
 }) {
-  const isRunning = latestRun?.status === "running" || latestRun?.status === "waiting_for_feedback";
+  const isRunning = workflowRun?.status === "running" || workflowRun?.status === "pending";
+  const isWaiting = workflowRun?.status === "waiting";
+  const isFailed = workflowRun?.status === "failed";
+
+  // Find the current active step name
+  const activeStep = workflowRun?.active_steps?.find(
+    (s) => s.status === "running" || s.status === "waiting",
+  );
 
   return (
     <tr
@@ -45,15 +52,31 @@ export function WorktreeRow({
       </td>
       <td className="px-4 py-2">
         {isRunning ? (
-          <span className="inline-flex items-center gap-1.5 text-xs text-amber-600">
-            <span className="relative flex h-2 w-2">
+          <span className="inline-flex items-center gap-1.5 text-xs">
+            <span className="relative flex h-2 w-2 shrink-0">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
             </span>
-            {latestRun!.status === "waiting_for_feedback" ? "Waiting" : "Running"}
+            <span className="text-amber-600">
+              {workflowRun!.workflow_name}
+              {activeStep && <span className="text-gray-400"> &middot; {activeStep.step_name}</span>}
+            </span>
           </span>
-        ) : latestRun ? (
-          <span className="text-xs text-gray-500">{latestRun.status}</span>
+        ) : isWaiting ? (
+          <span className="inline-flex items-center gap-1.5 text-xs">
+            <span className="inline-flex h-2 w-2 rounded-full bg-blue-400 shrink-0" />
+            <span className="text-blue-600">
+              {workflowRun!.workflow_name}
+              {activeStep && <span className="text-gray-400"> &middot; {activeStep.step_name}</span>}
+            </span>
+          </span>
+        ) : isFailed ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-red-600">
+            <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+            </svg>
+            {workflowRun!.workflow_name} failed
+          </span>
         ) : null}
       </td>
       <td className="px-4 py-2 text-gray-500">
