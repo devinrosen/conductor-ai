@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 61;
+pub const LATEST_SCHEMA_VERSION: u32 = 62;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1031,6 +1031,17 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 61)?;
     }
 
+    // Migration 062: ticket_dependencies join table (RFC 009 prerequisite).
+    if version < 62 {
+        let has_table: bool = conn
+            .prepare("SELECT 1 FROM ticket_dependencies LIMIT 0")
+            .is_ok();
+        if !has_table {
+            conn.execute_batch(include_str!("migrations/062_ticket_dependencies.sql"))?;
+        }
+        bump_version(conn, 62)?;
+    }
+
     Ok(())
 }
 
@@ -1833,6 +1844,122 @@ mod tests {
         assert!(
             col_names_after.contains(&"gate_selections".to_string()),
             "gate_selections must exist after migration 056"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 062 tests
+    // -----------------------------------------------------------------------
+
+    /// Verifies that `ticket_dependencies` exists on a fresh DB after all migrations.
+    #[test]
+    fn test_ticket_dependencies_table_exists() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+        // A simple SELECT proves the table exists.
+        conn.execute_batch("SELECT 1 FROM ticket_dependencies LIMIT 0")
+            .expect("ticket_dependencies table must exist after migration 062");
+    }
+
+    /// Verifies that deleting a ticket cascades to its dependency rows.
+    #[test]
+    fn test_ticket_dependencies_on_delete_cascade() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        // Insert a minimal repo and two tickets.
+        conn.execute_batch(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');
+             INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
+        )
+        .unwrap();
+
+        // Confirm the row exists.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies WHERE from_ticket_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Delete the blocking ticket — the dependency row must cascade away.
+        conn.execute("DELETE FROM tickets WHERE id = 't1'", [])
+            .unwrap();
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies WHERE from_ticket_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count_after, 0,
+            "dependency row must be removed on ticket delete"
+        );
+    }
+
+    /// Verifies that `dep_type` defaults to `'blocks'` when omitted.
+    #[test]
+    fn test_ticket_dependencies_dep_type_default() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        conn.execute_batch(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');
+             INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
+        )
+        .unwrap();
+
+        let dep_type: String = conn
+            .query_row(
+                "SELECT dep_type FROM ticket_dependencies WHERE from_ticket_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(dep_type, "blocks", "dep_type must default to 'blocks'");
+    }
+
+    /// Verifies that inserting an invalid `dep_type` value is rejected.
+    #[test]
+    fn test_ticket_dependencies_check_constraint() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        conn.execute_batch(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');",
+        )
+        .unwrap();
+
+        let result = conn.execute(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type)
+             VALUES ('t1', 't2', 'invalid_type')",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "CHECK constraint must reject invalid dep_type"
         );
     }
 }
