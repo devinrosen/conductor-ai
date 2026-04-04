@@ -13,7 +13,7 @@ import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { ColumnHeader, type SortDirection } from "../components/shared/ColumnHeader";
-import { parseLabels } from "../utils/ticketUtils";
+import { parseLabels, getPipelineStatus, filterTicketsByColumns, sortTickets } from "../utils/ticketUtils";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -75,14 +75,6 @@ export function RepoDetailPage() {
   const [ticketSortDir, setTicketSortDir] = useState<SortDirection>(null);
   const [ticketColumnFilters, setTicketColumnFilters] = useState<Record<string, Set<string>>>({});
 
-  function getTicketPipelineStatus(ticket: Ticket): string {
-    try {
-      return JSON.parse(ticket.raw_json)?.conductor?.status ?? "";
-    } catch {
-      return "";
-    }
-  }
-
   const ticketFilterOptions = useMemo(() => {
     if (!tickets) return {};
     const states = new Set<string>();
@@ -93,7 +85,7 @@ export function RepoDetailPage() {
       states.add(t.state);
       if (t.assignee) assignees.add(t.assignee);
       for (const l of parseLabels(t.labels)) labels.add(l);
-      const ps = getTicketPipelineStatus(t);
+      const ps = getPipelineStatus(t);
       if (ps) pipelines.add(ps);
     }
     return {
@@ -106,39 +98,9 @@ export function RepoDetailPage() {
 
   const sortedFilteredTickets = useMemo(() => {
     if (!tickets) return [];
-    let result = [...tickets];
-
-    // Column filters
-    for (const [col, values] of Object.entries(ticketColumnFilters)) {
-      if (values.size === 0) continue;
-      result = result.filter((t) => {
-        switch (col) {
-          case "state": return values.has(t.state);
-          case "assignee": return values.has(t.assignee ?? "");
-          case "labels": return parseLabels(t.labels).some((l) => values.has(l));
-          case "pipeline": return values.has(getTicketPipelineStatus(t));
-          default: return true;
-        }
-      });
-    }
-
-    // Sort
-    if (ticketSortColumn && ticketSortDir) {
-      const dir = ticketSortDir === "asc" ? 1 : -1;
-      result.sort((a, b) => {
-        let va = "";
-        let vb = "";
-        switch (ticketSortColumn) {
-          case "source_id": va = a.source_id; vb = b.source_id; break;
-          case "title": va = a.title; vb = b.title; break;
-          case "state": va = a.state; vb = b.state; break;
-          case "assignee": va = a.assignee ?? ""; vb = b.assignee ?? ""; break;
-          case "pipeline": va = getTicketPipelineStatus(a); vb = getTicketPipelineStatus(b); break;
-        }
-        return va.localeCompare(vb) * dir;
-      });
-    }
-
+    const noRepo = () => "";
+    let result = filterTicketsByColumns([...tickets], ticketColumnFilters, noRepo);
+    result = sortTickets(result, ticketSortColumn, ticketSortDir, noRepo);
     return result;
   }, [tickets, ticketColumnFilters, ticketSortColumn, ticketSortDir]);
 

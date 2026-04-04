@@ -167,8 +167,16 @@ pub async fn list_prs(
         let mgr = RepoManager::new(&db, &config);
         mgr.get_by_id(&id)?.remote_url
     };
-    let prs = tokio::task::spawn_blocking(move || list_open_prs(&remote_url).unwrap_or_default())
-        .await
-        .unwrap_or_default();
+    let prs = match tokio::task::spawn_blocking(move || list_open_prs(&remote_url)).await {
+        Ok(Ok(prs)) => prs,
+        Ok(Err(e)) => {
+            tracing::warn!("list_open_prs failed: {e}");
+            vec![]
+        }
+        Err(e) => {
+            tracing::warn!("list_open_prs task panicked: {e}");
+            vec![]
+        }
+    };
     Ok(Json(prs))
 }

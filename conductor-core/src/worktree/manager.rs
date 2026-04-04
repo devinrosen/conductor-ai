@@ -62,21 +62,26 @@ fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithSta
     })
 }
 
-/// Look up a ticket's Vantage dependencies and return the branch of the first
-/// parent that has an active worktree.  Returns `None` if the ticket has no
-/// resolvable parent branch (non-Vantage, no deps, or no parent worktree).
+/// Look up a ticket's dependencies and return the branch of the first parent that has
+/// an active worktree.  Returns `None` if the ticket has no resolvable parent branch
+/// (no dependency metadata for its source type, no deps, or no parent worktree).
 ///
-/// Dependency IDs are extracted via [`crate::vantage::get_parent_deliverable_ids`];
+/// Dependency IDs are extracted via [`crate::ticket_source::get_dependency_ids`];
 /// swap to a `ticket_dependencies` table query once RFC 009 lands.
 fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> Option<String> {
     let syncer = TicketSyncer::new(conn);
-    let ticket = syncer.get_by_id(ticket_id).ok()?;
+    let ticket = match syncer.get_by_id(ticket_id) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("resolve_parent_branch: failed to look up ticket {ticket_id}: {e}");
+            return None;
+        }
+    };
 
-    if ticket.source_type != "vantage" {
+    let dep_ids = crate::ticket_source::get_dependency_ids(&ticket.raw_json, &ticket.source_type);
+    if dep_ids.is_empty() {
         return None;
     }
-
-    let dep_ids = crate::vantage::get_parent_deliverable_ids(&ticket.raw_json);
 
     for dep_id in &dep_ids {
         let parent = match syncer.get_by_source_id(repo_id, dep_id) {

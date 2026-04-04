@@ -146,17 +146,14 @@ fn run_sdlc(sdlc_root: &str, args: &[&str]) -> Result<std::process::Output> {
 }
 
 /// Update Vantage conductor status to "dispatched" when a workflow starts.
-pub fn notify_dispatched(
-    deliverable_id: &str,
-    sdlc_root: &str,
-    workflow_run_id: &str,
-) -> Result<()> {
+fn notify_dispatched(deliverable_id: &str, sdlc_root: &str, workflow_run_id: &str) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     run_sdlc(
         sdlc_root,
         &[
             "deliverable",
             "set",
+            "--",
             deliverable_id,
             "conductor.status=dispatched",
             &format!("conductor.dispatched_at={now}"),
@@ -168,7 +165,7 @@ pub fn notify_dispatched(
 }
 
 /// Update Vantage conductor status to "completed" when a workflow succeeds.
-pub fn notify_completed(
+fn notify_completed(
     deliverable_id: &str,
     sdlc_root: &str,
     pr_url: Option<&str>,
@@ -178,6 +175,7 @@ pub fn notify_completed(
     let mut args = vec![
         "deliverable",
         "set",
+        "--",
         deliverable_id,
         "conductor.status=completed",
     ];
@@ -199,14 +197,14 @@ pub fn notify_completed(
 }
 
 /// Update Vantage conductor status to "failed" when a workflow fails.
-pub fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
-    let escaped_reason = reason.replace('"', "'");
-    let reason_arg = format!("conductor.failed_reason={escaped_reason}");
+fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
+    let reason_arg = format!("conductor.failed_reason={reason}");
     run_sdlc(
         sdlc_root,
         &[
             "deliverable",
             "set",
+            "--",
             deliverable_id,
             "conductor.status=failed",
             &reason_arg,
@@ -235,57 +233,84 @@ pub fn get_parent_deliverable_ids(raw_json: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Resolve the Vantage deliverable ID and sdlc_root for a workflow run.
+/// Lifecycle hooks for a workflow run backed by a Vantage deliverable.
 ///
-/// Returns `Some((deliverable_id, sdlc_root))` if the ticket is a Vantage
-/// deliverable and the repo has a configured Vantage issue source.
-/// Returns `None` (with a debug log) for any non-fatal resolution failure.
-pub fn resolve_context_for_workflow(
-    conn: &Connection,
-    ticket_id: &str,
-    repo_id: &str,
-) -> Option<(String, String)> {
-    let ticket = match crate::tickets::TicketSyncer::new(conn).get_by_id(ticket_id) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::debug!("Vantage context: failed to look up ticket {ticket_id}: {e}");
+/// Resolved once at workflow start via [`VantageLifecycle::resolve`]; methods write
+/// back pipeline status to the Vantage SDLC backend at dispatch, completion, and
+/// failure. All notification methods are best-effort: callers should log and continue
+/// on error rather than aborting the workflow.
+pub struct VantageLifecycle {
+    pub deliverable_id: String,
+    pub sdlc_root: String,
+}
+
+impl VantageLifecycle {
+    /// Resolve the lifecycle context for a workflow run.
+    ///
+    /// Returns `Some(VantageLifecycle)` if the ticket is a Vantage deliverable and the
+    /// repo has a configured Vantage issue source. Returns `None` (with a debug log) for
+    /// any non-fatal resolution failure (wrong source type, missing config, DB error).
+    pub fn resolve(conn: &Connection, ticket_id: &str, repo_id: &str) -> Option<Self> {
+        let ticket = match crate::tickets::TicketSyncer::new(conn).get_by_id(ticket_id) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::debug!("Vantage context: failed to look up ticket {ticket_id}: {e}");
+                return None;
+            }
+        };
+        if ticket.source_type != "vantage" {
+            tracing::debug!(
+                "Vantage context: ticket {ticket_id} is source_type={}, not vantage",
+                ticket.source_type
+            );
             return None;
         }
-    };
-    if ticket.source_type != "vantage" {
-        tracing::debug!(
-            "Vantage context: ticket {ticket_id} is source_type={}, not vantage",
-            ticket.source_type
+        let sources = match IssueSourceManager::new(conn).list(repo_id) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::debug!("Vantage context: failed to list issue sources: {e}");
+                return None;
+            }
+        };
+        let vantage_source = match sources.iter().find(|s| s.source_type == "vantage") {
+            Some(s) => s,
+            None => {
+                tracing::debug!("Vantage context: no vantage issue source for repo {repo_id}");
+                return None;
+            }
+        };
+        let cfg: VantageConfig = match serde_json::from_str(&vantage_source.config_json) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!("Vantage context: failed to parse config: {e}");
+                return None;
+            }
+        };
+        tracing::info!(
+            "Vantage context resolved: deliverable={}, sdlc_root={}",
+            ticket.source_id,
+            cfg.sdlc_root
         );
-        return None;
+        Some(VantageLifecycle {
+            deliverable_id: ticket.source_id,
+            sdlc_root: cfg.sdlc_root,
+        })
     }
-    let sources = match IssueSourceManager::new(conn).list(repo_id) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::debug!("Vantage context: failed to list issue sources: {e}");
-            return None;
-        }
-    };
-    let vantage_source = match sources.iter().find(|s| s.source_type == "vantage") {
-        Some(s) => s,
-        None => {
-            tracing::debug!("Vantage context: no vantage issue source for repo {repo_id}");
-            return None;
-        }
-    };
-    let cfg: VantageConfig = match serde_json::from_str(&vantage_source.config_json) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::debug!("Vantage context: failed to parse config: {e}");
-            return None;
-        }
-    };
-    tracing::info!(
-        "Vantage context resolved: deliverable={}, sdlc_root={}",
-        ticket.source_id,
-        cfg.sdlc_root
-    );
-    Some((ticket.source_id, cfg.sdlc_root))
+
+    /// Notify Vantage that the workflow has been dispatched (best-effort).
+    pub fn on_dispatched(&self, workflow_run_id: &str) -> Result<()> {
+        notify_dispatched(&self.deliverable_id, &self.sdlc_root, workflow_run_id)
+    }
+
+    /// Notify Vantage that the workflow completed successfully (best-effort).
+    pub fn on_completed(&self, pr_url: Option<&str>, worktree_slug: Option<&str>) -> Result<()> {
+        notify_completed(&self.deliverable_id, &self.sdlc_root, pr_url, worktree_slug)
+    }
+
+    /// Notify Vantage that the workflow failed (best-effort).
+    pub fn on_failed(&self, reason: &str) -> Result<()> {
+        notify_failed(&self.deliverable_id, &self.sdlc_root, reason)
+    }
 }
 
 /// Parse a Vantage deliverable JSON object into a TicketInput.
@@ -340,6 +365,7 @@ fn map_vantage_status(status: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::create_test_conn;
 
     #[test]
     fn test_parse_vantage_deliverable_basic() {
@@ -433,5 +459,121 @@ mod tests {
         let ticket = parse_vantage_deliverable(&json);
         let raw: serde_json::Value = serde_json::from_str(&ticket.raw_json).unwrap();
         assert_eq!(raw["custom_field"], "preserved");
+    }
+
+    // --- get_parent_deliverable_ids ---
+
+    #[test]
+    fn test_get_parent_deliverable_ids_with_deps() {
+        let json = serde_json::json!({ "id": "D-001", "dependencies": ["D-002", "D-003"] });
+        let ids = get_parent_deliverable_ids(&serde_json::to_string(&json).unwrap());
+        assert_eq!(ids, vec!["D-002", "D-003"]);
+    }
+
+    #[test]
+    fn test_get_parent_deliverable_ids_empty_array() {
+        let json = serde_json::json!({ "id": "D-001", "dependencies": [] });
+        let ids = get_parent_deliverable_ids(&serde_json::to_string(&json).unwrap());
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn test_get_parent_deliverable_ids_missing_field() {
+        let json = serde_json::json!({ "id": "D-001" });
+        let ids = get_parent_deliverable_ids(&serde_json::to_string(&json).unwrap());
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn test_get_parent_deliverable_ids_invalid_json() {
+        let ids = get_parent_deliverable_ids("not valid json {{");
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn test_get_parent_deliverable_ids_filters_non_string_values() {
+        let json = serde_json::json!({
+            "id": "D-001",
+            "dependencies": [42, "D-002", null, "D-003"]
+        });
+        let ids = get_parent_deliverable_ids(&serde_json::to_string(&json).unwrap());
+        assert_eq!(ids, vec!["D-002", "D-003"]);
+    }
+
+    // --- VantageLifecycle::resolve ---
+
+    #[test]
+    fn test_resolve_returns_none_when_ticket_not_found() {
+        let conn = create_test_conn();
+        let result = VantageLifecycle::resolve(&conn, "nonexistent-ticket", "repo-1");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_returns_none_for_non_vantage_ticket() {
+        let conn = create_test_conn();
+        // Insert a github ticket
+        crate::test_helpers::insert_test_repo(&conn, "r1", "my-repo", "/tmp/repo");
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'github', 'GH-42', 'Test', '', 'open', '[]', 'https://github.com', '2024-01-01', '{}')",
+            [],
+        ).unwrap();
+        let result = VantageLifecycle::resolve(&conn, "t1", "r1");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_returns_none_when_no_vantage_issue_source() {
+        let conn = create_test_conn();
+        crate::test_helpers::insert_test_repo(&conn, "r1", "my-repo", "/tmp/repo");
+        // Insert a vantage ticket but no issue source
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'vantage', 'D-001', 'Test', '', 'open', '[]', 'vantage://deliverables/D-001', '2024-01-01', '{}')",
+            [],
+        ).unwrap();
+        let result = VantageLifecycle::resolve(&conn, "t1", "r1");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_returns_none_for_malformed_config() {
+        let conn = create_test_conn();
+        crate::test_helpers::insert_test_repo(&conn, "r1", "my-repo", "/tmp/repo");
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'vantage', 'D-001', 'Test', '', 'open', '[]', 'vantage://deliverables/D-001', '2024-01-01', '{}')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO repo_issue_sources (id, repo_id, source_type, config_json) \
+             VALUES ('s1', 'r1', 'vantage', 'not-valid-json')",
+            [],
+        )
+        .unwrap();
+        let result = VantageLifecycle::resolve(&conn, "t1", "r1");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_returns_lifecycle_on_success() {
+        let conn = create_test_conn();
+        crate::test_helpers::insert_test_repo(&conn, "r1", "my-repo", "/tmp/repo");
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'vantage', 'D-042', 'Test', '', 'open', '[]', 'vantage://deliverables/D-042', '2024-01-01', '{}')",
+            [],
+        ).unwrap();
+        let config = serde_json::json!({"project_id": "PROJ-001", "sdlc_root": "/path/to/sdlc"});
+        conn.execute(
+            "INSERT INTO repo_issue_sources (id, repo_id, source_type, config_json) \
+             VALUES ('s1', 'r1', 'vantage', ?1)",
+            rusqlite::params![config.to_string()],
+        )
+        .unwrap();
+        let result = VantageLifecycle::resolve(&conn, "t1", "r1").unwrap();
+        assert_eq!(result.deliverable_id, "D-042");
+        assert_eq!(result.sdlc_root, "/path/to/sdlc");
     }
 }

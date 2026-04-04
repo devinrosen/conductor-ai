@@ -9,19 +9,11 @@ import { TicketCard } from "../components/tickets/TicketCard";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { ColumnHeader, type SortDirection } from "../components/shared/ColumnHeader";
 import type { Ticket, Repo } from "../api/types";
-import { parseLabels, buildLabelColorMap } from "../utils/ticketUtils";
+import { parseLabels, buildLabelColorMap, getPipelineStatus, filterTicketsByColumns, sortTickets } from "../utils/ticketUtils";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { useListNav } from "../hooks/useListNav";
 
 type SortColumn = "repo" | "source_id" | "title" | "state" | "assignee" | "pipeline" | null;
-
-function getPipelineStatus(ticket: Ticket): string {
-  try {
-    return JSON.parse(ticket.raw_json)?.conductor?.status ?? "";
-  } catch {
-    return "";
-  }
-}
 
 export function TicketsPage() {
   const { repos } = useRepos();
@@ -105,37 +97,11 @@ export function TicketsPage() {
     }
 
     // Column filters
-    for (const [col, values] of Object.entries(columnFilters)) {
-      if (values.size === 0) continue;
-      result = result.filter((t) => {
-        switch (col) {
-          case "repo": return values.has(repoMap[t.repo_id]?.slug ?? "");
-          case "state": return values.has(t.state);
-          case "assignee": return values.has(t.assignee ?? "");
-          case "labels": return parseLabels(t.labels).some((l) => values.has(l));
-          case "pipeline": return values.has(getPipelineStatus(t));
-          default: return true;
-        }
-      });
-    }
+    const getSlug = (id: string) => repoMap[id]?.slug ?? "";
+    result = filterTicketsByColumns(result, columnFilters, getSlug);
 
     // Sort
-    if (sortColumn && sortDir) {
-      const dir = sortDir === "asc" ? 1 : -1;
-      result = [...result].sort((a, b) => {
-        let va = "";
-        let vb = "";
-        switch (sortColumn) {
-          case "repo": va = repoMap[a.repo_id]?.slug ?? ""; vb = repoMap[b.repo_id]?.slug ?? ""; break;
-          case "source_id": va = a.source_id; vb = b.source_id; break;
-          case "title": va = a.title; vb = b.title; break;
-          case "state": va = a.state; vb = b.state; break;
-          case "assignee": va = a.assignee ?? ""; vb = b.assignee ?? ""; break;
-          case "pipeline": va = getPipelineStatus(a); vb = getPipelineStatus(b); break;
-        }
-        return va.localeCompare(vb) * dir;
-      });
-    }
+    result = sortTickets(result, sortColumn, sortDir, getSlug);
 
     return result;
   }, [tickets, filter, columnFilters, sortColumn, sortDir, repoMap]);
