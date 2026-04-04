@@ -6,6 +6,7 @@ pub mod model_config;
 pub mod notifications;
 pub mod push;
 pub mod repos;
+pub mod slack;
 pub mod stats;
 pub mod tickets;
 pub mod workflows;
@@ -273,6 +274,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/push/subscribe",
             post(push::subscribe_push).delete(push::unsubscribe_push),
         )
+        // Slack slash commands
+        .route("/api/slack/commands", post(slack::handle_slash_command))
         // Model Config
         .route(
             "/api/config/model",
