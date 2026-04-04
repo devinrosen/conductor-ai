@@ -157,10 +157,7 @@ impl<'a> ConversationManager<'a> {
             return Err(ConductorError::ConversationHasActiveRun { id: id.to_string() });
         }
 
-        self.conn.execute(
-            "DELETE FROM agent_runs WHERE conversation_id = ?1",
-            params![id],
-        )?;
+        AgentManager::new(self.conn).delete_runs_for_conversation(id)?;
 
         self.conn
             .execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
