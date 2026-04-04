@@ -275,16 +275,13 @@ impl<'a> WorkflowManager<'a> {
 
         for (run_id, parent_run_id) in stuck {
             // Determine the correct final status from step outcomes.
-            let has_failure: bool = self
-                .conn
-                .query_row(
-                    "SELECT COUNT(*) > 0 FROM workflow_run_steps \
+            let has_failure: bool = self.conn.query_row(
+                "SELECT COUNT(*) > 0 FROM workflow_run_steps \
                      WHERE workflow_run_id = ?1 \
                        AND status IN ('failed', 'timed_out')",
-                    params![run_id],
-                    |row| row.get(0),
-                )
-                .unwrap_or(false);
+                params![run_id],
+                |row| row.get(0),
+            )?;
 
             let final_status = if has_failure {
                 WorkflowRunStatus::Failed
