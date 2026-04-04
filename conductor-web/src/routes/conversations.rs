@@ -243,6 +243,16 @@ mod tests {
     use crate::test_helpers::seeded_state;
 
     async fn send_post_json(uri: &str, body: serde_json::Value, state: AppState) -> StatusCode {
+        let (status, _bytes) = send_post_json_full(uri, body, state).await;
+        status
+    }
+
+    async fn send_post_json_full(
+        uri: &str,
+        body: serde_json::Value,
+        state: AppState,
+    ) -> (StatusCode, bytes::Bytes) {
+        use http_body_util::BodyExt;
         let app = api_router().with_state(state);
         let response = app
             .oneshot(
@@ -255,7 +265,9 @@ mod tests {
             )
             .await
             .unwrap();
-        response.status()
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, bytes)
     }
 
     /// Seed a conversation, a run linked to it (with a pending feedback request),
@@ -353,7 +365,10 @@ mod tests {
             "response": "yes"
         });
         let uri = format!("/api/conversations/{conv1_id}/feedback");
-        let status = send_post_json(&uri, body, state).await;
+        let (status, bytes) = send_post_json_full(&uri, body, state).await;
         assert_eq!(status, StatusCode::OK);
+        let run: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(run["id"], run1_id);
+        assert_eq!(run["conversation_id"], conv1_id);
     }
 }
