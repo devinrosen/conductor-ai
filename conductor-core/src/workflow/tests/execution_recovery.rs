@@ -745,6 +745,23 @@ fn test_reap_finalization_updates_parent_agent_run() {
 }
 
 #[test]
+fn test_reap_finalization_updates_parent_agent_run_on_failure() {
+    // Verifies that the parent agent_run is marked `failed` (not `completed`) when
+    // at least one workflow step has a failed status.
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let agent_mgr = AgentManager::new(&conn);
+
+    let (run_id, parent_id) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Failed, 0);
+
+    wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+
+    let parent = agent_mgr.get_run(&parent_id).unwrap().unwrap();
+    assert_eq!(parent.status, crate::agent::AgentRunStatus::Failed);
+}
+
+#[test]
 fn test_reap_finalization_skipped_step_counts_as_success() {
     let conn = setup_db();
     let wf_mgr = WorkflowManager::new(&conn);

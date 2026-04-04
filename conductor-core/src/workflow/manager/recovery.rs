@@ -303,20 +303,9 @@ impl<'a> WorkflowManager<'a> {
             // Best-effort: update the parent agent_runs row if still running.
             let agent_mgr = crate::agent::AgentManager::new(self.conn);
             let update_result = if has_failure {
-                agent_mgr.update_run_failed(&parent_run_id, &summary)
+                agent_mgr.update_run_failed_if_running(&parent_run_id, &summary)
             } else {
-                agent_mgr.update_run_completed(
-                    &parent_run_id,
-                    None,
-                    Some(&summary),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
+                agent_mgr.update_run_completed_if_running(&parent_run_id, &summary)
             };
             if let Err(e) = update_result {
                 tracing::warn!(
