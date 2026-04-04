@@ -21,8 +21,8 @@ impl IntoResponse for ApiError {
                     | ConductorError::TicketNotFound { .. }
                     | ConductorError::WorkflowRunNotFound { .. }
                     | ConductorError::AgentRunNotFound { .. }
-                    | ConductorError::FeedbackNotFound { .. } => StatusCode::NOT_FOUND,
-                    ConductorError::AgentRunNotInConversation { .. }
+                    | ConductorError::FeedbackNotFound { .. }
+                    | ConductorError::AgentRunNotInConversation { .. }
                     | ConductorError::FeedbackRunMismatch { .. } => StatusCode::NOT_FOUND,
                     ConductorError::RepoAlreadyExists { .. }
                     | ConductorError::WorktreeAlreadyExists { .. }

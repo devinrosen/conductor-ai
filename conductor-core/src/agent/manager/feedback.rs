@@ -259,11 +259,15 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
-    /// Verify that `run_id` belongs to `conversation_id`.
+    /// Verify that `run_id` belongs to `conversation_id` and return the run.
     ///
     /// Returns `AgentRunNotFound` if the run does not exist, or
     /// `AgentRunNotInConversation` if it belongs to a different conversation.
-    fn check_run_in_conversation(&self, run_id: &str, conversation_id: &str) -> Result<()> {
+    fn check_run_in_conversation(
+        &self,
+        run_id: &str,
+        conversation_id: &str,
+    ) -> Result<super::super::types::AgentRun> {
         let run = self
             .get_run(run_id)?
             .ok_or_else(|| ConductorError::AgentRunNotFound {
@@ -275,7 +279,7 @@ impl<'a> AgentManager<'a> {
                 conversation_id: conversation_id.to_string(),
             });
         }
-        Ok(())
+        Ok(run)
     }
 
     /// Submit a response to a feedback request, validating ownership.
