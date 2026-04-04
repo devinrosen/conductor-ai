@@ -392,6 +392,60 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Spawn a 2-second background poller that emits AgentStep SSE events for
+    // each new agent_run_events row written by running CLI agents.
+    let step_poller_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut tracker: StepTracker = StepTracker::new();
+        loop {
+            interval.tick().await;
+            let db = step_poller_state.db.clone();
+            let events_bus = step_poller_state.events.clone();
+            // Clone the tracker so the original is preserved if spawn_blocking fails,
+            // preventing duplicate SSE emissions on the next tick.
+            let tracker_snapshot = tracker.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let conn = db.blocking_lock();
+                let mgr = AgentManager::new(&conn);
+                let running_runs = mgr.list_agent_runs(
+                    None,
+                    None,
+                    Some(&conductor_core::agent::AgentRunStatus::Running),
+                    100,
+                    0,
+                )?;
+                let new_events_by_run: std::collections::HashMap<String, Vec<_>> = running_runs
+                    .iter()
+                    .map(|run| {
+                        let (last_id, _) = tracker_snapshot
+                            .get(&run.id)
+                            .cloned()
+                            .unwrap_or_else(|| (String::new(), 0));
+                        let evs = mgr.list_step_events_for_run_since(&run.id, &last_id)?;
+                        Ok::<_, conductor_core::error::ConductorError>((run.id.clone(), evs))
+                    })
+                    .collect::<Result<_, _>>()?;
+                let (new_tracker, to_emit) =
+                    compute_step_events(&running_runs, tracker_snapshot, &new_events_by_run);
+                for (run_id, description, step_index) in to_emit {
+                    events_bus.emit(ConductorEvent::AgentStep {
+                        agent_run_id: run_id,
+                        description,
+                        step_index: Some(step_index),
+                    });
+                }
+                Ok::<_, conductor_core::error::ConductorError>(new_tracker)
+            })
+            .await;
+            match result {
+                Ok(Ok(new_tracker)) => tracker = new_tracker,
+                Ok(Err(e)) => tracing::warn!("step-event poller failed: {e}"),
+                Err(join_err) => tracing::warn!("step-event poller panicked: {join_err}"),
+            }
+        }
+    });
+
     // Spawn a task that subscribes to the EventBus and sends push notifications
     // for high-urgency gate-waiting and feedback-requested events in real time.
     let gate_state = state.clone();
@@ -512,4 +566,166 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Tracks the last-seen event ID and step count per active run.
+type StepTracker = std::collections::HashMap<String, (String, i64)>;
+
+/// Pure step-event computation for the background poller.
+///
+/// Given the list of currently-running agent runs, the previous tracker state
+/// (`run_id → (last_event_id, step_count)`), and a pre-fetched map of new
+/// step events per run, returns:
+/// - the updated tracker (pruned to active runs)
+/// - a list of `(run_id, description, step_index)` tuples to emit as SSE events
+///
+/// Keeping this logic pure (no I/O) makes it straightforward to unit-test.
+fn compute_step_events(
+    running_runs: &[conductor_core::agent::AgentRun],
+    mut tracker: StepTracker,
+    new_events_by_run: &std::collections::HashMap<
+        String,
+        Vec<conductor_core::agent::AgentRunEvent>,
+    >,
+) -> (StepTracker, Vec<(String, String, i64)>) {
+    let mut to_emit: Vec<(String, String, i64)> = Vec::new();
+    for run in running_runs {
+        let (last_id, step_count) = tracker
+            .get(&run.id)
+            .cloned()
+            .unwrap_or_else(|| (String::new(), 0));
+        let mut current_last_id = last_id;
+        let mut current_step_count = step_count;
+        if let Some(events) = new_events_by_run.get(&run.id) {
+            for ev in events {
+                to_emit.push((run.id.clone(), ev.summary.clone(), current_step_count));
+                current_step_count += 1;
+                current_last_id = ev.id.clone();
+            }
+        }
+        tracker.insert(run.id.clone(), (current_last_id, current_step_count));
+    }
+    // Prune stale entries for runs that are no longer active.
+    let active_ids: std::collections::HashSet<&str> =
+        running_runs.iter().map(|r| r.id.as_str()).collect();
+    tracker.retain(|id, _| active_ids.contains(id.as_str()));
+    (tracker, to_emit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_step_events;
+    use conductor_core::agent::{AgentRun, AgentRunEvent, AgentRunStatus};
+
+    fn make_run(id: &str) -> AgentRun {
+        AgentRun {
+            id: id.to_string(),
+            worktree_id: None,
+            repo_id: None,
+            claude_session_id: None,
+            prompt: String::new(),
+            status: AgentRunStatus::Running,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: String::new(),
+            ended_at: None,
+            tmux_window: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+        }
+    }
+
+    fn make_event(id: &str, run_id: &str, summary: &str) -> AgentRunEvent {
+        AgentRunEvent {
+            id: id.to_string(),
+            run_id: run_id.to_string(),
+            kind: "tool".to_string(),
+            summary: summary.to_string(),
+            started_at: String::new(),
+            ended_at: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn test_compute_step_events_advances_tracker() {
+        let run = make_run("run1");
+        let ev1 = make_event("ev1", "run1", "Step 1");
+        let ev2 = make_event("ev2", "run1", "Step 2");
+
+        let tracker = std::collections::HashMap::new();
+        let mut events_map = std::collections::HashMap::new();
+        events_map.insert("run1".to_string(), vec![ev1.clone(), ev2.clone()]);
+
+        let (new_tracker, to_emit) = compute_step_events(&[run], tracker, &events_map);
+
+        assert_eq!(to_emit.len(), 2);
+        assert_eq!(to_emit[0], ("run1".to_string(), "Step 1".to_string(), 0));
+        assert_eq!(to_emit[1], ("run1".to_string(), "Step 2".to_string(), 1));
+        assert_eq!(new_tracker["run1"], ("ev2".to_string(), 2));
+    }
+
+    #[test]
+    fn test_compute_step_events_resumes_from_tracker() {
+        let run = make_run("run1");
+        let ev3 = make_event("ev3", "run1", "Step 3");
+
+        let mut tracker = std::collections::HashMap::new();
+        tracker.insert("run1".to_string(), ("ev2".to_string(), 2_i64));
+
+        let mut events_map = std::collections::HashMap::new();
+        events_map.insert("run1".to_string(), vec![ev3.clone()]);
+
+        let (new_tracker, to_emit) = compute_step_events(&[run], tracker, &events_map);
+
+        assert_eq!(to_emit.len(), 1);
+        assert_eq!(to_emit[0], ("run1".to_string(), "Step 3".to_string(), 2));
+        assert_eq!(new_tracker["run1"], ("ev3".to_string(), 3));
+    }
+
+    #[test]
+    fn test_compute_step_events_prunes_stale_runs() {
+        let run_a = make_run("runA");
+        let ev = make_event("ev1", "runA", "Step A");
+
+        // Tracker has a stale entry for runB which is no longer running
+        let mut tracker = std::collections::HashMap::new();
+        tracker.insert("runB".to_string(), ("ev_old".to_string(), 5_i64));
+
+        let mut events_map = std::collections::HashMap::new();
+        events_map.insert("runA".to_string(), vec![ev]);
+
+        let (new_tracker, _) = compute_step_events(&[run_a], tracker, &events_map);
+
+        assert!(new_tracker.contains_key("runA"));
+        assert!(
+            !new_tracker.contains_key("runB"),
+            "stale run must be pruned"
+        );
+    }
+
+    #[test]
+    fn test_compute_step_events_no_new_events() {
+        let run = make_run("run1");
+        let mut tracker = std::collections::HashMap::new();
+        tracker.insert("run1".to_string(), ("ev1".to_string(), 1_i64));
+
+        let events_map: std::collections::HashMap<String, Vec<AgentRunEvent>> =
+            std::collections::HashMap::new();
+
+        let (new_tracker, to_emit) = compute_step_events(&[run], tracker, &events_map);
+
+        assert!(to_emit.is_empty());
+        assert_eq!(new_tracker["run1"], ("ev1".to_string(), 1));
+    }
 }
