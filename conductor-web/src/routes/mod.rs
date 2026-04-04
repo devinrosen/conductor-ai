@@ -114,12 +114,16 @@ pub fn api_router() -> Router<AppState> {
             get(conversations::get_conversation),
         )
         .route(
-            "/api/conversations/{id}/message",
+            "/api/conversations/{id}/messages",
             post(conversations::send_message),
         )
         .route(
-            "/api/conversations/{id}/message/{run_id}/respond",
+            "/api/conversations/{id}/messages/{run_id}/respond",
             post(conversations::respond_to_run_feedback),
+        )
+        .route(
+            "/api/conversations/{id}/feedback",
+            post(conversations::respond_to_feedback),
         )
         .route(
             "/api/agent/latest-runs",
