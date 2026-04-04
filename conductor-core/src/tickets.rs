@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
+
+/// Ticket columns for SELECT queries that join `tickets` with alias `t`.
+const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -635,8 +638,6 @@ impl<'a> TicketSyncer<'a> {
 
     /// Returns dependency relationships for a single ticket.
     pub fn get_dependencies(&self, ticket_id: &str) -> Result<TicketDependencies> {
-        const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
-
         // Tickets that block this one (from_ticket_id = blocker, to_ticket_id = this)
         let blocked_by = query_collect(
             self.conn,
@@ -695,174 +696,83 @@ impl<'a> TicketSyncer<'a> {
         })
     }
 
-    /// Batch-loads dependencies for all tickets in a single pair of queries.
+    /// Batch-loads dependencies for all tickets in two queries (one per dep_type).
     /// Returns `ticket_id → TicketDependencies`. Used by the TUI background
     /// poller to avoid N+1 queries.
     pub fn get_all_dependencies(&self) -> Result<HashMap<String, TicketDependencies>> {
-        const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
+        // Column offset constants: from-ticket fields start at 2, to-ticket fields at 17.
+        const FROM_OFFSET: usize = 2;
+        const TO_OFFSET: usize = 17;
 
-        // For 'blocks': from_ticket_id blocks to_ticket_id.
-        // - "from" ticket belongs to to_ticket_id's blocked_by list.
-        // - "to" ticket belongs to from_ticket_id's blocks list.
-        let blocks_raw: Vec<(String, String, Ticket)> = query_collect(
+        // Query 1: all 'blocks' relationships. Each row yields both tickets via a
+        // double join, so we build both blocked_by and blocks in one pass.
+        //
+        // from_ticket (blocker) → goes into to_ticket_id's blocked_by list
+        // to_ticket  (blocked)  → goes into from_ticket_id's blocks list
+        let blocks_rows: Vec<(String, String, Ticket, Ticket)> = query_collect(
             self.conn,
-            &format!(
-                "SELECT d.from_ticket_id, d.to_ticket_id, {TICKET_COLS}
-                 FROM ticket_dependencies d
-                 JOIN tickets t ON t.id = d.from_ticket_id
-                 WHERE d.dep_type = 'blocks'"
-            ),
+            "SELECT d.from_ticket_id, d.to_ticket_id,
+             tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+             tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+             tf.workflow, tf.agent_map,
+             tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+             tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+             tt.workflow, tt.agent_map
+             FROM ticket_dependencies d
+             JOIN tickets tf ON tf.id = d.from_ticket_id
+             JOIN tickets tt ON tt.id = d.to_ticket_id
+             WHERE d.dep_type = 'blocks'",
             [],
             |row| {
                 let from_id: String = row.get(0)?;
                 let to_id: String = row.get(1)?;
-                // ticket columns start at index 2
-                let ticket = Ticket {
-                    id: row.get(2)?,
-                    repo_id: row.get(3)?,
-                    source_type: row.get(4)?,
-                    source_id: row.get(5)?,
-                    title: row.get(6)?,
-                    body: row.get(7)?,
-                    state: row.get(8)?,
-                    labels: row.get(9)?,
-                    assignee: row.get(10)?,
-                    priority: row.get(11)?,
-                    url: row.get(12)?,
-                    synced_at: row.get(13)?,
-                    raw_json: row.get(14)?,
-                    workflow: row.get(15)?,
-                    agent_map: row.get(16)?,
-                };
-                Ok((from_id, to_id, ticket))
+                let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
+                let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+                Ok((from_id, to_id, from_ticket, to_ticket))
             },
         )?;
 
-        // Also fetch the to_ticket side for blocks list on from_ticket_id.
-        let blocks_to_raw: Vec<(String, String, Ticket)> = query_collect(
+        // Query 2: all 'parent_of' relationships. Each row yields both tickets.
+        //
+        // from_ticket (parent) → goes into to_ticket_id's parent field
+        // to_ticket  (child)   → goes into from_ticket_id's children list
+        let parent_rows: Vec<(String, String, Ticket, Ticket)> = query_collect(
             self.conn,
-            &format!(
-                "SELECT d.from_ticket_id, d.to_ticket_id, {TICKET_COLS}
-                 FROM ticket_dependencies d
-                 JOIN tickets t ON t.id = d.to_ticket_id
-                 WHERE d.dep_type = 'blocks'"
-            ),
+            "SELECT d.from_ticket_id, d.to_ticket_id,
+             tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+             tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+             tf.workflow, tf.agent_map,
+             tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+             tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+             tt.workflow, tt.agent_map
+             FROM ticket_dependencies d
+             JOIN tickets tf ON tf.id = d.from_ticket_id
+             JOIN tickets tt ON tt.id = d.to_ticket_id
+             WHERE d.dep_type = 'parent_of'",
             [],
             |row| {
                 let from_id: String = row.get(0)?;
                 let to_id: String = row.get(1)?;
-                let ticket = Ticket {
-                    id: row.get(2)?,
-                    repo_id: row.get(3)?,
-                    source_type: row.get(4)?,
-                    source_id: row.get(5)?,
-                    title: row.get(6)?,
-                    body: row.get(7)?,
-                    state: row.get(8)?,
-                    labels: row.get(9)?,
-                    assignee: row.get(10)?,
-                    priority: row.get(11)?,
-                    url: row.get(12)?,
-                    synced_at: row.get(13)?,
-                    raw_json: row.get(14)?,
-                    workflow: row.get(15)?,
-                    agent_map: row.get(16)?,
-                };
-                Ok((from_id, to_id, ticket))
-            },
-        )?;
-
-        // For 'parent_of': from_ticket_id is parent of to_ticket_id.
-        let parent_raw: Vec<(String, String, Ticket)> = query_collect(
-            self.conn,
-            &format!(
-                "SELECT d.from_ticket_id, d.to_ticket_id, {TICKET_COLS}
-                 FROM ticket_dependencies d
-                 JOIN tickets t ON t.id = d.from_ticket_id
-                 WHERE d.dep_type = 'parent_of'"
-            ),
-            [],
-            |row| {
-                let from_id: String = row.get(0)?;
-                let to_id: String = row.get(1)?;
-                let ticket = Ticket {
-                    id: row.get(2)?,
-                    repo_id: row.get(3)?,
-                    source_type: row.get(4)?,
-                    source_id: row.get(5)?,
-                    title: row.get(6)?,
-                    body: row.get(7)?,
-                    state: row.get(8)?,
-                    labels: row.get(9)?,
-                    assignee: row.get(10)?,
-                    priority: row.get(11)?,
-                    url: row.get(12)?,
-                    synced_at: row.get(13)?,
-                    raw_json: row.get(14)?,
-                    workflow: row.get(15)?,
-                    agent_map: row.get(16)?,
-                };
-                Ok((from_id, to_id, ticket))
-            },
-        )?;
-
-        let parent_child_raw: Vec<(String, String, Ticket)> = query_collect(
-            self.conn,
-            &format!(
-                "SELECT d.from_ticket_id, d.to_ticket_id, {TICKET_COLS}
-                 FROM ticket_dependencies d
-                 JOIN tickets t ON t.id = d.to_ticket_id
-                 WHERE d.dep_type = 'parent_of'"
-            ),
-            [],
-            |row| {
-                let from_id: String = row.get(0)?;
-                let to_id: String = row.get(1)?;
-                let ticket = Ticket {
-                    id: row.get(2)?,
-                    repo_id: row.get(3)?,
-                    source_type: row.get(4)?,
-                    source_id: row.get(5)?,
-                    title: row.get(6)?,
-                    body: row.get(7)?,
-                    state: row.get(8)?,
-                    labels: row.get(9)?,
-                    assignee: row.get(10)?,
-                    priority: row.get(11)?,
-                    url: row.get(12)?,
-                    synced_at: row.get(13)?,
-                    raw_json: row.get(14)?,
-                    workflow: row.get(15)?,
-                    agent_map: row.get(16)?,
-                };
-                Ok((from_id, to_id, ticket))
+                let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
+                let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+                Ok((from_id, to_id, from_ticket, to_ticket))
             },
         )?;
 
         let mut map: HashMap<String, TicketDependencies> = HashMap::new();
 
-        // blocks_raw: (from_id=blocker, to_id=blocked, ticket=blocker)
-        // → to_id's blocked_by list gets the blocker ticket
-        for (_, to_id, ticket) in blocks_raw {
-            map.entry(to_id).or_default().blocked_by.push(ticket);
+        // blocks_rows: (from_id=blocker, to_id=blocked, from_ticket=blocker, to_ticket=blocked)
+        // → to_id's blocked_by list gets the blocker; from_id's blocks list gets the blocked
+        for (from_id, to_id, from_ticket, to_ticket) in blocks_rows {
+            map.entry(to_id).or_default().blocked_by.push(from_ticket);
+            map.entry(from_id).or_default().blocks.push(to_ticket);
         }
 
-        // blocks_to_raw: (from_id=blocker, to_id=blocked, ticket=blocked)
-        // → from_id's blocks list gets the blocked ticket
-        for (from_id, _, ticket) in blocks_to_raw {
-            map.entry(from_id).or_default().blocks.push(ticket);
-        }
-
-        // parent_raw: (from_id=parent, to_id=child, ticket=parent)
-        // → to_id's parent gets the parent ticket (last one wins if multiple, which shouldn't happen)
-        for (_, to_id, ticket) in parent_raw {
-            map.entry(to_id).or_default().parent = Some(ticket);
-        }
-
-        // parent_child_raw: (from_id=parent, to_id=child, ticket=child)
-        // → from_id's children list gets the child ticket
-        for (from_id, _, ticket) in parent_child_raw {
-            map.entry(from_id).or_default().children.push(ticket);
+        // parent_rows: (from_id=parent, to_id=child, from_ticket=parent, to_ticket=child)
+        // → to_id's parent gets the parent ticket; from_id's children list gets the child
+        for (from_id, to_id, from_ticket, to_ticket) in parent_rows {
+            map.entry(to_id).or_default().parent = Some(from_ticket);
+            map.entry(from_id).or_default().children.push(to_ticket);
         }
 
         Ok(map)
@@ -996,22 +906,28 @@ pub fn build_agent_prompt(ticket: &Ticket) -> String {
 }
 
 fn map_ticket_row(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
+    map_ticket_row_at(row, 0)
+}
+
+/// Like `map_ticket_row` but reads ticket fields starting at the given column `offset`.
+/// Used when ticket columns are preceded by other fields (e.g. join key columns).
+fn map_ticket_row_at(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<Ticket> {
     Ok(Ticket {
-        id: row.get(0)?,
-        repo_id: row.get(1)?,
-        source_type: row.get(2)?,
-        source_id: row.get(3)?,
-        title: row.get(4)?,
-        body: row.get(5)?,
-        state: row.get(6)?,
-        labels: row.get(7)?,
-        assignee: row.get(8)?,
-        priority: row.get(9)?,
-        url: row.get(10)?,
-        synced_at: row.get(11)?,
-        raw_json: row.get(12)?,
-        workflow: row.get(13)?,
-        agent_map: row.get(14)?,
+        id: row.get(offset)?,
+        repo_id: row.get(offset + 1)?,
+        source_type: row.get(offset + 2)?,
+        source_id: row.get(offset + 3)?,
+        title: row.get(offset + 4)?,
+        body: row.get(offset + 5)?,
+        state: row.get(offset + 6)?,
+        labels: row.get(offset + 7)?,
+        assignee: row.get(offset + 8)?,
+        priority: row.get(offset + 9)?,
+        url: row.get(offset + 10)?,
+        synced_at: row.get(offset + 11)?,
+        raw_json: row.get(offset + 12)?,
+        workflow: row.get(offset + 13)?,
+        agent_map: row.get(offset + 14)?,
     })
 }
 
@@ -2542,5 +2458,192 @@ mod tests {
             1,
             "parent_of row must survive a separate blocked_by clear for the child ticket"
         );
+    }
+
+    // ── get_dependencies / get_all_dependencies tests ───────────────────────
+
+    /// Returns the source_ids of a ticket slice for readable assertions.
+    fn source_ids(tickets: &[Ticket]) -> Vec<&str> {
+        tickets.iter().map(|t| t.source_id.as_str()).collect()
+    }
+
+    #[test]
+    fn test_get_dependencies_blocked_by_and_blocks() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "1" blocks ticket "2"
+        let t1 = make_ticket("1", "Blocker");
+        // no special fields needed — relationship is written via t2.blocked_by
+        let mut t2 = make_ticket("2", "Blocked");
+        t2.blocked_by = vec!["1".to_string()];
+
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        let deps = syncer
+            .get_dependencies_by_source_id("r1", "1")
+            .expect("get_dependencies for ticket 1");
+
+        // Ticket 1 blocks ticket 2
+        assert_eq!(
+            source_ids(&deps.blocks),
+            vec!["2"],
+            "ticket 1 should block ticket 2"
+        );
+        assert!(
+            deps.blocked_by.is_empty(),
+            "ticket 1 should not be blocked by anything"
+        );
+
+        let deps2 = syncer
+            .get_dependencies_by_source_id("r1", "2")
+            .expect("get_dependencies for ticket 2");
+
+        // Ticket 2 is blocked by ticket 1
+        assert_eq!(
+            source_ids(&deps2.blocked_by),
+            vec!["1"],
+            "ticket 2 should be blocked by ticket 1"
+        );
+        assert!(
+            deps2.blocks.is_empty(),
+            "ticket 2 should not block anything"
+        );
+    }
+
+    #[test]
+    fn test_get_dependencies_parent_and_children() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "10" is parent of "11" and "12"
+        let child1 = make_ticket("11", "Child 1");
+        let child2 = make_ticket("12", "Child 2");
+        let mut parent = make_ticket("10", "Parent");
+        parent.children = vec!["11".to_string(), "12".to_string()];
+
+        syncer
+            .upsert_tickets("r1", &[child1, child2, parent])
+            .unwrap();
+
+        let parent_deps = syncer
+            .get_dependencies_by_source_id("r1", "10")
+            .expect("get_dependencies for parent ticket");
+
+        let mut child_ids = source_ids(&parent_deps.children);
+        child_ids.sort();
+        assert_eq!(
+            child_ids,
+            vec!["11", "12"],
+            "parent should list both children"
+        );
+        assert!(
+            parent_deps.parent.is_none(),
+            "parent ticket has no parent itself"
+        );
+
+        let child1_deps = syncer
+            .get_dependencies_by_source_id("r1", "11")
+            .expect("get_dependencies for child 1");
+
+        assert_eq!(
+            child1_deps.parent.as_ref().map(|t| t.source_id.as_str()),
+            Some("10"),
+            "child 1 should know its parent"
+        );
+        assert!(child1_deps.children.is_empty(), "child has no children");
+    }
+
+    #[test]
+    fn test_get_dependencies_empty_when_no_deps() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[make_ticket("99", "Standalone")])
+            .unwrap();
+
+        let deps = syncer
+            .get_dependencies_by_source_id("r1", "99")
+            .expect("get_dependencies for standalone ticket");
+
+        assert!(deps.blocked_by.is_empty());
+        assert!(deps.blocks.is_empty());
+        assert!(deps.parent.is_none());
+        assert!(deps.children.is_empty());
+    }
+
+    #[test]
+    fn test_get_all_dependencies_maps_both_directions() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "A" blocks ticket "B"
+        let ta = make_ticket("A", "Blocker");
+        let mut tb = make_ticket("B", "Blocked");
+        tb.blocked_by = vec!["A".to_string()];
+
+        // ticket "P" is parent of "C"
+        let tc = make_ticket("C", "Child");
+        let mut tp = make_ticket("P", "Parent");
+        tp.children = vec!["C".to_string()];
+
+        syncer.upsert_tickets("r1", &[ta, tb, tc, tp]).unwrap();
+
+        let all = syncer.get_all_dependencies().expect("get_all_dependencies");
+
+        // Look up internal IDs via source_id
+        let id_a = ticket_id_for_source(&conn, "A");
+        let id_b = ticket_id_for_source(&conn, "B");
+        let id_p = ticket_id_for_source(&conn, "P");
+        let id_c = ticket_id_for_source(&conn, "C");
+
+        let deps_b = all.get(&id_b).expect("entry for ticket B");
+        assert_eq!(source_ids(&deps_b.blocked_by), vec!["A"], "B blocked_by A");
+        assert!(deps_b.blocks.is_empty(), "B blocks nothing");
+
+        let deps_a = all.get(&id_a).expect("entry for ticket A");
+        assert_eq!(source_ids(&deps_a.blocks), vec!["B"], "A blocks B");
+        assert!(deps_a.blocked_by.is_empty(), "A is not blocked");
+
+        let deps_c = all.get(&id_c).expect("entry for ticket C");
+        assert_eq!(
+            deps_c.parent.as_ref().map(|t| t.source_id.as_str()),
+            Some("P"),
+            "C parent is P"
+        );
+        assert!(deps_c.children.is_empty());
+
+        let deps_p = all.get(&id_p).expect("entry for ticket P");
+        assert_eq!(source_ids(&deps_p.children), vec!["C"], "P children: C");
+        assert!(deps_p.parent.is_none());
+    }
+
+    /// Helper for dependency tests: look up the internal ULID for a ticket by source_id.
+    fn ticket_id_for_source(conn: &Connection, source_id: &str) -> String {
+        conn.query_row(
+            "SELECT id FROM tickets WHERE source_id = ?1",
+            params![source_id],
+            |row| row.get(0),
+        )
+        .expect("ticket not found")
+    }
+
+    /// Helper: call get_dependencies by source_id (resolves ULID internally).
+    impl TicketSyncer<'_> {
+        fn get_dependencies_by_source_id(
+            &self,
+            _repo_id: &str,
+            source_id: &str,
+        ) -> Result<TicketDependencies> {
+            let ticket_id: String = self
+                .conn
+                .query_row(
+                    "SELECT id FROM tickets WHERE source_id = ?1",
+                    params![source_id],
+                    |row| row.get(0),
+                )
+                .map_err(ConductorError::Database)?;
+            self.get_dependencies(&ticket_id)
+        }
     }
 }

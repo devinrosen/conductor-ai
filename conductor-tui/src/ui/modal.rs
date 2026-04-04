@@ -13,6 +13,16 @@ use conductor_core::worktree::Worktree;
 
 use crate::theme::Theme;
 
+/// Data bundle passed to [`render_ticket_info`], grouping the ticket and its
+/// associated metadata so the function signature stays within clippy's argument limit.
+pub struct TicketInfoData<'a> {
+    pub ticket: &'a Ticket,
+    pub agent_totals: Option<&'a TicketAgentTotals>,
+    pub worktrees: Option<&'a Vec<Worktree>>,
+    pub labels: Option<&'a [TicketLabel]>,
+    pub dependencies: Option<&'a TicketDependencies>,
+}
+
 pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str, theme: &Theme) {
     let popup = centered_rect(50, 30, area);
     frame.render_widget(Clear, popup);
@@ -224,17 +234,13 @@ pub fn render_progress(frame: &mut Frame, area: Rect, message: &str, theme: &The
     frame.render_widget(content, popup);
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn render_ticket_info(
-    frame: &mut Frame,
-    area: Rect,
-    ticket: &Ticket,
-    agent_totals: Option<&TicketAgentTotals>,
-    worktrees: Option<&Vec<Worktree>>,
-    labels: Option<&[TicketLabel]>,
-    dependencies: Option<&TicketDependencies>,
-    theme: &Theme,
-) {
+pub fn render_ticket_info(frame: &mut Frame, area: Rect, data: &TicketInfoData<'_>, theme: &Theme) {
+    let ticket = data.ticket;
+    let agent_totals = data.agent_totals;
+    let worktrees = data.worktrees;
+    let labels = data.labels;
+    let dependencies = data.dependencies;
+
     let popup = centered_rect(60, 70, area);
     frame.render_widget(Clear, popup);
 

@@ -154,7 +154,7 @@ pub async fn ticket_detail(
     let worktrees = wt_mgr.list_by_ticket(&ticket_id)?;
 
     let syncer = TicketSyncer::new(&db);
-    let dependencies = syncer.get_dependencies(&ticket_id).unwrap_or_default();
+    let dependencies = syncer.get_dependencies(&ticket_id)?;
 
     Ok(Json(TicketDetail {
         agent_totals,
