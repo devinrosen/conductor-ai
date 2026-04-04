@@ -23,14 +23,19 @@ impl IntoResponse for ApiError {
                     ConductorError::RepoNotFound { .. }
                     | ConductorError::WorktreeNotFound { .. }
                     | ConductorError::TicketNotFound { .. }
-                    | ConductorError::WorkflowRunNotFound { .. } => StatusCode::NOT_FOUND,
+                    | ConductorError::WorkflowRunNotFound { .. }
+                    | ConductorError::AgentRunNotFound { .. }
+                    | ConductorError::FeedbackNotFound { .. } => StatusCode::NOT_FOUND,
+                    ConductorError::AgentRunNotInConversation { .. }
+                    | ConductorError::FeedbackRunMismatch { .. } => StatusCode::FORBIDDEN,
                     ConductorError::RepoAlreadyExists { .. }
                     | ConductorError::WorktreeAlreadyExists { .. }
                     | ConductorError::IssueSourceAlreadyExists { .. }
                     | ConductorError::TicketAlreadyLinked
                     | ConductorError::WorkflowRunAlreadyActive { .. } => StatusCode::CONFLICT,
                     ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
-                    ConductorError::Agent(_)
+                    ConductorError::NoPendingFeedbackForRun { .. }
+                    | ConductorError::Agent(_)
                     | ConductorError::InvalidInput(_)
                     | ConductorError::UnknownSourceType(_) => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,

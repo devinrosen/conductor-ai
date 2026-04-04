@@ -259,6 +259,83 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    /// Submit a response to a feedback request, validating ownership.
+    ///
+    /// Verifies that `run_id` belongs to `conversation_id` and that `feedback_id`
+    /// belongs to `run_id` before delegating to [`submit_feedback`].  Returns
+    /// structured errors (`AgentRunNotFound`, `AgentRunNotInConversation`,
+    /// `FeedbackNotFound`, `FeedbackRunMismatch`) so callers can map them to
+    /// appropriate HTTP status codes without duplicating validation logic.
+    pub fn submit_feedback_for_conversation(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        feedback_id: &str,
+        response: &str,
+    ) -> Result<()> {
+        let run = self
+            .get_run(run_id)?
+            .ok_or_else(|| ConductorError::AgentRunNotFound {
+                id: run_id.to_string(),
+            })?;
+        if run.conversation_id.as_deref() != Some(conversation_id) {
+            return Err(ConductorError::AgentRunNotInConversation {
+                run_id: run_id.to_string(),
+                conversation_id: conversation_id.to_string(),
+            });
+        }
+        let feedback =
+            self.get_feedback(feedback_id)?
+                .ok_or_else(|| ConductorError::FeedbackNotFound {
+                    id: feedback_id.to_string(),
+                })?;
+        if feedback.run_id != run_id {
+            return Err(ConductorError::FeedbackRunMismatch {
+                feedback_id: feedback_id.to_string(),
+                run_id: run_id.to_string(),
+            });
+        }
+        self.submit_feedback(feedback_id, response)?;
+        Ok(())
+    }
+
+    /// Submit the pending feedback response for a run, validating conversation ownership.
+    ///
+    /// Verifies that `run_id` belongs to `conversation_id`, finds the single
+    /// pending feedback request, submits `response`, and returns the refreshed
+    /// `AgentRun`.  Returns structured errors so the web layer can map them to
+    /// 404/403/422 without duplicating validation.
+    pub fn submit_pending_run_feedback_for_conversation(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        response: &str,
+    ) -> Result<super::super::types::AgentRun> {
+        let run = self
+            .get_run(run_id)?
+            .ok_or_else(|| ConductorError::AgentRunNotFound {
+                id: run_id.to_string(),
+            })?;
+        if run.conversation_id.as_deref() != Some(conversation_id) {
+            return Err(ConductorError::AgentRunNotInConversation {
+                run_id: run_id.to_string(),
+                conversation_id: conversation_id.to_string(),
+            });
+        }
+        let feedback = self.pending_feedback_for_run(run_id)?.ok_or_else(|| {
+            ConductorError::NoPendingFeedbackForRun {
+                run_id: run_id.to_string(),
+            }
+        })?;
+        self.submit_feedback(&feedback.id, response)?;
+        let updated = self
+            .get_run(run_id)?
+            .ok_or_else(|| ConductorError::AgentRunNotFound {
+                id: run_id.to_string(),
+            })?;
+        Ok(updated)
+    }
+
     /// Get a feedback request by ID.
     pub fn get_feedback(&self, feedback_id: &str) -> Result<Option<FeedbackRequest>> {
         let result = self.conn.query_row(

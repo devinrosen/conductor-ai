@@ -202,27 +202,12 @@ pub async fn respond_to_feedback(
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
 
-    // Validate the run belongs to this conversation.
-    let run = agent_mgr
-        .get_run(&body.run_id)?
-        .ok_or_else(|| ApiError::NotFound(format!("agent run {} not found", body.run_id)))?;
-    if run.conversation_id.as_deref() != Some(&conversation_id) {
-        return Err(ApiError::Forbidden(
-            "agent run does not belong to this conversation".to_string(),
-        ));
-    }
-
-    // Validate the feedback belongs to the authorized run (prevents IDOR).
-    let feedback = agent_mgr
-        .get_feedback(&body.feedback_id)?
-        .ok_or_else(|| ApiError::NotFound(format!("feedback {} not found", body.feedback_id)))?;
-    if feedback.run_id != body.run_id {
-        return Err(ApiError::Forbidden(
-            "feedback request does not belong to the specified run".to_string(),
-        ));
-    }
-
-    agent_mgr.submit_feedback(&body.feedback_id, &body.response)?;
+    agent_mgr.submit_feedback_for_conversation(
+        &conversation_id,
+        &body.run_id,
+        &body.feedback_id,
+        &body.response,
+    )?;
 
     Ok((StatusCode::OK, Json(serde_json::json!({}))))
 }
@@ -237,29 +222,11 @@ pub async fn respond_to_run_feedback(
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
 
-    // Validate the run belongs to this conversation.
-    let run = agent_mgr
-        .get_run(&run_id)?
-        .ok_or_else(|| ApiError::NotFound(format!("agent run {run_id} not found")))?;
-    if run.conversation_id.as_deref() != Some(&conversation_id) {
-        return Err(ApiError::Forbidden(
-            "agent run does not belong to this conversation".to_string(),
-        ));
-    }
-
-    // Find the pending feedback request for this run.
-    let feedback = agent_mgr
-        .pending_feedback_for_run(&run_id)?
-        .ok_or_else(|| {
-            ConductorError::Agent(format!("no pending feedback request for run {run_id}"))
-        })?;
-
-    agent_mgr.submit_feedback(&feedback.id, &body.response)?;
-
-    // Return the refreshed run record.
-    let updated_run = agent_mgr
-        .get_run(&run_id)?
-        .ok_or_else(|| ConductorError::Agent(format!("agent run {run_id} not found")))?;
+    let updated_run = agent_mgr.submit_pending_run_feedback_for_conversation(
+        &conversation_id,
+        &run_id,
+        &body.response,
+    )?;
 
     Ok(Json(updated_run))
 }
