@@ -3,7 +3,7 @@ use std::path::Path;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_arg_usize, open_db_and_config, tool_err, tool_ok};
 
 fn parse_comma_arg(args: &serde_json::Map<String, Value>, key: &str) -> Vec<String> {
     get_arg(args, key)
@@ -235,9 +235,7 @@ pub(super) fn tool_get_ready_tickets(
     let repo_slug = require_arg!(args, "repo");
     let root_ticket_id = get_arg(args, "root_ticket_id").map(|s| s.to_string());
     let label = get_arg(args, "label").map(|s| s.to_string());
-    let limit = get_arg(args, "limit")
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(50);
+    let limit = get_arg_usize(args, "limit").unwrap_or(50);
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,

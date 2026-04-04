@@ -36,14 +36,27 @@ pub(crate) fn make_resource(
 }
 
 /// Helper: build a JSON Schema input_schema for a Tool.
-/// fields: (name, description, required)
+/// fields: (name, description, required) — all fields are typed as "string".
 pub(crate) fn schema(fields: &[(&str, &str, bool)]) -> Arc<serde_json::Map<String, Value>> {
+    schema_typed(
+        &fields
+            .iter()
+            .map(|(n, d, r)| (*n, "string", *d, *r))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Like `schema`, but each field includes an explicit JSON Schema type.
+/// fields: (name, json_type, description, required)
+pub(crate) fn schema_typed(
+    fields: &[(&str, &str, &str, bool)],
+) -> Arc<serde_json::Map<String, Value>> {
     let mut props = serde_json::Map::new();
     let mut required = Vec::new();
-    for (name, desc, req) in fields {
+    for (name, field_type, desc, req) in fields {
         props.insert(
             name.to_string(),
-            json!({ "type": "string", "description": desc }),
+            json!({ "type": field_type, "description": desc }),
         );
         if *req {
             required.push(Value::String(name.to_string()));
@@ -59,6 +72,17 @@ pub(crate) fn schema(fields: &[(&str, &str, bool)]) -> Arc<serde_json::Map<Strin
 /// Helper: extract an optional string arg from tool call arguments.
 pub(crate) fn get_arg<'a>(args: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str())
+}
+
+/// Helper: extract an optional usize arg, accepting both JSON number and string representations.
+pub(crate) fn get_arg_usize(args: &serde_json::Map<String, Value>, key: &str) -> Option<usize> {
+    args.get(key).and_then(|v| {
+        if let Some(n) = v.as_u64() {
+            Some(n as usize)
+        } else {
+            v.as_str().and_then(|s| s.parse().ok())
+        }
+    })
 }
 
 /// Macro: extract a required string arg; returns `tool_err` early if missing.
