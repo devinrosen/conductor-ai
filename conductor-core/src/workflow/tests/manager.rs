@@ -2320,7 +2320,8 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
-    assert_eq!(ids.len(), 0, "sub-workflow must not be detected");
+    assert_eq!(ids.len(), 1, "sub-workflow must also be detected as stuck");
+    assert_eq!(ids[0], "sub-run");
 }
 
 #[test]
@@ -2497,10 +2498,12 @@ fn test_detect_stale_workflow_runs_skips_sub_workflows() {
 
     let mgr = WorkflowManager::new(&conn);
     let stale = mgr.detect_stale_workflow_runs(60).unwrap();
-    assert!(
-        stale.is_empty(),
-        "sub-workflow steps should not trigger stale"
+    assert_eq!(
+        stale.len(),
+        1,
+        "sub-workflow steps should also trigger stale detection"
     );
+    assert_eq!(stale[0].run_id, "sub-run");
 }
 
 #[test]
