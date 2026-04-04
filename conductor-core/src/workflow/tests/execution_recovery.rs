@@ -826,3 +826,23 @@ fn test_reap_finalization_child_run_not_reaped() {
     let child = wf_mgr.get_workflow_run(&child_run.id).unwrap().unwrap();
     assert_eq!(child.status, WorkflowRunStatus::Running);
 }
+
+#[test]
+fn test_reap_finalization_respects_threshold() {
+    // Verifies that a recently-finished run is NOT reaped when threshold_secs hasn't elapsed.
+    // All existing tests use threshold=-1 (bypass), but production uses threshold=60.
+    // Using i64::MAX ensures elapsed time will never exceed the threshold.
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
+
+    let count = wf_mgr
+        .reap_finalization_stuck_workflow_runs(i64::MAX)
+        .unwrap();
+    assert_eq!(count, 0);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Running);
+}
