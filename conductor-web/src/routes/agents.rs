@@ -23,7 +23,7 @@ use crate::state::AppState;
 
 /// Spawn a tmux window on a blocking thread and mark the agent run as failed
 /// if the spawn panics or returns an error.
-async fn spawn_tmux_blocking(
+pub(super) async fn spawn_tmux_blocking(
     state: &AppState,
     run_id: &str,
     args: Vec<Cow<'static, str>>,
@@ -747,11 +747,15 @@ fn verify_feedback_ownership(
     worktree_id: &str,
 ) -> Result<(), ApiError> {
     let fb = mgr.get_feedback(feedback_id)?.ok_or_else(|| {
-        ApiError::Core(ConductorError::Agent("feedback request not found".into()))
+        ApiError::Core(ConductorError::FeedbackNotFound {
+            id: feedback_id.to_string(),
+        })
     })?;
-    let run = mgr
-        .get_run(&fb.run_id)?
-        .ok_or_else(|| ApiError::Core(ConductorError::Agent("agent run not found".into())))?;
+    let run = mgr.get_run(&fb.run_id)?.ok_or_else(|| {
+        ApiError::Core(ConductorError::AgentRunNotFound {
+            id: fb.run_id.clone(),
+        })
+    })?;
     if run.worktree_id.as_deref() != Some(worktree_id) {
         return Err(ApiError::Core(ConductorError::Agent(
             "feedback request does not belong to this worktree".into(),
@@ -882,7 +886,9 @@ pub struct StartRepoAgentRequest {
     pub new_session: bool,
 }
 
-/// Start a read-only agent scoped to a repo. Uses `--permission-mode plan`.
+/// Start a read-only agent scoped to a repo. Uses `--allowedTools` restriction with
+/// `--dangerously-skip-permissions` for unrestricted Bash/gh access while blocking
+/// file-writing tools (Edit, Write, MultiEdit, NotebookEdit).
 pub async fn start_repo_agent(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -924,8 +930,8 @@ pub async fn start_repo_agent(
             model.as_deref(),
         )?;
 
-        // Build args with plan permission mode (read-only)
-        let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
+        // Build args with repo-safe permission mode (read-only tools, unrestricted Bash/gh)
+        let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
         let args = conductor_core::agent_runtime::build_agent_args_with_mode(
             &run.id,
             &repo.local_path,
@@ -1063,4 +1069,39 @@ pub async fn get_agent_run_feedback_by_run_id(
     let mgr = AgentManager::new(&db);
     let feedback = mgr.list_feedback_for_run(&run_id)?;
     Ok(Json(feedback))
+}
+
+/// Get parsed agent events for a single run by ID — scope-agnostic.
+///
+/// Checks DB-persisted events first; falls back to log-file parsing for older runs.
+pub async fn get_agent_run_events_by_id(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<Vec<AgentEventResponse>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+
+    let db_events = mgr.list_events_for_run(&run_id)?;
+    if !db_events.is_empty() {
+        return Ok(Json(
+            db_events
+                .into_iter()
+                .map(AgentEventResponse::from)
+                .collect(),
+        ));
+    }
+
+    // Fall back to log-file parsing for runs without persisted DB events.
+    let events = mgr
+        .get_run(&run_id)?
+        .and_then(|r| r.log_file)
+        .map(|path| {
+            parse_agent_log(&path)
+                .into_iter()
+                .map(AgentEventResponse::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(Json(events))
 }

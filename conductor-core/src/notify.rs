@@ -2015,6 +2015,7 @@ mod tests {
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
             bot_name: None,
+            conversation_id: None,
         }
     }
 

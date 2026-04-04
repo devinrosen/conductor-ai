@@ -590,7 +590,7 @@ fn test_execute_nodes_stops_on_external_cancel() {
         body: vec![],
     })];
 
-    let result = execute_nodes(&mut state, &nodes);
+    let result = execute_nodes(&mut state, &nodes, true);
     assert!(result.is_err(), "cancelled run should return Err");
     assert!(
         result.unwrap_err().to_string().contains("cancelled"),

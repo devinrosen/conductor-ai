@@ -617,7 +617,7 @@ pub(super) fn run_workflow_engine(
 
     // Execute main body
     let mut body_error: Option<String> = None;
-    let body_result = execute_nodes(state, &workflow.body);
+    let body_result = execute_nodes(state, &workflow.body, true);
     if let Err(ref e) = body_result {
         let msg = e.to_string();
         tracing::error!("Body execution error: {msg}");
@@ -635,7 +635,7 @@ pub(super) fn run_workflow_engine(
         state
             .inputs
             .insert("workflow_status".to_string(), workflow_status.to_string());
-        let always_result = execute_nodes(state, &workflow.always);
+        let always_result = execute_nodes(state, &workflow.always, false);
         if let Err(ref e) = always_result {
             tracing::warn!("Always block error (non-fatal): {e}");
         }
@@ -668,7 +668,12 @@ pub(super) fn run_workflow_engine(
             WorkflowRunStatus::Completed,
             Some(&summary),
         )?;
-        state.flush_metrics()?;
+        if let Err(e) = state.flush_metrics() {
+            tracing::warn!(
+                workflow_run_id = %wf_run_id,
+                "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
+            );
+        }
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
 
         // Notify Vantage of completion (best-effort)
@@ -697,7 +702,12 @@ pub(super) fn run_workflow_engine(
             WorkflowRunStatus::Failed,
             Some(&summary),
         )?;
-        state.flush_metrics()?;
+        if let Err(e) = state.flush_metrics() {
+            tracing::warn!(
+                workflow_run_id = %wf_run_id,
+                "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
+            );
+        }
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
 
         // Notify Vantage of failure (best-effort)
@@ -1181,15 +1191,19 @@ pub(super) fn execute_single_node(
         WorkflowNode::Script(n) => super::executors::execute_script(state, n, iteration)?,
         WorkflowNode::Always(n) => {
             // Nested always — just execute body
-            execute_nodes(state, &n.body)?;
+            execute_nodes(state, &n.body, false)?;
         }
     }
     Ok(())
 }
 
-pub(super) fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNode]) -> Result<()> {
+pub(super) fn execute_nodes(
+    state: &mut ExecutionState<'_>,
+    nodes: &[WorkflowNode],
+    respect_fail_fast: bool,
+) -> Result<()> {
     for node in nodes {
-        if !state.all_succeeded && state.exec_config.fail_fast {
+        if respect_fail_fast && !state.all_succeeded && state.exec_config.fail_fast {
             break;
         }
         // Lightweight cancellation check — only reads the status column.

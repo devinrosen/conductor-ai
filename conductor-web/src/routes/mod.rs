@@ -1,6 +1,8 @@
 pub mod agents;
+pub mod conversations;
 pub mod events;
 pub mod features;
+pub mod health;
 pub mod issue_sources;
 pub mod model_config;
 pub mod notifications;
@@ -32,6 +34,8 @@ pub fn api_router_with_cors(allowed_origins: Vec<HeaderValue>) -> Router<AppStat
 
 pub fn api_router() -> Router<AppState> {
     Router::new()
+        // Health check
+        .route("/health", get(health::health))
         // SSE event stream
         .route("/api/events", get(events::event_stream))
         // Repos
@@ -100,6 +104,31 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/agent/runs/{id}/feedback",
             get(agents::get_agent_run_feedback_by_run_id),
+        )
+        .route(
+            "/api/agent/runs/{id}/events",
+            get(agents::get_agent_run_events_by_id),
+        )
+        // Conversations
+        .route(
+            "/api/conversations",
+            get(conversations::list_conversations).post(conversations::create_conversation),
+        )
+        .route(
+            "/api/conversations/{id}",
+            get(conversations::get_conversation).delete(conversations::delete_conversation),
+        )
+        .route(
+            "/api/conversations/{id}/messages",
+            post(conversations::send_message),
+        )
+        .route(
+            "/api/conversations/{id}/messages/{run_id}/respond",
+            post(conversations::respond_to_run_feedback),
+        )
+        .route(
+            "/api/conversations/{id}/feedback",
+            post(conversations::respond_to_feedback),
         )
         .route(
             "/api/agent/latest-runs",

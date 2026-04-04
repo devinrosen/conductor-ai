@@ -30,6 +30,7 @@ pub mod agent;
 pub mod agent_config;
 pub mod agent_runtime;
 pub mod config;
+pub mod conversation;
 pub mod db;
 pub mod error;
 pub mod feature;
@@ -59,8 +60,20 @@ pub mod workflow_template;
 pub mod worktree;
 
 /// Generate a new ULID-based unique ID string.
+///
+/// Uses a thread-local monotonic generator so IDs created within the
+/// same millisecond are guaranteed to sort in creation order.
 pub fn new_id() -> String {
-    ulid::Ulid::new().to_string()
+    use std::cell::RefCell;
+    thread_local! {
+        static GEN: RefCell<ulid::Generator> = const { RefCell::new(ulid::Generator::new()) };
+    }
+    GEN.with(|g| {
+        g.borrow_mut()
+            .generate()
+            .unwrap_or_else(|_| ulid::Ulid::new())
+            .to_string()
+    })
 }
 
 #[cfg(feature = "test-helpers")]
