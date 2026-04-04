@@ -29,7 +29,13 @@ export function formatWorkflowProgress(run: WorkflowRun): string | null {
   if (iter) parts.push(iter);
   if (run.current_step_name) parts.push(run.current_step_name);
   if (run.estimated_remaining_ms != null && run.estimated_remaining_ms > 0) {
-    parts.push(`~${formatDuration(run.estimated_remaining_ms)} left`);
+    if (run.estimated_remaining_low_ms != null && run.estimated_remaining_high_ms != null
+        && run.estimate_confidence !== "low"
+        && run.estimated_remaining_low_ms !== run.estimated_remaining_high_ms) {
+      parts.push(`~${formatDuration(run.estimated_remaining_low_ms)}-${formatDuration(run.estimated_remaining_high_ms)} left`);
+    } else {
+      parts.push(`~${formatDuration(run.estimated_remaining_ms)} left`);
+    }
   }
   return parts.length > 0 ? parts.join(" \u00b7 ") : null;
 }

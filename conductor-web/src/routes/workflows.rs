@@ -126,6 +126,18 @@ pub struct WorkflowRunResponse {
     /// Estimated remaining milliseconds for in-progress runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     estimated_remaining_ms: Option<i64>,
+    /// Confidence level for the time estimate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimate_confidence: Option<conductor_core::workflow::Confidence>,
+    /// Lower bound (p25) of estimated remaining ms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_remaining_low_ms: Option<i64>,
+    /// Upper bound (p75) of estimated remaining ms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_remaining_high_ms: Option<i64>,
+    /// Per-step time estimates for active runs (step_name → estimate).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step_estimates: Option<HashMap<String, conductor_core::workflow::Estimate>>,
 }
 
 #[derive(Serialize)]
@@ -815,7 +827,7 @@ pub async fn list_all_workflow_runs_handler(
         .map(|wt| (wt.id, wt.slug))
         .collect();
 
-    // ── Time estimation: batch-fetch historical durations and LLM estimates ──
+    // ── Time estimation: batch-fetch historical durations, step histories, and LLM estimates ──
     let active_run_ids: Vec<&str> = runs
         .iter()
         .filter(|r| {
@@ -828,7 +840,7 @@ pub async fn list_all_workflow_runs_handler(
         .collect();
     let plan_estimates = mgr.get_plan_estimates_for_runs(&active_run_ids)?;
 
-    // Collect unique workflow names for active runs and query historical durations
+    // Collect unique workflow names for active runs
     let active_workflow_names: std::collections::HashSet<&str> = runs
         .iter()
         .filter(|r| {
@@ -839,14 +851,28 @@ pub async fn list_all_workflow_runs_handler(
         })
         .map(|r| r.workflow_name.as_str())
         .collect();
+
+    // Batch-fetch historical durations (workflow-level) and step histories
     let historical_durations: HashMap<String, Vec<i64>> = active_workflow_names
-        .into_iter()
+        .iter()
         .filter_map(|name| {
             mgr.get_completed_run_durations(name, 15)
                 .ok()
                 .map(|d| (name.to_string(), d))
         })
         .collect();
+    let step_histories: HashMap<String, HashMap<String, Vec<i64>>> = active_workflow_names
+        .into_iter()
+        .filter_map(|name| {
+            mgr.get_completed_step_durations(name, 20)
+                .ok()
+                .map(|d| (name.to_string(), d))
+        })
+        .collect();
+
+    // Batch-fetch all steps for active runs (for live remaining estimation)
+    let mut all_active_run_steps: HashMap<String, Vec<WorkflowRunStep>> =
+        mgr.get_steps_for_runs(&active_run_ids)?;
 
     let responses: Vec<WorkflowRunResponse> = runs
         .into_iter()
@@ -900,17 +926,65 @@ pub async fn list_all_workflow_runs_handler(
                 run.status,
                 WorkflowRunStatus::Running | WorkflowRunStatus::Pending
             );
-            let (estimated_duration_ms, estimated_remaining_ms) = if is_active {
+
+            let (
+                estimated_duration_ms,
+                estimated_remaining_ms,
+                estimate_confidence,
+                estimated_remaining_low_ms,
+                estimated_remaining_high_ms,
+                step_estimates_out,
+            ) = if is_active {
                 let llm_est = plan_estimates.get(&run.id).copied();
                 let hist = historical_durations
                     .get(&run.workflow_name)
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
-                let est = estimation::estimate_duration_ms(llm_est, hist);
-                let remaining = est.map(|e| estimation::estimated_remaining_ms(e, &run.started_at));
-                (est, remaining)
+
+                // Try per-step live estimation first
+                let sh = step_histories.get(&run.workflow_name);
+                let run_steps = all_active_run_steps.remove(&run.id).unwrap_or_default();
+                let step_ests = sh.map(estimation::estimate_all_steps);
+                let live = step_ests
+                    .as_ref()
+                    .and_then(|se| estimation::live_remaining_estimate(&run_steps, se));
+
+                if let Some(ref live_est) = live {
+                    // Use per-step live estimate
+                    let wf_est = estimation::estimate_with_confidence(llm_est, hist);
+                    (
+                        wf_est.as_ref().map(|e| e.point_ms),
+                        Some(live_est.remaining_ms),
+                        Some(live_est.confidence),
+                        Some(live_est.low_remaining_ms),
+                        Some(live_est.high_remaining_ms),
+                        step_ests,
+                    )
+                } else {
+                    // Fall back to workflow-level estimate with confidence
+                    let wf_est = estimation::estimate_with_confidence(llm_est, hist);
+                    match wf_est {
+                        Some(ref est) => {
+                            let remaining =
+                                estimation::estimated_remaining_ms(est.point_ms, &run.started_at);
+                            let remaining_low =
+                                estimation::estimated_remaining_ms(est.low_ms, &run.started_at);
+                            let remaining_high =
+                                estimation::estimated_remaining_ms(est.high_ms, &run.started_at);
+                            (
+                                Some(est.point_ms),
+                                Some(remaining),
+                                Some(est.confidence),
+                                Some(remaining_low),
+                                Some(remaining_high),
+                                None,
+                            )
+                        }
+                        None => (None, None, None, None, None, None),
+                    }
+                }
             } else {
-                (None, None)
+                (None, None, None, None, None, None)
             };
 
             WorkflowRunResponse {
@@ -925,6 +999,10 @@ pub async fn list_all_workflow_runs_handler(
                 max_iterations,
                 estimated_duration_ms,
                 estimated_remaining_ms,
+                estimate_confidence,
+                estimated_remaining_low_ms,
+                estimated_remaining_high_ms,
+                step_estimates: step_estimates_out,
             }
         })
         .collect();

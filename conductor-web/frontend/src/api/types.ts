@@ -238,6 +238,15 @@ export interface WorkflowRun {
   max_iterations?: number | null;
   estimated_duration_ms?: number | null;
   estimated_remaining_ms?: number | null;
+  estimate_confidence?: "high" | "medium" | "low" | null;
+  estimated_remaining_low_ms?: number | null;
+  estimated_remaining_high_ms?: number | null;
+  step_estimates?: Record<string, {
+    point_ms: number;
+    low_ms: number;
+    high_ms: number;
+    confidence: "high" | "medium" | "low";
+  }> | null;
 }
 
 export interface WorkflowRunStep {
