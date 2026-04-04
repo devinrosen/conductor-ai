@@ -585,36 +585,6 @@ fn test_restore_completed_step_restores_gate_feedback() {
 
 // ── reap_finalization_stuck_workflow_runs tests ─────────────────────────────
 
-/// Helper: create a running workflow run with a parent agent run.
-fn make_running_wf(conn: &rusqlite::Connection, name: &str) -> (String, String) {
-    let agent_mgr = AgentManager::new(conn);
-    let wf_mgr = WorkflowManager::new(conn);
-    let parent = agent_mgr.create_run(Some("w1"), name, None, None).unwrap();
-    let run = wf_mgr
-        .create_workflow_run(name, Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
-        .unwrap();
-    (run.id, parent.id)
-}
-
-/// Helper: insert a terminal step into a workflow run.
-fn insert_terminal_step(
-    conn: &rusqlite::Connection,
-    wf_run_id: &str,
-    status: WorkflowStepStatus,
-    position: i64,
-) {
-    let wf_mgr = WorkflowManager::new(conn);
-    let step_id = wf_mgr
-        .insert_step(wf_run_id, "step", "actor", false, position, 0)
-        .unwrap();
-    wf_mgr
-        .update_step_status(&step_id, status, None, None, None, None, None)
-        .unwrap();
-}
-
 #[test]
 fn test_reap_finalization_all_completed_marks_completed() {
     let conn = setup_db();
@@ -696,17 +666,11 @@ fn test_reap_finalization_already_terminal_not_touched() {
     let conn = setup_db();
     let wf_mgr = WorkflowManager::new(&conn);
 
-    let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "flow", None, None)
-        .unwrap();
-    let run = wf_mgr
-        .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let (run_id, _) = make_running_wf(&conn, "flow");
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .update_workflow_status(&run_id, WorkflowRunStatus::Completed, None)
         .unwrap();
-    insert_terminal_step(&conn, &run.id, WorkflowStepStatus::Completed, 0);
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
 
     let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
     assert_eq!(count, 0);

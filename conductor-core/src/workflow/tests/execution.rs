@@ -3271,18 +3271,6 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
 // evaluate_hooks integration tests
 // ---------------------------------------------------------------------------
 
-/// Helper: set up a temp dir with `.conductor/config.toml` and optional workflow files.
-fn setup_hooks_dir(config_toml: &str, workflows: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let conductor_dir = dir.path().join(".conductor");
-    std::fs::create_dir_all(conductor_dir.join("workflows")).unwrap();
-    std::fs::write(conductor_dir.join("config.toml"), config_toml).unwrap();
-    for (name, content) in workflows {
-        std::fs::write(conductor_dir.join("workflows").join(name), content).unwrap();
-    }
-    dir
-}
-
 #[test]
 fn test_hook_chain_prevention_when_triggered_by_hook() {
     // When triggered_by_hook is true, hooks should NOT fire (prevents infinite chains).
