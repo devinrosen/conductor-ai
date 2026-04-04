@@ -2,7 +2,7 @@ mod definitions;
 mod helpers;
 mod lifecycle;
 mod queries;
-mod recovery;
+pub(crate) mod recovery;
 mod steps;
 
 #[cfg(test)]
