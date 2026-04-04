@@ -50,6 +50,47 @@ pub fn handle_workflow(
     }
 
     match command {
+        WorkflowCommands::Active { slack } => {
+            let wf_mgr = WorkflowManager::new(conn);
+            let runs = wf_mgr.list_active_workflow_runs(&[])?;
+
+            if runs.is_empty() {
+                let msg = "No active workflow runs.";
+                println!("{msg}");
+                if slack {
+                    conductor_core::notify::send_slack_sync(&config.notifications, msg)?;
+                    println!("Posted to Slack.");
+                }
+            } else {
+                let mut lines = vec![format!("*Active workflow runs ({})* ", runs.len())];
+                for run in &runs {
+                    let label = run.target_label.as_deref().unwrap_or("-");
+                    let since = &run.started_at[..16.min(run.started_at.len())];
+                    lines.push(format!(
+                        "• *{}* on `{}` — {} (since {})",
+                        run.workflow_name, label, run.status, since
+                    ));
+                }
+                let summary = lines.join("\n");
+
+                // Print to terminal
+                for run in &runs {
+                    let label = run.target_label.as_deref().unwrap_or("-");
+                    let since = &run.started_at[..16.min(run.started_at.len())];
+                    println!(
+                        "  {:<26}  {:<30}  {:<10}  {label} ({since})",
+                        &run.id[..26.min(run.id.len())],
+                        run.workflow_name,
+                        run.status,
+                    );
+                }
+
+                if slack {
+                    conductor_core::notify::send_slack_sync(&config.notifications, &summary)?;
+                    println!("Posted to Slack.");
+                }
+            }
+        }
         WorkflowCommands::Runs { repo, worktree } => {
             let repo_mgr = RepoManager::new(conn, config);
             let r = repo_mgr.get_by_slug(&repo)?;
