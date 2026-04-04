@@ -585,7 +585,6 @@ fn test_restore_completed_step_restores_gate_feedback() {
 
 // ── reap_finalization_stuck_workflow_runs tests ─────────────────────────────
 
-
 #[test]
 fn test_reap_finalization_all_completed_marks_completed() {
     let conn = setup_db();

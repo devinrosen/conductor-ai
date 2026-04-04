@@ -2199,7 +2199,6 @@ fn insert_running_root_run(conn: &Connection, run_id: &str) {
     .unwrap();
 }
 
-
 /// Insert a non-terminal step (pending/running/waiting) with no ended_at.
 fn insert_non_terminal_step(conn: &Connection, step_id: &str, run_id: &str, status: &str) {
     conn.execute(
