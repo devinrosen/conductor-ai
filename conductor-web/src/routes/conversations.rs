@@ -120,7 +120,7 @@ pub async fn send_message(
                 (
                     repo.local_path.clone(),
                     model,
-                    Some(AgentPermissionMode::Plan),
+                    Some(AgentPermissionMode::RepoSafe),
                 )
             }
             ConversationScope::Worktree => {

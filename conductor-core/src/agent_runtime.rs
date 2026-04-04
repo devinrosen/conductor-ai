@@ -297,7 +297,7 @@ const AGENT_ARGS_CAPACITY: usize = 18;
 /// ready to pass to [`spawn_tmux_window`].
 ///
 /// `permission_mode` optionally overrides the configured permission mode
-/// (e.g. `Some(AgentPermissionMode::Plan)` for repo-scoped read-only agents).
+/// (e.g. `Some(AgentPermissionMode::RepoSafe)` for repo-scoped read-only agents).
 pub fn build_agent_args(
     run_id: &str,
     worktree_path: &str,
@@ -321,8 +321,9 @@ pub fn build_agent_args(
 
 /// Like [`build_agent_args`] but accepts an optional permission mode override.
 ///
-/// When `permission_mode` is `Some(AgentPermissionMode::Plan)`, the agent run
-/// will use `--permission-mode plan` instead of the configured default.
+/// The permission mode is encoded via `--permission-mode <name>` in the conductor
+/// args (e.g. `--permission-mode repo-safe`). The actual flags passed to the claude
+/// subprocess differ and are resolved in `run_agent()` via `claude_permission_flag()`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_agent_args_with_mode(
     run_id: &str,
@@ -764,8 +765,40 @@ mod tests {
     }
 
     #[test]
+    fn build_agent_args_with_mode_repo_safe() {
+        use crate::config::AgentPermissionMode;
+        let args = super::build_agent_args_with_mode(
+            "run-1",
+            "/tmp/wt",
+            "prompt",
+            None,
+            None,
+            None,
+            Some(&AgentPermissionMode::RepoSafe),
+            &[],
+        )
+        .unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--permission-mode")
+            .expect("expected --permission-mode flag in conductor args");
+        assert_eq!(
+            args[idx + 1], "repo-safe",
+            "expected 'repo-safe' value after --permission-mode"
+        );
+
+        // --allowedTools must NOT appear in conductor args — it is passed
+        // to the claude CLI subprocess inside run_agent(), not here.
+        assert!(
+            !args.iter().any(|a| a == "--allowedTools"),
+            "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
+        );
+    }
+
+    #[test]
     fn build_agent_args_non_plan_no_allowed_tools() {
         use crate::config::AgentPermissionMode;
+        // RepoSafe is excluded: its allowed_tools() is applied in run_agent(), not here.
         for mode in &[
             AgentPermissionMode::SkipPermissions,
             AgentPermissionMode::AutoMode,

@@ -23,20 +23,48 @@ pub enum AgentPermissionMode {
     SkipPermissions,
     /// Use `--permission-mode plan` (read-only mode for repo-scoped agents).
     Plan,
+    /// Use `--dangerously-skip-permissions` + `--allowedTools` read-safe pattern.
+    /// Excludes file-writing tools (Edit, Write, MultiEdit, NotebookEdit) at the
+    /// Claude tool level without locking into plan-mode's "propose before acting"
+    /// flow, so Bash/gh remain fully executable.
+    RepoSafe,
 }
 
 impl AgentPermissionMode {
-    /// Returns the CLI flag string to pass to the `claude` command.
+    /// Returns the conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
     pub fn cli_flag(&self) -> &str {
         match self {
             Self::AutoMode => "--enable-auto-mode",
             Self::SkipPermissions => "--dangerously-skip-permissions",
             Self::Plan => "--permission-mode",
+            Self::RepoSafe => "--permission-mode",
         }
     }
 
-    /// Returns the optional value argument that follows the flag (e.g. "plan" for `--permission-mode plan`).
+    /// Returns the optional value argument that follows the conductor CLI flag.
     pub fn cli_flag_value(&self) -> Option<&str> {
+        match self {
+            Self::Plan => Some("plan"),
+            Self::RepoSafe => Some("repo-safe"),
+            _ => None,
+        }
+    }
+
+    /// Returns the actual permission flag to pass to the `claude` subprocess.
+    ///
+    /// This differs from `cli_flag()` for `RepoSafe`: conductor receives
+    /// `--permission-mode repo-safe`, but claude receives `--dangerously-skip-permissions`.
+    pub fn claude_permission_flag(&self) -> &str {
+        match self {
+            Self::AutoMode => "--enable-auto-mode",
+            Self::SkipPermissions => "--dangerously-skip-permissions",
+            Self::Plan => "--permission-mode",
+            Self::RepoSafe => "--dangerously-skip-permissions",
+        }
+    }
+
+    /// Returns the optional value argument that follows the claude permission flag.
+    pub fn claude_permission_flag_value(&self) -> Option<&str> {
         match self {
             Self::Plan => Some("plan"),
             _ => None,
@@ -45,11 +73,14 @@ impl AgentPermissionMode {
 
     /// Returns the `--allowedTools` pattern for this mode, if any.
     ///
-    /// Plan mode allows read-only and shell tools (Bash, Glob, Grep, Read, WebFetch, WebSearch)
-    /// plus all MCP tools, while excluding file-writing tools (Edit, Write, MultiEdit, NotebookEdit).
+    /// Plan and RepoSafe modes allow read-only and shell tools (Bash, Glob, Grep, Read,
+    /// WebFetch, WebSearch) plus all MCP tools, while excluding file-writing tools
+    /// (Edit, Write, MultiEdit, NotebookEdit).
     pub fn allowed_tools(&self) -> Option<&'static str> {
         match self {
-            Self::Plan => Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*"),
+            Self::Plan | Self::RepoSafe => {
+                Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+            }
             _ => None,
         }
     }
@@ -639,10 +670,56 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_permission_mode_cli_flag_repo_safe() {
+        assert_eq!(AgentPermissionMode::RepoSafe.cli_flag(), "--permission-mode");
+    }
+
+    #[test]
     fn test_agent_permission_mode_cli_flag_value() {
         assert_eq!(AgentPermissionMode::AutoMode.cli_flag_value(), None);
         assert_eq!(AgentPermissionMode::SkipPermissions.cli_flag_value(), None);
         assert_eq!(AgentPermissionMode::Plan.cli_flag_value(), Some("plan"));
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.cli_flag_value(),
+            Some("repo-safe")
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_claude_permission_flag() {
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag(),
+            "--enable-auto-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag(),
+            "--permission-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_claude_permission_flag_value() {
+        assert_eq!(AgentPermissionMode::AutoMode.claude_permission_flag_value(), None);
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag_value(),
+            Some("plan")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag_value(),
+            None
+        );
     }
 
     #[test]
@@ -651,6 +728,10 @@ mod tests {
         assert_eq!(AgentPermissionMode::SkipPermissions.allowed_tools(), None);
         assert_eq!(
             AgentPermissionMode::Plan.allowed_tools(),
+            Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.allowed_tools(),
             Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
         );
     }
