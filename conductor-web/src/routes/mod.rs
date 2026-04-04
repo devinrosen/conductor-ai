@@ -111,7 +111,7 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/conversations/{id}",
-            get(conversations::get_conversation),
+            get(conversations::get_conversation).delete(conversations::delete_conversation),
         )
         .route(
             "/api/conversations/{id}/messages",

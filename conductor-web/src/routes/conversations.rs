@@ -81,9 +81,24 @@ pub async fn get_conversation(
     let db = state.db.lock().await;
     let mgr = ConversationManager::new(&db);
     let conversation = mgr.get_with_runs(&conversation_id)?.ok_or_else(|| {
-        ConductorError::Agent(format!("conversation {conversation_id} not found"))
+        ConductorError::ConversationNotFound {
+            id: conversation_id.clone(),
+        }
     })?;
     Ok(Json(conversation))
+}
+
+/// DELETE /api/conversations/{id} — hard-delete a conversation and its agent runs.
+///
+/// Returns 204 No Content on success. Returns 409 Conflict if the conversation
+/// has an active or waiting agent run.
+pub async fn delete_conversation(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let db = state.db.lock().await;
+    ConversationManager::new(&db).delete(&conversation_id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /api/conversations/{id}/messages — send a message to a conversation.
