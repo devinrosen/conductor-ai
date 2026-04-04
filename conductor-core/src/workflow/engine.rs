@@ -581,12 +581,6 @@ pub(super) fn run_workflow_engine(
             WorkflowRunStatus::Completed,
             Some(&summary),
         )?;
-        if let Err(e) = state.flush_metrics() {
-            tracing::warn!(
-                workflow_run_id = %wf_run_id,
-                "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
-            );
-        }
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
     } else {
         state
@@ -597,13 +591,14 @@ pub(super) fn run_workflow_engine(
             WorkflowRunStatus::Failed,
             Some(&summary),
         )?;
-        if let Err(e) = state.flush_metrics() {
-            tracing::warn!(
-                workflow_run_id = %wf_run_id,
-                "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
-            );
-        }
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
+    }
+
+    if let Err(e) = state.flush_metrics() {
+        tracing::warn!(
+            workflow_run_id = %wf_run_id,
+            "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
+        );
     }
 
     tracing::info!(
