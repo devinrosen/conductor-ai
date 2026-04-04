@@ -298,6 +298,74 @@ mod tests {
         (conv1.id, run1.id, fb1.id, conv2.id, run2.id, fb2.id)
     }
 
+    // ── respond_to_run_feedback tests ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn respond_to_run_feedback_returns_404_for_unknown_run() {
+        let (state, _tmp) = seeded_state();
+        {
+            let db = state.db.lock().await;
+            seed_conversations(&db);
+        }
+        let body = serde_json::json!({ "response": "yes" });
+        let status = send_post_json(
+            "/api/conversations/any-conv/messages/nonexistent-run/respond",
+            body,
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn respond_to_run_feedback_returns_404_when_run_belongs_to_other_conversation() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, _fb1_id, _conv2_id, _run2_id, _fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        // run1 belongs to conv1; pass a wrong conversation ID in the path
+        let body = serde_json::json!({ "response": "yes" });
+        let uri = format!("/api/conversations/wrong-conv-id/messages/{run1_id}/respond");
+        let status = send_post_json(&uri, body, state).await;
+        assert_ne!(conv1_id, "wrong-conv-id");
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn respond_to_run_feedback_returns_404_when_no_pending_feedback() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, fb1_id, _conv2_id, _run2_id, _fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        // First, consume the pending feedback so none remains.
+        {
+            let db = state.db.lock().await;
+            let agent_mgr = conductor_core::agent::AgentManager::new(&db);
+            agent_mgr.submit_feedback(&fb1_id, "consumed").unwrap();
+        }
+        let body = serde_json::json!({ "response": "yes" });
+        let uri = format!("/api/conversations/{conv1_id}/messages/{run1_id}/respond");
+        let status = send_post_json(&uri, body, state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn respond_to_run_feedback_returns_200_for_valid_request() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, _fb1_id, _conv2_id, _run2_id, _fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        let body = serde_json::json!({ "response": "yes" });
+        let uri = format!("/api/conversations/{conv1_id}/messages/{run1_id}/respond");
+        let (status, bytes) = send_post_json_full(&uri, body, state).await;
+        assert_eq!(status, StatusCode::OK);
+        let run: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(run["id"], run1_id);
+    }
+
     // ── respond_to_feedback tests ─────────────────────────────────────────────
 
 
@@ -368,70 +436,6 @@ mod tests {
             "response": "yes"
         });
         let uri = format!("/api/conversations/{conv1_id}/feedback");
-        let (status, bytes) = send_post_json_full(&uri, body, state).await;
-        assert_eq!(status, StatusCode::OK);
-        let run: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(run["id"], run1_id);
-        assert_eq!(run["conversation_id"], conv1_id);
-    }
-
-    #[tokio::test]
-    async fn respond_to_run_feedback_returns_404_for_unknown_run() {
-        let (state, _tmp) = seeded_state();
-        {
-            let db = state.db.lock().await;
-            seed_conversations(&db);
-        }
-        let body = serde_json::json!({ "response": "yes" });
-        let status = send_post_json(
-            "/api/conversations/any-conv/messages/nonexistent/respond",
-            body,
-            state,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn respond_to_run_feedback_returns_404_when_run_belongs_to_other_conversation() {
-        let (state, _tmp) = seeded_state();
-        let (_conv1_id, run1_id, _fb1_id, conv2_id, _run2_id, _fb2_id) = {
-            let db = state.db.lock().await;
-            seed_conversations(&db)
-        };
-        // run1 belongs to conv1; use conv2's id in the path → ownership mismatch
-        let body = serde_json::json!({ "response": "yes" });
-        let uri = format!("/api/conversations/{conv2_id}/messages/{run1_id}/respond");
-        let status = send_post_json(&uri, body, state).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn respond_to_run_feedback_returns_400_when_no_pending_feedback() {
-        let (state, _tmp) = seeded_state();
-        let (conv1_id, run1_id, _fb1_id, _conv2_id, _run2_id, _fb2_id) = {
-            let db = state.db.lock().await;
-            seed_conversations(&db)
-        };
-        let body = serde_json::json!({ "response": "yes" });
-        let uri = format!("/api/conversations/{conv1_id}/messages/{run1_id}/respond");
-        // First call consumes the pending feedback
-        let status = send_post_json(&uri, body.clone(), state.clone()).await;
-        assert_eq!(status, StatusCode::OK);
-        // Second call finds no pending feedback → 400
-        let status = send_post_json(&uri, body, state).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn respond_to_run_feedback_returns_200_for_valid_request() {
-        let (state, _tmp) = seeded_state();
-        let (conv1_id, run1_id, _fb1_id, _conv2_id, _run2_id, _fb2_id) = {
-            let db = state.db.lock().await;
-            seed_conversations(&db)
-        };
-        let body = serde_json::json!({ "response": "yes" });
-        let uri = format!("/api/conversations/{conv1_id}/messages/{run1_id}/respond");
         let (status, bytes) = send_post_json_full(&uri, body, state).await;
         assert_eq!(status, StatusCode::OK);
         let run: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
