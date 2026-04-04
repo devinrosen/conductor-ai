@@ -43,12 +43,13 @@ impl AgentPermissionMode {
         }
     }
 
-    /// Returns the `--allowedTools` glob pattern for this mode, if any.
+    /// Returns the `--allowedTools` pattern for this mode, if any.
     ///
-    /// Plan mode restricts agents to conductor MCP tools only.
+    /// Plan mode allows read-only and shell tools (Bash, Glob, Grep, Read, WebFetch, WebSearch)
+    /// plus all MCP tools, while excluding file-writing tools (Edit, Write, MultiEdit, NotebookEdit).
     pub fn allowed_tools(&self) -> Option<&'static str> {
         match self {
-            Self::Plan => Some("mcp__conductor__*"),
+            Self::Plan => Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*"),
             _ => None,
         }
     }
@@ -642,6 +643,16 @@ mod tests {
         assert_eq!(AgentPermissionMode::AutoMode.cli_flag_value(), None);
         assert_eq!(AgentPermissionMode::SkipPermissions.cli_flag_value(), None);
         assert_eq!(AgentPermissionMode::Plan.cli_flag_value(), Some("plan"));
+    }
+
+    #[test]
+    fn test_agent_permission_mode_allowed_tools() {
+        assert_eq!(AgentPermissionMode::AutoMode.allowed_tools(), None);
+        assert_eq!(AgentPermissionMode::SkipPermissions.allowed_tools(), None);
+        assert_eq!(
+            AgentPermissionMode::Plan.allowed_tools(),
+            Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+        );
     }
 
     #[test]
