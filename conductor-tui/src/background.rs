@@ -350,6 +350,12 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(ids) if !ids.is_empty() => {
                     let n = ids.len();
                     tracing::info!("Auto-resuming {n} stuck workflow run(s)");
+                    // Notify user about orphaned runs being recovered.
+                    conductor_core::notify::fire_orphan_resumed_notification(
+                        &conn,
+                        &config.notifications,
+                        &ids,
+                    );
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                     for run_id in ids {
                         let config_clone = config.clone();
@@ -377,6 +383,71 @@ pub fn poll_data() -> Option<PollResult> {
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
+            }
+            // Stale workflow watchdog: check tmux liveness, reap dead runs,
+            // fire notifications, and auto-restart.
+            let stale_mins = config.general.stale_workflow_minutes;
+            if stale_mins > 0 {
+                // First fire informational alerts for all stale runs (alive or dead).
+                match wf_mgr.detect_stale_workflow_runs(stale_mins as i64) {
+                    Ok(stale) => {
+                        for s in &stale {
+                            conductor_core::notify::fire_stale_workflow_notification(
+                                &conn,
+                                &config.notifications,
+                                &s.run_id,
+                                &s.workflow_name,
+                                s.target_label.as_deref(),
+                                &s.step_name,
+                                s.running_minutes,
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!("detect_stale_workflow_runs failed: {e}"),
+                }
+                // Then reap runs whose agent process is confirmed dead and auto-restart.
+                let live_windows = conductor_core::agent::list_live_tmux_windows();
+                match wf_mgr.reap_stale_workflow_runs(stale_mins as i64, &live_windows) {
+                    Ok(reaped) if !reaped.is_empty() => {
+                        let conductor_bin_dir =
+                            conductor_core::workflow::resolve_conductor_bin_dir();
+                        for r in &reaped {
+                            conductor_core::notify::fire_stale_reaped_notification(
+                                &conn,
+                                &config.notifications,
+                                &r.run_id,
+                                &r.workflow_name,
+                                r.target_label.as_deref(),
+                                &r.step_name,
+                                true, // auto_restarted
+                            );
+                            let config_clone = config.clone();
+                            let bin_dir = conductor_bin_dir.clone();
+                            let run_id = r.run_id.clone();
+                            std::thread::spawn(move || {
+                                let params = conductor_core::workflow::WorkflowResumeStandalone {
+                                    config: config_clone,
+                                    workflow_run_id: run_id.clone(),
+                                    model: None,
+                                    from_step: None,
+                                    restart: false,
+                                    db_path: None,
+                                    conductor_bin_dir: bin_dir,
+                                };
+                                if let Err(e) =
+                                    conductor_core::workflow::resume_workflow_standalone(&params)
+                                {
+                                    tracing::warn!(
+                                        run_id = %run_id,
+                                        "Auto-restart of stale workflow run failed: {e}"
+                                    );
+                                }
+                            });
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
+                }
             }
         }
     }

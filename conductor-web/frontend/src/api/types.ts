@@ -69,6 +69,18 @@ export interface CreateRepoRequest {
   workspace_dir?: string;
 }
 
+export interface GithubPr {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  state: string;
+  head_ref_name: string;
+  is_draft: boolean;
+  review_decision: string | null;
+  ci_status: string;
+}
+
 export interface CreateWorktreeRequest {
   name: string;
   from_branch?: string;
@@ -219,6 +231,13 @@ export interface WorkflowRun {
   active_steps?: WorkflowRunStep[];
   repo_slug: string | null;
   worktree_slug: string | null;
+  total_steps?: number | null;
+  current_step?: number | null;
+  current_step_name?: string | null;
+  current_iteration?: number | null;
+  max_iterations?: number | null;
+  estimated_duration_ms?: number | null;
+  estimated_remaining_ms?: number | null;
 }
 
 export interface WorkflowRunStep {

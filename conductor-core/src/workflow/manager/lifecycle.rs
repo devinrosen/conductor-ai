@@ -258,6 +258,25 @@ impl<'a> WorkflowManager<'a> {
             }
         }
 
+        // Recursively cancel child workflow runs (sub-workflows spawned by call_workflow steps)
+        if let Ok(children) = self.list_child_workflow_runs(run_id) {
+            for child in children {
+                if matches!(
+                    child.status,
+                    WorkflowRunStatus::Running
+                        | WorkflowRunStatus::Pending
+                        | WorkflowRunStatus::Waiting
+                ) {
+                    if let Err(e) = self.cancel_run(&child.id, reason) {
+                        tracing::warn!(
+                            child_run_id = %child.id,
+                            "Failed to cancel child workflow run during parent cancellation: {e}"
+                        );
+                    }
+                }
+            }
+        }
+
         self.update_workflow_status(run_id, WorkflowRunStatus::Cancelled, Some(reason))
     }
 

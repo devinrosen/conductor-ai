@@ -8,6 +8,7 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::git::{check_gh_output, check_output, git_in};
 use crate::repo::RepoManager;
+use crate::tickets::TicketSyncer;
 
 use super::git_helpers::*;
 use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
@@ -59,6 +60,46 @@ fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithSta
         ticket_number,
         ticket_url,
     })
+}
+
+/// Look up a ticket's Vantage dependencies and return the branch of the first
+/// parent that has an active worktree.  Returns `None` if the ticket has no
+/// resolvable parent branch (non-Vantage, no deps, or no parent worktree).
+///
+/// This function parses `raw_json` directly; swap to a `ticket_dependencies`
+/// table query once RFC 009 lands.
+fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> Option<String> {
+    let syncer = TicketSyncer::new(conn);
+    let ticket = syncer.get_by_id(ticket_id).ok()?;
+
+    if ticket.source_type != "vantage" {
+        return None;
+    }
+
+    let raw: serde_json::Value = serde_json::from_str(&ticket.raw_json).ok()?;
+    let deps = raw.get("dependencies")?.as_array()?;
+
+    for dep_id in deps.iter().filter_map(|v| v.as_str()) {
+        let parent = match syncer.get_by_source_id(repo_id, dep_id) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        // Find an active worktree for this parent ticket
+        let worktrees: Vec<Worktree> = query_collect(
+            conn,
+            &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
+            params![&parent.id],
+            map_worktree_row,
+        ).ok().unwrap_or_default();
+        if let Some(wt) = worktrees
+            .iter()
+            .find(|w| w.status == WorktreeStatus::Active)
+        {
+            return Some(wt.branch.clone());
+        }
+    }
+
+    None
 }
 
 pub struct WorktreeManager<'a> {
@@ -142,9 +183,40 @@ impl<'a> WorktreeManager<'a> {
             (pr_branch, Some(pr_base), Vec::new())
         } else {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
-            let base = from_branch
-                .map(|b| b.to_string())
-                .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
+            let base = if let Some(b) = from_branch {
+                b.to_string()
+            } else if let Some(parent_branch) =
+                ticket_id.and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
+            {
+                parent_branch
+            } else {
+                resolve_base_branch(&repo.local_path, &repo.default_branch)
+            };
+            // If the base branch doesn't exist locally, try fetching it from remote
+            let local_ref_exists = git_in(&repo.local_path)
+                .args(["rev-parse", "--verify", &format!("refs/heads/{base}")])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !local_ref_exists {
+                tracing::info!("Base branch {base:?} not found locally, fetching from origin");
+                let fetch_result = git_in(&repo.local_path)
+                    .args(["fetch", "origin", &format!("{base}:{base}")])
+                    .output();
+                match fetch_result {
+                    Ok(o) if o.status.success() => {
+                        tracing::info!("Fetched {base:?} from origin");
+                    }
+                    _ => {
+                        return Err(ConductorError::Git(
+                            crate::error::SubprocessFailure::from_message(
+                                "git fetch",
+                                format!("Base branch '{base}' not found locally or on remote"),
+                            ),
+                        ));
+                    }
+                }
+            }
             let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",

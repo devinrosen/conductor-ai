@@ -8,6 +8,7 @@ import type {
   TicketDetail,
   CreateRepoRequest,
   CreateWorktreeRequest,
+  GithubPr,
   SyncResult,
   AgentRun,
   AgentEvent,
@@ -59,6 +60,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ model }),
     }),
+
+  // PRs
+  listPrs: (repoId: string) => request<GithubPr[]>(`/repos/${repoId}/prs`),
 
   // Worktrees
   listAllWorktrees: (showCompleted = false) =>
@@ -243,7 +247,7 @@ export const api = {
   getWorkflowDef: (worktreeId: string, name: string) =>
     request<WorkflowDef>(`/worktrees/${worktreeId}/workflows/defs/${encodeURIComponent(name)}`),
   runWorkflow: (worktreeId: string, data: RunWorkflowRequest) =>
-    request<{ status: string; worktree_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
+    request<{ status: string; worktree_id: string; run_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -261,6 +265,11 @@ export const api = {
     request<WorkflowRun[]>(`/workflows/runs/${runId}/children`),
   cancelWorkflow: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/cancel`, { method: "POST" }),
+  resumeWorkflow: (runId: string, opts?: { from_step?: string; restart?: boolean; model?: string }) =>
+    request<{ status: string; run_id: string }>(`/workflows/runs/${runId}/resume`, {
+      method: "POST",
+      body: JSON.stringify(opts ?? {}),
+    }),
   approveGate: (runId: string, feedback?: string, selections?: string[]) =>
     request<void>(`/workflows/runs/${runId}/gate/approve`, {
       method: "POST",

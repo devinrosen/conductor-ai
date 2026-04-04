@@ -12,6 +12,34 @@ use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{StepKey, WorkflowRun};
 
+/// A workflow run whose active step has been running longer than the
+/// configured threshold without progress.
+#[derive(Debug, Clone)]
+pub struct StaleWorkflowRun {
+    pub run_id: String,
+    pub workflow_name: String,
+    pub target_label: Option<String>,
+    pub step_name: String,
+    /// How many minutes the step has been running.
+    pub running_minutes: i64,
+    /// The workflow_run_steps row ID (needed to mark the step as failed).
+    pub step_id: String,
+    /// The child agent_run ID for this step (if any).
+    pub child_run_id: Option<String>,
+    /// The tmux window name for the child agent run (if any).
+    pub tmux_window: Option<String>,
+}
+
+/// Result of reaping a stale workflow run whose agent process is confirmed dead.
+#[derive(Debug, Clone)]
+pub struct ReapedStaleRun {
+    pub run_id: String,
+    pub workflow_name: String,
+    pub target_label: Option<String>,
+    pub step_name: String,
+    pub running_minutes: i64,
+}
+
 impl<'a> WorkflowManager<'a> {
     /// Recover steps stuck in `running` status whose child agent run has
     /// already reached a terminal state (completed, failed, or cancelled).
@@ -205,7 +233,6 @@ impl<'a> WorkflowManager<'a> {
                   WHERE wrs2.workflow_run_id = wr.id) AS last_step_ended \
                FROM workflow_runs wr \
                WHERE wr.status = 'running' \
-                 AND wr.parent_workflow_run_id IS NULL \
                  AND NOT EXISTS ( \
                    SELECT 1 FROM workflow_run_steps wrs \
                    WHERE wrs.workflow_run_id = wr.id \
@@ -220,105 +247,126 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
-    /// Directly finalize workflow runs that are stuck in `running` status because
-    /// the finalization DB write (`update_workflow_status`) failed after all steps
-    /// already reached terminal states.
+    /// Detect workflow runs with an active step that has been running longer
+    /// than `threshold_minutes` without completing.
     ///
-    /// A run is eligible when ALL of the following hold:
-    /// 1. `status = 'running'`
-    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
-    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
-    /// 4. The most recent step `ended_at` (or the run's own `started_at` when
-    ///    no steps exist) is older than `threshold_secs`
+    /// Unlike [`detect_stuck_workflow_run_ids`] (all steps terminal, executor
+    /// crashed between steps), this catches the case where a step's child
+    /// process is alive but hung — no crash, just no progress.
     ///
-    /// Unlike `detect_stuck_workflow_run_ids`, this function writes the correct
-    /// terminal status directly without resetting steps or re-running the engine:
-    /// - Any `failed` or `timed_out` step → `Failed`
-    /// - All `completed`/`skipped`/`cancelled` steps → `Completed`
-    ///
-    /// The parent `agent_runs` row is updated best-effort (failures are logged,
-    /// not returned as errors).
-    ///
-    /// Returns the number of runs finalized.
-    pub fn reap_finalization_stuck_workflow_runs(
+    /// Returns metadata for each stale run including the child agent run's
+    /// tmux window name, so callers can verify whether the process is still
+    /// alive before taking action.
+    pub fn detect_stale_workflow_runs(
         &self,
-        threshold_secs: i64,
-    ) -> crate::error::Result<usize> {
-        // Find root running workflow runs where all steps are terminal and
-        // the last step (or the run itself) ended more than threshold_secs ago.
-        let stuck: Vec<(String, String)> = query_collect(
+        threshold_minutes: i64,
+    ) -> Result<Vec<StaleWorkflowRun>> {
+        if threshold_minutes <= 0 {
+            return Ok(vec![]);
+        }
+        query_collect(
             self.conn,
-            "SELECT id, parent_run_id FROM ( \
-               SELECT wr.id, wr.parent_run_id, \
-                 COALESCE( \
-                   (SELECT MAX(ended_at) FROM workflow_run_steps wrs2 \
-                    WHERE wrs2.workflow_run_id = wr.id), \
-                   wr.started_at \
-                 ) AS age_ref \
-               FROM workflow_runs wr \
-               WHERE wr.status = 'running' \
-                 AND wr.parent_workflow_run_id IS NULL \
-                 AND NOT EXISTS ( \
-                   SELECT 1 FROM workflow_run_steps wrs \
-                   WHERE wrs.workflow_run_id = wr.id \
-                     AND wrs.status IN ('running', 'pending', 'waiting') \
-                 ) \
-             ) \
-             WHERE age_ref IS NOT NULL \
+            "SELECT wr.id, wr.workflow_name, wr.target_label, \
+                    wrs.step_name, \
+                    (CAST(strftime('%s', 'now') AS INTEGER) \
+                     - CAST(strftime('%s', wrs.started_at) AS INTEGER)) / 60, \
+                    wrs.id, wrs.child_run_id, ar.tmux_window \
+             FROM workflow_runs wr \
+             JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
+             LEFT JOIN agent_runs ar ON ar.id = wrs.child_run_id \
+             WHERE wr.status = 'running' \
+               AND wrs.status = 'running' \
+               AND wrs.started_at IS NOT NULL \
                AND (CAST(strftime('%s', 'now') AS INTEGER) \
-                    - CAST(strftime('%s', age_ref) AS INTEGER)) > ?1",
-            params![threshold_secs],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+                    - CAST(strftime('%s', wrs.started_at) AS INTEGER)) > ?1 * 60",
+            params![threshold_minutes],
+            |row| {
+                Ok(StaleWorkflowRun {
+                    run_id: row.get(0)?,
+                    workflow_name: row.get(1)?,
+                    target_label: row.get(2)?,
+                    step_name: row.get(3)?,
+                    running_minutes: row.get(4)?,
+                    step_id: row.get(5)?,
+                    child_run_id: row.get(6)?,
+                    tmux_window: row.get(7)?,
+                })
+            },
+        )
+    }
 
-        let mut finalized = 0usize;
+    /// Reap stale workflow runs whose agent process is confirmed dead.
+    ///
+    /// For each stale run returned by [`detect_stale_workflow_runs`]:
+    /// 1. Check if the child agent's tmux window still exists.
+    /// 2. If the window is gone, mark the child agent run as failed, mark the
+    ///    workflow step as failed, and mark the workflow run as failed.
+    /// 3. If the window is still alive, the agent is running (just slow) — skip.
+    ///
+    /// Returns the list of reaped runs so callers can fire notifications and
+    /// optionally auto-restart them.
+    pub fn reap_stale_workflow_runs(
+        &self,
+        threshold_minutes: i64,
+        live_tmux_windows: &std::collections::HashSet<String>,
+    ) -> Result<Vec<ReapedStaleRun>> {
+        let stale = self.detect_stale_workflow_runs(threshold_minutes)?;
+        if stale.is_empty() {
+            return Ok(vec![]);
+        }
 
-        for (run_id, parent_run_id) in stuck {
-            // Determine the correct final status from step outcomes.
-            let has_failure: bool = self.conn.query_row(
-                "SELECT COUNT(*) > 0 FROM workflow_run_steps \
-                     WHERE workflow_run_id = ?1 \
-                       AND status IN ('failed', 'timed_out')",
-                params![run_id],
-                |row| row.get(0),
-            )?;
+        let agent_mgr = crate::agent::AgentManager::new(self.conn);
+        let now_str = Utc::now().to_rfc3339();
+        let mut reaped = Vec::new();
 
-            let final_status = if has_failure {
-                WorkflowRunStatus::Failed
-            } else {
-                WorkflowRunStatus::Completed
-            };
+        for s in stale {
+            // If the tmux window is still alive, the agent is running — just slow.
+            if let Some(ref window) = s.tmux_window {
+                if live_tmux_windows.contains(window.as_str()) {
+                    continue;
+                }
+            }
 
-            let summary =
-                "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'"
-                    .to_string();
-
-            self.update_workflow_status(&run_id, final_status.clone(), Some(&summary))?;
-            tracing::info!(
-                run_id = %run_id,
-                status = %final_status,
-                "Reaper finalized stuck workflow run"
-            );
-
-            // Best-effort: update the parent agent_runs row if still running.
-            let agent_mgr = crate::agent::AgentManager::new(self.conn);
-            let update_result = if has_failure {
-                agent_mgr.update_run_failed_if_running(&parent_run_id, &summary)
-            } else {
-                agent_mgr.update_run_completed_if_running(&parent_run_id, &summary)
-            };
-            if let Err(e) = update_result {
-                tracing::warn!(
-                    run_id = %run_id,
-                    parent_run_id = %parent_run_id,
-                    "Failed to update parent agent_runs row (best-effort, non-fatal): {e}"
+            // Agent process is dead. Mark child agent run as failed.
+            if let Some(ref child_run_id) = s.child_run_id {
+                let _ = agent_mgr.update_run_failed(
+                    child_run_id,
+                    "Stale workflow watchdog: agent process died (tmux session lost)",
                 );
             }
 
-            finalized += 1;
+            // Mark the workflow step as failed.
+            self.conn.execute(
+                "UPDATE workflow_run_steps SET status = 'failed', ended_at = ?1, \
+                 result_text = 'Agent process died — marked by stale workflow watchdog' \
+                 WHERE id = ?2",
+                params![now_str, s.step_id],
+            )?;
+
+            // Mark the workflow run as failed.
+            self.update_workflow_status(
+                &s.run_id,
+                WorkflowRunStatus::Failed,
+                Some("Stale workflow watchdog: agent process died, run marked as failed"),
+            )?;
+
+            tracing::info!(
+                run_id = %s.run_id,
+                step_name = %s.step_name,
+                running_minutes = s.running_minutes,
+                "Reaped stale workflow run — agent process was dead"
+            );
+
+            reaped.push(ReapedStaleRun {
+                run_id: s.run_id,
+                workflow_name: s.workflow_name,
+                target_label: s.target_label,
+                step_name: s.step_name,
+                running_minutes: s.running_minutes,
+            });
         }
 
-        Ok(finalized)
+        Ok(reaped)
     }
 
     /// Find the most-recently-started child workflow run that can be resumed:

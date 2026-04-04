@@ -1,7 +1,9 @@
-import type { Ticket, TicketAgentTotals } from "../../api/types";
+import type { Ticket, TicketAgentTotals, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
+import { Tooltip } from "../shared/Tooltip";
 import { formatTicketTotalsFull } from "../../utils/agentStats";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
+import { formatStepProgress, formatIteration } from "../../utils/workflowProgress";
 
 interface TicketRowProps {
   ticket: Ticket;
@@ -11,14 +13,93 @@ interface TicketRowProps {
   selected?: boolean;
   index?: number;
   labelColorMap?: Record<string, string>;
+  depth?: number;
+  blocked?: boolean;
+  unlocked?: boolean;
+  workflowStatus?: "running" | "pending" | "waiting" | "failed" | "completed" | null;
+  workflowRun?: WorkflowRun | null;
+  onStartWorkflow?: (ticket: Ticket) => void;
+  onResumeWorkflow?: (runId: string) => void;
+  isStarting?: boolean;
+  isResuming?: boolean;
+  showPipeline?: boolean;
+  hideStateAndLabels?: boolean;
+  hasChildren?: boolean;
+  collapsed?: boolean;
+  onToggleCollapse?: (ticketId: string) => void;
+  hasWorktree?: boolean;
 }
 
-export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, index, labelColorMap }: TicketRowProps) {
+const PIPELINE_DOT_COLORS: Record<string, string> = {
+  ready: "bg-emerald-400",
+  dispatched: "bg-blue-400",
+  running: "bg-amber-400",
+  completed: "bg-green-500",
+  failed: "bg-red-500",
+};
+
+function PipelineIndicator({ rawJson }: { rawJson: string }) {
+  try {
+    const parsed = JSON.parse(rawJson);
+    const status = parsed?.conductor?.status;
+    if (!status) return null;
+    const dot = PIPELINE_DOT_COLORS[status] ?? "bg-gray-400";
+    return (
+      <span className={`inline-block w-2.5 h-2.5 rounded-full ${dot}`} title={status} />
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function TicketRow({
+  ticket,
+  agentTotals,
+  repoSlug,
+  onClick,
+  selected,
+  index,
+  labelColorMap,
+  depth = 0,
+  blocked = false,
+  unlocked = false,
+  workflowStatus,
+  workflowRun,
+  onStartWorkflow,
+  onResumeWorkflow,
+  isStarting = false,
+  isResuming = false,
+  showPipeline = false,
+  hideStateAndLabels = false,
+  hasChildren = false,
+  collapsed = false,
+  onToggleCollapse,
+  hasWorktree = false,
+}: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
+  const isActive = workflowStatus === "running" || workflowStatus === "pending" || workflowStatus === "waiting";
+  // Build short progress: "Step 3/7 · implement"
+  const stepProg = workflowRun ? formatStepProgress(workflowRun) : null;
+  const iter = workflowRun ? formatIteration(workflowRun) : null;
+  const stepName = workflowRun?.current_step_name;
+  const displayName = stepName && !stepName.startsWith("workflow:") ? stepName : null;
+  const progressParts = [stepProg, iter, displayName].filter(Boolean);
+  const progressText = progressParts.length > 0 ? progressParts.join(" \u00b7 ") : null;
+  const canStart =
+    (!blocked || unlocked) &&
+    !isActive &&
+    !hasWorktree &&
+    ticket.source_type === "vantage" &&
+    ticket.state === "open" &&
+    onStartWorkflow;
+
   return (
     <tr
-      className={`cursor-pointer hover:bg-gray-50 ${selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}`}
-      onClick={() => onClick(ticket)}
+      className={[
+        blocked && !unlocked ? "opacity-50 cursor-default" : "cursor-pointer hover:bg-gray-50",
+        selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : "",
+      ].join(" ")}
+      onClick={() => (!blocked || unlocked) && onClick(ticket)}
       data-list-index={index}
     >
       {repoSlug !== undefined && (
@@ -28,41 +109,160 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
           </span>
         </td>
       )}
-      <td className="px-3 py-1.5">
-        <span className="text-indigo-600">{ticket.source_id}</span>
+      <td className="px-3 py-1.5 whitespace-nowrap">
+        <span className="inline-flex items-center gap-1">
+          {depth > 0 && (
+            <span className="text-gray-400 text-[10px]" style={{ marginLeft: `${(depth - 1) * 0.75}rem` }}>&#8627;</span>
+          )}
+          {hasChildren && onToggleCollapse && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleCollapse(ticket.source_id);
+              }}
+              className="text-gray-400 hover:text-gray-600 text-[10px] w-3 text-center"
+              aria-label={collapsed ? "Expand children" : "Collapse children"}
+              aria-expanded={!collapsed}
+            >
+              {collapsed ? "▶" : "▼"}
+            </button>
+          )}
+          {blocked && !unlocked && (
+            <span title="Blocked — waiting on parent">
+              <svg className="w-3 h-3 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
+              </svg>
+            </span>
+          )}
+          {blocked && unlocked && (
+            <Tooltip content="Unlocked — parent PR approved">
+              <svg className="w-3 h-3 text-green-500/60 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+              </svg>
+            </Tooltip>
+          )}
+          <span className={depth > 0 ? "text-indigo-400" : "text-indigo-600"}>{ticket.source_id}</span>
+        </span>
       </td>
       <td className="px-3 py-1.5 text-gray-900">{ticket.title}</td>
-      <td className="px-3 py-1.5">
-        <StatusBadge status={ticket.state} />
-      </td>
-      <td className="px-3 py-1.5">
-        <div className="flex flex-wrap gap-1">
-          {labels.map((l) => {
-            const bg = labelColorMap?.[l];
-            return bg ? (
-              <span
-                key={l}
-                className="px-1.5 py-0.5 text-xs rounded"
-                style={{ backgroundColor: bg, color: labelTextColor(bg) }}
-              >
-                {l}
-              </span>
-            ) : (
-              <span
-                key={l}
-                className="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600"
-              >
-                {l}
-              </span>
-            );
-          })}
-        </div>
-      </td>
+      {!hideStateAndLabels && (
+        <td className="px-3 py-1.5">
+          <StatusBadge status={ticket.state} />
+        </td>
+      )}
+      {!hideStateAndLabels && (
+        <td className="px-3 py-1.5">
+          <div className="flex flex-wrap gap-1">
+            {labels.map((l) => {
+              const bg = labelColorMap?.[l];
+              return bg ? (
+                <span
+                  key={l}
+                  className="px-1.5 py-0.5 text-xs rounded"
+                  style={{ backgroundColor: bg, color: labelTextColor(bg) }}
+                >
+                  {l}
+                </span>
+              ) : (
+                <span
+                  key={l}
+                  className="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600"
+                >
+                  {l}
+                </span>
+              );
+            })}
+          </div>
+        </td>
+      )}
       <td className="px-3 py-1.5 text-xs text-gray-500">
         {ticket.assignee ?? "-"}
       </td>
-      <td className="px-3 py-1.5 text-xs text-purple-600 whitespace-nowrap">
-        {agentTotals ? formatTicketTotalsFull(agentTotals) : ""}
+      {showPipeline && (
+        <td className="px-3 py-1.5 text-center">
+          <PipelineIndicator rawJson={ticket.raw_json} />
+        </td>
+      )}
+      <td className="px-3 py-1.5 text-xs">
+        {workflowStatus === "completed" ? (
+          <span className="inline-flex items-center gap-1.5 text-green-500">
+            <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+            </svg>
+            PR Approved by 🚂
+          </span>
+        ) : workflowStatus === "failed" ? (
+          <div className="flex items-start gap-1.5">
+            <svg className="w-3.5 h-3.5 shrink-0 text-red-500 mt-0.5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+            </svg>
+            <div className="min-w-0">
+              <span className="text-gray-700 dark:text-gray-200 block">Failed</span>
+              {progressText && (
+                <span className="text-[11px] text-gray-500 block">{progressText}</span>
+              )}
+            </div>
+            {onResumeWorkflow && workflowRun && (
+              isResuming ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-amber-500 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <Tooltip content="Resume from failed step">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onResumeWorkflow(workflowRun.id);
+                    }}
+                    className="mt-0.5 text-amber-600 hover:text-amber-800 shrink-0"
+                    aria-label="Resume from failed step"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </Tooltip>
+              )
+            )}
+          </div>
+        ) : isActive ? (
+          <div className="flex items-start gap-1.5">
+            <span className="relative flex h-2 w-2 shrink-0 mt-1">
+              <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+            </span>
+            <div className="min-w-0">
+              <span className="text-gray-700 dark:text-gray-200 block">Running</span>
+              {progressText && (
+                <span className="text-[11px] text-gray-500 block">{progressText}</span>
+              )}
+            </div>
+          </div>
+        ) : isStarting ? (
+          <span className="inline-flex items-center gap-1.5 text-indigo-400 text-xs">
+            <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Starting...
+          </span>
+        ) : canStart ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartWorkflow!(ticket);
+            }}
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition-transform"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6.3 2.84A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.27l9.344-5.891a1.5 1.5 0 000-2.538L6.3 2.841z" />
+            </svg>
+            Start
+          </button>
+        ) : agentTotals ? (
+          <span className="text-purple-600">{formatTicketTotalsFull(agentTotals)}</span>
+        ) : null}
       </td>
     </tr>
   );
