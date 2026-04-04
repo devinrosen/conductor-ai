@@ -96,8 +96,6 @@ pub struct ReadyTicket {
     /// The dep_type of an incoming parent_of edge, if any ('parent_of'), or `None` for
     /// unconstrained tickets with no dependency edges pointing at them.
     pub dep_type: Option<String>,
-    /// Always `0` — all returned tickets are ready by definition.
-    pub blocker_count: u32,
 }
 
 /// Filter options for [`TicketSyncer::list_filtered`].
@@ -870,7 +868,6 @@ impl<'a> TicketSyncer<'a> {
                 title: row.get(2)?,
                 url: row.get(3)?,
                 dep_type: row.get(4)?,
-                blocker_count: 0,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -2525,7 +2522,6 @@ mod tests {
 
         let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
         assert_eq!(ready.len(), 2);
-        assert!(ready.iter().all(|t| t.blocker_count == 0));
         assert!(ready.iter().all(|t| t.dep_type.is_none()));
     }
 
