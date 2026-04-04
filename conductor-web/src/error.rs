@@ -37,7 +37,8 @@ impl IntoResponse for ApiError {
                     | ConductorError::WorkflowRunAlreadyActive { .. }
                     | ConductorError::ConversationHasActiveRun { .. } => StatusCode::CONFLICT,
                     ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
-                    ConductorError::Agent(_)
+                    ConductorError::NoPendingFeedbackForRun { .. }
+                    | ConductorError::Agent(_)
                     | ConductorError::InvalidInput(_)
                     | ConductorError::UnknownSourceType(_)
                     | ConductorError::NoPendingFeedbackForRun { .. } => StatusCode::BAD_REQUEST,
