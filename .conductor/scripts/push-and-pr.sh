@@ -17,7 +17,7 @@ EOF
   exit 0
 fi
 
-git push -u origin HEAD
+SKIP_E2E=1 git push -u origin HEAD
 
 pr_create_err=$(mktemp)
 if pr_url=$(gh pr create --fill --base "$base" 2>"$pr_create_err"); then
