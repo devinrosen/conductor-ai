@@ -100,7 +100,7 @@ export function WorktreeRow({
     </svg>
   ) : null;
 
-  const nameColor = isFailed ? "text-red-600" : "text-gray-700 dark:text-gray-200";
+  const nameColor = "text-gray-300";
 
   return (
     <tr
@@ -116,7 +116,7 @@ export function WorktreeRow({
           {worktree.branch}
         </Link>
         <span className="text-[11px] text-gray-500">
-          <TimeAgo date={worktree.created_at} short />
+          created <TimeAgo date={worktree.created_at} short /> ago
         </span>
       </td>
       {/* Ticket */}
