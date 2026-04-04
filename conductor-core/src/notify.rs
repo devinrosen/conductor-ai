@@ -853,6 +853,182 @@ pub fn detect_agent_terminal_transitions<'a>(
     transitions
 }
 
+/// Fire a notification when a workflow step has been running longer than the
+/// configured threshold (stale watchdog).
+///
+/// Uses `(run_id, "workflow_stale")` as the dedup key so each stale run fires
+/// at most one notification per process lifetime.
+pub fn fire_stale_workflow_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    run_id: &str,
+    workflow_name: &str,
+    target_label: Option<&str>,
+    step_name: &str,
+    running_minutes: i64,
+) {
+    if !config.enabled || !config.workflows.on_stale {
+        return;
+    }
+
+    if !try_claim_notification(conn, run_id, "workflow_stale") {
+        return;
+    }
+
+    let title = "Conductor \u{2014} Workflow Stale";
+    let body = match target_label {
+        Some(label) => format!(
+            "{workflow_name} on {label}: step \"{step_name}\" running for {running_minutes}m with no progress"
+        ),
+        None => format!(
+            "{workflow_name}: step \"{step_name}\" running for {running_minutes}m with no progress"
+        ),
+    };
+
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind: "workflow_stale",
+            title,
+            body: &body,
+            severity: NotificationSeverity::Warning,
+            entity_id: Some(run_id),
+            entity_type: Some("workflow_run"),
+        },
+    );
+
+    if let Err(e) = show_desktop_notification(title, &body) {
+        tracing::warn!(
+            run_id,
+            workflow_name,
+            "desktop notification (stale) failed: {e}"
+        );
+    }
+
+    let slack_text = format!("[conductor] {title}: {body}");
+    maybe_send_slack(config, &slack_text);
+}
+
+/// Fire a notification when orphaned/stuck workflow runs are auto-resumed on
+/// startup or during periodic recovery.
+pub fn fire_orphan_resumed_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    run_ids: &[String],
+) {
+    if !config.enabled || !config.workflows.on_failure {
+        return;
+    }
+    if run_ids.is_empty() {
+        return;
+    }
+
+    // Use a synthetic dedup key so we don't spam on every poll tick.
+    // One notification per batch of resumed runs.
+    let dedup_key = format!("orphan_resumed_{}", run_ids.first().unwrap());
+    if !try_claim_notification(conn, &dedup_key, "workflow_orphan_resumed") {
+        return;
+    }
+
+    let n = run_ids.len();
+    let title = "Conductor \u{2014} Orphaned Workflows Recovered";
+    let body = if n == 1 {
+        "1 stuck workflow run was automatically resumed".to_string()
+    } else {
+        format!("{n} stuck workflow runs were automatically resumed")
+    };
+
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind: "workflow_orphan_resumed",
+            title,
+            body: &body,
+            severity: NotificationSeverity::Warning,
+            entity_id: None,
+            entity_type: None,
+        },
+    );
+
+    if let Err(e) = show_desktop_notification(title, &body) {
+        tracing::warn!("desktop notification (orphan resumed) failed: {e}");
+    }
+
+    let slack_text = format!("[conductor] {body}");
+    maybe_send_slack(config, &slack_text);
+}
+
+/// Fire a notification when a stale workflow run's agent was confirmed dead
+/// and the run was marked as failed (and optionally auto-restarted).
+pub fn fire_stale_reaped_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    run_id: &str,
+    workflow_name: &str,
+    target_label: Option<&str>,
+    step_name: &str,
+    auto_restarted: bool,
+) {
+    if !config.enabled || !config.workflows.on_stale {
+        return;
+    }
+
+    if !try_claim_notification(conn, run_id, "workflow_stale_reaped") {
+        return;
+    }
+
+    let action = if auto_restarted {
+        "marked as failed and auto-restarted"
+    } else {
+        "marked as failed"
+    };
+    let title = "Conductor \u{2014} Dead Workflow Detected";
+    let body = match target_label {
+        Some(label) => format!(
+            "{workflow_name} on {label}: agent for step \"{step_name}\" was dead — {action}"
+        ),
+        None => format!("{workflow_name}: agent for step \"{step_name}\" was dead — {action}"),
+    };
+
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind: "workflow_stale_reaped",
+            title,
+            body: &body,
+            severity: NotificationSeverity::Warning,
+            entity_id: Some(run_id),
+            entity_type: Some("workflow_run"),
+        },
+    );
+
+    if let Err(e) = show_desktop_notification(title, &body) {
+        tracing::warn!(
+            run_id,
+            workflow_name,
+            "desktop notification (stale reaped) failed: {e}"
+        );
+    }
+
+    let slack_text = format!("[conductor] {title}: {body}");
+    maybe_send_slack(config, &slack_text);
+}
+
+fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
+    #[cfg(not(any(test, feature = "test-notifications")))]
+    {
+        notify_rust::Notification::new()
+            .summary(title)
+            .body(body)
+            .show()
+            .map(|_| ())
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(any(test, feature = "test-notifications"))]
+    let _ = (title, body);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,6 +1045,8 @@ mod tests {
                 on_gate_ci: false,
                 on_gate_pr_review: true,
             }),
+                on_stale: true,
+            },
             slack: SlackConfig::default(),
             web_url: None,
         }

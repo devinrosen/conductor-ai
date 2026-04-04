@@ -4,7 +4,7 @@ use std::process::Command;
 ///
 /// Calls `tmux list-windows -a` once and returns the set of window names.
 /// Returns an empty set if tmux is not running or the command fails.
-pub(crate) fn list_live_tmux_windows() -> std::collections::HashSet<String> {
+pub fn list_live_tmux_windows() -> std::collections::HashSet<String> {
     let Ok(output) = Command::new("tmux")
         .args(["list-windows", "-a", "-F", "#{window_name}"])
         .output()

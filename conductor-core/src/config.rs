@@ -134,6 +134,10 @@ pub struct WorkflowNotificationConfig {
     pub on_gate_ci: bool,
     #[serde(default = "default_true")]
     pub on_gate_pr_review: bool,
+    /// Fire a notification when a workflow step has been running longer than
+    /// `general.stale_workflow_minutes`. Defaults to true.
+    #[serde(default = "default_true")]
+    pub on_stale: bool,
 }
 
 impl Default for WorkflowNotificationConfig {
@@ -144,6 +148,7 @@ impl Default for WorkflowNotificationConfig {
             on_gate_human: true,
             on_gate_ci: false,
             on_gate_pr_review: true,
+            on_stale: true,
         }
     }
 }
@@ -309,6 +314,10 @@ pub struct GeneralConfig {
     /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,
+    /// Minutes a workflow step can run without progress before a "stale" alert fires.
+    /// Set to 0 to disable stale workflow detection. Defaults to 60.
+    #[serde(default = "default_stale_workflow_minutes")]
+    pub stale_workflow_minutes: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,6 +356,10 @@ fn default_fix_prefix() -> String {
 
 fn default_stale_feature_days() -> u32 {
     14
+}
+
+fn default_stale_workflow_minutes() -> u32 {
+    60
 }
 
 fn default_true() -> bool {
@@ -412,6 +425,7 @@ impl GeneralConfig {
                 None
             }
             None => None,
+            stale_workflow_minutes: default_stale_workflow_minutes(),
         }
     }
 }
