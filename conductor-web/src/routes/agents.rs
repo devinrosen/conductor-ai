@@ -886,7 +886,9 @@ pub struct StartRepoAgentRequest {
     pub new_session: bool,
 }
 
-/// Start a read-only agent scoped to a repo. Uses `--permission-mode plan`.
+/// Start a read-only agent scoped to a repo. Uses `--allowedTools` restriction with
+/// `--dangerously-skip-permissions` for unrestricted Bash/gh access while blocking
+/// file-writing tools (Edit, Write, MultiEdit, NotebookEdit).
 pub async fn start_repo_agent(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -928,8 +930,8 @@ pub async fn start_repo_agent(
             model.as_deref(),
         )?;
 
-        // Build args with plan permission mode (read-only)
-        let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
+        // Build args with repo-safe permission mode (read-only tools, unrestricted Bash/gh)
+        let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
         let args = conductor_core::agent_runtime::build_agent_args_with_mode(
             &run.id,
             &repo.local_path,
