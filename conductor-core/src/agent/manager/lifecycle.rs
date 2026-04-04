@@ -778,4 +778,50 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.log_file.as_deref(), Some("/tmp/agent-logs/run.log"));
     }
+
+    #[test]
+    fn test_update_run_failed_if_running_noop_when_already_failed() {
+        // The `AND status = 'running'` guard must prevent overwriting a run that
+        // has already been finalized (e.g. by another reaper path).
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_failed(&run.id, "original error").unwrap();
+
+        // Calling the if_running variant on an already-failed run must be a no-op.
+        mgr.update_run_failed_if_running(&run.id, "overwritten error")
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Failed);
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("original error"),
+            "result_text must not be overwritten when run is not running"
+        );
+    }
+
+    #[test]
+    fn test_update_run_completed_if_running_noop_when_already_failed() {
+        // The `AND status = 'running'` guard must prevent overwriting a run that
+        // has already been finalized (e.g. by another reaper path).
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_failed(&run.id, "original error").unwrap();
+
+        // Calling the if_running variant on an already-failed run must be a no-op.
+        mgr.update_run_completed_if_running(&run.id, "overwritten result")
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Failed);
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("original error"),
+            "result_text must not be overwritten when run is not running"
+        );
+    }
 }
