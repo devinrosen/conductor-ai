@@ -316,9 +316,16 @@ export function RepoDetailPage() {
     setStartingWorkflow(ticket.id);
     try {
       const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title);
+      // Parse base_branch from Vantage deliverable if present
+      let fromBranch: string | undefined;
+      try {
+        const raw = JSON.parse(ticket.raw_json);
+        if (raw.base_branch) fromBranch = raw.base_branch;
+      } catch { /* ignore */ }
       const wt = await api.createWorktree(repoId!, {
         name: wtName,
         ticket_id: ticket.id,
+        from_branch: fromBranch,
       });
       const result = await api.runWorkflow(wt.id, {
         name: "ticket-to-pr",
@@ -509,13 +516,6 @@ export function RepoDetailPage() {
           </svg>
         </button>
       </div>
-
-      {actionError && (
-        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
-          <span>{actionError}</span>
-          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-600 ml-2">&times;</button>
-        </div>
-      )}
 
       {/* Settings (collapsible) */}
       {settingsOpen && (
@@ -879,11 +879,11 @@ export function RepoDetailPage() {
         )}
       </section>
 
-      {/* Error Banner */}
+      {/* Error toast — fixed at top so it's always visible */}
       {actionError && (
-        <div className="px-3 py-2 text-sm text-red-700 bg-red-50 rounded-md border border-red-200 flex items-center justify-between">
-          <span>{actionError}</span>
-          <button onClick={() => setActionError(null)} className="text-red-500 hover:text-red-700 text-xs ml-2">Dismiss</button>
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-lg w-full px-4 py-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg shadow-lg flex items-center justify-between">
+          <span className="truncate">{actionError}</span>
+          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-600 ml-3 shrink-0">&times;</button>
         </div>
       )}
 

@@ -192,6 +192,31 @@ impl<'a> WorktreeManager<'a> {
             } else {
                 resolve_base_branch(&repo.local_path, &repo.default_branch)
             };
+            // If the base branch doesn't exist locally, try fetching it from remote
+            let local_ref_exists = git_in(&repo.local_path)
+                .args(["rev-parse", "--verify", &format!("refs/heads/{base}")])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !local_ref_exists {
+                tracing::info!("Base branch {base:?} not found locally, fetching from origin");
+                let fetch_result = git_in(&repo.local_path)
+                    .args(["fetch", "origin", &format!("{base}:{base}")])
+                    .output();
+                match fetch_result {
+                    Ok(o) if o.status.success() => {
+                        tracing::info!("Fetched {base:?} from origin");
+                    }
+                    _ => {
+                        return Err(ConductorError::Git(
+                            crate::error::SubprocessFailure::from_message(
+                                "git fetch",
+                                format!("Base branch '{base}' not found locally or on remote"),
+                            ),
+                        ));
+                    }
+                }
+            }
             let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
