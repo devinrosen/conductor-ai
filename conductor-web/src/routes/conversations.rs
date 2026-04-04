@@ -343,9 +343,7 @@ mod tests {
         {
             let db = state.db.lock().await;
             let agent_mgr = conductor_core::agent::AgentManager::new(&db);
-            agent_mgr
-                .submit_feedback(&fb1_id, "consumed")
-                .unwrap();
+            agent_mgr.submit_feedback(&fb1_id, "consumed").unwrap();
         }
         let body = serde_json::json!({ "response": "yes" });
         let uri = format!("/api/conversations/{conv1_id}/messages/{run1_id}/respond");
