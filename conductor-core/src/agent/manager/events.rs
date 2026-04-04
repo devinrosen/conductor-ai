@@ -73,6 +73,25 @@ impl<'a> AgentManager<'a> {
         )
     }
 
+    /// List step events for a run inserted after `after_id`, excluding
+    /// terminal `result` events.  This is the correct source for SSE
+    /// `agent_step` emissions — `result` rows carry the final outcome and
+    /// should never be surfaced as incremental steps.
+    pub fn list_step_events_for_run_since(
+        &self,
+        run_id: &str,
+        after_id: &str,
+    ) -> Result<Vec<AgentRunEvent>> {
+        query_collect(
+            self.conn,
+            &format!(
+                "{AGENT_RUN_EVENTS_SELECT} WHERE run_id = ?1 AND id > ?2 AND kind != 'result' ORDER BY id ASC"
+            ),
+            params![run_id, after_id],
+            row_to_agent_run_event,
+        )
+    }
+
     /// List all events for a run in chronological order.
     pub fn list_events_for_run(&self, run_id: &str) -> Result<Vec<AgentRunEvent>> {
         query_collect(
@@ -283,6 +302,68 @@ mod tests {
         // after ev3 returns nothing
         let after_last = mgr.list_events_for_run_since(&run.id, &ev3.id).unwrap();
         assert!(after_last.is_empty());
+    }
+
+    #[test]
+    fn test_list_events_for_run_since_cross_run_isolation() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let t = "2024-01-01T00:00:00Z";
+
+        let run_a = mgr.create_run(Some("w1"), "Run A", None, None).unwrap();
+        let run_b = mgr.create_run(Some("w1"), "Run B", None, None).unwrap();
+
+        mgr.create_event(&run_a.id, "tool", "Event for A", t, None)
+            .unwrap();
+        let b_ev = mgr
+            .create_event(&run_b.id, "tool", "Event for B", t, None)
+            .unwrap();
+
+        // Querying run_a returns only run_a's events, never run_b's
+        let a_events = mgr.list_events_for_run_since(&run_a.id, "").unwrap();
+        assert_eq!(a_events.len(), 1);
+        assert_eq!(a_events[0].run_id, run_a.id);
+
+        // Querying run_b returns only run_b's events, never run_a's
+        let b_events = mgr.list_events_for_run_since(&run_b.id, "").unwrap();
+        assert_eq!(b_events.len(), 1);
+        assert_eq!(b_events[0].id, b_ev.id);
+        assert_eq!(b_events[0].run_id, run_b.id);
+    }
+
+    #[test]
+    fn test_list_step_events_for_run_since_excludes_result() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let t = "2024-01-01T00:00:00Z";
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        let ev1 = mgr
+            .create_event(&run.id, "tool", "[Bash] cargo build", t, None)
+            .unwrap();
+        let ev_result = mgr
+            .create_event(&run.id, "result", "Done", t, None)
+            .unwrap();
+        let ev3 = mgr
+            .create_event(&run.id, "text", "Planning", t, None)
+            .unwrap();
+
+        // list_step_events_for_run_since must exclude "result" rows.
+        // We verify membership rather than position because ULIDs generated
+        // within the same millisecond have random ordering.
+        let steps = mgr.list_step_events_for_run_since(&run.id, "").unwrap();
+        let step_ids: std::collections::HashSet<&str> =
+            steps.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(steps.len(), 2, "exactly two non-result events");
+        assert!(step_ids.contains(ev1.id.as_str()), "ev1 must be included");
+        assert!(step_ids.contains(ev3.id.as_str()), "ev3 must be included");
+        assert!(
+            !step_ids.contains(ev_result.id.as_str()),
+            "result event must be excluded"
+        );
+        assert!(steps.iter().all(|e| e.kind != "result"));
     }
 
     #[test]
