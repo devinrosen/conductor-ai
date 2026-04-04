@@ -140,6 +140,34 @@ impl<'a> ConversationManager<'a> {
         Ok(())
     }
 
+    /// Hard-delete a conversation and all its associated agent runs.
+    ///
+    /// Child tables of `agent_runs` (events, steps, feedback, created issues) are
+    /// removed automatically via their `ON DELETE CASCADE` FK constraints.
+    ///
+    /// # Errors
+    /// - `ConductorError::ConversationNotFound` if the conversation does not exist.
+    /// - `ConductorError::ConversationHasActiveRun` if there is an active or
+    ///   waiting agent run — the caller must stop the run first.
+    pub fn delete(&self, id: &str) -> Result<()> {
+        self.get(id)?
+            .ok_or_else(|| ConductorError::ConversationNotFound { id: id.to_string() })?;
+
+        if self.has_active_run(id)? {
+            return Err(ConductorError::ConversationHasActiveRun { id: id.to_string() });
+        }
+
+        self.conn.execute(
+            "DELETE FROM agent_runs WHERE conversation_id = ?1",
+            params![id],
+        )?;
+
+        self.conn
+            .execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
+
+        Ok(())
+    }
+
     /// Validate, create an agent run record for this conversation, update metadata,
     /// and return the new run together with the resume session ID (if any).
     ///
@@ -384,6 +412,80 @@ mod tests {
 
         let session = mgr.last_completed_session_id(&conv.id).unwrap();
         assert_eq!(session.as_deref(), Some("sess-bbb"));
+    }
+
+    #[test]
+    fn test_delete_removes_conversation() {
+        let conn = setup_db();
+        let mgr = ConversationManager::new(&conn);
+        let conv = mgr.create(ConversationScope::Repo, "r1").unwrap();
+
+        mgr.delete(&conv.id).unwrap();
+
+        assert!(mgr.get(&conv.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_returns_not_found_for_unknown_id() {
+        let conn = setup_db();
+        let mgr = ConversationManager::new(&conn);
+        let err = mgr.delete("nonexistent").unwrap_err();
+        assert!(
+            matches!(err, ConductorError::ConversationNotFound { .. }),
+            "expected ConversationNotFound, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_delete_blocks_when_active_run_exists() {
+        let conn = setup_db();
+        let mgr = ConversationManager::new(&conn);
+        let conv = mgr.create(ConversationScope::Repo, "r1").unwrap();
+
+        // Create a running agent run linked to this conversation.
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        agent_mgr
+            .create_repo_run_for_conversation("r1", "hello", None, None, &conv.id)
+            .unwrap();
+
+        let err = mgr.delete(&conv.id).unwrap_err();
+        assert!(
+            matches!(err, ConductorError::ConversationHasActiveRun { .. }),
+            "expected ConversationHasActiveRun, got: {err}"
+        );
+        // Conversation must still exist.
+        assert!(mgr.get(&conv.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_delete_cascades_agent_runs() {
+        let conn = setup_db();
+        let mgr = ConversationManager::new(&conn);
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let conv = mgr.create(ConversationScope::Repo, "r1").unwrap();
+
+        // Create a run and immediately mark it completed so delete is not blocked.
+        let run = agent_mgr
+            .create_repo_run_for_conversation("r1", "q", None, None, &conv.id)
+            .unwrap();
+        agent_mgr
+            .update_run_completed(
+                &run.id, None, None, None, None, None, None, None, None, None,
+            )
+            .unwrap();
+
+        mgr.delete(&conv.id).unwrap();
+
+        // Both conversation and run must be gone.
+        assert!(mgr.get(&conv.id).unwrap().is_none());
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_runs WHERE conversation_id = ?1",
+                params![conv.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
     }
 
     #[test]

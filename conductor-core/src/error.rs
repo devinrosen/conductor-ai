@@ -137,6 +137,12 @@ pub enum ConductorError {
 
     #[error("unknown ticket source type: {0}")]
     UnknownSourceType(String),
+
+    #[error("conversation not found: {id}")]
+    ConversationNotFound { id: String },
+
+    #[error("cannot delete conversation {id}: it has an active or waiting agent run")]
+    ConversationHasActiveRun { id: String },
 }
 
 impl ConductorError {
@@ -185,6 +191,8 @@ impl ConductorError {
             Self::WorkflowRunAlreadyActive { .. } => 61,
             Self::WorkflowRunNotFound { .. } => 62,
             Self::UnknownSourceType(_) => 43,
+            Self::ConversationNotFound { .. } => 57,
+            Self::ConversationHasActiveRun { .. } => 58,
         }
     }
 }
@@ -243,6 +251,8 @@ mod tests {
             ConductorError::WorkflowRunAlreadyActive { name: "wf".into() },
             ConductorError::WorkflowRunNotFound { id: "id".into() },
             ConductorError::UnknownSourceType("jira".into()),
+            ConductorError::ConversationNotFound { id: "id".into() },
+            ConductorError::ConversationHasActiveRun { id: "id".into() },
         ]
     }
 
