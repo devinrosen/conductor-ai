@@ -131,11 +131,11 @@ export function TicketRow({
             </span>
           )}
           {blocked && unlocked && (
-            <span title="Unlocked — parent PR approved">
-              <svg className="w-3 h-3 text-emerald-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5a3 3 0 016 0v.5a.75.75 0 001.5 0v-.5A4.5 4.5 0 0010 1z" />
+            <Tooltip content="Unlocked — parent PR approved">
+              <svg className="w-3 h-3 text-green-500/60 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
               </svg>
-            </span>
+            </Tooltip>
           )}
           <span className={depth > 0 ? "text-indigo-400" : "text-indigo-600"}>{ticket.source_id}</span>
         </span>
