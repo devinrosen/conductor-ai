@@ -118,6 +118,15 @@ async fn main() -> Result<()> {
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed on startup: {e}"),
         }
+        match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+            Ok(n) if n > 0 => {
+                tracing::info!("Reaper finalized {n} stuck workflow run(s) on startup")
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("reap_finalization_stuck_workflow_runs failed on startup: {e}")
+            }
+        }
         match wf_mgr.detect_stuck_workflow_run_ids(60) {
             Ok(ids) if !ids.is_empty() => {
                 let n = ids.len();
@@ -208,6 +217,15 @@ async fn main() -> Result<()> {
                 }
                 let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
                 wf_mgr.reap_orphaned_workflow_runs()?;
+                match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("Reaper finalized {n} stuck workflow run(s)")
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}")
+                    }
+                }
                 match wf_mgr.detect_stuck_workflow_run_ids(60) {
                     Ok(ids) if !ids.is_empty() => {
                         let n = ids.len();
