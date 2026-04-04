@@ -301,16 +301,23 @@ impl<'a> WorkflowManager<'a> {
             );
 
             // Best-effort: update the parent agent_runs row if still running.
-            let update_result = self.conn.execute(
-                "UPDATE agent_runs SET status = ?1, result_text = ?2, ended_at = ?3 \
-                 WHERE id = ?4 AND status = 'running'",
-                params![
-                    final_status.to_string(),
-                    summary,
-                    chrono::Utc::now().to_rfc3339(),
-                    parent_run_id,
-                ],
-            );
+            let agent_mgr = crate::agent::AgentManager::new(self.conn);
+            let update_result = if has_failure {
+                agent_mgr.update_run_failed(&parent_run_id, &summary)
+            } else {
+                agent_mgr.update_run_completed(
+                    &parent_run_id,
+                    None,
+                    Some(&summary),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            };
             if let Err(e) = update_result {
                 tracing::warn!(
                     run_id = %run_id,
