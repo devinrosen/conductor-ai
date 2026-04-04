@@ -46,6 +46,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                                 let label = match ts.source_type_str() {
                                     "github" => "GitHub issues",
                                     "jira" => "Jira issues",
+                                    "vantage" => "Vantage deliverables",
                                     other => other,
                                 };
                                 sync_repo(
@@ -54,7 +55,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                                     &r.slug,
                                     ts.source_type_str(),
                                     label,
-                                    || ts.sync(token),
+                                    || ts.sync(token, Some(&r.slug)),
                                 );
                             }
                             Err(e) => {

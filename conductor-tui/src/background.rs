@@ -343,23 +343,18 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(ids) if !ids.is_empty() => {
                     let n = ids.len();
                     tracing::info!("Auto-resuming {n} stuck workflow run(s)");
+                    // Notify user about orphaned runs being recovered.
+                    conductor_core::notify::fire_orphan_resumed_notification(
+                        &conn,
+                        &config.notifications,
+                        &ids,
+                    );
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                     for run_id in ids {
                         let config_clone = config.clone();
                         let bin_dir = conductor_bin_dir.clone();
-                        std::thread::spawn(move || {
-                            let params = conductor_core::workflow::WorkflowResumeStandalone {
-                                config: config_clone,
-                                workflow_run_id: run_id.clone(),
-                                model: None,
-                                from_step: None,
-                                restart: false,
-                                db_path: None,
-                                conductor_bin_dir: bin_dir,
-                            };
-                            if let Err(e) =
-                                conductor_core::workflow::resume_workflow_standalone(&params)
-                            {
+                        spawn_workflow_resume(config_clone, run_id, bin_dir, |run_id, result| {
+                            if let Err(e) = result {
                                 tracing::warn!(
                                     run_id = %run_id,
                                     "Auto-resume of stuck workflow run failed: {e}"
@@ -370,6 +365,77 @@ pub fn poll_data() -> Option<PollResult> {
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
+            }
+            // Stale workflow watchdog: check tmux liveness, reap dead runs,
+            // fire notifications, and auto-restart.
+            let stale_mins = config.general.stale_workflow_minutes;
+            if stale_mins > 0 {
+                // Detect once, fire informational alerts, then reap dead agents.
+                let stale_runs = match wf_mgr.detect_stale_workflow_runs(stale_mins as i64) {
+                    Ok(runs) => {
+                        for s in &runs {
+                            conductor_core::notify::fire_stale_workflow_notification(
+                                &conn,
+                                &config.notifications,
+                                &s.run_id,
+                                &s.workflow_name,
+                                s.target_label.as_deref(),
+                                &s.step_name,
+                                s.running_minutes,
+                            );
+                        }
+                        runs
+                    }
+                    Err(e) => {
+                        tracing::warn!("detect_stale_workflow_runs failed: {e}");
+                        vec![]
+                    }
+                };
+                // Reap runs whose agent process is confirmed dead and auto-restart,
+                // passing the already-detected list to avoid a redundant DB query.
+                let live_windows = conductor_core::agent::list_live_tmux_windows();
+                match wf_mgr.reap_detected_stale_runs(stale_runs, &live_windows) {
+                    Ok(reaped) if !reaped.is_empty() => {
+                        let conductor_bin_dir =
+                            conductor_core::workflow::resolve_conductor_bin_dir();
+                        for r in &reaped {
+                            let config_for_thread = config.clone();
+                            let config_for_notify = config.clone();
+                            let bin_dir = conductor_bin_dir.clone();
+                            let run_id = r.run_id.clone();
+                            let workflow_name = r.workflow_name.clone();
+                            let target_label = r.target_label.clone();
+                            let step_name = r.step_name.clone();
+                            spawn_workflow_resume(
+                                config_for_thread,
+                                run_id,
+                                bin_dir,
+                                move |run_id, result| {
+                                    let auto_restarted = result.is_ok();
+                                    if let Err(e) = &result {
+                                        tracing::warn!(
+                                            run_id = %run_id,
+                                            "Auto-restart of stale workflow run failed: {e}"
+                                        );
+                                    }
+                                    if let Ok(thread_conn) = open_database(&db_path()) {
+                                        conductor_core::notify::fire_stale_reaped_notification(
+                                            &thread_conn,
+                                            &config_for_notify.notifications,
+                                            run_id,
+                                            &workflow_name,
+                                            target_label.as_deref(),
+                                            &step_name,
+                                            auto_restarted,
+                                        );
+                                    }
+                                },
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
+                }
             }
         }
     }
@@ -785,6 +851,54 @@ pub fn spawn_workflow_poller(
     });
 }
 
+/// Spawn a thread that constructs a [`WorkflowResumeStandalone`] params struct,
+/// calls [`resume_workflow_standalone`], then invokes `on_result` with the run ID
+/// and the outcome.  Centralises the boilerplate shared by stuck-run recovery
+/// and stale-run auto-restart so only the post-result handling differs.
+fn spawn_workflow_resume<F>(
+    config: conductor_core::config::Config,
+    run_id: String,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+    on_result: F,
+) where
+    F: FnOnce(&str, Result<(), String>) + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let params = conductor_core::workflow::WorkflowResumeStandalone {
+            config,
+            workflow_run_id: run_id.clone(),
+            model: None,
+            from_step: None,
+            restart: false,
+            db_path: None,
+            conductor_bin_dir,
+        };
+        let result = conductor_core::workflow::resume_workflow_standalone(&params)
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+        on_result(&run_id, result);
+    });
+}
+
+/// Sort comparator for workflow definitions: grouped first (alphabetically),
+/// then ungrouped, with secondary sort by name within each group.
+fn cmp_workflow_defs(
+    a: &conductor_core::workflow::WorkflowDef,
+    b: &conductor_core::workflow::WorkflowDef,
+) -> std::cmp::Ordering {
+    let ka = (
+        if a.group.is_none() { 1u8 } else { 0u8 },
+        a.group.as_deref().unwrap_or(""),
+        a.name.as_str(),
+    );
+    let kb = (
+        if b.group.is_none() { 1u8 } else { 0u8 },
+        b.group.as_deref().unwrap_or(""),
+        b.name.as_str(),
+    );
+    ka.cmp(&kb)
+}
+
 fn poll_workflow_data(
     worktree_id: Option<&str>,
     worktree_path: Option<&str>,
@@ -809,19 +923,7 @@ fn poll_workflow_data(
         // Worktree-scoped: load defs from this worktree's filesystem path.
         let (mut defs, warnings) =
             WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default();
-        defs.sort_by(|a, b| {
-            let ka = (
-                if a.group.is_none() { 1u8 } else { 0u8 },
-                a.group.as_deref().unwrap_or(""),
-                a.name.as_str(),
-            );
-            let kb = (
-                if b.group.is_none() { 1u8 } else { 0u8 },
-                b.group.as_deref().unwrap_or(""),
-                b.name.as_str(),
-            );
-            ka.cmp(&kb)
-        });
+        defs.sort_by(cmp_workflow_defs);
         (Some(defs), Some(Vec::new()), warnings)
     } else if let Some(rid) = repo_id {
         // Repo-scoped: scan all active worktrees of this repo, deduplicate by name.
@@ -856,19 +958,7 @@ fn poll_workflow_data(
                 all_defs.extend(repo_defs);
             }
         }
-        all_defs.sort_by(|a, b| {
-            let ka = (
-                if a.group.is_none() { 1u8 } else { 0u8 },
-                a.group.as_deref().unwrap_or(""),
-                a.name.as_str(),
-            );
-            let kb = (
-                if b.group.is_none() { 1u8 } else { 0u8 },
-                b.group.as_deref().unwrap_or(""),
-                b.name.as_str(),
-            );
-            ka.cmp(&kb)
-        });
+        all_defs.sort_by(cmp_workflow_defs);
         // def_slugs empty: all defs belong to the same repo, no slug labels needed.
         (Some(all_defs), Some(Vec::new()), all_warnings)
     } else {

@@ -11,6 +11,8 @@ use crate::schema_config::{OutputSchema, SchemaIssue};
 use crate::workflow_dsl::{self, WorkflowDef, WorkflowNode};
 use crate::worktree::WorktreeManager;
 
+use crate::issue_source::{IssueSourceManager, VantageConfig};
+
 use super::manager::WorkflowManager;
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 use super::types::{
@@ -50,6 +52,79 @@ pub(super) struct ResumeContext {
     /// Pre-loaded child agent runs keyed by run ID, avoiding N+1 queries
     /// when accumulating costs during restore.
     pub child_runs: HashMap<String, crate::agent::AgentRun>,
+}
+
+/// Vantage context needed to write back pipeline status.
+struct VantageContext {
+    deliverable_id: String,
+    sdlc_root: String,
+}
+
+/// If the workflow's ticket is a Vantage deliverable, resolve the sdlc_root
+/// so we can write back pipeline status.
+fn resolve_vantage_context(
+    conn: &Connection,
+    state: &ExecutionState<'_>,
+) -> Option<VantageContext> {
+    let ticket_id = match state.ticket_id.as_ref() {
+        Some(id) => id,
+        None => {
+            tracing::debug!("Vantage context: no ticket_id on workflow state");
+            return None;
+        }
+    };
+    let ticket = match crate::tickets::TicketSyncer::new(conn).get_by_id(ticket_id) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to look up ticket {ticket_id}: {e}");
+            return None;
+        }
+    };
+    if ticket.source_type != "vantage" {
+        tracing::debug!(
+            "Vantage context: ticket {} is source_type={}, not vantage",
+            ticket_id,
+            ticket.source_type
+        );
+        return None;
+    }
+    let repo_id = match state.repo_id.as_ref() {
+        Some(id) => id,
+        None => {
+            tracing::debug!("Vantage context: no repo_id on workflow state");
+            return None;
+        }
+    };
+    let sources = match IssueSourceManager::new(conn).list(repo_id) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to list issue sources: {e}");
+            return None;
+        }
+    };
+    let vantage_source = match sources.iter().find(|s| s.source_type == "vantage") {
+        Some(s) => s,
+        None => {
+            tracing::debug!("Vantage context: no vantage issue source for repo {repo_id}");
+            return None;
+        }
+    };
+    let cfg: VantageConfig = match serde_json::from_str(&vantage_source.config_json) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to parse config: {e}");
+            return None;
+        }
+    };
+    tracing::info!(
+        "Vantage context resolved: deliverable={}, sdlc_root={}",
+        ticket.source_id,
+        cfg.sdlc_root
+    );
+    Some(VantageContext {
+        deliverable_id: ticket.source_id,
+        sdlc_root: cfg.sdlc_root,
+    })
 }
 
 /// Mutable runtime state for a workflow execution.
@@ -528,6 +603,18 @@ pub(super) fn run_workflow_engine(
     state: &mut ExecutionState<'_>,
     workflow: &WorkflowDef,
 ) -> Result<WorkflowResult> {
+    // Notify Vantage on dispatch (best-effort — don't fail the workflow)
+    let vantage_ctx = resolve_vantage_context(state.conn, state);
+    if let Some(ref ctx) = vantage_ctx {
+        if let Err(e) = crate::vantage::notify_dispatched(
+            &ctx.deliverable_id,
+            &ctx.sdlc_root,
+            &state.workflow_run_id,
+        ) {
+            tracing::warn!("Vantage dispatch notification failed: {e}");
+        }
+    }
+
     // Execute main body
     let mut body_error: Option<String> = None;
     let body_result = execute_nodes(state, &workflow.body, true);
@@ -583,6 +670,24 @@ pub(super) fn run_workflow_engine(
         )?;
         state.flush_metrics()?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
+
+        // Notify Vantage of completion (best-effort)
+        if let Some(ref ctx) = vantage_ctx {
+            let pr_url = state.inputs.get("pr_url").map(|s| s.as_str());
+            let wt_slug = if state.worktree_slug.is_empty() {
+                None
+            } else {
+                Some(state.worktree_slug.as_str())
+            };
+            if let Err(e) = crate::vantage::notify_completed(
+                &ctx.deliverable_id,
+                &ctx.sdlc_root,
+                pr_url,
+                wt_slug,
+            ) {
+                tracing::warn!("Vantage completion notification failed: {e}");
+            }
+        }
     } else {
         state
             .agent_mgr
@@ -594,6 +699,15 @@ pub(super) fn run_workflow_engine(
         )?;
         state.flush_metrics()?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
+
+        // Notify Vantage of failure (best-effort)
+        if let Some(ref ctx) = vantage_ctx {
+            if let Err(e) =
+                crate::vantage::notify_failed(&ctx.deliverable_id, &ctx.sdlc_root, &summary)
+            {
+                tracing::warn!("Vantage failure notification failed: {e}");
+            }
+        }
     }
 
     tracing::info!(
@@ -1358,27 +1472,7 @@ pub(super) fn restore_completed_step(
     // Accumulate costs from the pre-loaded child agent run
     if let Some(ref child_run_id) = step.child_run_id {
         if let Some(run) = ctx.child_runs.get(child_run_id) {
-            if let Some(cost) = run.cost_usd {
-                state.total_cost += cost;
-            }
-            if let Some(turns) = run.num_turns {
-                state.total_turns += turns;
-            }
-            if let Some(dur) = run.duration_ms {
-                state.total_duration_ms += dur;
-            }
-            if let Some(t) = run.input_tokens {
-                state.total_input_tokens += t;
-            }
-            if let Some(t) = run.output_tokens {
-                state.total_output_tokens += t;
-            }
-            if let Some(t) = run.cache_read_input_tokens {
-                state.total_cache_read_input_tokens += t;
-            }
-            if let Some(t) = run.cache_creation_input_tokens {
-                state.total_cache_creation_input_tokens += t;
-            }
+            state.accumulate_agent_run(run);
         } else {
             tracing::warn!(
                 "resume: child agent run '{child_run_id}' for step '{step_key}' not found \
