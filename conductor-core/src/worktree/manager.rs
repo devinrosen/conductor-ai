@@ -66,8 +66,8 @@ fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithSta
 /// parent that has an active worktree.  Returns `None` if the ticket has no
 /// resolvable parent branch (non-Vantage, no deps, or no parent worktree).
 ///
-/// This function parses `raw_json` directly; swap to a `ticket_dependencies`
-/// table query once RFC 009 lands.
+/// Dependency IDs are extracted via [`crate::vantage::get_parent_deliverable_ids`];
+/// swap to a `ticket_dependencies` table query once RFC 009 lands.
 fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> Option<String> {
     let syncer = TicketSyncer::new(conn);
     let ticket = syncer.get_by_id(ticket_id).ok()?;
@@ -76,21 +76,26 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
         return None;
     }
 
-    let raw: serde_json::Value = serde_json::from_str(&ticket.raw_json).ok()?;
-    let deps = raw.get("dependencies")?.as_array()?;
+    let dep_ids = crate::vantage::get_parent_deliverable_ids(&ticket.raw_json);
 
-    for dep_id in deps.iter().filter_map(|v| v.as_str()) {
+    for dep_id in &dep_ids {
         let parent = match syncer.get_by_source_id(repo_id, dep_id) {
             Ok(t) => t,
             Err(_) => continue,
         };
         // Find an active worktree for this parent ticket
-        let worktrees: Vec<Worktree> = query_collect(
+        let worktrees: Vec<Worktree> = match query_collect(
             conn,
             &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
             params![&parent.id],
             map_worktree_row,
-        ).ok().unwrap_or_default();
+        ) {
+            Ok(wts) => wts,
+            Err(e) => {
+                tracing::warn!("resolve_parent_branch: DB query failed for ticket {}: {e}", parent.id);
+                continue;
+            }
+        };
         if let Some(wt) = worktrees
             .iter()
             .find(|w| w.status == WorktreeStatus::Active)
@@ -1008,5 +1013,100 @@ impl<'a> WorktreeManager<'a> {
         }
 
         Ok(cleaned)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::create_test_conn;
+
+    fn insert_ticket(conn: &Connection, id: &str, repo_id: &str, source_id: &str, raw_json: &str) {
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES (?1, ?2, 'vantage', ?3, 'Test', '', 'open', '[]', '', '2024-01-01T00:00:00Z', ?4)",
+            rusqlite::params![id, repo_id, source_id, raw_json],
+        ).unwrap();
+    }
+
+    fn insert_worktree_with_ticket(
+        conn: &Connection,
+        id: &str,
+        repo_id: &str,
+        ticket_id: &str,
+        status: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, ticket_id, created_at) \
+             VALUES (?1, ?2, ?1, 'feat/dep', '/tmp/dep', ?3, ?4, '2024-01-01T00:00:00Z')",
+            rusqlite::params![id, repo_id, status, ticket_id],
+        ).unwrap();
+    }
+
+    #[test]
+    fn resolve_parent_branch_returns_none_for_non_vantage_ticket() {
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) VALUES ('r1','repo','/p','u','/w','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'github', '42', 'Issue', '', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+        assert!(resolve_parent_branch(&conn, "t1", "r1").is_none());
+    }
+
+    #[test]
+    fn resolve_parent_branch_returns_none_when_no_dependencies() {
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) VALUES ('r1','repo','/p','u','/w','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        insert_ticket(&conn, "t1", "r1", "D-001", r#"{"id":"D-001"}"#);
+        assert!(resolve_parent_branch(&conn, "t1", "r1").is_none());
+    }
+
+    #[test]
+    fn resolve_parent_branch_finds_active_parent_worktree() {
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) VALUES ('r1','repo','/p','u','/w','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        // Parent ticket (dep D-000) with an active worktree
+        insert_ticket(&conn, "parent", "r1", "D-000", r#"{"id":"D-000"}"#);
+        insert_worktree_with_ticket(&conn, "wt-parent", "r1", "parent", "active");
+        // Child ticket depending on D-000
+        insert_ticket(
+            &conn,
+            "child",
+            "r1",
+            "D-001",
+            r#"{"id":"D-001","dependencies":["D-000"]}"#,
+        );
+        let branch = resolve_parent_branch(&conn, "child", "r1");
+        assert_eq!(branch, Some("feat/dep".to_string()));
+    }
+
+    #[test]
+    fn resolve_parent_branch_returns_none_when_parent_worktree_not_active() {
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) VALUES ('r1','repo','/p','u','/w','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        insert_ticket(&conn, "parent", "r1", "D-000", r#"{"id":"D-000"}"#);
+        insert_worktree_with_ticket(&conn, "wt-parent", "r1", "parent", "merged");
+        insert_ticket(
+            &conn,
+            "child",
+            "r1",
+            "D-001",
+            r#"{"id":"D-001","dependencies":["D-000"]}"#,
+        );
+        assert!(resolve_parent_branch(&conn, "child", "r1").is_none());
     }
 }

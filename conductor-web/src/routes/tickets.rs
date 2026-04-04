@@ -110,10 +110,10 @@ pub async fn sync_tickets(
     } else {
         for source in sources {
             if let Ok(ts) = TicketSource::from_issue_source(&source) {
+                let ts = ts.with_repo_slug(&repo.slug);
                 let source_type_str = ts.source_type_str();
-                let (synced, closed) = sync_source(&syncer, &repo.id, source_type_str, || {
-                    ts.sync(token, Some(&repo.slug))
-                });
+                let (synced, closed) =
+                    sync_source(&syncer, &repo.id, source_type_str, || ts.sync(token));
                 total_synced += synced;
                 total_closed += closed;
             }

@@ -1,6 +1,9 @@
 use std::process::Command;
 
+use rusqlite::Connection;
+
 use crate::error::{ConductorError, Result};
+use crate::issue_source::{IssueSourceManager, VantageConfig};
 use crate::tickets::TicketInput;
 
 /// Conductor pipeline statuses that should be synced into Conductor.
@@ -59,13 +62,19 @@ pub fn sync_vantage_deliverables(
         }
         let status = item["status"].as_str().unwrap_or("");
         tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?}, conductor.status={conductor_status:?})");
-        // Fetch full detail for each deliverable (list output lacks body)
-        match fetch_vantage_deliverable(id, sdlc_root) {
-            Ok(ticket) => tickets.push(ticket),
-            Err(e) => {
-                tracing::warn!("Failed to fetch Vantage deliverable {id}: {e}");
+        // Use list data directly when body is present; fetch full detail only if missing.
+        let ticket = if item["body"].as_str().is_some_and(|b| !b.is_empty()) {
+            parse_vantage_deliverable(item)
+        } else {
+            match fetch_vantage_deliverable(id, sdlc_root) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("Failed to fetch Vantage deliverable {id}: {e}");
+                    continue;
+                }
             }
-        }
+        };
+        tickets.push(ticket);
     }
 
     tracing::info!(
@@ -78,7 +87,11 @@ pub fn sync_vantage_deliverables(
 
 /// Fetch a single Vantage deliverable by ID.
 pub fn fetch_vantage_deliverable(deliverable_id: &str, sdlc_root: &str) -> Result<TicketInput> {
-    let output = run_sdlc(sdlc_root, &["deliverable", "get", deliverable_id, "--json"])?;
+    // `--json` flag before `--` terminator; `--` prevents deliverable_id being parsed as a flag.
+    let output = run_sdlc(
+        sdlc_root,
+        &["deliverable", "get", "--json", "--", deliverable_id],
+    )?;
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let value: serde_json::Value = serde_json::from_str(&json_str)
@@ -113,9 +126,20 @@ fn run_sdlc(sdlc_root: &str, args: &[&str]) -> Result<std::process::Output> {
     })?;
 
     if !output.status.success() {
-        return Err(ConductorError::TicketSync(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let code = output
+            .status
+            .code()
+            .map_or("signal".to_string(), |c| c.to_string());
+        let detail = match (stderr.trim().is_empty(), stdout.trim().is_empty()) {
+            (false, _) => stderr.trim().to_string(),
+            (true, false) => stdout.trim().to_string(),
+            (true, true) => format!("sdlc exited with status {code} and no output"),
+        };
+        return Err(ConductorError::TicketSync(format!(
+            "sdlc exited with status {code}: {detail}"
+        )));
     }
 
     Ok(output)
@@ -190,6 +214,78 @@ pub fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Res
     )?;
     tracing::info!("Vantage: marked {deliverable_id} as failed");
     Ok(())
+}
+
+/// Extract the list of dependency deliverable IDs from a ticket's stored `raw_json`.
+///
+/// Returns an empty vec if the ticket is not a Vantage deliverable, if `raw_json` is
+/// malformed, or if the `dependencies` field is absent.
+pub fn get_parent_deliverable_ids(raw_json: &str) -> Vec<String> {
+    let raw: serde_json::Value = match serde_json::from_str(raw_json) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    raw.get("dependencies")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Resolve the Vantage deliverable ID and sdlc_root for a workflow run.
+///
+/// Returns `Some((deliverable_id, sdlc_root))` if the ticket is a Vantage
+/// deliverable and the repo has a configured Vantage issue source.
+/// Returns `None` (with a debug log) for any non-fatal resolution failure.
+pub fn resolve_context_for_workflow(
+    conn: &Connection,
+    ticket_id: &str,
+    repo_id: &str,
+) -> Option<(String, String)> {
+    let ticket = match crate::tickets::TicketSyncer::new(conn).get_by_id(ticket_id) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to look up ticket {ticket_id}: {e}");
+            return None;
+        }
+    };
+    if ticket.source_type != "vantage" {
+        tracing::debug!(
+            "Vantage context: ticket {ticket_id} is source_type={}, not vantage",
+            ticket.source_type
+        );
+        return None;
+    }
+    let sources = match IssueSourceManager::new(conn).list(repo_id) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to list issue sources: {e}");
+            return None;
+        }
+    };
+    let vantage_source = match sources.iter().find(|s| s.source_type == "vantage") {
+        Some(s) => s,
+        None => {
+            tracing::debug!("Vantage context: no vantage issue source for repo {repo_id}");
+            return None;
+        }
+    };
+    let cfg: VantageConfig = match serde_json::from_str(&vantage_source.config_json) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("Vantage context: failed to parse config: {e}");
+            return None;
+        }
+    };
+    tracing::info!(
+        "Vantage context resolved: deliverable={}, sdlc_root={}",
+        ticket.source_id,
+        cfg.sdlc_root
+    );
+    Some((ticket.source_id, cfg.sdlc_root))
 }
 
 /// Parse a Vantage deliverable JSON object into a TicketInput.
