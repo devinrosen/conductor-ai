@@ -255,7 +255,7 @@ export function RepoDetailPage() {
 
   // Fetch active workflow runs for this repo to show running indicators on tickets
   const { data: activeWorkflowRuns, refetch: refetchWorkflowRuns } = useApi(
-    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed"]),
+    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed", "completed"]),
     [],
   );
 
@@ -282,13 +282,20 @@ export function RepoDetailPage() {
   }, [worktrees]);
 
   // Map worktree_id -> workflow run (for both worktree table and ticket indicators)
+  // Prefers: completed > running/pending/waiting > failed (most recent wins within tier)
   const workflowRunByWorktreeId = useMemo(() => {
     const m = new Map<string, WorkflowRun>();
     if (!activeWorkflowRuns) return m;
+    const priority = (s: string) =>
+      s === "completed" ? 3 : s === "running" || s === "pending" || s === "waiting" ? 2 : 1;
     for (const run of activeWorkflowRuns) {
       // Only top-level runs (no parent workflow), scoped to this repo
       if (run.repo_id === repoId && run.worktree_id && !run.parent_workflow_run_id) {
-        m.set(run.worktree_id, run);
+        const existing = m.get(run.worktree_id);
+        if (!existing || priority(run.status) > priority(existing.status) ||
+            (priority(run.status) === priority(existing.status) && run.started_at > existing.started_at)) {
+          m.set(run.worktree_id, run);
+        }
       }
     }
     return m;
