@@ -671,7 +671,10 @@ mod tests {
 
     #[test]
     fn test_agent_permission_mode_cli_flag_repo_safe() {
-        assert_eq!(AgentPermissionMode::RepoSafe.cli_flag(), "--permission-mode");
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.cli_flag(),
+            "--permission-mode"
+        );
     }
 
     #[test]
@@ -707,7 +710,10 @@ mod tests {
 
     #[test]
     fn test_agent_permission_mode_claude_permission_flag_value() {
-        assert_eq!(AgentPermissionMode::AutoMode.claude_permission_flag_value(), None);
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag_value(),
+            None
+        );
         assert_eq!(
             AgentPermissionMode::SkipPermissions.claude_permission_flag_value(),
             None

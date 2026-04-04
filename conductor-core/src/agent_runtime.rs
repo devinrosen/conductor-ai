@@ -783,7 +783,8 @@ mod tests {
             .position(|a| a == "--permission-mode")
             .expect("expected --permission-mode flag in conductor args");
         assert_eq!(
-            args[idx + 1], "repo-safe",
+            args[idx + 1],
+            "repo-safe",
             "expected 'repo-safe' value after --permission-mode"
         );
 
