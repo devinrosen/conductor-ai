@@ -105,3 +105,39 @@ pub(crate) fn open_db_and_config(
     let config = load_config()?;
     Ok((conn, config))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn args(val: Value) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("limit".into(), val);
+        m
+    }
+
+    #[test]
+    fn get_arg_usize_accepts_json_number() {
+        let a = args(json!(10));
+        assert_eq!(get_arg_usize(&a, "limit"), Some(10));
+    }
+
+    #[test]
+    fn get_arg_usize_accepts_string() {
+        let a = args(json!("25"));
+        assert_eq!(get_arg_usize(&a, "limit"), Some(25));
+    }
+
+    #[test]
+    fn get_arg_usize_returns_none_for_missing_key() {
+        let m = serde_json::Map::new();
+        assert_eq!(get_arg_usize(&m, "limit"), None);
+    }
+
+    #[test]
+    fn get_arg_usize_returns_none_for_invalid_string() {
+        let a = args(json!("not_a_number"));
+        assert_eq!(get_arg_usize(&a, "limit"), None);
+    }
+}
