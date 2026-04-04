@@ -30,10 +30,10 @@ impl IntoResponse for ApiError {
                     | ConductorError::TicketAlreadyLinked
                     | ConductorError::WorkflowRunAlreadyActive { .. } => StatusCode::CONFLICT,
                     ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
-                    ConductorError::Agent(_)
+                    ConductorError::NoPendingFeedbackForRun { .. }
+                    | ConductorError::Agent(_)
                     | ConductorError::InvalidInput(_)
-                    | ConductorError::UnknownSourceType(_)
-                    | ConductorError::NoPendingFeedbackForRun { .. } => StatusCode::BAD_REQUEST,
+                    | ConductorError::UnknownSourceType(_) => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 let msg = err.to_string();

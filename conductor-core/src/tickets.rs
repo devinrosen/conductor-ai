@@ -101,6 +101,19 @@ pub struct TicketDependencies {
     pub children: Vec<Ticket>,
 }
 
+/// A ticket that is ready to be worked on: not closed, has no unresolved blockers,
+/// and is not already linked to an active workflow run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadyTicket {
+    pub id: String,
+    pub source_id: String,
+    pub title: String,
+    pub url: String,
+    /// The dep_type of an incoming parent_of edge, if any ('parent_of'), or `None` for
+    /// unconstrained tickets with no dependency edges pointing at them.
+    pub dep_type: Option<String>,
+}
+
 /// Filter options for [`TicketSyncer::list_filtered`].
 pub struct TicketFilter {
     /// Only include tickets that have ALL of these labels.
@@ -374,6 +387,31 @@ impl<'a> TicketSyncer<'a> {
         Ok(tickets)
     }
 
+    /// Shared SELECT clause for ticket queries.
+    fn ticket_select() -> &'static str {
+        "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
+         t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
+         FROM tickets t"
+    }
+
+    /// Shared label EXISTS subquery fragment (requires one `?` param bound to the label value).
+    fn label_exists_subquery() -> &'static str {
+        "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
+    }
+
+    /// Execute a ticket SELECT query with the given SQL and boxed parameters.
+    fn execute_ticket_query(
+        &self,
+        sql: &str,
+        param_values: Vec<Box<dyn rusqlite::types::ToSql>>,
+    ) -> Result<Vec<Ticket>> {
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// List tickets with optional filtering. Open-only by default.
     ///
     /// Filters are applied in SQL:
@@ -386,9 +424,7 @@ impl<'a> TicketSyncer<'a> {
         repo_id: Option<&str>,
         filter: &TicketFilter,
     ) -> Result<Vec<Ticket>> {
-        let select = "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
-                      t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
-                      FROM tickets t";
+        let select = Self::ticket_select();
 
         let mut conditions: Vec<String> = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -403,10 +439,7 @@ impl<'a> TicketSyncer<'a> {
         }
 
         for label in &filter.labels {
-            conditions.push(
-                "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
-                    .to_string(),
-            );
+            conditions.push(Self::label_exists_subquery().to_string());
             param_values.push(Box::new(label.clone()));
         }
 
@@ -426,11 +459,7 @@ impl<'a> TicketSyncer<'a> {
             )
         };
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        self.execute_ticket_query(&sql, param_values)
     }
 
     /// Link a ticket to a worktree.
@@ -765,6 +794,89 @@ impl<'a> TicketSyncer<'a> {
         }
 
         Ok(count)
+    }
+
+    /// Return tickets that are ready to be worked on for `repo_id`.
+    ///
+    /// A ticket is ready when:
+    /// - Its state is not `'closed'`
+    /// - It has no unresolved `'blocks'` blocker (blocker is open OR its workflow run is not
+    ///   completed)
+    /// - It is not already linked to an active workflow run
+    ///
+    /// Optional filters:
+    /// - `root_ticket_id`: restrict to direct children of this ticket (parent_of edges)
+    /// - `label`: restrict to tickets with this label in `ticket_labels`
+    /// - `limit`: cap result count (default caller-supplied; must be > 0)
+    pub fn get_ready_tickets(
+        &self,
+        repo_id: &str,
+        root_ticket_id: Option<&str>,
+        label: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ReadyTicket>> {
+        let mut sql = String::from(
+            "SELECT t.id, t.source_id, t.title, t.url, \
+             (SELECT dep.dep_type FROM ticket_dependencies dep \
+              WHERE dep.to_ticket_id = t.id AND dep.dep_type = 'parent_of' LIMIT 1) AS dep_type \
+             FROM tickets t \
+             WHERE t.state != 'closed' \
+               AND t.repo_id = ? \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM ticket_dependencies dep \
+                   JOIN tickets blocker ON blocker.id = dep.from_ticket_id \
+                   LEFT JOIN workflow_runs wr ON wr.ticket_id = blocker.id \
+                   WHERE dep.to_ticket_id = t.id \
+                     AND dep.dep_type = 'blocks' \
+                     AND (blocker.state != 'closed' OR COALESCE(wr.status, 'completed') != 'completed') \
+               ) \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM workflow_runs wr \
+                   WHERE wr.ticket_id = t.id \
+                     AND wr.status IN ('running', 'waiting_for_feedback', 'paused') \
+               )",
+        );
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(repo_id.to_string())];
+
+        if let Some(root_id) = root_ticket_id {
+            sql.push_str(
+                " AND EXISTS ( \
+                   SELECT 1 FROM ticket_dependencies pof \
+                   WHERE pof.from_ticket_id = ? AND pof.to_ticket_id = t.id \
+                     AND pof.dep_type = 'parent_of' \
+                 )",
+            );
+            param_values.push(Box::new(root_id.to_string()));
+        }
+
+        if let Some(lbl) = label {
+            sql.push_str(
+                " AND EXISTS ( \
+                   SELECT 1 FROM ticket_labels tl \
+                   WHERE tl.ticket_id = t.id AND tl.label = ? \
+                 )",
+            );
+            param_values.push(Box::new(lbl.to_string()));
+        }
+
+        sql.push_str(" ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC LIMIT ?");
+        param_values.push(Box::new(limit as i64));
+
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(ReadyTicket {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                title: row.get(2)?,
+                url: row.get(3)?,
+                dep_type: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Resolve a user-supplied ticket identifier to `(source_type, source_id)`.
@@ -2408,6 +2520,219 @@ mod tests {
             dep_count(&conn),
             0,
             "stale children dependency row should be removed"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // get_ready_tickets tests
+    // -----------------------------------------------------------------------
+
+    fn insert_workflow_run_for_ticket(
+        conn: &Connection,
+        wf_id: &str,
+        ticket_id: &str,
+        status: &str,
+    ) {
+        // Insert a minimal agent_run first (parent_run_id FK)
+        let ar_id = format!("ar-{wf_id}");
+        conn.execute(
+            "INSERT OR IGNORE INTO worktrees (id, repo_id, slug, branch, path, created_at) \
+             VALUES ('wt-sys', 'r1', 'sys', 'sys', '/tmp/sys', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_runs (id, worktree_id, prompt, status, started_at) \
+             VALUES (?1, 'wt-sys', 'test', 'completed', '2024-01-01T00:00:00Z')",
+            params![ar_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, parent_run_id, status, started_at, ticket_id, repo_id) \
+             VALUES (?1, 'wf', ?2, ?3, '2024-01-01T00:00:00Z', ?4, 'r1')",
+            params![wf_id, ar_id, status, ticket_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_get_ready_tickets_no_deps_all_open_ready() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "A"), make_ticket("2", "B")])
+            .unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        assert_eq!(ready.len(), 2);
+        assert!(ready.iter().all(|t| t.dep_type.is_none()));
+    }
+
+    #[test]
+    fn test_get_ready_tickets_blocked_ticket_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "2" blocks ticket "1"; blocker is still open → ticket "1" is not ready
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].source_id, "2"); // only the blocker itself is ready
+    }
+
+    #[test]
+    fn test_get_ready_tickets_blocker_closed_makes_blocked_ready() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        // Close the blocker
+        syncer
+            .close_missing_tickets("r1", "github", &["1"])
+            .unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"1"),
+            "blocked ticket should be ready once blocker is closed"
+        );
+    }
+
+    #[test]
+    fn test_get_ready_tickets_active_run_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "A")])
+            .unwrap();
+        let tid: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // Link an active workflow run to the ticket
+        insert_workflow_run_for_ticket(&conn, "wr1", &tid, "running");
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        assert_eq!(ready.len(), 0, "ticket with active run must be excluded");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_completed_run_not_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "A")])
+            .unwrap();
+        let tid: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // Completed run — should not block the ticket from being ready
+        insert_workflow_run_for_ticket(&conn, "wr1", &tid, "completed");
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        assert_eq!(ready.len(), 1);
+    }
+
+    #[test]
+    fn test_get_ready_tickets_root_ticket_id_scope() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "1" is parent of "2"; ticket "3" is unrelated
+        let t2 = make_ticket("2", "Child");
+        let t3 = make_ticket("3", "Unrelated");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t3, t1]).unwrap();
+
+        let parent_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let ready = syncer
+            .get_ready_tickets("r1", Some(&parent_id), None, 50)
+            .unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].source_id, "2");
+        assert_eq!(ready[0].dep_type.as_deref(), Some("parent_of"));
+    }
+
+    #[test]
+    fn test_get_ready_tickets_label_scope() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let mut t1 = make_ticket("1", "With label");
+        t1.label_details = vec![TicketLabelInput {
+            name: "backend".to_string(),
+            color: None,
+        }];
+        let t2 = make_ticket("2", "No label");
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        let ready = syncer
+            .get_ready_tickets("r1", None, Some("backend"), 50)
+            .unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_limit_respected() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets: Vec<_> = (1..=5)
+            .map(|i| make_ticket(&i.to_string(), &format!("Issue {i}")))
+            .collect();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 3).unwrap();
+        assert_eq!(ready.len(), 3);
+    }
+
+    #[test]
+    fn test_get_ready_tickets_coalesce_no_run_as_completed() {
+        // A blocker with state='closed' and NO workflow run must be treated as
+        // resolved (COALESCE(wr.status, 'completed') = 'completed').
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        // Close the blocker (no workflow run created)
+        syncer
+            .close_missing_tickets("r1", "github", &["1"])
+            .unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"1"),
+            "blocked ticket should be ready when closed blocker has no run (COALESCE = completed)"
         );
     }
 

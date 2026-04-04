@@ -4,7 +4,7 @@ use std::sync::Arc;
 use rmcp::model::{CallToolResult, Tool, ToolAnnotations};
 use serde_json::{json, Value};
 
-use crate::mcp::helpers::{schema, tool_err};
+use crate::mcp::helpers::{schema, schema_typed, tool_err};
 
 mod agents;
 mod gates;
@@ -419,6 +419,24 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                 ("children",    "Comma-separated source IDs of child tickets (this ticket is parent)", false),
             ]),
         ),
+        Tool::new(
+            "conductor_get_ready_tickets",
+            "Return open tickets that have no unresolved blockers and no active workflow run. \
+             A ticket is ready when all tickets that block it are closed (and their workflow runs, if any, \
+             are completed), and the ticket itself has no running or waiting workflow run. \
+             Optionally scope to direct children of a parent ticket, filter by label, or cap results with limit.",
+            schema_typed(&[
+                ("repo", "string", "Repo slug (e.g. my-repo)", true),
+                (
+                    "root_ticket_id",
+                    "string",
+                    "Scope to direct children of this ticket ULID (optional)",
+                    false,
+                ),
+                ("label", "string", "Filter by label name (optional)", false),
+                ("limit", "integer", "Max tickets to return (optional)", false),
+            ]),
+        ),
     ]
 }
 
@@ -453,6 +471,7 @@ pub(super) fn dispatch_tool(
         "conductor_unregister_repo" => repos::tool_unregister_repo(db_path, args),
         "conductor_delete_ticket" => tickets::tool_delete_ticket(db_path, args),
         "conductor_upsert_ticket" => tickets::tool_upsert_ticket(db_path, args),
+        "conductor_get_ready_tickets" => tickets::tool_get_ready_tickets(db_path, args),
         "conductor_list_templates" => workflows::tool_list_templates(db_path, args),
         "conductor_instantiate_template" => workflows::tool_instantiate_template(db_path, args),
         "conductor_create_gh_issue" => issues::tool_create_gh_issue(db_path, args),
