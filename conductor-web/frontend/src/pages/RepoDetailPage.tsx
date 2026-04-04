@@ -865,7 +865,7 @@ export function RepoDetailPage() {
                     {!allVantage && <ColumnHeader label="Labels" columnKey="labels" sortDirection={null} onSort={() => {}} filterOptions={ticketFilterOptions.labels} activeFilters={ticketColumnFilters.labels} onFilter={handleTicketFilter} />}
                     <ColumnHeader label="Assignee" columnKey="assignee" sortDirection={ticketSortDirFor("assignee")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.assignee} activeFilters={ticketColumnFilters.assignee} onFilter={handleTicketFilter} />
                     {hasVantage && <ColumnHeader label="Pipeline" columnKey="pipeline" sortDirection={ticketSortDirFor("pipeline")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.pipeline} activeFilters={ticketColumnFilters.pipeline} onFilter={handleTicketFilter} />}
-                    <th className="px-4 py-2 text-xs font-medium uppercase">Agent</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase">Workflow</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
