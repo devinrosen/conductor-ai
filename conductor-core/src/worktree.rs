@@ -177,10 +177,8 @@ impl<'a> WorktreeManager<'a> {
             (pr_branch, Some(pr_base), Vec::new())
         } else {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
-            let base = from_branch
-                .map(|b| b.to_string())
-                .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
-            let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
+            let (base, warnings) =
+                resolve_and_update_base(&repo.local_path, from_branch, &repo.default_branch)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",
@@ -765,6 +763,48 @@ fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
     })
 }
 
+/// Resolve the base branch name (with prefix fallback) and ensure it's up to date.
+///
+/// When an explicit `from_branch` is provided (e.g. from a Vantage ticket), we try:
+/// 1. The exact name
+/// 2. If that fails and the name doesn't already start with `feat/` or `fix/`, try
+///    prefixing with `feat/` then `fix/`
+///
+/// If no explicit branch is given, falls back to `resolve_base_branch`.
+fn resolve_and_update_base(
+    repo_path: &str,
+    from_branch: Option<&str>,
+    configured_default: &str,
+) -> Result<(String, Vec<String>)> {
+    let Some(requested) = from_branch else {
+        let base = resolve_base_branch(repo_path, configured_default);
+        let warnings = ensure_base_up_to_date(repo_path, &base)?;
+        return Ok((base, warnings));
+    };
+
+    // Try exact name first
+    match ensure_base_up_to_date(repo_path, requested) {
+        Ok(warnings) => Ok((requested.to_string(), warnings)),
+        Err(_first_err) => {
+            // If the name already has a known prefix, don't try alternatives
+            if requested.starts_with("feat/") || requested.starts_with("fix/") {
+                return Err(_first_err);
+            }
+
+            // Try feat/ and fix/ prefixes
+            for prefix in &["feat/", "fix/"] {
+                let candidate = format!("{prefix}{requested}");
+                if let Ok(warnings) = ensure_base_up_to_date(repo_path, &candidate) {
+                    return Ok((candidate, warnings));
+                }
+            }
+
+            // All attempts failed — return the original error
+            Err(_first_err)
+        }
+    }
+}
+
 /// Resolve the base branch for a repo using a priority order:
 /// 1. The configured default branch (from DB) if it exists locally
 /// 2. `git symbolic-ref refs/remotes/origin/HEAD` (remote default)
@@ -847,7 +887,43 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
         .map(|o| o.status.success())
         .unwrap_or(false);
 
+    let has_local = branch_exists(repo_path, base_branch);
+
+    if !has_remote && !has_local {
+        // Neither local nor remote — try prefix variations (feat/, fix/) in case the
+        // caller supplied a bare name like "D-148-foo" but the remote branch is
+        // "feat/D-148-foo".
+        return Err(ConductorError::Git(format!(
+            "base branch '{}' not found locally or on remote 'origin'",
+            base_branch
+        )));
+    }
+
+    // 3b. If the branch exists on the remote but not locally, create a local tracking branch
+    if has_remote && !has_local {
+        let create = git_in(repo_path)
+            .args([
+                "branch",
+                "--track",
+                base_branch,
+                &format!("origin/{base_branch}"),
+            ])
+            .output();
+        match create {
+            Ok(o) if o.status.success() => {}
+            _ => {
+                return Err(ConductorError::Git(format!(
+                    "base branch '{}' exists on remote but could not create local tracking branch",
+                    base_branch
+                )));
+            }
+        }
+        // Local branch is now set to the remote tip — no need to fast-forward.
+        return Ok(warnings);
+    }
+
     if !has_remote {
+        // Local branch exists but no remote tracking — use local state as-is.
         return Ok(warnings);
     }
 
@@ -874,26 +950,20 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
             ));
         }
     } else {
-        // Need to checkout base branch first (handles detached HEAD too)
-        let checkout = git_in(repo_path).args(["checkout", base_branch]).output();
-        match checkout {
-            Ok(o) if o.status.success() => {
-                let merge = git_in(repo_path)
-                    .args(["merge", "--ff-only", &origin_ref])
-                    .output();
-                if !merge.map(|o| o.status.success()).unwrap_or(false) {
-                    warnings.push(format!(
-                        "base branch '{}' has diverged from origin; consider `git pull --rebase`",
-                        base_branch
-                    ));
-                }
-            }
-            _ => {
-                warnings.push(format!(
-                    "could not checkout '{}'; creating worktree from local state",
-                    base_branch
-                ));
-            }
+        // Base exists locally but is not checked out — update it without checkout
+        // by using `git fetch . origin/{base}:refs/heads/{base}` (local fast-forward).
+        let ff = git_in(repo_path)
+            .args([
+                "fetch",
+                ".",
+                &format!("refs/remotes/origin/{base_branch}:refs/heads/{base_branch}"),
+            ])
+            .output();
+        if !ff.map(|o| o.status.success()).unwrap_or(false) {
+            warnings.push(format!(
+                "base branch '{}' has diverged from origin; consider `git pull --rebase`",
+                base_branch
+            ));
         }
     }
 
@@ -1317,11 +1387,21 @@ mod tests {
         git(&["checkout", "--detach", "HEAD"], &local);
 
         let warnings = ensure_base_up_to_date(local.to_str().unwrap(), "main").unwrap();
-        // Should succeed (checkout main, then ff) with no warnings
+        // Should succeed (fast-forward refs/heads/main) with no warnings
         assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 
-        // Verify we're now on main and have the extra file
-        assert!(local.join("extra.txt").exists());
+        // Verify refs/heads/main was updated to include the remote commit
+        // (the working tree stays on detached HEAD — we only update the ref)
+        let log = std::process::Command::new("git")
+            .current_dir(&local)
+            .args(["log", "--oneline", "refs/heads/main"])
+            .output()
+            .unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        assert!(
+            log_str.contains("extra commit"),
+            "refs/heads/main should contain the fast-forwarded commit"
+        );
     }
 
     #[test]
