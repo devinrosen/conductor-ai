@@ -24,15 +24,29 @@ export function WorktreeRow({
   const isRunning = workflowRun?.status === "running" || workflowRun?.status === "pending";
   const isWaiting = workflowRun?.status === "waiting";
   const isFailed = workflowRun?.status === "failed";
+  const hasWorkflow = isRunning || isWaiting || isFailed;
 
-  // Build a short progress string: "Step 3/7 · implement"
+  // Build secondary line: "Step 3/7 · implement"
   const stepProg = workflowRun ? formatStepProgress(workflowRun) : null;
   const iter = workflowRun ? formatIteration(workflowRun) : null;
   const stepName = workflowRun?.current_step_name;
   const displayName = stepName && !stepName.startsWith("workflow:") ? stepName : null;
+  const secondaryParts = [stepProg, iter, displayName].filter(Boolean);
+  const secondaryText = secondaryParts.length > 0 ? secondaryParts.join(" \u00b7 ") : null;
 
-  const progressParts = [stepProg, iter, displayName].filter(Boolean);
-  const progressText = progressParts.length > 0 ? progressParts.join(" \u00b7 ") : null;
+  // Status indicator element
+  const statusDot = isRunning ? (
+    <span className="relative flex h-2 w-2 shrink-0">
+      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+      <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+    </span>
+  ) : isWaiting ? (
+    <span className="inline-flex h-2 w-2 rounded-full bg-blue-400 shrink-0" />
+  ) : isFailed ? (
+    <svg className="w-3.5 h-3.5 shrink-0 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+    </svg>
+  ) : null;
 
   return (
     <tr
@@ -55,45 +69,20 @@ export function WorktreeRow({
         )}
       </td>
       <td className="px-4 py-2">
-        {isRunning ? (
-          <span className="inline-flex items-center gap-1.5 text-xs">
-            <span className="relative flex h-2 w-2 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
-            </span>
-            <span className="text-amber-600">
-              {workflowRun!.workflow_name}
-            </span>
-            {progressText && (
-              <span className="text-gray-400 text-[11px]">{progressText}</span>
-            )}
-          </span>
-        ) : isWaiting ? (
-          <span className="inline-flex items-center gap-1.5 text-xs">
-            <span className="inline-flex h-2 w-2 rounded-full bg-blue-400 shrink-0" />
-            <span className="text-blue-600">
-              {workflowRun!.workflow_name}
-            </span>
-            {progressText && (
-              <span className="text-gray-400 text-[11px]">{progressText}</span>
-            )}
-          </span>
-        ) : isFailed ? (
-          <span className="inline-flex items-center gap-1.5 text-xs">
-            <svg className="w-3.5 h-3.5 shrink-0 text-red-500" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-            </svg>
-            <span className="text-red-600">
-              {workflowRun!.workflow_name}
-            </span>
-            {progressText && (
-              <span className="text-red-400 text-[11px]">{progressText}</span>
-            )}
-          </span>
+        {hasWorkflow ? (
+          <div className="flex items-start gap-1.5">
+            <span className="mt-0.5">{statusDot}</span>
+            <div className="min-w-0">
+              <span className="text-xs text-gray-200 block">{workflowRun!.workflow_name}</span>
+              {secondaryText && (
+                <span className="text-[11px] text-gray-500 block">{secondaryText}</span>
+              )}
+            </div>
+          </div>
         ) : null}
       </td>
-      <td className="px-4 py-2 text-gray-500">
-        <TimeAgo date={worktree.created_at} />
+      <td className="px-4 py-2 text-gray-500 text-xs">
+        <TimeAgo date={worktree.created_at} short />
       </td>
       <td className="px-4 py-2">
         <div className="flex items-center gap-1.5">

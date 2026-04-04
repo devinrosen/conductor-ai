@@ -177,16 +177,18 @@ export function TicketRow({
           <PipelineIndicator rawJson={ticket.raw_json} />
         </td>
       )}
-      <td className="px-3 py-1.5 text-xs whitespace-nowrap">
+      <td className="px-3 py-1.5 text-xs">
         {workflowStatus === "failed" ? (
-          <span className="inline-flex items-center gap-1.5">
-            <svg className="w-3.5 h-3.5 shrink-0 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+          <div className="flex items-start gap-1.5">
+            <svg className="w-3.5 h-3.5 shrink-0 text-red-500 mt-0.5" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
             </svg>
-            <span className="text-red-600">Failed</span>
-            {progressText && (
-              <span className="text-red-400 text-[11px]">{progressText}</span>
-            )}
+            <div className="min-w-0">
+              <span className="text-gray-200 block">Failed</span>
+              {progressText && (
+                <span className="text-[11px] text-gray-500 block">{progressText}</span>
+              )}
+            </div>
             {onResumeWorkflow && workflowRun && (
               <Tooltip content="Resume from failed step">
                 <button
@@ -194,7 +196,7 @@ export function TicketRow({
                     e.stopPropagation();
                     onResumeWorkflow(workflowRun.id);
                   }}
-                  className="ml-0.5 text-amber-600 hover:text-amber-800"
+                  className="mt-0.5 text-amber-600 hover:text-amber-800 shrink-0"
                 >
                   <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
@@ -202,18 +204,20 @@ export function TicketRow({
                 </button>
               </Tooltip>
             )}
-          </span>
+          </div>
         ) : isActive ? (
-          <span className="inline-flex items-center gap-1.5 text-amber-600">
-            <span className="relative flex h-2 w-2">
+          <div className="flex items-start gap-1.5">
+            <span className="relative flex h-2 w-2 shrink-0 mt-1">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
             </span>
-            <span>Running</span>
-            {progressText && (
-              <span className="text-amber-400 text-[11px]">{progressText}</span>
-            )}
-          </span>
+            <div className="min-w-0">
+              <span className="text-gray-200 block">Running</span>
+              {progressText && (
+                <span className="text-[11px] text-gray-500 block">{progressText}</span>
+              )}
+            </div>
+          </div>
         ) : canStart ? (
           <button
             onClick={(e) => {
