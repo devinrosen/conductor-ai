@@ -1,5 +1,6 @@
 import type { Ticket, TicketAgentTotals, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
+import { Tooltip } from "../shared/Tooltip";
 import { formatTicketTotalsFull } from "../../utils/agentStats";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 import { formatStepProgress, formatIteration } from "../../utils/workflowProgress";
@@ -187,18 +188,19 @@ export function TicketRow({
               <span className="text-red-400 text-[11px]">{progressText}</span>
             )}
             {onResumeWorkflow && workflowRun && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onResumeWorkflow(workflowRun.id);
-                }}
-                className="ml-0.5 text-amber-600 hover:text-amber-800"
-                title="Resume from failed step"
-              >
-                <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
-                </svg>
-              </button>
+              <Tooltip content="Resume from failed step">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onResumeWorkflow(workflowRun.id);
+                  }}
+                  className="ml-0.5 text-amber-600 hover:text-amber-800"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </Tooltip>
             )}
           </span>
         ) : isActive ? (
