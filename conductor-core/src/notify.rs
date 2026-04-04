@@ -226,7 +226,14 @@ pub fn fire_feedback_notification(
 
     let slack_text = format!("[conductor] agent run waiting for feedback: {prompt_preview}");
 
-    dispatch_notification(conn, config, request_id, "feedback_requested", &notification, &slack_text);
+    dispatch_notification(
+        conn,
+        config,
+        request_id,
+        "feedback_requested",
+        &notification,
+        &slack_text,
+    );
 }
 
 /// Fire a notification for a standalone agent run that reached a terminal state.
@@ -411,7 +418,14 @@ pub fn fire_gate_notification(
 
     let slack_text = format!("[conductor] {title}: {body}");
 
-    dispatch_notification(conn, config, params.step_id, "gate_waiting", &notification, &slack_text);
+    dispatch_notification(
+        conn,
+        config,
+        params.step_id,
+        "gate_waiting",
+        &notification,
+        &slack_text,
+    );
 }
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
@@ -506,7 +520,14 @@ pub fn fire_grouped_gate_notification(
 
     let slack_text = format!("[conductor] {title}: {body}");
 
-    dispatch_notification(conn, config, params.run_id, "gates_grouped", &notification, &slack_text);
+    dispatch_notification(
+        conn,
+        config,
+        params.run_id,
+        "gates_grouped",
+        &notification,
+        &slack_text,
+    );
 }
 
 /// A workflow run that freshly transitioned to a terminal state.
