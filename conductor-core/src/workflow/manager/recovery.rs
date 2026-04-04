@@ -246,15 +246,20 @@ impl<'a> WorkflowManager<'a> {
     ) -> crate::error::Result<usize> {
         // Find root running workflow runs where all steps are terminal and
         // the last step (or the run itself) ended more than threshold_secs ago.
-        let stuck: Vec<(String, String)> = query_collect(
+        let stuck: Vec<(String, String, bool)> = query_collect(
             self.conn,
-            "SELECT id, parent_run_id FROM ( \
+            "SELECT id, parent_run_id, has_failure FROM ( \
                SELECT wr.id, wr.parent_run_id, \
                  COALESCE( \
                    (SELECT MAX(ended_at) FROM workflow_run_steps wrs2 \
                     WHERE wrs2.workflow_run_id = wr.id), \
                    wr.started_at \
-                 ) AS age_ref \
+                 ) AS age_ref, \
+                 EXISTS ( \
+                   SELECT 1 FROM workflow_run_steps wrs3 \
+                   WHERE wrs3.workflow_run_id = wr.id \
+                     AND wrs3.status IN ('failed', 'timed_out') \
+                 ) AS has_failure \
                FROM workflow_runs wr \
                WHERE wr.status = 'running' \
                  AND wr.parent_workflow_run_id IS NULL \
@@ -268,20 +273,12 @@ impl<'a> WorkflowManager<'a> {
                AND (CAST(strftime('%s', 'now') AS INTEGER) \
                     - CAST(strftime('%s', age_ref) AS INTEGER)) > ?1",
             params![threshold_secs],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
 
         let mut finalized = 0usize;
 
-        for (run_id, parent_run_id) in stuck {
-            // Determine the correct final status from step outcomes.
-            let has_failure: bool = self.conn.query_row(
-                "SELECT COUNT(*) > 0 FROM workflow_run_steps \
-                     WHERE workflow_run_id = ?1 \
-                       AND status IN ('failed', 'timed_out')",
-                params![run_id],
-                |row| row.get(0),
-            )?;
+        for (run_id, parent_run_id, has_failure) in stuck {
 
             let final_status = if has_failure {
                 WorkflowRunStatus::Failed
