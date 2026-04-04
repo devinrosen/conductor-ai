@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 use rusqlite::Connection;
@@ -51,10 +52,13 @@ pub fn sync_vantage_deliverables(
             tracing::debug!("Vantage sync: skipping {id} (codebase={codebase:?} != {repo_slug:?})");
             continue;
         }
-        // Only sync conductor-mode deliverables in actionable pipeline states
-        let exec_mode = item["execution_mode"].as_str().unwrap_or("");
-        let conductor_status = item["conductor"]["status"].as_str().unwrap_or("");
-        if exec_mode != "conductor" || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status) {
+        // Only sync conductor-mode deliverables in actionable pipeline states.
+        // The sdlc CLI may not include these fields in JSON output, so fall back
+        // to reading the YAML frontmatter from the deliverable file directly.
+        let (exec_mode, conductor_status) = resolve_conductor_fields(item, id, sdlc_root);
+        if exec_mode != "conductor"
+            || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status.as_str())
+        {
             skipped_mode_or_status += 1;
             tracing::debug!(
                 "Vantage sync: skipping {id} (execution_mode={exec_mode:?}, conductor.status={conductor_status:?})"
@@ -119,6 +123,62 @@ pub fn fetch_vantage_deliverable(deliverable_id: &str, sdlc_root: &str) -> Resul
     }
 
     Ok(parse_vantage_deliverable(&value))
+}
+
+/// Resolve `execution_mode` and `conductor.status` for a deliverable.
+///
+/// First checks the CLI JSON output; if the fields are missing (the sdlc CLI
+/// may not serialize them), falls back to reading the YAML frontmatter from
+/// `{sdlc_root}/deliverables/{id}.md`.
+fn resolve_conductor_fields(
+    item: &serde_json::Value,
+    id: &str,
+    sdlc_root: &str,
+) -> (String, String) {
+    let exec_mode = item["execution_mode"].as_str().unwrap_or("").to_string();
+    let conductor_status = item["conductor"]["status"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    if !exec_mode.is_empty() && !conductor_status.is_empty() {
+        return (exec_mode, conductor_status);
+    }
+
+    // Fall back to reading the deliverable file frontmatter directly.
+    let file_path = Path::new(sdlc_root)
+        .join("deliverables")
+        .join(format!("{id}.md"));
+    match std::fs::read_to_string(&file_path) {
+        Ok(contents) => {
+            parse_conductor_frontmatter(&contents).unwrap_or((exec_mode, conductor_status))
+        }
+        Err(e) => {
+            tracing::debug!("Vantage sync: could not read {}: {e}", file_path.display());
+            (exec_mode, conductor_status)
+        }
+    }
+}
+
+/// Extract `execution_mode` and `conductor.status` from YAML frontmatter.
+///
+/// Expects `---` delimited frontmatter at the start of the file.
+fn parse_conductor_frontmatter(contents: &str) -> Option<(String, String)> {
+    let trimmed = contents.trim_start();
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    let after_open = &trimmed[3..];
+    let end = after_open.find("\n---")?;
+    let frontmatter = &after_open[..end];
+
+    let yaml: serde_json::Value = serde_yml::from_str(frontmatter).ok()?;
+    let exec_mode = yaml["execution_mode"].as_str().unwrap_or("").to_string();
+    let conductor_status = yaml["conductor"]["status"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    Some((exec_mode, conductor_status))
 }
 
 /// Run the `sdlc` CLI with the given arguments, optionally setting --sdlc-root.
@@ -835,6 +895,40 @@ mod tests {
     fn test_map_vantage_status_unknown_defaults_to_open() {
         assert_eq!(map_vantage_status("something_else"), "open");
         assert_eq!(map_vantage_status(""), "open");
+    }
+
+    #[test]
+    fn test_parse_conductor_frontmatter_full() {
+        let md =
+            "---\nid: D-136\nexecution_mode: conductor\nconductor:\n  status: ready\n---\n# Body";
+        let (em, cs) = parse_conductor_frontmatter(md).unwrap();
+        assert_eq!(em, "conductor");
+        assert_eq!(cs, "ready");
+    }
+
+    #[test]
+    fn test_parse_conductor_frontmatter_missing_fields() {
+        let md = "---\nid: D-001\nstatus: draft\n---\n# Body";
+        let (em, cs) = parse_conductor_frontmatter(md).unwrap();
+        assert_eq!(em, "");
+        assert_eq!(cs, "");
+    }
+
+    #[test]
+    fn test_parse_conductor_frontmatter_no_frontmatter() {
+        let md = "# Just a heading\nNo frontmatter here.";
+        assert!(parse_conductor_frontmatter(md).is_none());
+    }
+
+    #[test]
+    fn test_resolve_conductor_fields_from_json() {
+        let item = serde_json::json!({
+            "execution_mode": "conductor",
+            "conductor": { "status": "ready" }
+        });
+        let (em, cs) = resolve_conductor_fields(&item, "D-001", "/nonexistent");
+        assert_eq!(em, "conductor");
+        assert_eq!(cs, "ready");
     }
 
     #[test]

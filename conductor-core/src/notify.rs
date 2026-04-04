@@ -44,6 +44,34 @@ fn maybe_send_slack(config: &NotificationConfig, text: &str) {
     }
 }
 
+/// Send a message to the configured Slack webhook synchronously.
+///
+/// Returns `Ok(())` if sent, or an error if Slack is not configured or the
+/// request failed. Unlike `maybe_send_slack` this blocks until delivery
+/// completes, which is appropriate for CLI commands that exit immediately.
+pub fn send_slack_sync(config: &NotificationConfig, text: &str) -> crate::error::Result<()> {
+    let url = config
+        .slack
+        .webhook_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| {
+            crate::error::ConductorError::Config(
+                "Slack webhook_url is not configured in ~/.conductor/config.toml".to_string(),
+            )
+        })?;
+    let escaped = escape_slack_mrkdwn(text);
+    let body = serde_json::json!({ "text": escaped });
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .build();
+    agent
+        .post(url)
+        .send_json(&body)
+        .map_err(|e| crate::error::ConductorError::Config(format!("Slack webhook failed: {e}")))?;
+    Ok(())
+}
+
 /// Persist an in-app notification record. Logs a warning on failure.
 fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
     let mgr = NotificationManager::new(conn);
