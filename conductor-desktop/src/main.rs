@@ -110,7 +110,40 @@ fn main() {
                     ];
                     #[cfg(debug_assertions)]
                     allowed_origins.push(HeaderValue::from_static("http://localhost:8675"));
-                    let router = api_router_with_cors(allowed_origins).with_state(web_state);
+                    let router =
+                        api_router_with_cors(allowed_origins).with_state(web_state.clone());
+
+                    // Spawn periodic background reaper (same as conductor-web main.rs)
+                    let reaper_db = web_state.db.clone();
+                    let reaper_config = web_state.config.clone();
+                    tokio::spawn(async move {
+                        let mut interval = tokio::time::interval_at(
+                            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                            std::time::Duration::from_secs(30),
+                        );
+                        loop {
+                            interval.tick().await;
+                            let db = reaper_db.clone();
+                            let cfg = reaper_config.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                let conn = db.blocking_lock();
+                                let mgr = conductor_core::agent::AgentManager::new(&conn);
+                                if let Err(e) = mgr.reap_orphaned_runs() {
+                                    tracing::warn!("reap_orphaned_runs failed: {e}");
+                                }
+                                if let Err(e) = mgr.dismiss_expired_feedback_requests() {
+                                    tracing::warn!("dismiss_expired_feedback_requests failed: {e}");
+                                }
+                                let cfg = cfg.blocking_read();
+                                let wt_mgr =
+                                    conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
+                                if let Err(e) = wt_mgr.reap_stale_worktrees() {
+                                    tracing::warn!("reap_stale_worktrees failed: {e}");
+                                }
+                            })
+                            .await;
+                        }
+                    });
 
                     if let Err(e) = axum::serve(listener, router).await {
                         eprintln!(
