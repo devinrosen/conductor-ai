@@ -708,7 +708,7 @@ pub fn fire_orphan_resumed_notification(
     config: &NotificationConfig,
     run_ids: &[String],
 ) {
-    if !config.enabled || !config.workflows.on_failure {
+    if !config.enabled || !config.workflows.on_stale {
         return;
     }
     if run_ids.is_empty() {

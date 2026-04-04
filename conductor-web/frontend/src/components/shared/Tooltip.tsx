@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useLayoutEffect, type ReactNode } from "react";
+import { useState, useRef, useCallback, useLayoutEffect, useId, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 interface TooltipProps {
@@ -13,6 +13,7 @@ export function Tooltip({ content, children, delay = 200 }: TooltipProps) {
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tooltipId = useId();
 
   const show = useCallback(() => {
     timeout.current = setTimeout(() => setVisible(true), delay);
@@ -28,16 +29,26 @@ export function Tooltip({ content, children, delay = 200 }: TooltipProps) {
     if (!visible || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     setCoords({
-      top: rect.top - 4, // gap above trigger
+      top: rect.top - 4,
       left: rect.left + rect.width / 2,
     });
   }, [visible]);
 
   return (
-    <span ref={triggerRef} className="inline-flex" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
+    <span
+      ref={triggerRef}
+      className="inline-flex"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+      aria-describedby={visible ? tooltipId : undefined}
+    >
       {children}
       {visible && coords && createPortal(
         <span
+          id={tooltipId}
+          role="tooltip"
           className="fixed z-[9999] pointer-events-none"
           style={{ top: coords.top, left: coords.left, transform: "translate(-50%, -100%)" }}
         >
