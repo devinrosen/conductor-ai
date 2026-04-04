@@ -857,9 +857,7 @@ impl<'a> TicketSyncer<'a> {
             param_values.push(Box::new(lbl.to_string()));
         }
 
-        sql.push_str(
-            " ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC LIMIT ?",
-        );
+        sql.push_str(" ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC LIMIT ?");
         param_values.push(Box::new(limit as i64));
 
         let params: Vec<&dyn rusqlite::types::ToSql> =
@@ -2487,7 +2485,12 @@ mod tests {
     // get_ready_tickets tests
     // -----------------------------------------------------------------------
 
-    fn insert_workflow_run_for_ticket(conn: &Connection, wf_id: &str, ticket_id: &str, status: &str) {
+    fn insert_workflow_run_for_ticket(
+        conn: &Connection,
+        wf_id: &str,
+        ticket_id: &str,
+        status: &str,
+    ) {
         // Insert a minimal agent_run first (parent_run_id FK)
         let ar_id = format!("ar-{wf_id}");
         conn.execute(
@@ -2559,7 +2562,10 @@ mod tests {
 
         let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
         let ids: Vec<&str> = ready.iter().map(|t| t.source_id.as_str()).collect();
-        assert!(ids.contains(&"1"), "blocked ticket should be ready once blocker is closed");
+        assert!(
+            ids.contains(&"1"),
+            "blocked ticket should be ready once blocker is closed"
+        );
     }
 
     #[test]
@@ -2567,7 +2573,9 @@ mod tests {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
 
-        syncer.upsert_tickets("r1", &[make_ticket("1", "A")]).unwrap();
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "A")])
+            .unwrap();
         let tid: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
                 row.get(0)
@@ -2586,7 +2594,9 @@ mod tests {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
 
-        syncer.upsert_tickets("r1", &[make_ticket("1", "A")]).unwrap();
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "A")])
+            .unwrap();
         let tid: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
                 row.get(0)

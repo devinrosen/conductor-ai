@@ -803,7 +803,10 @@ mod tests {
             .as_text()
             .map(|t| t.text.as_str())
             .unwrap_or("");
-        assert!(text.contains("#42"), "expected ticket source_id in output, got: {text}");
+        assert!(
+            text.contains("#42"),
+            "expected ticket source_id in output, got: {text}"
+        );
     }
 
     // ---- delete ticket tests ----
