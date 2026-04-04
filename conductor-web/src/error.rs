@@ -27,7 +27,7 @@ impl IntoResponse for ApiError {
                     | ConductorError::AgentRunNotFound { .. }
                     | ConductorError::FeedbackNotFound { .. } => StatusCode::NOT_FOUND,
                     ConductorError::AgentRunNotInConversation { .. }
-                    | ConductorError::FeedbackRunMismatch { .. } => StatusCode::FORBIDDEN,
+                    | ConductorError::FeedbackRunMismatch { .. } => StatusCode::NOT_FOUND,
                     ConductorError::RepoAlreadyExists { .. }
                     | ConductorError::WorktreeAlreadyExists { .. }
                     | ConductorError::IssueSourceAlreadyExists { .. }
