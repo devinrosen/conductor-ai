@@ -329,13 +329,18 @@ export function RepoDetailPage() {
   const workflowStatusByTicketSourceId = useMemo(() => {
     const m = new Map<string, WorkflowRun["status"]>();
     if (!worktrees || !workflowRunByWorktreeId.size) return m;
+    // Build an O(1) lookup for ticket.id → ticket.source_id to avoid an O(n)
+    // tickets.find() scan per worktree, making the overall loop O(worktrees + tickets).
+    const ticketSourceIdById = new Map(
+      tickets ? tickets.map((t) => [t.id, t.source_id]) : []
+    );
     for (const wt of worktrees) {
       const run = workflowRunByWorktreeId.get(wt.id);
       if (!run) continue;
-      if (tickets && wt.ticket_id) {
-        const ticket = tickets.find((t) => t.id === wt.ticket_id);
-        if (ticket) {
-          m.set(ticket.source_id, run.status);
+      if (wt.ticket_id) {
+        const sourceId = ticketSourceIdById.get(wt.ticket_id);
+        if (sourceId) {
+          m.set(sourceId, run.status);
         }
       }
     }

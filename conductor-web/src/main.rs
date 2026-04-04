@@ -275,10 +275,10 @@ async fn main() -> Result<()> {
                 // Stale workflow watchdog: alert, reap dead agents, auto-restart.
                 let stale_mins = cfg.general.stale_workflow_minutes;
                 if stale_mins > 0 {
-                    // Informational alerts for all stale runs.
-                    match wf_mgr.detect_stale_workflow_runs(stale_mins as i64) {
-                        Ok(stale) => {
-                            for s in &stale {
+                    // Detect once, fire informational alerts, then reap dead agents.
+                    let stale_runs = match wf_mgr.detect_stale_workflow_runs(stale_mins as i64) {
+                        Ok(runs) => {
+                            for s in &runs {
                                 conductor_core::notify::fire_stale_workflow_notification(
                                     &conn,
                                     &cfg.notifications,
@@ -289,32 +289,31 @@ async fn main() -> Result<()> {
                                     s.running_minutes,
                                 );
                             }
+                            runs
                         }
-                        Err(e) => tracing::warn!("detect_stale_workflow_runs failed: {e}"),
-                    }
-                    // Reap runs whose agent process is confirmed dead and auto-restart.
+                        Err(e) => {
+                            tracing::warn!("detect_stale_workflow_runs failed: {e}");
+                            vec![]
+                        }
+                    };
+                    // Reap runs whose agent process is confirmed dead and auto-restart,
+                    // passing the already-detected list to avoid a redundant DB query.
                     let live_windows = conductor_core::agent::list_live_tmux_windows();
-                    match wf_mgr.reap_stale_workflow_runs(stale_mins as i64, &live_windows) {
+                    match wf_mgr.reap_detected_stale_runs(stale_runs, &live_windows) {
                         Ok(reaped) if !reaped.is_empty() => {
                             let conductor_bin_dir =
                                 conductor_core::workflow::resolve_conductor_bin_dir();
                             for r in &reaped {
-                                conductor_core::notify::fire_stale_reaped_notification(
-                                    &conn,
-                                    &cfg.notifications,
-                                    &r.run_id,
-                                    &r.workflow_name,
-                                    r.target_label.as_deref(),
-                                    &r.step_name,
-                                    true, // auto_restarted
-                                );
                                 let cfg_clone = (*cfg).clone();
                                 let bin_dir = conductor_bin_dir.clone();
                                 let run_id = r.run_id.clone();
+                                let workflow_name = r.workflow_name.clone();
+                                let target_label = r.target_label.clone();
+                                let step_name = r.step_name.clone();
                                 std::thread::spawn(move || {
                                     let params =
                                         conductor_core::workflow::WorkflowResumeStandalone {
-                                            config: cfg_clone,
+                                            config: cfg_clone.clone(),
                                             workflow_run_id: run_id.clone(),
                                             model: None,
                                             from_step: None,
@@ -322,14 +321,28 @@ async fn main() -> Result<()> {
                                             db_path: None,
                                             conductor_bin_dir: bin_dir,
                                         };
-                                    if let Err(e) =
-                                        conductor_core::workflow::resume_workflow_standalone(
+                                    let auto_restarted =
+                                        match conductor_core::workflow::resume_workflow_standalone(
                                             &params,
-                                        )
-                                    {
-                                        tracing::warn!(
-                                            run_id = %run_id,
-                                            "Auto-restart of stale workflow run failed: {e}"
+                                        ) {
+                                            Ok(_) => true,
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    run_id = %run_id,
+                                                    "Auto-restart of stale workflow run failed: {e}"
+                                                );
+                                                false
+                                            }
+                                        };
+                                    if let Ok(thread_conn) = open_database(&db_path()) {
+                                        conductor_core::notify::fire_stale_reaped_notification(
+                                            &thread_conn,
+                                            &cfg_clone.notifications,
+                                            &run_id,
+                                            &workflow_name,
+                                            target_label.as_deref(),
+                                            &step_name,
+                                            auto_restarted,
                                         );
                                     }
                                 });
