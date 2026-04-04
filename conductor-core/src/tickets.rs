@@ -700,64 +700,8 @@ impl<'a> TicketSyncer<'a> {
     /// Returns `ticket_id → TicketDependencies`. Used by the TUI background
     /// poller to avoid N+1 queries.
     pub fn get_all_dependencies(&self) -> Result<HashMap<String, TicketDependencies>> {
-        // Column offset constants: from-ticket fields start at 2, to-ticket fields at 17.
-        const FROM_OFFSET: usize = 2;
-        const TO_OFFSET: usize = 17;
-
-        // Query 1: all 'blocks' relationships. Each row yields both tickets via a
-        // double join, so we build both blocked_by and blocks in one pass.
-        //
-        // from_ticket (blocker) → goes into to_ticket_id's blocked_by list
-        // to_ticket  (blocked)  → goes into from_ticket_id's blocks list
-        let blocks_rows: Vec<(String, String, Ticket, Ticket)> = query_collect(
-            self.conn,
-            "SELECT d.from_ticket_id, d.to_ticket_id,
-             tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
-             tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
-             tf.workflow, tf.agent_map,
-             tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
-             tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
-             tt.workflow, tt.agent_map
-             FROM ticket_dependencies d
-             JOIN tickets tf ON tf.id = d.from_ticket_id
-             JOIN tickets tt ON tt.id = d.to_ticket_id
-             WHERE d.dep_type = 'blocks'",
-            [],
-            |row| {
-                let from_id: String = row.get(0)?;
-                let to_id: String = row.get(1)?;
-                let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
-                let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
-                Ok((from_id, to_id, from_ticket, to_ticket))
-            },
-        )?;
-
-        // Query 2: all 'parent_of' relationships. Each row yields both tickets.
-        //
-        // from_ticket (parent) → goes into to_ticket_id's parent field
-        // to_ticket  (child)   → goes into from_ticket_id's children list
-        let parent_rows: Vec<(String, String, Ticket, Ticket)> = query_collect(
-            self.conn,
-            "SELECT d.from_ticket_id, d.to_ticket_id,
-             tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
-             tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
-             tf.workflow, tf.agent_map,
-             tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
-             tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
-             tt.workflow, tt.agent_map
-             FROM ticket_dependencies d
-             JOIN tickets tf ON tf.id = d.from_ticket_id
-             JOIN tickets tt ON tt.id = d.to_ticket_id
-             WHERE d.dep_type = 'parent_of'",
-            [],
-            |row| {
-                let from_id: String = row.get(0)?;
-                let to_id: String = row.get(1)?;
-                let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
-                let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
-                Ok((from_id, to_id, from_ticket, to_ticket))
-            },
-        )?;
+        let blocks_rows = query_dep_pairs(self.conn, "blocks")?;
+        let parent_rows = query_dep_pairs(self.conn, "parent_of")?;
 
         let mut map: HashMap<String, TicketDependencies> = HashMap::new();
 
@@ -907,6 +851,39 @@ pub fn build_agent_prompt(ticket: &Ticket) -> String {
 
 fn map_ticket_row(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
     map_ticket_row_at(row, 0)
+}
+
+/// Runs the shared double-join query for a single `dep_type` and returns
+/// `(from_ticket_id, to_ticket_id, from_ticket, to_ticket)` for every row.
+/// Used by `get_all_dependencies` to eliminate query/mapper duplication.
+fn query_dep_pairs(
+    conn: &Connection,
+    dep_type: &str,
+) -> Result<Vec<(String, String, Ticket, Ticket)>> {
+    const FROM_OFFSET: usize = 2;
+    const TO_OFFSET: usize = 17;
+    query_collect(
+        conn,
+        "SELECT d.from_ticket_id, d.to_ticket_id,
+         tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+         tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+         tf.workflow, tf.agent_map,
+         tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+         tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+         tt.workflow, tt.agent_map
+         FROM ticket_dependencies d
+         JOIN tickets tf ON tf.id = d.from_ticket_id
+         JOIN tickets tt ON tt.id = d.to_ticket_id
+         WHERE d.dep_type = ?1",
+        rusqlite::params![dep_type],
+        |row| {
+            let from_id: String = row.get(0)?;
+            let to_id: String = row.get(1)?;
+            let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
+            let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+            Ok((from_id, to_id, from_ticket, to_ticket))
+        },
+    )
 }
 
 /// Like `map_ticket_row` but reads ticket fields starting at the given column `offset`.
