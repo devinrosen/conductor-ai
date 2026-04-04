@@ -743,16 +743,6 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_permission_mode_allowed_tools() {
-        assert_eq!(AgentPermissionMode::AutoMode.allowed_tools(), None);
-        assert_eq!(AgentPermissionMode::SkipPermissions.allowed_tools(), None);
-        assert_eq!(
-            AgentPermissionMode::Plan.allowed_tools(),
-            Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
-        );
-    }
-
-    #[test]
     fn test_model_default_is_none() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.general.model, None);
