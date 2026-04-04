@@ -55,6 +55,26 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// List events for a run that were inserted after `after_id` (exclusive).
+    ///
+    /// ULIDs are lexicographically time-ordered, so `id > after_id` is an
+    /// efficient range scan backed by the `idx_agent_run_events_run_id` index.
+    /// Pass an empty string to return all events for the run.
+    pub fn list_events_for_run_since(
+        &self,
+        run_id: &str,
+        after_id: &str,
+    ) -> Result<Vec<AgentRunEvent>> {
+        query_collect(
+            self.conn,
+            &format!(
+                "{AGENT_RUN_EVENTS_SELECT} WHERE run_id = ?1 AND id > ?2 ORDER BY id ASC"
+            ),
+            params![run_id, after_id],
+            row_to_agent_run_event,
+        )
+    }
+
     /// List all events for a run in chronological order.
     pub fn list_events_for_run(&self, run_id: &str) -> Result<Vec<AgentRunEvent>> {
         query_collect(
@@ -231,6 +251,41 @@ impl<'a> AgentManager<'a> {
 mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
+
+    #[test]
+    fn test_list_events_for_run_since() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        let t = "2024-01-01T00:00:00Z";
+
+        let ev1 = mgr
+            .create_event(&run.id, "system", "Session started", t, None)
+            .unwrap();
+        let ev2 = mgr
+            .create_event(&run.id, "tool", "[Bash] cargo build", t, None)
+            .unwrap();
+        let ev3 = mgr
+            .create_event(&run.id, "text", "Planning", t, None)
+            .unwrap();
+
+        // Empty after_id returns all events
+        let all = mgr.list_events_for_run_since(&run.id, "").unwrap();
+        assert_eq!(all.len(), 3);
+
+        // after ev1 returns ev2 and ev3
+        let after_first = mgr.list_events_for_run_since(&run.id, &ev1.id).unwrap();
+        assert_eq!(after_first.len(), 2);
+        assert_eq!(after_first[0].id, ev2.id);
+        assert_eq!(after_first[1].id, ev3.id);
+
+        // after ev3 returns nothing
+        let after_last = mgr.list_events_for_run_since(&run.id, &ev3.id).unwrap();
+        assert!(after_last.is_empty());
+    }
 
     #[test]
     fn test_create_and_list_events() {

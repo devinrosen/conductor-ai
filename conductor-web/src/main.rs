@@ -392,6 +392,71 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Spawn a 2-second background poller that emits AgentStep SSE events for
+    // each new agent_run_events row written by running CLI agents.
+    let step_poller_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        // Map<run_id, (last_event_id, step_count)>
+        let mut tracker: std::collections::HashMap<String, (String, i64)> =
+            std::collections::HashMap::new();
+        loop {
+            interval.tick().await;
+            let db = step_poller_state.db.clone();
+            let events_bus = step_poller_state.events.clone();
+            let mut current_tracker = std::mem::take(&mut tracker);
+            let result = tokio::task::spawn_blocking(move || {
+                let conn = db.blocking_lock();
+                let mgr = AgentManager::new(&conn);
+                let running_runs = mgr.list_agent_runs(
+                    None,
+                    None,
+                    Some(&conductor_core::agent::AgentRunStatus::Running),
+                    100,
+                    0,
+                )?;
+                let mut emitted: Vec<(String, String, i64)> = Vec::new();
+                for run in &running_runs {
+                    let (last_id, step_count) = current_tracker
+                        .get(&run.id)
+                        .cloned()
+                        .unwrap_or_else(|| (String::new(), 0));
+                    let new_events = mgr.list_events_for_run_since(&run.id, &last_id)?;
+                    let mut current_last_id = last_id;
+                    let mut current_step_count = step_count;
+                    for ev in new_events {
+                        if ev.kind == "result" {
+                            current_last_id = ev.id;
+                            continue;
+                        }
+                        events_bus.emit(ConductorEvent::AgentStep {
+                            agent_run_id: run.id.clone(),
+                            description: ev.summary.clone(),
+                            step_index: Some(current_step_count),
+                        });
+                        current_step_count += 1;
+                        current_last_id = ev.id;
+                    }
+                    emitted.push((run.id.clone(), current_last_id, current_step_count));
+                }
+                // Prune map to only active run IDs
+                let active_ids: std::collections::HashSet<&str> =
+                    running_runs.iter().map(|r| r.id.as_str()).collect();
+                current_tracker.retain(|id, _| active_ids.contains(id.as_str()));
+                for (run_id, last_id, step_count) in emitted {
+                    current_tracker.insert(run_id, (last_id, step_count));
+                }
+                Ok::<_, conductor_core::error::ConductorError>(current_tracker)
+            })
+            .await;
+            match result {
+                Ok(Ok(new_tracker)) => tracker = new_tracker,
+                Ok(Err(e)) => tracing::warn!("step-event poller failed: {e}"),
+                Err(join_err) => tracing::warn!("step-event poller panicked: {join_err}"),
+            }
+        }
+    });
+
     // Spawn a task that subscribes to the EventBus and sends push notifications
     // for high-urgency gate-waiting and feedback-requested events in real time.
     let gate_state = state.clone();
