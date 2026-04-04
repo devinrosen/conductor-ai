@@ -190,49 +190,42 @@ const RunRow = memo(function RunRow({
   const progress = formatWorkflowProgress(run);
 
   return (
-    <div className={`px-3 py-2 mb-0.5 ${indent ? "ml-6" : ""}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <StatusIcon status={run.status} />
-          {nameEl}
-          {progress && (
-            <span className="text-[11px] text-gray-400 truncate shrink-0">{progress}</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0 text-xs text-gray-400">
-          {PULSE_STATUSES.has(run.status) && (
-            <StatusPulseBadge status={run.status} />
-          )}
-          {ms != null && (
-            <span className="font-mono tabular-nums">{formatDuration(ms)}</span>
-          )}
-          {isActive && run.estimated_remaining_ms != null && run.estimated_remaining_ms > 0 && (
-            <span className="text-gray-500 font-mono tabular-nums">~{formatDuration(run.estimated_remaining_ms)} left</span>
-          )}
-          <TimeAgo date={run.started_at} short />
-          {isActive && onCancel && (
-            <button
-              onClick={(e) => { e.preventDefault(); onCancel(run.id); }}
-              className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
-            >
-              Cancel
-            </button>
-          )}
-          {isFailed && onResume && (
-            <button
-              onClick={(e) => { e.preventDefault(); onResume(run.id); }}
-              className="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200"
-            >
-              Resume
-            </button>
-          )}
-        </div>
+    <div className={`flex items-center justify-between gap-2 px-3 py-2 mb-0.5 ${indent ? "ml-6" : ""}`}>
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <StatusIcon status={run.status} />
+        {nameEl}
+        {progress && (
+          <span className="text-[11px] text-gray-400 truncate shrink-0">{progress}</span>
+        )}
       </div>
-      {isFailed && run.result_summary && (
-        <p className="text-[10px] text-red-400/70 truncate mt-0.5 ml-6 max-w-md" title={run.result_summary}>
-          {run.result_summary}
-        </p>
-      )}
+      <div className="flex items-center gap-2 shrink-0 text-xs text-gray-400">
+        {PULSE_STATUSES.has(run.status) && (
+          <StatusPulseBadge status={run.status} />
+        )}
+        {ms != null && (
+          <span className="font-mono tabular-nums">{formatDuration(ms)}</span>
+        )}
+        {isActive && run.estimated_remaining_ms != null && run.estimated_remaining_ms > 0 && (
+          <span className="text-gray-500 font-mono tabular-nums">~{formatDuration(run.estimated_remaining_ms)} left</span>
+        )}
+        <TimeAgo date={run.started_at} short />
+        {isActive && onCancel && (
+          <button
+            onClick={(e) => { e.preventDefault(); onCancel(run.id); }}
+            className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+          >
+            Cancel
+          </button>
+        )}
+        {isFailed && onResume && (
+          <button
+            onClick={(e) => { e.preventDefault(); onResume(run.id); }}
+            className="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200"
+          >
+            Resume
+          </button>
+        )}
+      </div>
     </div>
   );
 });

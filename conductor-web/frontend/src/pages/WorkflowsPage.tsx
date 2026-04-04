@@ -458,15 +458,10 @@ export function WorkflowsPage() {
                         {(() => {
                           const prog = formatWorkflowProgress(run);
                           return prog ? (
-                            <span className="text-[10px] text-gray-400">{prog}</span>
+                            <span className="text-[11px] text-gray-400">{prog}</span>
                           ) : null;
                         })()}
                       </div>
-                      {run.status === "failed" && run.result_summary && (
-                        <span className="block text-[10px] text-red-400 mt-0.5 max-w-[250px] truncate" title={run.result_summary}>
-                          {run.result_summary}
-                        </span>
-                      )}
                     </td>
                     <td className="px-3 py-1.5 text-xs text-gray-400">
                       <TimeAgo date={run.started_at} />

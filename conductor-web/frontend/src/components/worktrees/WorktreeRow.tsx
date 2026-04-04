@@ -2,7 +2,7 @@ import { Link } from "react-router";
 import type { Worktree, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
-import { formatWorkflowProgress } from "../../utils/workflowProgress";
+import { formatStepProgress, formatIteration } from "../../utils/workflowProgress";
 
 export function WorktreeRow({
   worktree,
@@ -25,7 +25,15 @@ export function WorktreeRow({
   const isWaiting = workflowRun?.status === "waiting";
   const isFailed = workflowRun?.status === "failed";
 
-  const progress = workflowRun ? formatWorkflowProgress(workflowRun) : null;
+  // Build a short progress string: "Step 3/7 · implement"
+  const stepProg = workflowRun ? formatStepProgress(workflowRun) : null;
+  const iter = workflowRun ? formatIteration(workflowRun) : null;
+  const stepName = workflowRun?.current_step_name;
+  // Only show step name if it's not a sub-workflow call
+  const displayName = stepName && !stepName.startsWith("workflow:") ? stepName : null;
+
+  const progressParts = [stepProg, iter, displayName].filter(Boolean);
+  const progressText = progressParts.length > 0 ? progressParts.join(" \u00b7 ") : null;
 
   return (
     <tr
@@ -50,70 +58,73 @@ export function WorktreeRow({
       <td className="px-4 py-2">
         <StatusBadge status={worktree.status} />
       </td>
-      <td className="px-4 py-2 max-w-[300px]">
+      <td className="px-4 py-2">
         {isRunning ? (
           <span className="inline-flex items-center gap-1.5 text-xs">
             <span className="relative flex h-2 w-2 shrink-0">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
             </span>
-            <span className="text-amber-600 truncate">
+            <span className="text-amber-600">
               {workflowRun!.workflow_name}
-              {progress && <span className="text-gray-400"> &middot; {progress}</span>}
             </span>
+            {progressText && (
+              <span className="text-gray-400 text-[11px]">{progressText}</span>
+            )}
           </span>
         ) : isWaiting ? (
           <span className="inline-flex items-center gap-1.5 text-xs">
             <span className="inline-flex h-2 w-2 rounded-full bg-blue-400 shrink-0" />
-            <span className="text-blue-600 truncate">
+            <span className="text-blue-600">
               {workflowRun!.workflow_name}
-              {progress && <span className="text-gray-400"> &middot; {progress}</span>}
             </span>
+            {progressText && (
+              <span className="text-gray-400 text-[11px]">{progressText}</span>
+            )}
           </span>
         ) : isFailed ? (
-          <div className="space-y-0.5">
-            <span className="inline-flex items-center gap-1.5 text-xs">
-              <svg className="w-3.5 h-3.5 shrink-0 text-red-500" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-              </svg>
-              <span className="text-red-600 truncate">
-                {workflowRun!.workflow_name}
-                {progress && <span className="text-red-400"> &middot; {progress}</span>}
-              </span>
-              {onResume && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    onResume(workflowRun!.id);
-                  }}
-                  className="shrink-0 px-1.5 py-0.5 text-[10px] rounded bg-red-100 text-red-700 hover:bg-red-200 active:scale-95 transition-transform"
-                  title="Resume from failed step"
-                >
-                  Resume
-                </button>
-              )}
+          <span className="inline-flex items-center gap-1.5 text-xs">
+            <svg className="w-3.5 h-3.5 shrink-0 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+            </svg>
+            <span className="text-red-600">
+              {workflowRun!.workflow_name}
             </span>
-            {workflowRun!.result_summary && (
-              <p className="text-[10px] text-red-400/70 truncate pl-5" title={workflowRun!.result_summary}>
-                {workflowRun!.result_summary}
-              </p>
+            {progressText && (
+              <span className="text-red-400 text-[11px]">{progressText}</span>
             )}
-          </div>
+          </span>
         ) : null}
       </td>
       <td className="px-4 py-2 text-gray-500">
         <TimeAgo date={worktree.created_at} />
       </td>
       <td className="px-4 py-2">
-        <button
-          onClick={() => onDelete(worktree.id)}
-          className="text-xs text-gray-400 hover:text-red-600"
-        >
-          <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clipRule="evenodd" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-1.5">
+          {isFailed && onResume && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                onResume(workflowRun!.id);
+              }}
+              className="text-xs text-amber-600 hover:text-amber-800"
+              title="Resume from failed step"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
+              </svg>
+            </button>
+          )}
+          <button
+            onClick={() => onDelete(worktree.id)}
+            className="text-xs text-gray-400 hover:text-red-600"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clipRule="evenodd" />
+            </svg>
+          </button>
+        </div>
       </td>
     </tr>
   );

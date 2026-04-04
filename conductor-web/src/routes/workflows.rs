@@ -879,7 +879,7 @@ pub async fn list_all_workflow_runs_handler(
                 .definition_snapshot
                 .as_deref()
                 .and_then(|snap| serde_json::from_str(snap).ok());
-            let total_steps = def.as_ref().map(|d| d.total_nodes());
+            let total_steps = def.as_ref().map(|d| d.top_level_steps());
             let max_iterations = current_step_name
                 .as_deref()
                 .and_then(|name| def.as_ref().and_then(|d| d.max_iterations_for_step(name)))
