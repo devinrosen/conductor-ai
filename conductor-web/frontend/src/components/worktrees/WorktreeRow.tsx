@@ -1,16 +1,18 @@
+import { useState, useEffect } from "react";
 import { Link } from "react-router";
 import type { Worktree, WorkflowRun } from "../../api/types";
 import { TimeAgo } from "../shared/TimeAgo";
 import { Tooltip } from "../shared/Tooltip";
+import { formatDuration } from "../../utils/agentStats";
 import { formatIteration } from "../../utils/workflowProgress";
 
 /** Small segmented progress bar showing completed/current/remaining steps. */
-function StepBar({ current, total }: { current: number; total: number }) {
+function StepBar({ current, total, failed }: { current: number; total: number; failed?: boolean }) {
   const segments = [];
   for (let i = 1; i <= total; i++) {
     let color: string;
     if (i < current) color = "bg-green-500";
-    else if (i === current) color = "bg-amber-400";
+    else if (i === current) color = failed ? "bg-red-500" : "bg-amber-400";
     else color = "bg-gray-600";
     segments.push(
       <span key={i} className={`h-1 flex-1 rounded-full ${color}`} />,
@@ -21,6 +23,30 @@ function StepBar({ current, total }: { current: number; total: number }) {
       <span className="flex gap-px w-20">{segments}</span>
     </Tooltip>
   );
+}
+
+/** Live elapsed timer that re-renders every second. */
+function LiveTimer({ startedAt, estimatedMs }: { startedAt: string; estimatedMs?: number | null }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const elapsed = Date.now() - new Date(startedAt).getTime();
+  const elapsedStr = formatDuration(elapsed);
+
+  if (estimatedMs && estimatedMs > 0) {
+    const remaining = Math.max(0, estimatedMs - elapsed);
+    return (
+      <span className="text-[10px] text-gray-500 font-mono tabular-nums">
+        {elapsedStr} / ~{formatDuration(estimatedMs)}
+        {remaining > 0 && <span className="text-gray-600"> ({formatDuration(remaining)} left)</span>}
+      </span>
+    );
+  }
+
+  return <span className="text-[10px] text-gray-500 font-mono tabular-nums">{elapsedStr}</span>;
 }
 
 export function WorktreeRow({
@@ -43,13 +69,22 @@ export function WorktreeRow({
   const isRunning = workflowRun?.status === "running" || workflowRun?.status === "pending";
   const isWaiting = workflowRun?.status === "waiting";
   const isFailed = workflowRun?.status === "failed";
-  const hasWorkflow = isRunning || isWaiting || isFailed;
+  const isActive = isRunning || isWaiting;
+  const hasWorkflow = isActive || isFailed;
 
-  const stepName = workflowRun?.current_step_name;
-  const displayName = stepName && !stepName.startsWith("workflow:") ? stepName : null;
+  // Get the deepest active substep name from active_steps
+  const activeStep = workflowRun?.active_steps?.find(
+    (s) => s.status === "running" || s.status === "waiting",
+  );
+  const substepName = activeStep?.step_name;
+  // For display: strip "workflow:" prefix, show leaf step name
+  const displaySubstep = substepName && !substepName.startsWith("workflow:")
+    ? substepName
+    : workflowRun?.current_step_name && !workflowRun.current_step_name.startsWith("workflow:")
+      ? workflowRun.current_step_name
+      : null;
+
   const iter = workflowRun ? formatIteration(workflowRun) : null;
-  const secondaryParts = [displayName, iter].filter(Boolean);
-  const secondaryText = secondaryParts.length > 0 ? secondaryParts.join(" \u00b7 ") : null;
 
   // Status indicator element
   const statusDot = isRunning ? (
@@ -98,24 +133,33 @@ export function WorktreeRow({
           <div className="flex items-start gap-1.5">
             <span className="mt-0.5">{statusDot}</span>
             <div className="min-w-0">
-              <span className={`text-xs ${nameColor} block`}>{workflowRun!.workflow_name}</span>
-              {workflowRun!.current_step != null && workflowRun!.total_steps != null ? (
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <StepBar current={workflowRun!.current_step} total={workflowRun!.total_steps} />
-                  {secondaryText && (
-                    <span className="text-[11px] text-gray-500">{secondaryText}</span>
-                  )}
-                </div>
-              ) : secondaryText ? (
-                <span className="text-[11px] text-gray-500 block">{secondaryText}</span>
-              ) : null}
+              <div className="flex items-center gap-1.5">
+                <span className={`text-xs ${nameColor}`}>{workflowRun!.workflow_name}</span>
+                {iter && <span className="text-[10px] text-gray-500">{iter}</span>}
+              </div>
+              {workflowRun!.current_step != null && workflowRun!.total_steps != null && (
+                <StepBar
+                  current={workflowRun!.current_step}
+                  total={workflowRun!.total_steps}
+                  failed={isFailed}
+                />
+              )}
+              {displaySubstep && (
+                <span className="text-[10px] text-gray-500 block truncate max-w-[180px]">{displaySubstep}</span>
+              )}
+              {isActive && workflowRun!.started_at && (
+                <LiveTimer
+                  startedAt={workflowRun!.started_at}
+                  estimatedMs={workflowRun!.estimated_duration_ms}
+                />
+              )}
             </div>
           </div>
         ) : null}
       </td>
       {/* Actions */}
-      <td className="px-4 py-2">
-        <div className="flex items-center gap-2">
+      <td className="px-4 py-2 align-top">
+        <div className="flex flex-col items-center gap-1">
           {isFailed && onResume && (
             <Tooltip content="Resume from failed step">
               <button
