@@ -220,6 +220,114 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// Directly finalize workflow runs that are stuck in `running` status because
+    /// the finalization DB write (`update_workflow_status`) failed after all steps
+    /// already reached terminal states.
+    ///
+    /// A run is eligible when ALL of the following hold:
+    /// 1. `status = 'running'`
+    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
+    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
+    /// 4. The most recent step `ended_at` (or the run's own `started_at` when
+    ///    no steps exist) is older than `threshold_secs`
+    ///
+    /// Unlike `detect_stuck_workflow_run_ids`, this function writes the correct
+    /// terminal status directly without resetting steps or re-running the engine:
+    /// - Any `failed` or `timed_out` step → `Failed`
+    /// - All `completed`/`skipped`/`cancelled` steps → `Completed`
+    ///
+    /// The parent `agent_runs` row is updated best-effort (failures are logged,
+    /// not returned as errors).
+    ///
+    /// Returns the number of runs finalized.
+    pub fn reap_finalization_stuck_workflow_runs(
+        &self,
+        threshold_secs: i64,
+    ) -> crate::error::Result<usize> {
+        // Find root running workflow runs where all steps are terminal and
+        // the last step (or the run itself) ended more than threshold_secs ago.
+        let stuck: Vec<(String, String)> = query_collect(
+            self.conn,
+            "SELECT id, parent_run_id FROM ( \
+               SELECT wr.id, wr.parent_run_id, \
+                 COALESCE( \
+                   (SELECT MAX(ended_at) FROM workflow_run_steps wrs2 \
+                    WHERE wrs2.workflow_run_id = wr.id), \
+                   wr.started_at \
+                 ) AS age_ref \
+               FROM workflow_runs wr \
+               WHERE wr.status = 'running' \
+                 AND wr.parent_workflow_run_id IS NULL \
+                 AND NOT EXISTS ( \
+                   SELECT 1 FROM workflow_run_steps wrs \
+                   WHERE wrs.workflow_run_id = wr.id \
+                     AND wrs.status IN ('running', 'pending', 'waiting') \
+                 ) \
+             ) \
+             WHERE age_ref IS NOT NULL \
+               AND (CAST(strftime('%s', 'now') AS INTEGER) \
+                    - CAST(strftime('%s', age_ref) AS INTEGER)) > ?1",
+            params![threshold_secs],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        let mut finalized = 0usize;
+
+        for (run_id, parent_run_id) in stuck {
+            // Determine the correct final status from step outcomes.
+            let has_failure: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM workflow_run_steps \
+                     WHERE workflow_run_id = ?1 \
+                       AND status IN ('failed', 'timed_out')",
+                    params![run_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+
+            let final_status = if has_failure {
+                WorkflowRunStatus::Failed
+            } else {
+                WorkflowRunStatus::Completed
+            };
+
+            let summary =
+                "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'"
+                    .to_string();
+
+            self.update_workflow_status(&run_id, final_status.clone(), Some(&summary))?;
+            tracing::info!(
+                run_id = %run_id,
+                status = %final_status,
+                "Reaper finalized stuck workflow run"
+            );
+
+            // Best-effort: update the parent agent_runs row if still running.
+            let update_result = self.conn.execute(
+                "UPDATE agent_runs SET status = ?1, result_text = ?2, ended_at = ?3 \
+                 WHERE id = ?4 AND status = 'running'",
+                params![
+                    final_status.to_string(),
+                    summary,
+                    chrono::Utc::now().to_rfc3339(),
+                    parent_run_id,
+                ],
+            );
+            if let Err(e) = update_result {
+                tracing::warn!(
+                    run_id = %run_id,
+                    parent_run_id = %parent_run_id,
+                    "Failed to update parent agent_runs row (best-effort, non-fatal): {e}"
+                );
+            }
+
+            finalized += 1;
+        }
+
+        Ok(finalized)
+    }
+
     /// Find the most-recently-started child workflow run that can be resumed:
     /// failed, pending, waiting, or timed_out status for the given parent + child
     /// workflow name. Returns `None` if no such run exists.

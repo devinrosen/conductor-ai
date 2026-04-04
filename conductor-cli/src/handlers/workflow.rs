@@ -17,9 +17,14 @@ pub fn handle_workflow(
     conn: &Connection,
     config: &Config,
 ) -> Result<()> {
-    // Detect and resume stuck workflow runs before handling any workflow command.
+    // Finalize and resume stuck workflow runs before handling any workflow command.
     {
         let wf_mgr = WorkflowManager::new(conn);
+        match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+            Ok(n) if n > 0 => eprintln!("Info: reaper finalized {n} stuck workflow run(s)"),
+            Ok(_) => {}
+            Err(e) => eprintln!("Warning: reap_finalization_stuck_workflow_runs failed: {e}"),
+        }
         match wf_mgr.detect_stuck_workflow_run_ids(60) {
             Ok(ids) if !ids.is_empty() => {
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
