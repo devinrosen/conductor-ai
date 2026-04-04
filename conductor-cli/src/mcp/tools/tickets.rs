@@ -225,6 +225,48 @@ pub(super) fn tool_upsert_ticket(
     }
 }
 
+pub(super) fn tool_get_ready_tickets(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::tickets::TicketSyncer;
+
+    let repo_slug = require_arg!(args, "repo");
+    let root_ticket_id = get_arg(args, "root_ticket_id").map(|s| s.to_string());
+    let label = get_arg(args, "label").map(|s| s.to_string());
+    let limit = get_arg(args, "limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(50);
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+    let syncer = TicketSyncer::new(&conn);
+    let tickets = match syncer.get_ready_tickets(
+        &repo.id,
+        root_ticket_id.as_deref(),
+        label.as_deref(),
+        limit,
+    ) {
+        Ok(t) => t,
+        Err(e) => return tool_err(e),
+    };
+    if tickets.is_empty() {
+        return tool_ok(format!("No ready tickets for {repo_slug}."));
+    }
+    let mut out = String::new();
+    for t in tickets {
+        out.push_str(&format!("#{} — {} [{}]\n", t.source_id, t.title, t.url));
+    }
+    tool_ok(out)
+}
+
 pub(super) fn tool_delete_ticket(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
@@ -710,6 +752,58 @@ mod tests {
             Some(true),
             "whitespace in labels should be trimmed and succeed"
         );
+    }
+
+    // ---- get_ready_tickets tests ----
+
+    #[test]
+    fn test_get_ready_tickets_missing_repo() {
+        let (_f, db) = make_test_db();
+        let result = tool_get_ready_tickets(&db, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "ghost-repo"));
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_get_ready_tickets_empty_result() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "test-repo"));
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("No ready tickets"), "got: {text}");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_happy_path() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        // Upsert a ticket
+        let args = full_ticket_args("test-repo");
+        let upsert = tool_upsert_ticket(&db, &args);
+        assert_ne!(upsert.is_error, Some(true));
+
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "test-repo"));
+        assert_ne!(result.is_error, Some(true), "got: {:?}", result.content);
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("#42"), "expected ticket source_id in output, got: {text}");
     }
 
     // ---- delete ticket tests ----
