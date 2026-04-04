@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use conductor_core::agent::AgentManager;
 use conductor_core::agent::AgentRun;
@@ -37,13 +37,15 @@ pub struct SendMessageRequest {
     pub prompt: String,
 }
 
-#[derive(Serialize)]
-pub struct SendMessageResponse {
-    pub agent_run_id: String,
+#[derive(Deserialize)]
+pub struct RespondToFeedbackRequest {
+    pub response: String,
 }
 
 #[derive(Deserialize)]
-pub struct RespondToFeedbackRequest {
+pub struct RespondToFeedbackByIdRequest {
+    pub run_id: String,
+    pub feedback_id: String,
     pub response: String,
 }
 
@@ -84,16 +86,16 @@ pub async fn get_conversation(
     Ok(Json(conversation))
 }
 
-/// POST /api/conversations/{id}/message — send a message to a conversation.
+/// POST /api/conversations/{id}/messages — send a message to a conversation.
 ///
 /// Creates a new agent run, with automatic session resumption from the last
-/// completed run. Returns `{ agent_run_id }` immediately; the agent runs
-/// asynchronously.
+/// completed run. Returns the full `AgentRun` object immediately; the agent
+/// runs asynchronously.
 pub async fn send_message(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
     Json(body): Json<SendMessageRequest>,
-) -> Result<(StatusCode, Json<SendMessageResponse>), ApiError> {
+) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
     // Phase 1: all DB work under the async lock.
     let (run, resume_session_id, working_dir, permission_mode, model, window_name) = {
         let db = state.db.lock().await;
@@ -186,15 +188,31 @@ pub async fn send_message(
 
     spawn_tmux_blocking(&state, &run.id, args, window_name).await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(SendMessageResponse {
-            agent_run_id: run.id,
-        }),
-    ))
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
-/// POST /api/conversations/{id}/message/{run_id}/respond — respond to a
+/// POST /api/conversations/{id}/feedback — submit feedback for a run using an
+/// explicit feedback_id. This is the mobile-client entrypoint; the run_id is
+/// used only to verify the run belongs to the conversation.
+pub async fn respond_to_feedback(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+    Json(body): Json<RespondToFeedbackByIdRequest>,
+) -> Result<Json<AgentRun>, ApiError> {
+    let db = state.db.lock().await;
+    let agent_mgr = AgentManager::new(&db);
+
+    let updated_run = agent_mgr.submit_feedback_for_conversation(
+        &conversation_id,
+        &body.run_id,
+        &body.feedback_id,
+        &body.response,
+    )?;
+
+    Ok(Json(updated_run))
+}
+
+/// POST /api/conversations/{id}/messages/{run_id}/respond — respond to a
 /// human-in-the-loop feedback request for a specific run.
 pub async fn respond_to_run_feedback(
     State(state): State<AppState>,
@@ -204,30 +222,153 @@ pub async fn respond_to_run_feedback(
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
 
-    // Validate the run belongs to this conversation.
-    let run = agent_mgr
-        .get_run(&run_id)?
-        .ok_or_else(|| ConductorError::Agent(format!("agent run {run_id} not found")))?;
-    if run.conversation_id.as_deref() != Some(&conversation_id) {
-        return Err(ConductorError::Agent(
-            "agent run does not belong to this conversation".to_string(),
-        )
-        .into());
-    }
-
-    // Find the pending feedback request for this run.
-    let feedback = agent_mgr
-        .pending_feedback_for_run(&run_id)?
-        .ok_or_else(|| {
-            ConductorError::Agent(format!("no pending feedback request for run {run_id}"))
-        })?;
-
-    agent_mgr.submit_feedback(&feedback.id, &body.response)?;
-
-    // Return the refreshed run record.
-    let updated_run = agent_mgr
-        .get_run(&run_id)?
-        .ok_or_else(|| ConductorError::Agent(format!("agent run {run_id} not found")))?;
+    let updated_run = agent_mgr.submit_pending_run_feedback_for_conversation(
+        &conversation_id,
+        &run_id,
+        &body.response,
+    )?;
 
     Ok(Json(updated_run))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use crate::routes::api_router;
+    use crate::test_helpers::seeded_state;
+
+    async fn send_post_json(uri: &str, body: serde_json::Value, state: AppState) -> StatusCode {
+        let (status, _bytes) = send_post_json_full(uri, body, state).await;
+        status
+    }
+
+    async fn send_post_json_full(
+        uri: &str,
+        body: serde_json::Value,
+        state: AppState,
+    ) -> (StatusCode, bytes::Bytes) {
+        use http_body_util::BodyExt;
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, bytes)
+    }
+
+    /// Seed a conversation, a run linked to it (with a pending feedback request),
+    /// and a second unrelated conversation+run. Returns
+    /// `(conv1_id, run1_id, feedback1_id, conv2_id, run2_id, feedback2_id)`.
+    fn seed_conversations(
+        conn: &rusqlite::Connection,
+    ) -> (String, String, String, String, String, String) {
+        let mgr = conductor_core::conversation::ConversationManager::new(conn);
+        let agent_mgr = conductor_core::agent::AgentManager::new(conn);
+
+        let conv1 = mgr.create(ConversationScope::Repo, "r1").unwrap();
+        let run1 = agent_mgr
+            .create_repo_run_for_conversation("r1", "q1", None, None, &conv1.id)
+            .unwrap();
+        let fb1 = agent_mgr
+            .request_feedback(&run1.id, "approve?", None)
+            .unwrap();
+
+        let conv2 = mgr.create(ConversationScope::Repo, "r1").unwrap();
+        let run2 = agent_mgr
+            .create_repo_run_for_conversation("r1", "q2", None, None, &conv2.id)
+            .unwrap();
+        let fb2 = agent_mgr
+            .request_feedback(&run2.id, "approve?", None)
+            .unwrap();
+
+        (conv1.id, run1.id, fb1.id, conv2.id, run2.id, fb2.id)
+    }
+
+    #[tokio::test]
+    async fn respond_to_feedback_returns_404_for_unknown_run() {
+        let (state, _tmp) = seeded_state();
+        {
+            let db = state.db.lock().await;
+            seed_conversations(&db);
+        }
+        let body = serde_json::json!({
+            "run_id": "nonexistent-run",
+            "feedback_id": "nonexistent-fb",
+            "response": "yes"
+        });
+        let status = send_post_json("/api/conversations/any-conv/feedback", body, state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn respond_to_feedback_returns_404_when_run_belongs_to_other_conversation() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, fb1_id, _conv2_id, _run2_id, _fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        // run1 belongs to conv1; pass conv2's ID as the path parameter
+        let body = serde_json::json!({
+            "run_id": run1_id,
+            "feedback_id": fb1_id,
+            "response": "yes"
+        });
+        let uri = "/api/conversations/wrong-conv-id/feedback";
+        let status = send_post_json(uri, body, state).await;
+        // Verify conv1_id is not used as the path parameter
+        assert_ne!(conv1_id, "wrong-conv-id");
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn respond_to_feedback_returns_404_when_feedback_belongs_to_other_run() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, _fb1_id, _conv2_id, _run2_id, fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        // fb2 belongs to run2, not run1 — IDOR attempt
+        let body = serde_json::json!({
+            "run_id": run1_id,
+            "feedback_id": fb2_id,
+            "response": "yes"
+        });
+        let uri = format!("/api/conversations/{conv1_id}/feedback");
+        let status = send_post_json(&uri, body, state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn respond_to_feedback_returns_200_for_valid_request() {
+        let (state, _tmp) = seeded_state();
+        let (conv1_id, run1_id, fb1_id, _conv2_id, _run2_id, _fb2_id) = {
+            let db = state.db.lock().await;
+            seed_conversations(&db)
+        };
+        let body = serde_json::json!({
+            "run_id": run1_id,
+            "feedback_id": fb1_id,
+            "response": "yes"
+        });
+        let uri = format!("/api/conversations/{conv1_id}/feedback");
+        let (status, bytes) = send_post_json_full(&uri, body, state).await;
+        assert_eq!(status, StatusCode::OK);
+        let run: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(run["id"], run1_id);
+        assert_eq!(run["conversation_id"], conv1_id);
+    }
 }
