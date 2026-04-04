@@ -1,4 +1,4 @@
-import type { GithubPr, Ticket, Worktree } from "../api/types";
+import type { GithubPr, Ticket, WorkflowRun, Worktree } from "../api/types";
 
 interface DepInfo {
   dependencies: string[];
@@ -37,7 +37,8 @@ export interface TicketTree {
  *
  * - Vantage tickets with `dependencies` are nested under their parents.
  * - A ticket is "blocked" if any dependency exists in the list and is not closed.
- * - A blocked ticket is "unlocked" if every blocking parent has a PR with review_decision "APPROVED".
+ * - A blocked ticket is "unlocked" if every blocking parent has an approved PR
+ *   (GitHub review_decision "APPROVED") or a completed conductor workflow.
  * - Tickets with multiple dependencies appear under each parent.
  * - Non-vantage tickets are always roots.
  */
@@ -45,6 +46,7 @@ export function buildTicketTree(
   tickets: Ticket[],
   worktrees?: Worktree[],
   prs?: GithubPr[],
+  workflowRunByTicketSourceId?: Map<string, WorkflowRun>,
 ): TicketTree {
   // Index tickets by source_id for fast lookup
   const bySourceId = new Map<string, Ticket>();
@@ -126,10 +128,18 @@ export function buildTicketTree(
       const allApproved = parents.every((parentSourceId) => {
         const parent = bySourceId.get(parentSourceId);
         if (!parent) return false;
+        // Check GitHub PR review decision
         const branch = wtBranchByTicketId.get(parent.id);
-        if (!branch) return false;
-        const pr = prByBranch.get(branch);
-        return pr?.review_decision === "APPROVED";
+        if (branch) {
+          const pr = prByBranch.get(branch);
+          if (pr?.review_decision === "APPROVED") return true;
+        }
+        // Also consider approved if the parent's conductor workflow completed
+        if (workflowRunByTicketSourceId) {
+          const run = workflowRunByTicketSourceId.get(parentSourceId);
+          if (run?.status === "completed") return true;
+        }
+        return false;
       });
 
       if (allApproved) {

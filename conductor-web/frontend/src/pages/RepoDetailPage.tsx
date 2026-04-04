@@ -259,12 +259,6 @@ export function RepoDetailPage() {
     [],
   );
 
-  // Build ticket dependency tree
-  const ticketTree = useMemo(
-    () => (tickets ? buildTicketTree(tickets, worktrees ?? undefined, prs ?? undefined) : null),
-    [tickets, worktrees, prs],
-  );
-
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display
   const ticketSourceIdMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -317,6 +311,12 @@ export function RepoDetailPage() {
     }
     return m;
   }, [worktrees, workflowRunByWorktreeId, tickets]);
+
+  // Build ticket dependency tree (must be after workflowRunByTicketSourceId)
+  const ticketTree = useMemo(
+    () => (tickets ? buildTicketTree(tickets, worktrees ?? undefined, prs ?? undefined, workflowRunByTicketSourceId) : null),
+    [tickets, worktrees, prs, workflowRunByTicketSourceId],
+  );
 
   async function handleStartTicketToPr(ticket: Ticket) {
     if (startingWorkflow) return;
