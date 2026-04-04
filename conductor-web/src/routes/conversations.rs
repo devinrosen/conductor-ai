@@ -303,7 +303,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn respond_to_feedback_returns_403_when_run_belongs_to_other_conversation() {
+    async fn respond_to_feedback_returns_404_when_run_belongs_to_other_conversation() {
         let (state, _tmp) = seeded_state();
         let (conv1_id, run1_id, fb1_id, _conv2_id, _run2_id, _fb2_id) = {
             let db = state.db.lock().await;
@@ -319,11 +319,11 @@ mod tests {
         let status = send_post_json(uri, body, state).await;
         // Verify conv1_id is not used as the path parameter
         assert_ne!(conv1_id, "wrong-conv-id");
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
-    async fn respond_to_feedback_returns_403_when_feedback_belongs_to_other_run() {
+    async fn respond_to_feedback_returns_404_when_feedback_belongs_to_other_run() {
         let (state, _tmp) = seeded_state();
         let (conv1_id, run1_id, _fb1_id, _conv2_id, _run2_id, fb2_id) = {
             let db = state.db.lock().await;
@@ -337,7 +337,7 @@ mod tests {
         });
         let uri = format!("/api/conversations/{conv1_id}/feedback");
         let status = send_post_json(&uri, body, state).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
