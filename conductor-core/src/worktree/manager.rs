@@ -207,7 +207,17 @@ impl<'a> WorktreeManager<'a> {
                     Ok(o) if o.status.success() => {
                         tracing::info!("Fetched {base:?} from origin");
                     }
-                    _ => {
+                    Ok(o) => {
+                        tracing::warn!("git fetch failed: {}", String::from_utf8_lossy(&o.stderr));
+                        return Err(ConductorError::Git(
+                            crate::error::SubprocessFailure::from_message(
+                                "git fetch",
+                                format!("Base branch '{base}' not found locally or on remote"),
+                            ),
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!("git fetch failed to spawn: {e}");
                         return Err(ConductorError::Git(
                             crate::error::SubprocessFailure::from_message(
                                 "git fetch",

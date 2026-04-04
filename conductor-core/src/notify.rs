@@ -2144,4 +2144,200 @@ mod tests {
         assert!(body.contains("check-quality"), "body: {body}");
         assert!(body.contains("review-pr"), "body: {body}");
     }
+
+    // --- fire_stale_workflow_notification ---
+
+    #[test]
+    fn fire_stale_workflow_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_stale_workflow_notification(&conn, &cfg, "run-s1", "my-workflow", None, "step-a", 30);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-s1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "disabled config must not write to notification_log"
+        );
+    }
+
+    #[test]
+    fn fire_stale_workflow_notification_enabled_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_stale_workflow_notification(
+            &conn,
+            &cfg,
+            "run-s2",
+            "my-workflow",
+            Some("feat/x"),
+            "step-b",
+            45,
+        );
+        fire_stale_workflow_notification(
+            &conn,
+            &cfg,
+            "run-s2",
+            "my-workflow",
+            Some("feat/x"),
+            "step-b",
+            45,
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-s2' AND event_type = 'workflow_stale'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "duplicate call must be deduped to a single notification_log row"
+        );
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(
+            unread.len(),
+            1,
+            "exactly one notification must be persisted"
+        );
+        assert_eq!(unread[0].kind, "workflow_stale");
+    }
+
+    // --- fire_orphan_resumed_notification ---
+
+    #[test]
+    fn fire_orphan_resumed_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_orphan_resumed_notification(&conn, &cfg, &["run-o1".to_string()]);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notification_log", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "disabled config must not write to notification_log"
+        );
+    }
+
+    #[test]
+    fn fire_orphan_resumed_notification_empty_run_ids_is_noop() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_orphan_resumed_notification(&conn, &cfg, &[]);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notification_log", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "empty run_ids must not write to notification_log");
+    }
+
+    #[test]
+    fn fire_orphan_resumed_notification_enabled_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        let ids = vec!["run-o2".to_string(), "run-o3".to_string()];
+        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_orphan_resumed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "duplicate call must be deduped");
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].kind, "workflow_orphan_resumed");
+    }
+
+    // --- fire_stale_reaped_notification ---
+
+    #[test]
+    fn fire_stale_reaped_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_stale_reaped_notification(&conn, &cfg, "run-r1", "my-workflow", None, "step-a", true);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "disabled config must not write to notification_log"
+        );
+    }
+
+    #[test]
+    fn fire_stale_reaped_notification_auto_restarted_true_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-r2",
+            "my-workflow",
+            Some("main"),
+            "step-b",
+            true,
+        );
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-r2",
+            "my-workflow",
+            Some("main"),
+            "step-b",
+            true,
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-r2' AND event_type = 'workflow_stale_reaped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "duplicate call must be deduped to a single row");
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].kind, "workflow_stale_reaped");
+        assert!(
+            unread[0].body.contains("auto-restarted"),
+            "body must mention auto-restart when auto_restarted=true: {}",
+            unread[0].body
+        );
+    }
+
+    #[test]
+    fn fire_stale_reaped_notification_auto_restarted_false_body_says_failed() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_stale_reaped_notification(&conn, &cfg, "run-r3", "my-workflow", None, "step-c", false);
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1);
+        assert!(
+            unread[0].body.contains("marked as failed"),
+            "body must mention failure when auto_restarted=false: {}",
+            unread[0].body
+        );
+        assert!(
+            !unread[0].body.contains("auto-restarted"),
+            "body must NOT mention auto-restart when auto_restarted=false: {}",
+            unread[0].body
+        );
+    }
 }
