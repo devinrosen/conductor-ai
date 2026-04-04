@@ -348,6 +348,7 @@ export function RepoDetailPage() {
     try {
       const labels = JSON.parse(ticket.labels || "[]") as string[];
       const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title, labels);
+      const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title);
       // Parse base_branch from Vantage deliverable if present
       let fromBranch: string | undefined;
       try {
@@ -363,6 +364,7 @@ export function RepoDetailPage() {
       const wt = await api.createWorktree(repoId!, {
         name: wtName,
         ticket_id: ticket.id,
+        from_branch: fromBranch,
       });
       const result = await api.runWorkflow(wt.id, {
         name: "ticket-to-pr",
