@@ -57,6 +57,7 @@ export function WorktreeRow({
   selected,
   index,
   ticketSourceId,
+  isMerged = false,
 }: {
   worktree: Worktree;
   workflowRun?: WorkflowRun | null;
@@ -65,6 +66,7 @@ export function WorktreeRow({
   selected?: boolean;
   index?: number;
   ticketSourceId?: string | null;
+  isMerged?: boolean;
 }) {
   const isRunning = workflowRun?.status === "running" || workflowRun?.status === "pending";
   const isWaiting = workflowRun?.status === "waiting";
@@ -130,7 +132,14 @@ export function WorktreeRow({
       </td>
       {/* Workflow */}
       <td className="px-4 py-2">
-        {isCompleted ? (
+        {isMerged ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-purple-400">
+            <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M15.98 1.804a1 1 0 00-1.96 0l-.24 1.192a1 1 0 01-.784.785l-1.192.238a1 1 0 000 1.962l1.192.238a1 1 0 01.785.785l.238 1.192a1 1 0 001.962 0l.238-1.192a1 1 0 01.785-.785l1.192-.238a1 1 0 000-1.962l-1.192-.238a1 1 0 01-.785-.785l-.238-1.192zM6.949 5.684a1 1 0 00-1.898 0l-.683 2.051a1 1 0 01-.633.633l-2.051.683a1 1 0 000 1.898l2.051.684a1 1 0 01.633.632l.683 2.051a1 1 0 001.898 0l.683-2.051a1 1 0 01.633-.633l2.051-.683a1 1 0 000-1.898l-2.051-.683a1 1 0 01-.633-.633L6.95 5.684zM13.949 13.684a1 1 0 00-1.898 0l-.184.551a1 1 0 01-.632.633l-.551.183a1 1 0 000 1.898l.551.183a1 1 0 01.633.633l.183.551a1 1 0 001.898 0l.184-.551a1 1 0 01.632-.633l.551-.183a1 1 0 000-1.898l-.551-.184a1 1 0 01-.633-.632l-.183-.551z" clipRule="evenodd" />
+            </svg>
+            Merged
+          </span>
+        ) : isCompleted ? (
           <span className="inline-flex items-center gap-1.5 text-xs text-green-500">
             <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
@@ -191,11 +200,11 @@ export function WorktreeRow({
       </td>
       {/* Delete */}
       <td className="pl-1 pr-4 py-2 w-6">
-        <Tooltip content="Delete worktree">
+        <Tooltip content={isMerged ? "Clean up merged worktree" : "Delete worktree"}>
           <button
             onClick={() => onDelete(worktree.id)}
-            className="text-gray-400 hover:text-red-600"
-            aria-label="Delete worktree"
+            className={isMerged ? "text-green-500 hover:text-green-400" : "text-gray-400 hover:text-red-600"}
+            aria-label={isMerged ? "Clean up merged worktree" : "Delete worktree"}
           >
             <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
               <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clipRule="evenodd" />

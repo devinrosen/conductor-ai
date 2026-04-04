@@ -803,6 +803,7 @@ export function RepoDetailPage() {
                     selected={index === selectedIndex}
                     index={index}
                     ticketSourceId={wt.ticket_id ? ticketSourceIdMap.get(wt.ticket_id) : null}
+                    isMerged={prs?.some((pr) => pr.head_ref_name === wt.branch && pr.state === "MERGED") ?? false}
                   />
                 ))}
               </tbody>
