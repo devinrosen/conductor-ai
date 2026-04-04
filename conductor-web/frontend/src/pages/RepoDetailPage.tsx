@@ -787,6 +787,7 @@ export function RepoDetailPage() {
                   <th className="px-4 py-2">Branch</th>
                   <th className="px-4 py-2">Ticket</th>
                   <th className="px-4 py-2">Workflow</th>
+                  <th className="px-3 py-2">Duration</th>
                   <th className="w-6"></th>
                   <th className="w-6"></th>
                 </tr>

@@ -100,7 +100,7 @@ export function WorktreeRow({
     </svg>
   ) : null;
 
-  const nameColor = "text-gray-300";
+  const nameColor = "text-gray-100";
 
   return (
     <tr
@@ -147,15 +147,18 @@ export function WorktreeRow({
               {displaySubstep && (
                 <span className="text-[10px] text-gray-500 block truncate max-w-[180px]">{displaySubstep}</span>
               )}
-              {isActive && workflowRun!.started_at && (
-                <LiveTimer
-                  startedAt={workflowRun!.started_at}
-                  estimatedMs={workflowRun!.estimated_duration_ms}
-                />
-              )}
             </div>
           </div>
         ) : null}
+      </td>
+      {/* Duration */}
+      <td className="px-3 py-2 align-top">
+        {isActive && workflowRun!.started_at && (
+          <LiveTimer
+            startedAt={workflowRun!.started_at}
+            estimatedMs={workflowRun!.estimated_duration_ms}
+          />
+        )}
       </td>
       {/* Resume */}
       <td className="pl-2 py-2 w-6">
