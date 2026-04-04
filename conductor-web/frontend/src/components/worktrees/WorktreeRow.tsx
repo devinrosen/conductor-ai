@@ -26,27 +26,26 @@ function StepBar({ current, total, failed }: { current: number; total: number; f
 }
 
 /** Live elapsed timer that re-renders every second. */
-function LiveTimer({ startedAt, estimatedMs }: { startedAt: string; estimatedMs?: number | null }) {
+function LiveTimer({ startedAt, endedAt, estimatedMs }: { startedAt: string; endedAt?: string | null; estimatedMs?: number | null }) {
   const [, setTick] = useState(0);
+  const isLive = !endedAt;
   useEffect(() => {
+    if (!isLive) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [isLive]);
 
-  const elapsed = Date.now() - new Date(startedAt).getTime();
+  const elapsed = (endedAt ? new Date(endedAt).getTime() : Date.now()) - new Date(startedAt).getTime();
   const elapsedStr = formatDuration(elapsed);
 
-  if (estimatedMs && estimatedMs > 0) {
-    const remaining = Math.max(0, estimatedMs - elapsed);
-    return (
-      <span className="text-[10px] text-gray-500 font-mono tabular-nums">
-        {elapsedStr} / ~{formatDuration(estimatedMs)}
-        {remaining > 0 && <span className="text-gray-600"> ({formatDuration(remaining)} left)</span>}
-      </span>
-    );
-  }
-
-  return <span className="text-[10px] text-gray-500 font-mono tabular-nums">{elapsedStr}</span>;
+  return (
+    <div className="text-[11px] font-mono tabular-nums">
+      <span className="text-gray-400">{elapsedStr}</span>
+      {estimatedMs && estimatedMs > 0 ? (
+        <span className="text-gray-600 block">est. {formatDuration(estimatedMs)}</span>
+      ) : null}
+    </div>
+  );
 }
 
 export function WorktreeRow({
@@ -100,7 +99,7 @@ export function WorktreeRow({
     </svg>
   ) : null;
 
-  const nameColor = "text-gray-100";
+  const nameColor = "text-gray-200";
 
   return (
     <tr
@@ -153,9 +152,10 @@ export function WorktreeRow({
       </td>
       {/* Duration */}
       <td className="px-3 py-2 align-top">
-        {isActive && workflowRun!.started_at && (
+        {hasWorkflow && workflowRun!.started_at && (
           <LiveTimer
             startedAt={workflowRun!.started_at}
+            endedAt={workflowRun!.ended_at}
             estimatedMs={workflowRun!.estimated_duration_ms}
           />
         )}
