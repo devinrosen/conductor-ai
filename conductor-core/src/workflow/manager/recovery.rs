@@ -233,7 +233,6 @@ impl<'a> WorkflowManager<'a> {
                   WHERE wrs2.workflow_run_id = wr.id) AS last_step_ended \
                FROM workflow_runs wr \
                WHERE wr.status = 'running' \
-                 AND wr.parent_workflow_run_id IS NULL \
                  AND NOT EXISTS ( \
                    SELECT 1 FROM workflow_run_steps wrs \
                    WHERE wrs.workflow_run_id = wr.id \
@@ -276,7 +275,6 @@ impl<'a> WorkflowManager<'a> {
              JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
              LEFT JOIN agent_runs ar ON ar.id = wrs.child_run_id \
              WHERE wr.status = 'running' \
-               AND wr.parent_workflow_run_id IS NULL \
                AND wrs.status = 'running' \
                AND wrs.started_at IS NOT NULL \
                AND (CAST(strftime('%s', 'now') AS INTEGER) \
