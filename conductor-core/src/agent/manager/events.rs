@@ -67,9 +67,7 @@ impl<'a> AgentManager<'a> {
     ) -> Result<Vec<AgentRunEvent>> {
         query_collect(
             self.conn,
-            &format!(
-                "{AGENT_RUN_EVENTS_SELECT} WHERE run_id = ?1 AND id > ?2 ORDER BY id ASC"
-            ),
+            &format!("{AGENT_RUN_EVENTS_SELECT} WHERE run_id = ?1 AND id > ?2 ORDER BY id ASC"),
             params![run_id, after_id],
             row_to_agent_run_event,
         )
