@@ -16,5 +16,6 @@ Steps:
    - A list of files to create or modify, with a brief description of each change
    - Any non-obvious design decisions or tradeoffs
    - Any risks or unknowns that should be resolved before implementing
+   - An estimated total duration in minutes for the full implementation
 
 Write the plan to `PLAN.md` in the worktree root. This file will be used by the next step.
