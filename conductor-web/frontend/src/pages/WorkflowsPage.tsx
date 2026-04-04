@@ -10,6 +10,7 @@ import { EmptyState } from "../components/shared/EmptyState";
 import { RunWorkflowModal } from "../components/workflows/RunWorkflowModal";
 import { WorkflowRunTree } from "../components/workflows/WorkflowRunTree";
 import { formatDuration, liveElapsedMs } from "../utils/agentStats";
+import { formatWorkflowProgress } from "../utils/workflowProgress";
 
 interface WorktreeContext {
   repoId: string;
@@ -176,6 +177,16 @@ export function WorkflowsPage() {
       refresh();
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : "Failed to cancel workflow");
+    }
+  };
+
+  const handleResumeWorkflow = async (runId: string) => {
+    try {
+      await api.resumeWorkflow(runId);
+      setActionError(null);
+      refresh();
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Failed to resume workflow");
     }
   };
 
@@ -438,9 +449,22 @@ export function WorkflowsPage() {
                       {ctx.branch}
                     </td>
                     <td className="px-3 py-1.5">
-                      <StatusBadge status={run.status} />
-                      {run.dry_run && (
-                        <span className="ml-1 text-[10px] px-1 py-0.5 bg-yellow-100 text-yellow-700 rounded">dry</span>
+                      <div className="flex items-center gap-1.5">
+                        <StatusBadge status={run.status} />
+                        {run.dry_run && (
+                          <span className="text-[10px] px-1 py-0.5 bg-yellow-100 text-yellow-700 rounded">dry</span>
+                        )}
+                        {(() => {
+                          const prog = formatWorkflowProgress(run);
+                          return prog ? (
+                            <span className="text-[10px] text-gray-400">{prog}</span>
+                          ) : null;
+                        })()}
+                      </div>
+                      {run.status === "failed" && run.result_summary && (
+                        <span className="block text-[10px] text-red-400 mt-0.5 max-w-[250px] truncate" title={run.result_summary}>
+                          {run.result_summary}
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-1.5 text-xs text-gray-400">
@@ -453,14 +477,24 @@ export function WorkflowsPage() {
                       })()}
                     </td>
                     <td className="px-3 py-1.5">
-                      {(run.status === "running" || run.status === "waiting") && (
-                        <button
-                          onClick={() => handleCancelWorkflow(run.id)}
-                          className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
-                        >
-                          Cancel
-                        </button>
-                      )}
+                      <div className="flex items-center gap-1">
+                        {(run.status === "running" || run.status === "waiting") && (
+                          <button
+                            onClick={() => handleCancelWorkflow(run.id)}
+                            className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                        {run.status === "failed" && (
+                          <button
+                            onClick={() => handleResumeWorkflow(run.id)}
+                            className="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200"
+                          >
+                            Resume
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

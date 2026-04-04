@@ -1,7 +1,8 @@
-import type { Ticket, TicketAgentTotals } from "../../api/types";
+import type { Ticket, TicketAgentTotals, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { formatTicketTotalsFull } from "../../utils/agentStats";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
+import { formatWorkflowProgress } from "../../utils/workflowProgress";
 
 interface TicketRowProps {
   ticket: Ticket;
@@ -15,7 +16,9 @@ interface TicketRowProps {
   blocked?: boolean;
   unlocked?: boolean;
   workflowStatus?: "running" | "pending" | "waiting" | "failed" | "completed" | null;
+  workflowRun?: WorkflowRun | null;
   onStartWorkflow?: (ticket: Ticket) => void;
+  onResumeWorkflow?: (runId: string) => void;
   showPipeline?: boolean;
   hideStateAndLabels?: boolean;
   hasChildren?: boolean;
@@ -58,7 +61,9 @@ export function TicketRow({
   blocked = false,
   unlocked = false,
   workflowStatus,
+  workflowRun,
   onStartWorkflow,
+  onResumeWorkflow,
   showPipeline = false,
   hideStateAndLabels = false,
   hasChildren = false,
@@ -68,6 +73,7 @@ export function TicketRow({
 }: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
   const isActive = workflowStatus === "running" || workflowStatus === "pending" || workflowStatus === "waiting";
+  const progress = workflowRun ? formatWorkflowProgress(workflowRun) : null;
   const canStart =
     (!blocked || unlocked) &&
     !isActive &&
@@ -167,10 +173,29 @@ export function TicketRow({
       <td className="px-3 py-1.5 text-xs whitespace-nowrap">
         {workflowStatus === "failed" ? (
           <span className="inline-flex items-center gap-1.5 text-red-600">
-            <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+            <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
             </svg>
-            Failed
+            <span>
+              Failed{progress && <span className="text-red-400"> &middot; {progress}</span>}
+              {workflowRun?.result_summary && (
+                <span className="block text-[10px] text-red-400 mt-0.5 whitespace-normal max-w-[200px]" title={workflowRun.result_summary}>
+                  {workflowRun.result_summary.length > 60 ? workflowRun.result_summary.slice(0, 60) + "\u2026" : workflowRun.result_summary}
+                </span>
+              )}
+            </span>
+            {onResumeWorkflow && workflowRun && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onResumeWorkflow(workflowRun.id);
+                }}
+                className="ml-1 px-1.5 py-0.5 text-[10px] rounded bg-red-100 text-red-700 hover:bg-red-200 active:scale-95 transition-transform shrink-0"
+                title="Resume from failed step"
+              >
+                Resume
+              </button>
+            )}
           </span>
         ) : isActive ? (
           <span className="inline-flex items-center gap-1.5 text-amber-600">
@@ -178,7 +203,9 @@ export function TicketRow({
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
             </span>
-            Running
+            <span>
+              Running{progress && <span className="text-amber-400"> &middot; {progress}</span>}
+            </span>
           </span>
         ) : canStart ? (
           <button

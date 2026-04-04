@@ -2,11 +2,13 @@ import { Link } from "react-router";
 import type { Worktree, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
+import { formatWorkflowProgress } from "../../utils/workflowProgress";
 
 export function WorktreeRow({
   worktree,
   workflowRun,
   onDelete,
+  onResume,
   selected,
   index,
   ticketSourceId,
@@ -14,6 +16,7 @@ export function WorktreeRow({
   worktree: Worktree;
   workflowRun?: WorkflowRun | null;
   onDelete: (id: string) => void;
+  onResume?: (runId: string) => void;
   selected?: boolean;
   index?: number;
   ticketSourceId?: string | null;
@@ -22,10 +25,14 @@ export function WorktreeRow({
   const isWaiting = workflowRun?.status === "waiting";
   const isFailed = workflowRun?.status === "failed";
 
-  // Find the current active step name
-  const activeStep = workflowRun?.active_steps?.find(
-    (s) => s.status === "running" || s.status === "waiting",
-  );
+  const progress = workflowRun ? formatWorkflowProgress(workflowRun) : null;
+
+  // Truncated failure reason from result_summary
+  const failReason = isFailed && workflowRun?.result_summary
+    ? workflowRun.result_summary.length > 80
+      ? workflowRun.result_summary.slice(0, 80) + "\u2026"
+      : workflowRun.result_summary
+    : null;
 
   return (
     <tr
@@ -59,7 +66,7 @@ export function WorktreeRow({
             </span>
             <span className="text-amber-600">
               {workflowRun!.workflow_name}
-              {activeStep && <span className="text-gray-400"> &middot; {activeStep.step_name}</span>}
+              {progress && <span className="text-gray-400"> &middot; {progress}</span>}
             </span>
           </span>
         ) : isWaiting ? (
@@ -67,7 +74,7 @@ export function WorktreeRow({
             <span className="inline-flex h-2 w-2 rounded-full bg-blue-400 shrink-0" />
             <span className="text-blue-600">
               {workflowRun!.workflow_name}
-              {activeStep && <span className="text-gray-400"> &middot; {activeStep.step_name}</span>}
+              {progress && <span className="text-gray-400"> &middot; {progress}</span>}
             </span>
           </span>
         ) : isFailed ? (
@@ -75,7 +82,28 @@ export function WorktreeRow({
             <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
             </svg>
-            {workflowRun!.workflow_name} failed
+            <span>
+              {workflowRun!.workflow_name}
+              {progress && <span className="text-red-400"> &middot; {progress}</span>}
+              {failReason && (
+                <span className="block text-[10px] text-red-400 mt-0.5" title={workflowRun!.result_summary ?? undefined}>
+                  {failReason}
+                </span>
+              )}
+            </span>
+            {onResume && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  onResume(workflowRun!.id);
+                }}
+                className="ml-1 px-1.5 py-0.5 text-[10px] rounded bg-red-100 text-red-700 hover:bg-red-200 active:scale-95 transition-transform"
+                title="Resume from failed step"
+              >
+                Resume
+              </button>
+            )}
           </span>
         ) : null}
       </td>

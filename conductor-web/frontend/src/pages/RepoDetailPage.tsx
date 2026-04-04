@@ -301,9 +301,9 @@ export function RepoDetailPage() {
     return m;
   }, [activeWorkflowRuns, repoId]);
 
-  // Map ticket source_id -> workflow status (via worktree linkage)
-  const workflowStatusByTicketSourceId = useMemo(() => {
-    const m = new Map<string, WorkflowRun["status"]>();
+  // Map ticket source_id -> workflow run (via worktree linkage)
+  const workflowRunByTicketSourceId = useMemo(() => {
+    const m = new Map<string, WorkflowRun>();
     if (!worktrees || !workflowRunByWorktreeId.size) return m;
     for (const wt of worktrees) {
       const run = workflowRunByWorktreeId.get(wt.id);
@@ -311,7 +311,7 @@ export function RepoDetailPage() {
       if (tickets && wt.ticket_id) {
         const ticket = tickets.find((t) => t.id === wt.ticket_id);
         if (ticket) {
-          m.set(ticket.source_id, run.status);
+          m.set(ticket.source_id, run);
         }
       }
     }
@@ -366,6 +366,15 @@ export function RepoDetailPage() {
       setActionError(err instanceof Error ? err.message : "Failed to start workflow");
     } finally {
       setStartingWorkflow(null);
+    }
+  }
+
+  async function handleResumeWorkflow(runId: string) {
+    try {
+      await api.resumeWorkflow(runId);
+      refetchWorkflowRuns();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Resume failed");
     }
   }
 
@@ -470,7 +479,7 @@ export function RepoDetailPage() {
       const children = ticketTree?.childMap.get(t.source_id);
       const hasChildren = !!children && children.length > 0;
       const isCollapsed = collapsedNodes.has(t.source_id);
-      const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | "failed" | "completed" | undefined;
+      const wfRun = workflowRunByTicketSourceId.get(t.source_id);
       rows.push(
         <TicketRow
           key={`${t.id}-d${depth}`}
@@ -480,8 +489,10 @@ export function RepoDetailPage() {
           depth={depth}
           blocked={ticketTree?.blocked.has(t.id) ?? false}
           unlocked={ticketTree?.unlocked.has(t.id) ?? false}
-          workflowStatus={wfStatus ?? null}
+          workflowStatus={(wfRun?.status as "running" | "pending" | "waiting" | "failed" | "completed") ?? null}
+          workflowRun={wfRun ?? null}
           onStartWorkflow={handleStartTicketToPr}
+          onResumeWorkflow={handleResumeWorkflow}
           showPipeline={hasVantage}
           hideStateAndLabels={allVantage}
           hasChildren={hasChildren}
@@ -788,6 +799,7 @@ export function RepoDetailPage() {
                     worktree={wt}
                     workflowRun={workflowRunByWorktreeId.get(wt.id)}
                     onDelete={setDeleteTarget}
+                    onResume={handleResumeWorkflow}
                     selected={index === selectedIndex}
                     index={index}
                     ticketSourceId={wt.ticket_id ? ticketSourceIdMap.get(wt.ticket_id) : null}

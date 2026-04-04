@@ -142,6 +142,15 @@ impl<'a> WorkflowManager<'a> {
         self.fetch_steps_for_runs_filtered(run_ids, Some(&["running", "waiting"]))
     }
 
+    /// Batch-fetch running, waiting, and failed steps for multiple runs.
+    /// Used by the API to compute progress for both active and failed workflows.
+    pub fn get_progress_steps_for_runs(
+        &self,
+        run_ids: &[&str],
+    ) -> Result<HashMap<String, Vec<WorkflowRunStep>>> {
+        self.fetch_steps_for_runs_filtered(run_ids, Some(&["running", "waiting", "failed"]))
+    }
+
     fn fetch_steps_for_runs_filtered(
         &self,
         run_ids: &[&str],
@@ -877,5 +886,68 @@ impl<'a> WorkflowManager<'a> {
             )
             .optional()?;
         Ok(status.as_deref() == Some("cancelled"))
+    }
+
+    /// Return `total_duration_ms` values for the most recent completed runs of
+    /// the given workflow name. Returns up to `limit` durations, newest first.
+    pub fn get_completed_run_durations(
+        &self,
+        workflow_name: &str,
+        limit: usize,
+    ) -> Result<Vec<i64>> {
+        let sql = "SELECT total_duration_ms FROM workflow_runs \
+                   WHERE workflow_name = ?1 \
+                     AND status = 'completed' \
+                     AND total_duration_ms IS NOT NULL \
+                   ORDER BY ended_at DESC \
+                   LIMIT ?2";
+        let mut stmt = self.conn.prepare_cached(sql)?;
+        let rows = stmt.query_map(params![workflow_name, limit as i64], |row| row.get(0))?;
+        let mut durations = Vec::new();
+        for row in rows {
+            durations.push(row?);
+        }
+        Ok(durations)
+    }
+
+    /// Batch-fetch the LLM `estimated_minutes` from plan-step structured output
+    /// for the given run IDs. Returns a map of `run_id → estimate_ms`.
+    ///
+    /// Scans completed steps with non-null `structured_output` and parses the
+    /// JSON to find an `estimated_minutes` field. Only the first match per run
+    /// is returned.
+    pub fn get_plan_estimates_for_runs(&self, run_ids: &[&str]) -> Result<HashMap<String, i64>> {
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = sql_placeholders(run_ids.len());
+        let sql = format!(
+            "SELECT workflow_run_id, structured_output FROM workflow_run_steps \
+             WHERE workflow_run_id IN ({placeholders}) \
+               AND status = 'completed' \
+               AND structured_output IS NOT NULL \
+             ORDER BY position ASC"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(run_ids.iter()), |row| {
+            let run_id: String = row.get(0)?;
+            let json_str: String = row.get(1)?;
+            Ok((run_id, json_str))
+        })?;
+
+        let mut result: HashMap<String, i64> = HashMap::new();
+        for row in rows {
+            let (run_id, json_str) = row?;
+            // Only keep the first match per run
+            if result.contains_key(&run_id) {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                if let Some(minutes) = val.get("estimated_minutes").and_then(|v| v.as_f64()) {
+                    result.insert(run_id, (minutes * 60_000.0) as i64);
+                }
+            }
+        }
+        Ok(result)
     }
 }

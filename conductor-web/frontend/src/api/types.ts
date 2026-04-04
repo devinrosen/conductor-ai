@@ -231,6 +231,13 @@ export interface WorkflowRun {
   active_steps?: WorkflowRunStep[];
   repo_slug: string | null;
   worktree_slug: string | null;
+  total_steps?: number | null;
+  current_step?: number | null;
+  current_step_name?: string | null;
+  current_iteration?: number | null;
+  max_iterations?: number | null;
+  estimated_duration_ms?: number | null;
+  estimated_remaining_ms?: number | null;
 }
 
 export interface WorkflowRunStep {
