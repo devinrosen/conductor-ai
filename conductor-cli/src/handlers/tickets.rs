@@ -43,9 +43,11 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                     for source in sources {
                         match TicketSource::from_issue_source(&source) {
                             Ok(ts) => {
+                                let ts = ts.with_repo_slug(&r.slug);
                                 let label = match ts.source_type_str() {
                                     "github" => "GitHub issues",
                                     "jira" => "Jira issues",
+                                    "vantage" => "Vantage deliverables",
                                     other => other,
                                 };
                                 sync_repo(
