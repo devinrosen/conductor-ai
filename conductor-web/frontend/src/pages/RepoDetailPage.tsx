@@ -787,8 +787,7 @@ export function RepoDetailPage() {
                   <th className="px-4 py-2">Branch</th>
                   <th className="px-4 py-2">Ticket</th>
                   <th className="px-4 py-2">Workflow</th>
-                  <th className="px-4 py-2">Created</th>
-                  <th className="px-4 py-2"></th>
+                  <th className="px-4 py-2 w-16"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">

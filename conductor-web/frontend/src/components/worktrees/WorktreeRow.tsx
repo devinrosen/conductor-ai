@@ -2,7 +2,26 @@ import { Link } from "react-router";
 import type { Worktree, WorkflowRun } from "../../api/types";
 import { TimeAgo } from "../shared/TimeAgo";
 import { Tooltip } from "../shared/Tooltip";
-import { formatStepProgress, formatIteration } from "../../utils/workflowProgress";
+import { formatIteration } from "../../utils/workflowProgress";
+
+/** Small segmented progress bar showing completed/current/remaining steps. */
+function StepBar({ current, total }: { current: number; total: number }) {
+  const segments = [];
+  for (let i = 1; i <= total; i++) {
+    let color: string;
+    if (i < current) color = "bg-green-500";
+    else if (i === current) color = "bg-amber-400";
+    else color = "bg-gray-600";
+    segments.push(
+      <span key={i} className={`h-1 flex-1 rounded-full ${color}`} />,
+    );
+  }
+  return (
+    <Tooltip content={`Step ${current}/${total}`}>
+      <span className="flex gap-px w-20">{segments}</span>
+    </Tooltip>
+  );
+}
 
 export function WorktreeRow({
   worktree,
@@ -26,12 +45,10 @@ export function WorktreeRow({
   const isFailed = workflowRun?.status === "failed";
   const hasWorkflow = isRunning || isWaiting || isFailed;
 
-  // Build secondary line: "Step 3/7 · implement"
-  const stepProg = workflowRun ? formatStepProgress(workflowRun) : null;
-  const iter = workflowRun ? formatIteration(workflowRun) : null;
   const stepName = workflowRun?.current_step_name;
   const displayName = stepName && !stepName.startsWith("workflow:") ? stepName : null;
-  const secondaryParts = [stepProg, iter, displayName].filter(Boolean);
+  const iter = workflowRun ? formatIteration(workflowRun) : null;
+  const secondaryParts = [displayName, iter].filter(Boolean);
   const secondaryText = secondaryParts.length > 0 ? secondaryParts.join(" \u00b7 ") : null;
 
   // Status indicator element
@@ -48,19 +65,26 @@ export function WorktreeRow({
     </svg>
   ) : null;
 
+  const nameColor = isFailed ? "text-red-400" : "text-gray-200";
+
   return (
     <tr
       className={selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}
       data-list-index={index}
     >
+      {/* Branch + Created */}
       <td className="px-4 py-2">
         <Link
           to={`/repos/${worktree.repo_id}/worktrees/${worktree.id}`}
-          className="text-indigo-600 hover:underline"
+          className="text-indigo-600 hover:underline block"
         >
           {worktree.branch}
         </Link>
+        <span className="text-[11px] text-gray-500">
+          <TimeAgo date={worktree.created_at} short />
+        </span>
       </td>
+      {/* Ticket */}
       <td className="px-4 py-2">
         {ticketSourceId ? (
           <span className="text-xs font-mono text-indigo-500">{ticketSourceId}</span>
@@ -68,24 +92,30 @@ export function WorktreeRow({
           <span className="text-xs text-gray-400">-</span>
         )}
       </td>
+      {/* Workflow */}
       <td className="px-4 py-2">
         {hasWorkflow ? (
           <div className="flex items-start gap-1.5">
             <span className="mt-0.5">{statusDot}</span>
             <div className="min-w-0">
-              <span className="text-xs text-gray-200 block">{workflowRun!.workflow_name}</span>
-              {secondaryText && (
+              <span className={`text-xs ${nameColor} block`}>{workflowRun!.workflow_name}</span>
+              {workflowRun!.current_step != null && workflowRun!.total_steps != null ? (
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <StepBar current={workflowRun!.current_step} total={workflowRun!.total_steps} />
+                  {secondaryText && (
+                    <span className="text-[11px] text-gray-500">{secondaryText}</span>
+                  )}
+                </div>
+              ) : secondaryText ? (
                 <span className="text-[11px] text-gray-500 block">{secondaryText}</span>
-              )}
+              ) : null}
             </div>
           </div>
         ) : null}
       </td>
-      <td className="px-4 py-2 text-gray-500 text-xs">
-        <TimeAgo date={worktree.created_at} short />
-      </td>
+      {/* Actions */}
       <td className="px-4 py-2">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
           {isFailed && onResume && (
             <Tooltip content="Resume from failed step">
               <button
@@ -94,7 +124,7 @@ export function WorktreeRow({
                   e.preventDefault();
                   onResume(workflowRun!.id);
                 }}
-                className="text-xs text-amber-600 hover:text-amber-800"
+                className="text-amber-600 hover:text-amber-800"
               >
                 <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
                   <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
@@ -105,7 +135,7 @@ export function WorktreeRow({
           <Tooltip content="Delete worktree">
             <button
               onClick={() => onDelete(worktree.id)}
-              className="text-xs text-gray-400 hover:text-red-600"
+              className="text-gray-400 hover:text-red-600"
             >
               <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clipRule="evenodd" />
