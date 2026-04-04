@@ -279,7 +279,6 @@ impl<'a> WorkflowManager<'a> {
         let mut finalized = 0usize;
 
         for (run_id, parent_run_id, has_failure) in stuck {
-
             let final_status = if has_failure {
                 WorkflowRunStatus::Failed
             } else {
