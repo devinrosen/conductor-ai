@@ -1,9 +1,23 @@
 import { useState, useEffect } from "react";
 import { api } from "../../api/client";
 import type { IssueSource } from "../../api/types";
+import { isDesktop } from "../../api/transport";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
 import { EmptyState } from "../shared/EmptyState";
 import { ConfirmDialog } from "../shared/ConfirmDialog";
+
+async function pickDirectory(): Promise<string | null> {
+  try {
+    const modName = "@tauri-apps/plugin-dialog";
+    // Dynamic import — only resolves in desktop (Tauri) builds
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mod: any = await (Function("m", "return import(m)")(modName));
+    const selected = await mod.open({ directory: true, multiple: false });
+    return typeof selected === "string" ? selected : null;
+  } catch {
+    return null;
+  }
+}
 
 interface Props {
   repoId: string;
@@ -29,6 +43,9 @@ function formatConfig(source: IssueSource): string {
   if (source.source_type === "jira") {
     return `${cfg.url} (${cfg.jql})`;
   }
+  if (source.source_type === "vantage") {
+    return `${cfg.project_id} (${cfg.sdlc_root})`;
+  }
   return source.config_json;
 }
 
@@ -40,9 +57,11 @@ export function IssueSourcesSection({
   onChanged,
 }: Props) {
   const [showAdd, setShowAdd] = useState(false);
-  const [sourceType, setSourceType] = useState<"github" | "jira">("github");
+  const [sourceType, setSourceType] = useState<"github" | "jira" | "vantage">("github");
   const [jiraUrl, setJiraUrl] = useState("");
   const [jiraJql, setJiraJql] = useState("");
+  const [vantageProjectId, setVantageProjectId] = useState("");
+  const [vantageSdlcRoot, setVantageSdlcRoot] = useState("");
   const [githubOwner, setGithubOwner] = useState("");
   const [githubRepo, setGithubRepo] = useState("");
   const [autoInferred, setAutoInferred] = useState(false);
@@ -82,6 +101,8 @@ export function IssueSourcesSection({
     setJiraJql("");
     setGithubOwner("");
     setGithubRepo("");
+    setVantageProjectId("");
+    setVantageSdlcRoot("");
     setAutoInferred(false);
     setError(null);
   }
@@ -105,7 +126,7 @@ export function IssueSourcesSection({
           source_type: "github",
           config_json: configJson,
         });
-      } else {
+      } else if (sourceType === "jira") {
         if (!jiraUrl.trim() || !jiraJql.trim()) {
           setError("Jira URL and JQL are required");
           setSaving(false);
@@ -116,6 +137,19 @@ export function IssueSourcesSection({
           config_json: JSON.stringify({
             url: jiraUrl.trim(),
             jql: jiraJql.trim(),
+          }),
+        });
+      } else if (sourceType === "vantage") {
+        if (!vantageProjectId.trim() || !vantageSdlcRoot.trim()) {
+          setError("Project ID and SDLC root path are required");
+          setSaving(false);
+          return;
+        }
+        await api.createIssueSource(repoId, {
+          source_type: "vantage",
+          config_json: JSON.stringify({
+            project_id: vantageProjectId.trim(),
+            sdlc_root: vantageSdlcRoot.trim(),
           }),
         });
       }
@@ -145,7 +179,8 @@ export function IssueSourcesSection({
 
   const hasGithub = sources.some((s) => s.source_type === "github");
   const hasJira = sources.some((s) => s.source_type === "jira");
-  const canAdd = !hasGithub || !hasJira;
+  const hasVantage = sources.some((s) => s.source_type === "vantage");
+  const canAdd = !hasGithub || !hasJira || !hasVantage;
 
   return (
     <section>
@@ -162,7 +197,8 @@ export function IssueSourcesSection({
           <button
             onClick={() => {
               // Default to whichever type isn't already added
-              if (hasGithub && !hasJira) setSourceType("jira");
+              if (!hasVantage) setSourceType("vantage");
+              else if (!hasJira) setSourceType("jira");
               else setSourceType("github");
               setShowAdd(true);
             }}
@@ -201,7 +237,9 @@ export function IssueSourcesSection({
                       className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                         source.source_type === "github"
                           ? "bg-gray-800 text-white"
-                          : "bg-blue-100 text-blue-700"
+                          : source.source_type === "vantage"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-blue-100 text-blue-700"
                       }`}
                     >
                       {source.source_type}
@@ -241,12 +279,13 @@ export function IssueSourcesSection({
                 <select
                   value={sourceType}
                   onChange={(e) =>
-                    setSourceType(e.target.value as "github" | "jira")
+                    setSourceType(e.target.value as "github" | "jira" | "vantage")
                   }
                   className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
                 >
                   {!hasGithub && <option value="github">GitHub</option>}
                   {!hasJira && <option value="jira">Jira</option>}
+                  {!hasVantage && <option value="vantage">Vantage</option>}
                 </select>
               </div>
 
@@ -316,6 +355,53 @@ export function IssueSourcesSection({
                       placeholder='e.g. project = PROJ AND status != Done'
                       className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
                     />
+                  </div>
+                </>
+              )}
+
+              {sourceType === "vantage" && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Project ID
+                    </label>
+                    <input
+                      type="text"
+                      value={vantageProjectId}
+                      onChange={(e) => setVantageProjectId(e.target.value)}
+                      placeholder="e.g. PROJ-012"
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      SDLC Root Path
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={vantageSdlcRoot}
+                        onChange={(e) => setVantageSdlcRoot(e.target.value)}
+                        placeholder="e.g. /Users/you/code/global-sdlc/sdlc"
+                        className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                      {isDesktop() && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const dir = await pickDirectory();
+                            if (dir) setVantageSdlcRoot(dir);
+                          }}
+                          className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                        >
+                          Browse
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Path to the sdlc/ directory containing your SDLC entities
+                    </p>
                   </div>
                 </>
               )}

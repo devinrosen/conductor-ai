@@ -208,6 +208,7 @@ pub fn execute_script(
             .or(state.default_bot_name.as_deref());
         let mut cmd = Command::new(&resolved_path);
         cmd.envs(&resolved_env)
+            .env("GIT_TERMINAL_PROMPT", "0")
             .stdout(output_file)
             .stderr(stderr_file)
             .current_dir(&state.working_dir);

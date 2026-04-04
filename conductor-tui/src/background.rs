@@ -9,9 +9,9 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::github;
 use conductor_core::github_app;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
-use conductor_core::jira_acli;
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
+use conductor_core::ticket_source::TicketSource;
 use conductor_core::tickets::{TicketInput, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
@@ -649,36 +649,20 @@ fn sync_sources_for_repo(
         }
     } else {
         for source in sources {
-            match source.source_type.as_str() {
-                "github" => {
-                    let action = match serde_json::from_str::<GitHubConfig>(&source.config_json) {
-                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "github", || {
-                            github::sync_github_issues(&cfg.owner, &cfg.repo, token)
-                        }),
-                        Err(e) => Action::TicketSyncFailed {
-                            repo_slug: repo_slug.to_string(),
-                            error: format!("invalid github config: {e}"),
-                        },
-                    };
-                    if !tx.send(action) {
-                        return false;
-                    }
+            let action = match TicketSource::from_issue_source(&source) {
+                Ok(ts) => {
+                    let source_type = ts.source_type_str();
+                    sync_repo(syncer, repo_id, repo_slug, source_type, || {
+                        ts.sync(token, Some(repo_slug))
+                    })
                 }
-                "jira" => {
-                    let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
-                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "jira", || {
-                            jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-                        }),
-                        Err(e) => Action::TicketSyncFailed {
-                            repo_slug: repo_slug.to_string(),
-                            error: format!("invalid jira config: {e}"),
-                        },
-                    };
-                    if !tx.send(action) {
-                        return false;
-                    }
-                }
-                _ => {}
+                Err(e) => Action::TicketSyncFailed {
+                    repo_slug: repo_slug.to_string(),
+                    error: format!("unsupported source type {:?}: {e}", source.source_type),
+                },
+            };
+            if !tx.send(action) {
+                return false;
             }
         }
     }
