@@ -85,6 +85,19 @@ pub struct TicketLabel {
     pub color: Option<String>,
 }
 
+/// Dependency relationships for a single ticket.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TicketDependencies {
+    /// Tickets that must complete before this one (blocks this ticket).
+    pub blocked_by: Vec<Ticket>,
+    /// Tickets that this ticket blocks.
+    pub blocks: Vec<Ticket>,
+    /// Parent ticket, if any.
+    pub parent: Option<Ticket>,
+    /// Child tickets.
+    pub children: Vec<Ticket>,
+}
+
 /// Filter options for [`TicketSyncer::list_filtered`].
 pub struct TicketFilter {
     /// Only include tickets that have ALL of these labels.
@@ -617,6 +630,241 @@ impl<'a> TicketSyncer<'a> {
         for lbl in all {
             map.entry(lbl.ticket_id.clone()).or_default().push(lbl);
         }
+        Ok(map)
+    }
+
+    /// Returns dependency relationships for a single ticket.
+    pub fn get_dependencies(&self, ticket_id: &str) -> Result<TicketDependencies> {
+        const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
+
+        // Tickets that block this one (from_ticket_id = blocker, to_ticket_id = this)
+        let blocked_by = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {TICKET_COLS} FROM tickets t
+                 JOIN ticket_dependencies d ON d.from_ticket_id = t.id
+                 WHERE d.to_ticket_id = ?1 AND d.dep_type = 'blocks'"
+            ),
+            params![ticket_id],
+            map_ticket_row,
+        )?;
+
+        // Tickets this one blocks (from_ticket_id = this, to_ticket_id = blocked)
+        let blocks = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {TICKET_COLS} FROM tickets t
+                 JOIN ticket_dependencies d ON d.to_ticket_id = t.id
+                 WHERE d.from_ticket_id = ?1 AND d.dep_type = 'blocks'"
+            ),
+            params![ticket_id],
+            map_ticket_row,
+        )?;
+
+        // Parent ticket (from_ticket_id = parent, to_ticket_id = this)
+        let parent = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {TICKET_COLS} FROM tickets t
+                 JOIN ticket_dependencies d ON d.from_ticket_id = t.id
+                 WHERE d.to_ticket_id = ?1 AND d.dep_type = 'parent_of'"
+            ),
+            params![ticket_id],
+            map_ticket_row,
+        )?
+        .into_iter()
+        .next();
+
+        // Child tickets (from_ticket_id = this, to_ticket_id = child)
+        let children = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {TICKET_COLS} FROM tickets t
+                 JOIN ticket_dependencies d ON d.to_ticket_id = t.id
+                 WHERE d.from_ticket_id = ?1 AND d.dep_type = 'parent_of'"
+            ),
+            params![ticket_id],
+            map_ticket_row,
+        )?;
+
+        Ok(TicketDependencies {
+            blocked_by,
+            blocks,
+            parent,
+            children,
+        })
+    }
+
+    /// Batch-loads dependencies for all tickets in a single pair of queries.
+    /// Returns `ticket_id → TicketDependencies`. Used by the TUI background
+    /// poller to avoid N+1 queries.
+    pub fn get_all_dependencies(&self) -> Result<HashMap<String, TicketDependencies>> {
+        const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
+
+        // For 'blocks': from_ticket_id blocks to_ticket_id.
+        // - "from" ticket belongs to to_ticket_id's blocked_by list.
+        // - "to" ticket belongs to from_ticket_id's blocks list.
+        let blocks_raw: Vec<(String, String, Ticket)> = query_collect(
+            self.conn,
+            &format!(
+                "SELECT d.from_ticket_id, d.to_ticket_id, {TICKET_COLS}
+                 FROM ticket_dependencies d
+                 JOIN tickets t ON t.id = d.from_ticket_id
+                 WHERE d.dep_type = 'blocks'"
+            ),
+            [],
+            |row| {
+                let from_id: String = row.get(0)?;
+                let to_id: String = row.get(1)?;
+                // ticket columns start at index 2
+                let ticket = Ticket {
+                    id: row.get(2)?,
+                    repo_id: row.get(3)?,
+                    source_type: row.get(4)?,
+                    source_id: row.get(5)?,
+                    title: row.get(6)?,
+                    body: row.get(7)?,
+                    state: row.get(8)?,
+                    labels: row.get(9)?,
+                    assignee: row.get(10)?,
+                    priority: row.get(11)?,
+                    url: row.get(12)?,
+                    synced_at: row.get(13)?,
+                    raw_json: row.get(14)?,
+                    workflow: row.get(15)?,
+                    agent_map: row.get(16)?,
+                };
+                Ok((from_id, to_id, ticket))
+            },
+        )?;
+
+        // Also fetch the to_ticket side for blocks list on from_ticket_id.
+        let blocks_to_raw: Vec<(String, String, Ticket)> = query_collect(
+            self.conn,
+            &format!(
+                "SELECT d.from_ticket_id, d.to_ticket_id, {TICKET_COLS}
+                 FROM ticket_dependencies d
+                 JOIN tickets t ON t.id = d.to_ticket_id
+                 WHERE d.dep_type = 'blocks'"
+            ),
+            [],
+            |row| {
+                let from_id: String = row.get(0)?;
+                let to_id: String = row.get(1)?;
+                let ticket = Ticket {
+                    id: row.get(2)?,
+                    repo_id: row.get(3)?,
+                    source_type: row.get(4)?,
+                    source_id: row.get(5)?,
+                    title: row.get(6)?,
+                    body: row.get(7)?,
+                    state: row.get(8)?,
+                    labels: row.get(9)?,
+                    assignee: row.get(10)?,
+                    priority: row.get(11)?,
+                    url: row.get(12)?,
+                    synced_at: row.get(13)?,
+                    raw_json: row.get(14)?,
+                    workflow: row.get(15)?,
+                    agent_map: row.get(16)?,
+                };
+                Ok((from_id, to_id, ticket))
+            },
+        )?;
+
+        // For 'parent_of': from_ticket_id is parent of to_ticket_id.
+        let parent_raw: Vec<(String, String, Ticket)> = query_collect(
+            self.conn,
+            &format!(
+                "SELECT d.from_ticket_id, d.to_ticket_id, {TICKET_COLS}
+                 FROM ticket_dependencies d
+                 JOIN tickets t ON t.id = d.from_ticket_id
+                 WHERE d.dep_type = 'parent_of'"
+            ),
+            [],
+            |row| {
+                let from_id: String = row.get(0)?;
+                let to_id: String = row.get(1)?;
+                let ticket = Ticket {
+                    id: row.get(2)?,
+                    repo_id: row.get(3)?,
+                    source_type: row.get(4)?,
+                    source_id: row.get(5)?,
+                    title: row.get(6)?,
+                    body: row.get(7)?,
+                    state: row.get(8)?,
+                    labels: row.get(9)?,
+                    assignee: row.get(10)?,
+                    priority: row.get(11)?,
+                    url: row.get(12)?,
+                    synced_at: row.get(13)?,
+                    raw_json: row.get(14)?,
+                    workflow: row.get(15)?,
+                    agent_map: row.get(16)?,
+                };
+                Ok((from_id, to_id, ticket))
+            },
+        )?;
+
+        let parent_child_raw: Vec<(String, String, Ticket)> = query_collect(
+            self.conn,
+            &format!(
+                "SELECT d.from_ticket_id, d.to_ticket_id, {TICKET_COLS}
+                 FROM ticket_dependencies d
+                 JOIN tickets t ON t.id = d.to_ticket_id
+                 WHERE d.dep_type = 'parent_of'"
+            ),
+            [],
+            |row| {
+                let from_id: String = row.get(0)?;
+                let to_id: String = row.get(1)?;
+                let ticket = Ticket {
+                    id: row.get(2)?,
+                    repo_id: row.get(3)?,
+                    source_type: row.get(4)?,
+                    source_id: row.get(5)?,
+                    title: row.get(6)?,
+                    body: row.get(7)?,
+                    state: row.get(8)?,
+                    labels: row.get(9)?,
+                    assignee: row.get(10)?,
+                    priority: row.get(11)?,
+                    url: row.get(12)?,
+                    synced_at: row.get(13)?,
+                    raw_json: row.get(14)?,
+                    workflow: row.get(15)?,
+                    agent_map: row.get(16)?,
+                };
+                Ok((from_id, to_id, ticket))
+            },
+        )?;
+
+        let mut map: HashMap<String, TicketDependencies> = HashMap::new();
+
+        // blocks_raw: (from_id=blocker, to_id=blocked, ticket=blocker)
+        // → to_id's blocked_by list gets the blocker ticket
+        for (_, to_id, ticket) in blocks_raw {
+            map.entry(to_id).or_default().blocked_by.push(ticket);
+        }
+
+        // blocks_to_raw: (from_id=blocker, to_id=blocked, ticket=blocked)
+        // → from_id's blocks list gets the blocked ticket
+        for (from_id, _, ticket) in blocks_to_raw {
+            map.entry(from_id).or_default().blocks.push(ticket);
+        }
+
+        // parent_raw: (from_id=parent, to_id=child, ticket=parent)
+        // → to_id's parent gets the parent ticket (last one wins if multiple, which shouldn't happen)
+        for (_, to_id, ticket) in parent_raw {
+            map.entry(to_id).or_default().parent = Some(ticket);
+        }
+
+        // parent_child_raw: (from_id=parent, to_id=child, ticket=child)
+        // → from_id's children list gets the child ticket
+        for (from_id, _, ticket) in parent_child_raw {
+            map.entry(from_id).or_default().children.push(ticket);
+        }
+
         Ok(map)
     }
 

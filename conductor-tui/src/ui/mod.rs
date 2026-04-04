@@ -89,6 +89,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 .ticket_labels
                 .get(&ticket.id)
                 .map(|v| v.as_slice());
+            let dependencies = state.data.ticket_dependencies.get(&ticket.id);
             modal::render_ticket_info(
                 frame,
                 area,
@@ -96,6 +97,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 agent_totals,
                 worktrees,
                 labels,
+                dependencies,
                 &state.theme,
             );
         }

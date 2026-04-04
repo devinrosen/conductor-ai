@@ -10,7 +10,7 @@ use conductor_core::github_app;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::ticket_source::TicketSource;
-use conductor_core::tickets::{Ticket, TicketInput, TicketLabel, TicketSyncer};
+use conductor_core::tickets::{Ticket, TicketDependencies, TicketInput, TicketLabel, TicketSyncer};
 use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
@@ -27,6 +27,7 @@ pub struct SyncResult {
 pub struct TicketDetail {
     pub agent_totals: Option<TicketAgentTotals>,
     pub worktrees: Vec<Worktree>,
+    pub dependencies: TicketDependencies,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,9 +153,13 @@ pub async fn ticket_detail(
     let wt_mgr = WorktreeManager::new(&db, &config);
     let worktrees = wt_mgr.list_by_ticket(&ticket_id)?;
 
+    let syncer = TicketSyncer::new(&db);
+    let dependencies = syncer.get_dependencies(&ticket_id).unwrap_or_default();
+
     Ok(Json(TicketDetail {
         agent_totals,
         worktrees,
+        dependencies,
     }))
 }
 

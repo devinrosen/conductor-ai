@@ -8,7 +8,7 @@ use tui_textarea::TextArea;
 use conductor_core::agent::TicketAgentTotals;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
-use conductor_core::tickets::{Ticket, TicketLabel};
+use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::worktree::Worktree;
 
 use crate::theme::Theme;
@@ -224,6 +224,7 @@ pub fn render_progress(frame: &mut Frame, area: Rect, message: &str, theme: &The
     frame.render_widget(content, popup);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_ticket_info(
     frame: &mut Frame,
     area: Rect,
@@ -231,6 +232,7 @@ pub fn render_ticket_info(
     agent_totals: Option<&TicketAgentTotals>,
     worktrees: Option<&Vec<Worktree>>,
     labels: Option<&[TicketLabel]>,
+    dependencies: Option<&TicketDependencies>,
     theme: &Theme,
 ) {
     let popup = centered_rect(60, 70, area);
@@ -382,6 +384,46 @@ pub fn render_ticket_info(
                     Span::styled(&wt.slug, value_style),
                     Span::styled(format!("  [{}]", wt.status), Style::default().fg(color)),
                     Span::styled(format!("  {}", wt.branch), dim_style),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
+    if let Some(deps) = dependencies {
+        let has_deps = !deps.blocked_by.is_empty()
+            || !deps.blocks.is_empty()
+            || deps.parent.is_some()
+            || !deps.children.is_empty();
+        if has_deps {
+            lines.push(Line::from(Span::styled("  Dependencies:", label_style)));
+            for t in &deps.blocked_by {
+                lines.push(Line::from(vec![
+                    Span::styled("    Blocked by:  ", label_style),
+                    Span::styled(format!("#{} {}", t.source_id, t.title), value_style),
+                ]));
+            }
+            for t in &deps.blocks {
+                lines.push(Line::from(vec![
+                    Span::styled("    Blocks:      ", label_style),
+                    Span::styled(format!("#{} {}", t.source_id, t.title), value_style),
+                ]));
+            }
+            if let Some(ref p) = deps.parent {
+                lines.push(Line::from(vec![
+                    Span::styled("    Parent:      ", label_style),
+                    Span::styled(format!("#{} {}", p.source_id, p.title), value_style),
+                ]));
+            }
+            for (i, t) in deps.children.iter().enumerate() {
+                let label = if i == 0 {
+                    "    Children:    "
+                } else {
+                    "                "
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(label, label_style),
+                    Span::styled(format!("#{} {}", t.source_id, t.title), value_style),
                 ]));
             }
             lines.push(Line::from(""));
