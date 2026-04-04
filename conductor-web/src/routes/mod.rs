@@ -2,6 +2,7 @@ pub mod agents;
 pub mod conversations;
 pub mod events;
 pub mod features;
+pub mod health;
 pub mod issue_sources;
 pub mod model_config;
 pub mod notifications;
@@ -33,6 +34,8 @@ pub fn api_router_with_cors(allowed_origins: Vec<HeaderValue>) -> Router<AppStat
 
 pub fn api_router() -> Router<AppState> {
     Router::new()
+        // Health check
+        .route("/health", get(health::health))
         // SSE event stream
         .route("/api/events", get(events::event_stream))
         // Repos
