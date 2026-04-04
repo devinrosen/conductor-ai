@@ -392,6 +392,7 @@ export function WorkflowsPage() {
               repos={repos}
               ctxMap={treeCtxMap}
               onCancel={handleCancelWorkflow}
+              onResume={handleResumeWorkflow}
             />
           </div>
         ) : (

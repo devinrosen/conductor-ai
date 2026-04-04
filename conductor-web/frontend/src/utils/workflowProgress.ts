@@ -20,6 +20,12 @@ export function formatIteration(run: WorkflowRun): string | null {
   return `iter ${iter}`;
 }
 
+/** Clean step name for display — strip "workflow:" prefix (redundant sub-workflow calls). */
+function displayStepName(name: string): string | null {
+  if (name.startsWith("workflow:")) return null;
+  return name;
+}
+
 /** Build a compact progress string combining step + iteration + step name. */
 export function formatWorkflowProgress(run: WorkflowRun): string | null {
   const parts: string[] = [];
@@ -27,7 +33,10 @@ export function formatWorkflowProgress(run: WorkflowRun): string | null {
   if (step) parts.push(step);
   const iter = formatIteration(run);
   if (iter) parts.push(iter);
-  if (run.current_step_name) parts.push(run.current_step_name);
+  if (run.current_step_name) {
+    const name = displayStepName(run.current_step_name);
+    if (name) parts.push(name);
+  }
   if (run.estimated_remaining_ms != null && run.estimated_remaining_ms > 0) {
     parts.push(`~${formatDuration(run.estimated_remaining_ms)} left`);
   }

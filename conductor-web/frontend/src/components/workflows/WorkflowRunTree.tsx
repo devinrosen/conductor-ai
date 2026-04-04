@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import { StatusPulseBadge, PULSE_STATUSES } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { formatDuration, liveElapsedMs } from "../../utils/agentStats";
+import { formatWorkflowProgress } from "../../utils/workflowProgress";
 
 // Same palette as Sidebar RepoIndicator — keeps repo colors consistent
 const REPO_COLORS = [
@@ -24,6 +25,7 @@ interface WorkflowRunTreeProps {
   repos: Repo[];
   ctxMap: Map<string, WorktreeCtx>;
   onCancel?: (runId: string) => void;
+  onResume?: (runId: string) => void;
 }
 
 type TargetType = "worktree" | "pr";
@@ -161,11 +163,13 @@ const RunRow = memo(function RunRow({
   ctxMap,
   indent,
   onCancel,
+  onResume,
 }: {
   run: WorkflowRun;
   ctxMap: Map<string, WorktreeCtx>;
   indent: boolean;
   onCancel?: (runId: string) => void;
+  onResume?: (runId: string) => void;
 }) {
   const ctx = run.worktree_id ? ctxMap.get(run.worktree_id) : undefined;
 
@@ -181,34 +185,54 @@ const RunRow = memo(function RunRow({
   );
 
   const isActive = run.status === "running" || run.status === "waiting";
+  const isFailed = run.status === "failed";
   const ms = runDurationMs(run);
+  const progress = formatWorkflowProgress(run);
 
   return (
-    <div className={`flex items-center justify-between gap-2 px-3 py-2 mb-0.5 ${indent ? "ml-6" : ""}`}>
-      <div className="flex items-center gap-2 min-w-0 flex-1">
-        <StatusIcon status={run.status} />
-        {nameEl}
+    <div className={`px-3 py-2 mb-0.5 ${indent ? "ml-6" : ""}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <StatusIcon status={run.status} />
+          {nameEl}
+          {progress && (
+            <span className="text-[11px] text-gray-400 truncate shrink-0">{progress}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0 text-xs text-gray-400">
+          {PULSE_STATUSES.has(run.status) && (
+            <StatusPulseBadge status={run.status} />
+          )}
+          {ms != null && (
+            <span className="font-mono tabular-nums">{formatDuration(ms)}</span>
+          )}
+          {isActive && run.estimated_remaining_ms != null && run.estimated_remaining_ms > 0 && (
+            <span className="text-gray-500 font-mono tabular-nums">~{formatDuration(run.estimated_remaining_ms)} left</span>
+          )}
+          <TimeAgo date={run.started_at} short />
+          {isActive && onCancel && (
+            <button
+              onClick={(e) => { e.preventDefault(); onCancel(run.id); }}
+              className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+            >
+              Cancel
+            </button>
+          )}
+          {isFailed && onResume && (
+            <button
+              onClick={(e) => { e.preventDefault(); onResume(run.id); }}
+              className="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200"
+            >
+              Resume
+            </button>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-2 shrink-0 text-xs text-gray-400">
-        {PULSE_STATUSES.has(run.status) && (
-          <StatusPulseBadge status={run.status} />
-        )}
-        {ms != null && (
-          <span className="font-mono tabular-nums">{formatDuration(ms)}</span>
-        )}
-        {isActive && run.estimated_remaining_ms != null && run.estimated_remaining_ms > 0 && (
-          <span className="text-gray-500 font-mono tabular-nums">~{formatDuration(run.estimated_remaining_ms)} left</span>
-        )}
-        <TimeAgo date={run.started_at} short />
-        {isActive && onCancel && (
-          <button
-            onClick={(e) => { e.preventDefault(); onCancel(run.id); }}
-            className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
-          >
-            Cancel
-          </button>
-        )}
-      </div>
+      {isFailed && run.result_summary && (
+        <p className="text-[10px] text-red-400/70 truncate mt-0.5 ml-6 max-w-md" title={run.result_summary}>
+          {run.result_summary}
+        </p>
+      )}
     </div>
   );
 });
@@ -360,7 +384,7 @@ function ChildRuns({ children, ctxMap, toggle, isOpen, onCancel, color }: {
   );
 }
 
-export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTreeProps) {
+export function WorkflowRunTree({ runs, repos, ctxMap, onCancel, onResume }: WorkflowRunTreeProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const initialized = useRef(false);
 
@@ -528,7 +552,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
                         const isChildrenOpen = !collapsed.has(childKey);
                         return (
                         <div key={run.id} className="ml-4">
-                          <RunRow run={run} ctxMap={ctxMap} indent={false} onCancel={onCancel} />
+                          <RunRow run={run} ctxMap={ctxMap} indent={false} onCancel={onCancel} onResume={onResume} />
                           <StepLeaves steps={run.active_steps ?? []} />
                           <ChildRuns
                             children={children}
