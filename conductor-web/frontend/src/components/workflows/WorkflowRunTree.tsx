@@ -206,6 +206,9 @@ const RunRow = memo(function RunRow({
         {ms != null && (
           <span className="font-mono tabular-nums">{formatDuration(ms)}</span>
         )}
+        {isActive && run.estimated_remaining_ms != null && run.estimated_remaining_ms > 0 && (
+          <span className="text-gray-500 font-mono tabular-nums">~{formatDuration(run.estimated_remaining_ms)} left</span>
+        )}
         <TimeAgo date={run.started_at} short />
         {isActive && onCancel && (
           <button

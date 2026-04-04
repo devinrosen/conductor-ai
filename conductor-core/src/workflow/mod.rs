@@ -7,6 +7,7 @@
 mod batch_validate;
 pub(crate) mod constants;
 pub(crate) mod engine;
+pub mod estimation;
 pub(crate) mod executors;
 pub(crate) mod helpers;
 pub(crate) mod manager;
