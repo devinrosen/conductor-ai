@@ -6,7 +6,7 @@ use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketLabel};
 use conductor_core::workflow::{
-    WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary, WorkflowWarning,
+    LiveEstimate, WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary, WorkflowWarning,
 };
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
@@ -72,6 +72,8 @@ pub struct DataRefreshedPayload {
     pub worktree_agent_events: HashMap<String, Vec<AgentRunEvent>>,
     /// All repo-scoped agent events keyed by repo_id (populated by background poller).
     pub repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
+    /// Estimated remaining time for active workflow runs, keyed by run_id.
+    pub workflow_run_estimates: HashMap<String, LiveEstimate>,
 }
 
 /// Every user intent or background result flows through this enum.
