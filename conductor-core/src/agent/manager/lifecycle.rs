@@ -298,6 +298,18 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Delete all agent runs for a conversation.
+    ///
+    /// Child tables (`agent_run_events`, `agent_run_steps`, etc.) are removed
+    /// automatically via their `ON DELETE CASCADE` FK constraints.
+    pub fn delete_runs_for_conversation(&self, conversation_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM agent_runs WHERE conversation_id = ?1",
+            params![conversation_id],
+        )?;
+        Ok(())
+    }
+
     /// Create a new run by cloning the prompt/config from a failed run.
     ///
     /// The original run must be in a terminal state (failed or cancelled).
