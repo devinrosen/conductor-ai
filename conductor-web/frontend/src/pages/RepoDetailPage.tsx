@@ -282,12 +282,12 @@ export function RepoDetailPage() {
   }, [worktrees]);
 
   // Map worktree_id -> workflow run (for both worktree table and ticket indicators)
-  // Prefers: completed > running/pending/waiting > failed (most recent wins within tier)
+  // Prefers: running/pending/waiting > completed > failed (most recent wins within tier)
   const workflowRunByWorktreeId = useMemo(() => {
     const m = new Map<string, WorkflowRun>();
     if (!activeWorkflowRuns) return m;
     const priority = (s: string) =>
-      s === "completed" ? 3 : s === "running" || s === "pending" || s === "waiting" ? 2 : 1;
+      s === "running" || s === "pending" || s === "waiting" ? 3 : s === "completed" ? 2 : 1;
     for (const run of activeWorkflowRuns) {
       // Only top-level runs (no parent workflow), scoped to this repo
       if (run.repo_id === repoId && run.worktree_id && !run.parent_workflow_run_id) {
