@@ -198,18 +198,18 @@ pub async fn respond_to_feedback(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
     Json(body): Json<RespondToFeedbackByIdRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+) -> Result<Json<AgentRun>, ApiError> {
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
 
-    agent_mgr.submit_feedback_for_conversation(
+    let updated_run = agent_mgr.submit_feedback_for_conversation(
         &conversation_id,
         &body.run_id,
         &body.feedback_id,
         &body.response,
     )?;
 
-    Ok((StatusCode::OK, Json(serde_json::json!({}))))
+    Ok(Json(updated_run))
 }
 
 /// POST /api/conversations/{id}/messages/{run_id}/respond — respond to a

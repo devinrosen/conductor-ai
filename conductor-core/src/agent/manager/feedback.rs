@@ -281,7 +281,8 @@ impl<'a> AgentManager<'a> {
     /// Submit a response to a feedback request, validating ownership.
     ///
     /// Verifies that `run_id` belongs to `conversation_id` and that `feedback_id`
-    /// belongs to `run_id` before delegating to [`submit_feedback`].  Returns
+    /// belongs to `run_id` before delegating to [`submit_feedback`].  Returns the
+    /// refreshed `AgentRun` so callers have a consistent response surface.  Returns
     /// structured errors (`AgentRunNotFound`, `AgentRunNotInConversation`,
     /// `FeedbackNotFound`, `FeedbackRunMismatch`) so callers can map them to
     /// appropriate HTTP status codes without duplicating validation logic.
@@ -291,7 +292,7 @@ impl<'a> AgentManager<'a> {
         run_id: &str,
         feedback_id: &str,
         response: &str,
-    ) -> Result<()> {
+    ) -> Result<super::super::types::AgentRun> {
         self.check_run_in_conversation(run_id, conversation_id)?;
         let feedback =
             self.get_feedback(feedback_id)?
@@ -305,7 +306,12 @@ impl<'a> AgentManager<'a> {
             });
         }
         self.submit_feedback(feedback_id, response)?;
-        Ok(())
+        let updated = self
+            .get_run(run_id)?
+            .ok_or_else(|| ConductorError::AgentRunNotFound {
+                id: run_id.to_string(),
+            })?;
+        Ok(updated)
     }
 
     /// Submit the pending feedback response for a run, validating conversation ownership.
@@ -791,9 +797,11 @@ mod tests {
             .unwrap();
         let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
-        mgr.submit_feedback_for_conversation("conv1", &run.id, &fb.id, "yes")
+        let updated_run = mgr
+            .submit_feedback_for_conversation("conv1", &run.id, &fb.id, "yes")
             .unwrap();
 
+        assert_eq!(updated_run.id, run.id);
         let fetched = mgr.get_feedback(&fb.id).unwrap().unwrap();
         assert_eq!(fetched.status, FeedbackStatus::Responded);
         assert_eq!(fetched.response.as_deref(), Some("yes"));
