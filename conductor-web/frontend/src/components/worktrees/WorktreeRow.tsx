@@ -58,6 +58,7 @@ export function WorktreeRow({
   index,
   ticketSourceId,
   isMerged = false,
+  isResuming = false,
 }: {
   worktree: Worktree;
   workflowRun?: WorkflowRun | null;
@@ -67,6 +68,7 @@ export function WorktreeRow({
   index?: number;
   ticketSourceId?: string | null;
   isMerged?: boolean;
+  isResuming?: boolean;
 }) {
   const isRunning = workflowRun?.status === "running" || workflowRun?.status === "pending";
   const isWaiting = workflowRun?.status === "waiting";
@@ -181,21 +183,28 @@ export function WorktreeRow({
       {/* Resume */}
       <td className="pl-2 py-2 w-6">
         {isFailed && onResume && (
-          <Tooltip content="Resume from failed step">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                onResume(workflowRun!.id);
-              }}
-              className="text-amber-600 hover:text-amber-800"
-              aria-label="Resume from failed step"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
-              </svg>
-            </button>
-          </Tooltip>
+          isResuming ? (
+            <svg className="w-4 h-4 animate-spin text-amber-500" viewBox="0 0 24 24" fill="none" aria-label="Resuming">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          ) : (
+            <Tooltip content="Resume from failed step">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  onResume(workflowRun!.id);
+                }}
+                className="text-amber-600 hover:text-amber-800"
+                aria-label="Resume from failed step"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </Tooltip>
+          )
         )}
       </td>
       {/* Delete */}

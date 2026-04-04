@@ -369,12 +369,17 @@ export function RepoDetailPage() {
     }
   }
 
+  const [resumingWorkflowId, setResumingWorkflowId] = useState<string | null>(null);
+
   async function handleResumeWorkflow(runId: string) {
+    setResumingWorkflowId(runId);
     try {
       await api.resumeWorkflow(runId);
       refetchWorkflowRuns();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Resume failed");
+    } finally {
+      setResumingWorkflowId(null);
     }
   }
 
@@ -493,6 +498,8 @@ export function RepoDetailPage() {
           workflowRun={wfRun ?? null}
           onStartWorkflow={handleStartTicketToPr}
           onResumeWorkflow={handleResumeWorkflow}
+          isStarting={startingWorkflow === t.id}
+          isResuming={resumingWorkflowId === wfRun?.id}
           showPipeline={hasVantage}
           hideStateAndLabels={allVantage}
           hasChildren={hasChildren}
@@ -804,6 +811,7 @@ export function RepoDetailPage() {
                     index={index}
                     ticketSourceId={wt.ticket_id ? ticketSourceIdMap.get(wt.ticket_id) : null}
                     isMerged={prs?.some((pr) => pr.head_ref_name === wt.branch && pr.state === "MERGED") ?? false}
+                    isResuming={resumingWorkflowId === workflowRunByWorktreeId.get(wt.id)?.id}
                   />
                 ))}
               </tbody>
