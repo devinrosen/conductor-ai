@@ -25,18 +25,19 @@ function StepBar({ current, total, failed }: { current: number; total: number; f
   );
 }
 
-/** Live elapsed timer that re-renders every second. */
+/** Elapsed timer — updates every 30s for active runs, static for completed/failed. */
 function LiveTimer({ startedAt, endedAt, estimatedMs }: { startedAt: string; endedAt?: string | null; estimatedMs?: number | null }) {
   const [, setTick] = useState(0);
   const isLive = !endedAt;
   useEffect(() => {
     if (!isLive) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => setTick((t) => t + 1), 30_000);
     return () => clearInterval(id);
   }, [isLive]);
 
   const elapsed = (endedAt ? new Date(endedAt).getTime() : Date.now()) - new Date(startedAt).getTime();
-  const elapsedStr = formatDuration(elapsed);
+  // Round to nearest minute for cleaner display
+  const elapsedStr = elapsed < 60_000 ? "<1m" : formatDuration(Math.floor(elapsed / 60_000) * 60_000);
 
   return (
     <div className="text-[11px] font-mono tabular-nums">
