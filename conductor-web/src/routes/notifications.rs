@@ -46,16 +46,12 @@ pub async fn mark_read(
     let mgr = NotificationManager::new(&db);
     match mgr.mark_read(&id) {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err(ApiError::NotFound(format!(
-            "notification not found: {id}"
-        ))),
+        Ok(false) => Err(ApiError::NotFound(format!("notification not found: {id}"))),
         Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
-pub async fn mark_all_read(
-    State(state): State<AppState>,
-) -> Result<StatusCode, ApiError> {
+pub async fn mark_all_read(State(state): State<AppState>) -> Result<StatusCode, ApiError> {
     let db = state.db.lock().await;
     let mgr = NotificationManager::new(&db);
     mgr.mark_all_read()

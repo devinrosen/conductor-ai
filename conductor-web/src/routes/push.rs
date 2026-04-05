@@ -117,7 +117,9 @@ pub async fn unsubscribe_push(
 
     match manager.delete_subscription(&request.endpoint) {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err(ApiError::NotFound("Push subscription not found".to_string())),
+        Ok(false) => Err(ApiError::NotFound(
+            "Push subscription not found".to_string(),
+        )),
         Err(e) => Err(ApiError::Internal(format!(
             "Failed to unsubscribe from push notifications: {}",
             e

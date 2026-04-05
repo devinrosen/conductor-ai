@@ -73,10 +73,7 @@ pub fn api_router() -> Router<AppState> {
             "/api/worktrees/{id}/model",
             patch(worktrees::patch_worktree_model),
         )
-        .route(
-            "/api/worktrees/{id}/ticket",
-            put(worktrees::link_ticket),
-        )
+        .route("/api/worktrees/{id}/ticket", put(worktrees::link_ticket))
         // Tickets
         .route("/api/ticket-labels", get(tickets::list_ticket_labels))
         .route("/api/tickets", get(tickets::list_all_tickets))
