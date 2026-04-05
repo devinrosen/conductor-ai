@@ -150,9 +150,17 @@ export interface AgentCreatedIssue {
   created_at: string;
 }
 
+export interface TicketDependencies {
+  blocked_by: Ticket[];
+  blocks: Ticket[];
+  parent: Ticket | null;
+  children: Ticket[];
+}
+
 export interface TicketDetail {
   agent_totals: TicketAgentTotals | null;
   worktrees: Worktree[];
+  dependencies: TicketDependencies;
 }
 
 export interface IssueSource {

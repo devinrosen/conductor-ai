@@ -1113,7 +1113,7 @@ async fn test_submit_feedback_nonexistent() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
@@ -1127,7 +1127,7 @@ async fn test_dismiss_feedback_nonexistent() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]

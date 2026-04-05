@@ -725,7 +725,7 @@ impl App {
                     .create_repo_run(&repo_id, &prompt, Some(&window_name), None)
                     .map_err(|e| format!("Failed to create repo agent run: {e}"))?;
 
-                let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
+                let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
                 let args = conductor_core::agent_runtime::build_agent_args_with_mode(
                     &run.id,
                     &repo_path,

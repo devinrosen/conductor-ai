@@ -4,7 +4,7 @@ use conductor_core::agent::{AgentRun, AgentRunEvent, FeedbackRequest, TicketAgen
 use conductor_core::feature::FeatureRow;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
-use conductor_core::tickets::{Ticket, TicketLabel};
+use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
     WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary, WorkflowWarning,
 };
@@ -47,6 +47,7 @@ pub struct DataRefreshedPayload {
     pub worktrees: Vec<Worktree>,
     pub tickets: Vec<Ticket>,
     pub ticket_labels: HashMap<String, Vec<TicketLabel>>,
+    pub ticket_dependencies: HashMap<String, TicketDependencies>,
     pub latest_agent_runs: HashMap<String, AgentRun>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// Most recent workflow run per worktree (for inline indicators in the Worktrees panel).

@@ -108,6 +108,7 @@ fn data_refreshed_updates_repos() {
             worktrees: vec![],
             tickets: vec![],
             ticket_labels: std::collections::HashMap::new(),
+            ticket_dependencies: std::collections::HashMap::new(),
             latest_agent_runs: std::collections::HashMap::new(),
             ticket_agent_totals: std::collections::HashMap::new(),
             latest_workflow_runs_by_worktree: std::collections::HashMap::new(),
