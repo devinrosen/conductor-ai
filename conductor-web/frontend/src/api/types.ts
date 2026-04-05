@@ -288,6 +288,8 @@ export interface WorkflowRunMetricsRow {
   duration_ms: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  worktree_id: string | null;
+  repo_id: string | null;
 }
 
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)

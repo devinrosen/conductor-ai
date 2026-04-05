@@ -90,7 +90,7 @@ export function WorkflowAnalyticsPage() {
         const v = histMetric === "duration" ? r.duration_ms
           : histMetric === "input_tokens" ? r.input_tokens
           : r.output_tokens;
-        return v !== null && v !== undefined ? { run: r, value: v } : null;
+        return v !== null && v !== undefined && v > 0 ? { run: r, value: v } : null;
       })
       .filter((x): x is { run: WorkflowRunMetricsRow; value: number } => x !== null);
 
@@ -104,7 +104,7 @@ export function WorkflowAnalyticsPage() {
     const range = maxVal - minVal;
     const width = range === 0 ? 1 : range / k;
 
-    const bins: { label: string; runs: { runId: string; startedAt: string }[] }[] = Array.from({ length: k }, (_, i) => {
+    const bins: { label: string; runs: { runId: string; startedAt: string; worktreeId: string | null; repoId: string | null }[] }[] = Array.from({ length: k }, (_, i) => {
       const lo = minVal + i * width;
       const label = histMetric === "duration"
         ? `${(lo / 1000).toFixed(1)}s`
@@ -114,7 +114,7 @@ export function WorkflowAnalyticsPage() {
 
     for (const { run, value } of paired) {
       const idx = Math.min(Math.floor((value - minVal) / width), k - 1);
-      bins[idx].runs.push({ runId: run.run_id, startedAt: run.started_at });
+      bins[idx].runs.push({ runId: run.run_id, startedAt: run.started_at, worktreeId: run.worktree_id ?? null, repoId: run.repo_id ?? null });
     }
 
     // Compute mean + stddev of bin counts for outlier highlighting
@@ -362,9 +362,24 @@ export function WorkflowAnalyticsPage() {
                       </button>
                     </div>
                     <ul className="space-y-1">
-                      {histogramBins[selectedBucketIdx].runs.map(({ runId, startedAt }) => (
+                      {histogramBins[selectedBucketIdx].runs.map(({ runId, startedAt, repoId, worktreeId }) => (
                         <li key={runId} className="text-xs font-mono flex items-center gap-2">
-                          <span className="text-gray-500">{runId.slice(0, 12)}…</span>
+                          {repoId && worktreeId ? (
+                            <a
+                              href={`/repos/${repoId}/worktrees/${worktreeId}/workflows/runs/${runId}`}
+                              className="text-indigo-500 hover:text-indigo-700 hover:underline"
+                            >
+                              {runId.slice(0, 12)}…
+                            </a>
+                          ) : (
+                            <button
+                              onClick={() => navigator.clipboard.writeText(runId)}
+                              className="text-gray-500 hover:text-gray-700 cursor-copy"
+                              title="Copy run ID"
+                            >
+                              {runId.slice(0, 12)}…
+                            </button>
+                          )}
                           <span className="text-gray-400">
                             {new Date(startedAt).toLocaleString()}
                           </span>

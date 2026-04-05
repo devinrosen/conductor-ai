@@ -508,4 +508,6 @@ pub struct WorkflowRunMetricsRow {
     pub duration_ms: Option<i64>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
+    pub worktree_id: Option<String>,
+    pub repo_id: Option<String>,
 }
