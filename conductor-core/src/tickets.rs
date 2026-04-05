@@ -969,6 +969,50 @@ fn query_dep_pairs(
 ) -> Result<Vec<(String, String, Ticket, Ticket)>> {
     const FROM_OFFSET: usize = 2;
     const TO_OFFSET: usize = 17;
+
+    // Use LEFT JOIN so orphaned edges (referencing deleted tickets) still
+    // produce rows — we detect them via a NULL tf.id / tt.id and return
+    // TicketNotFound instead of silently dropping the edge.
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.from_ticket_id, d.to_ticket_id,
+             tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+             tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+             tf.workflow, tf.agent_map,
+             tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+             tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+             tt.workflow, tt.agent_map
+             FROM ticket_dependencies d
+             LEFT JOIN tickets tf ON tf.id = d.from_ticket_id
+             LEFT JOIN tickets tt ON tt.id = d.to_ticket_id
+             WHERE d.dep_type = ?1",
+        )
+        .map_err(ConductorError::Database)?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![dep_type], |row| {
+            let from_id: String = row.get(0)?;
+            let to_id: String = row.get(1)?;
+            let from_exists: Option<String> = row.get(FROM_OFFSET)?;
+            let to_exists: Option<String> = row.get(TO_OFFSET)?;
+            Ok((from_id, to_id, from_exists, to_exists))
+        })
+        .map_err(ConductorError::Database)?;
+
+    // First pass: check for orphaned references.
+    let mut checked = Vec::new();
+    for row in rows {
+        let (from_id, to_id, from_exists, to_exists) = row.map_err(ConductorError::Database)?;
+        if from_exists.is_none() {
+            return Err(ConductorError::TicketNotFound { id: from_id });
+        }
+        if to_exists.is_none() {
+            return Err(ConductorError::TicketNotFound { id: to_id });
+        }
+        checked.push((from_id, to_id));
+    }
+
+    // All tickets exist — re-query with INNER JOIN to map full Ticket objects.
     query_collect(
         conn,
         "SELECT d.from_ticket_id, d.to_ticket_id,
@@ -2764,6 +2808,15 @@ mod tests {
         tickets.iter().map(|t| t.source_id.as_str()).collect()
     }
 
+    fn get_ticket_id(conn: &Connection, source_id: &str) -> String {
+        conn.query_row(
+            "SELECT id FROM tickets WHERE source_id = ?1",
+            params![source_id],
+            |row| row.get(0),
+        )
+        .expect("ticket not found")
+    }
+
     #[test]
     fn test_get_dependencies_blocked_by_and_blocks() {
         let conn = setup_db();
@@ -2941,6 +2994,43 @@ mod tests {
                 )
                 .map_err(ConductorError::Database)?;
             self.get_dependencies(&ticket_id)
+        }
+    }
+
+    /// If a ticket_dependencies row references a ticket ID that no longer exists in the
+    /// tickets table (e.g. deleted after FK was written with constraints off), query_dep_pairs
+    /// must return TicketNotFound rather than silently dropping the edge.
+    #[test]
+    fn test_query_dep_pairs_orphaned_ticket_returns_error() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert one real ticket to act as the "from" side.
+        syncer
+            .upsert_tickets("r1", &[make_ticket("orphan-from", "From Ticket")])
+            .unwrap();
+        let from_id = get_ticket_id(&conn, "orphan-from");
+
+        // Bypass FK constraints to insert an edge referencing a non-existent to_ticket_id.
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) \
+             VALUES (?1, 'nonexistent-ticket-id', 'blocks')",
+            rusqlite::params![from_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let result = query_dep_pairs(&conn, "blocks");
+        assert!(
+            result.is_err(),
+            "query_dep_pairs must return Err when a referenced ticket is missing"
+        );
+        match result.unwrap_err() {
+            ConductorError::TicketNotFound { id } => {
+                assert_eq!(id, "nonexistent-ticket-id");
+            }
+            e => panic!("expected TicketNotFound, got {e:?}"),
         }
     }
 }
