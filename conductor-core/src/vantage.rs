@@ -452,7 +452,9 @@ mod tests {
         #[test]
         fn test_sync_sdlc_not_found_returns_helpful_error() {
             with_no_sdlc(|| {
-                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo").err().unwrap();
+                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo")
+                    .err()
+                    .unwrap();
                 let msg = err.to_string();
                 assert!(
                     msg.contains("sdlc not found") || msg.contains("Install"),
@@ -478,7 +480,9 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             write_fake_sdlc(dir.path(), "echo 'something went wrong' >&2; exit 1");
             with_sdlc_on_path(dir.path(), || {
-                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo").err().unwrap();
+                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo")
+                    .err()
+                    .unwrap();
                 let msg = err.to_string();
                 assert!(
                     msg.contains("sdlc exited"),
@@ -492,7 +496,9 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             write_fake_sdlc(dir.path(), "echo 'not valid json {{'");
             with_sdlc_on_path(dir.path(), || {
-                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo").err().unwrap();
+                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo")
+                    .err()
+                    .unwrap();
                 let msg = err.to_string();
                 assert!(
                     msg.contains("failed to parse"),
@@ -550,8 +556,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
             with_sdlc_on_path(dir.path(), || {
-                let tickets =
-                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                let tickets = sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
                 assert!(
                     tickets.is_empty(),
                     "deliverable with wrong codebase should be filtered out"
@@ -573,9 +578,11 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
             with_sdlc_on_path(dir.path(), || {
-                let tickets =
-                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
-                assert!(tickets.is_empty(), "non-conductor mode should be filtered out");
+                let tickets = sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                assert!(
+                    tickets.is_empty(),
+                    "non-conductor mode should be filtered out"
+                );
             });
         }
 
@@ -593,8 +600,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
             with_sdlc_on_path(dir.path(), || {
-                let tickets =
-                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                let tickets = sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
                 assert!(
                     tickets.is_empty(),
                     "pre-ready conductor status should be filtered out"
@@ -617,8 +623,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
             with_sdlc_on_path(dir.path(), || {
-                let tickets =
-                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                let tickets = sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
                 assert_eq!(tickets.len(), 1);
                 assert_eq!(tickets[0].source_id, "D-004");
                 assert_eq!(tickets[0].title, "Matched");
@@ -637,8 +642,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
             with_sdlc_on_path(dir.path(), || {
-                let tickets =
-                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                let tickets = sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
                 assert_eq!(tickets.len(), 1);
                 assert_eq!(tickets[0].source_id, "D-005");
             });
