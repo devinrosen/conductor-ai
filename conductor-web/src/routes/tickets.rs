@@ -141,20 +141,20 @@ pub async fn list_ticket_labels(
 
 pub async fn ticket_detail(
     State(state): State<AppState>,
-    Path(ticket_id): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<Json<TicketDetail>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
 
     let agent_mgr = AgentManager::new(&db);
     let all_totals = agent_mgr.totals_by_ticket_all()?;
-    let agent_totals = all_totals.get(&ticket_id).cloned();
+    let agent_totals = all_totals.get(&id).cloned();
 
     let wt_mgr = WorktreeManager::new(&db, &config);
-    let worktrees = wt_mgr.list_by_ticket(&ticket_id)?;
+    let worktrees = wt_mgr.list_by_ticket(&id)?;
 
     let syncer = TicketSyncer::new(&db);
-    let dependencies = syncer.get_dependencies(&ticket_id)?;
+    let dependencies = syncer.get_dependencies(&id)?;
 
     Ok(Json(TicketDetail {
         agent_totals,

@@ -77,10 +77,10 @@ export const api = {
       body: JSON.stringify(data),
     }),
   deleteWorktree: (id: string) =>
-    request<Worktree>(`/worktrees/${id}`, { method: "DELETE" }),
+    request<void>(`/worktrees/${id}`, { method: "DELETE" }),
   linkTicket: (id: string, ticketId: string) =>
-    request<Worktree>(`/worktrees/${id}/link-ticket`, {
-      method: "POST",
+    request<Worktree>(`/worktrees/${id}/ticket`, {
+      method: "PUT",
       body: JSON.stringify({ ticket_id: ticketId }),
     }),
   setWorktreeModel: (id: string, model: string | null) =>
@@ -102,7 +102,7 @@ export const api = {
   syncTickets: (repoId: string) =>
     request<SyncResult>(`/repos/${repoId}/tickets/sync`, { method: "POST" }),
   getTicketDetail: (ticketId: string) =>
-    request<TicketDetail>(`/tickets/${ticketId}/detail`),
+    request<TicketDetail>(`/tickets/${ticketId}`),
 
   // Agent stats (aggregates)
   latestRunsByWorktree: () =>
@@ -282,7 +282,7 @@ export const api = {
   markNotificationRead: (id: string) =>
     request<void>(`/notifications/${id}/read`, { method: "POST" }),
   markAllNotificationsRead: () =>
-    request<void>("/notifications/read-all", { method: "POST" }),
+    request<void>("/notifications/read", { method: "POST" }),
 
   // Stats
   getThemeUnlockStats: () =>
@@ -297,7 +297,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
   unsubscribePush: (data: PushSubscribeRequest) =>
-    request<PushSubscribeResponse>("/push/subscribe", {
+    request<void>("/push/subscribe", {
       method: "DELETE",
       body: JSON.stringify(data),
     }),

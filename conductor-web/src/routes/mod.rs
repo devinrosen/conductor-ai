@@ -14,7 +14,7 @@ pub mod workflows;
 pub mod worktrees;
 
 use axum::http::HeaderValue;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -74,8 +74,8 @@ pub fn api_router() -> Router<AppState> {
             patch(worktrees::patch_worktree_model),
         )
         .route(
-            "/api/worktrees/{id}/link-ticket",
-            post(worktrees::link_ticket),
+            "/api/worktrees/{id}/ticket",
+            put(worktrees::link_ticket),
         )
         // Tickets
         .route("/api/ticket-labels", get(tickets::list_ticket_labels))
@@ -86,12 +86,9 @@ pub fn api_router() -> Router<AppState> {
             "/api/repos/{id}/workflows",
             get(workflows::list_repo_workflow_defs),
         )
-        .route(
-            "/api/tickets/{ticket_id}/detail",
-            get(tickets::ticket_detail),
-        )
+        .route("/api/tickets/{id}", get(tickets::ticket_detail))
         // Features
-        .route("/api/repos/{slug}/features", get(features::list_features))
+        .route("/api/repos/{id}/features", get(features::list_features))
         // Agent stats (aggregates)
         .route(
             "/api/worktrees/{id}/agent-runs",
@@ -282,7 +279,7 @@ pub fn api_router() -> Router<AppState> {
             get(notifications::unread_count),
         )
         .route(
-            "/api/notifications/read-all",
+            "/api/notifications/read",
             post(notifications::mark_all_read),
         )
         .route(

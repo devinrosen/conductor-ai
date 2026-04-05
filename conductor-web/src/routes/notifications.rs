@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use conductor_core::notification_manager::{Notification, NotificationManager};
 
+use crate::error::ApiError;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -22,7 +23,7 @@ pub struct UnreadCountResponse {
 pub async fn list_notifications(
     State(state): State<AppState>,
     Query(query): Query<ListNotificationsQuery>,
-) -> Result<Json<Vec<Notification>>, (StatusCode, String)> {
+) -> Result<Json<Vec<Notification>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = NotificationManager::new(&db);
     let notifications = if query.unread_only.unwrap_or(false) {
@@ -34,41 +35,40 @@ pub async fn list_notifications(
     };
     notifications
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 pub async fn mark_read(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, ApiError> {
     let db = state.db.lock().await;
     let mgr = NotificationManager::new(&db);
     match mgr.mark_read(&id) {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err((
-            StatusCode::NOT_FOUND,
-            format!("notification not found: {id}"),
-        )),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Ok(false) => Err(ApiError::NotFound(format!(
+            "notification not found: {id}"
+        ))),
+        Err(e) => Err(ApiError::Internal(e.to_string())),
     }
 }
 
 pub async fn mark_all_read(
     State(state): State<AppState>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, ApiError> {
     let db = state.db.lock().await;
     let mgr = NotificationManager::new(&db);
     mgr.mark_all_read()
         .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 pub async fn unread_count(
     State(state): State<AppState>,
-) -> Result<Json<UnreadCountResponse>, (StatusCode, String)> {
+) -> Result<Json<UnreadCountResponse>, ApiError> {
     let db = state.db.lock().await;
     let mgr = NotificationManager::new(&db);
     mgr.unread_count()
         .map(|count| Json(UnreadCountResponse { count }))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| ApiError::Internal(e.to_string()))
 }
