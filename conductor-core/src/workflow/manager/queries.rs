@@ -1028,18 +1028,21 @@ impl<'a> WorkflowManager<'a> {
         days: u32,
     ) -> Result<Vec<WorkflowRunMetricsRow>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT total_duration_ms, total_input_tokens, total_output_tokens \
+            "SELECT id, started_at, total_duration_ms, total_input_tokens, total_output_tokens \
              FROM workflow_runs \
              WHERE workflow_name = ?1 \
                AND status = 'completed' \
                AND started_at >= datetime('now', '-' || ?2 || ' days') \
+               AND (total_input_tokens IS NOT NULL OR total_output_tokens IS NOT NULL OR total_duration_ms IS NOT NULL) \
              ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map(params![workflow_name, days], |row| {
             Ok(WorkflowRunMetricsRow {
-                duration_ms: row.get(0)?,
-                input_tokens: row.get(1)?,
-                output_tokens: row.get(2)?,
+                run_id: row.get(0)?,
+                started_at: row.get(1)?,
+                duration_ms: row.get(2)?,
+                input_tokens: row.get(3)?,
+                output_tokens: row.get(4)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

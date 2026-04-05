@@ -503,6 +503,8 @@ pub struct StepTokenHeatmapRow {
 /// Raw per-run metrics for histogram distribution (one row per completed run).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunMetricsRow {
+    pub run_id: String,
+    pub started_at: String,
     pub duration_ms: Option<i64>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,

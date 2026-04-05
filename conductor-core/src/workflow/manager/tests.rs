@@ -2332,6 +2332,8 @@ fn test_run_metrics_returns_completed_run_data() {
     assert_eq!(result[0].input_tokens, Some(100));
     assert_eq!(result[0].output_tokens, Some(200));
     assert_eq!(result[0].duration_ms, Some(5000));
+    assert!(!result[0].run_id.is_empty());
+    assert!(!result[0].started_at.is_empty());
 }
 
 #[test]
@@ -2354,4 +2356,34 @@ fn test_run_metrics_filters_by_workflow_name() {
     let result = mgr.get_run_metrics("wf-a", 30).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].input_tokens, Some(100));
+    assert!(!result[0].run_id.is_empty());
+    assert!(!result[0].started_at.is_empty());
+}
+
+#[test]
+fn test_run_metrics_excludes_null_metric_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // All-null run: completed but no metrics persisted — should be excluded
+    let null_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&null_run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    // Duration-only run: set total_duration_ms but leave tokens null — should be included
+    let dur_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&dur_run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET total_duration_ms = 3000 WHERE id = ?1",
+        rusqlite::params![dur_run.id],
+    )
+    .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert_eq!(result.len(), 1, "all-null run should be excluded");
+    assert_eq!(result[0].run_id, dur_run.id);
+    assert_eq!(result[0].duration_ms, Some(3000));
+    assert_eq!(result[0].input_tokens, None);
+    assert_eq!(result[0].output_tokens, None);
 }
