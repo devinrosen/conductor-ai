@@ -2387,3 +2387,60 @@ fn test_run_metrics_excludes_null_metric_runs() {
     assert_eq!(result[0].input_tokens, None);
     assert_eq!(result[0].output_tokens, None);
 }
+
+#[test]
+fn test_run_metrics_excludes_zero_metric_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // All-zero run: completed with metrics all set to 0 — should be excluded
+    let zero_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&zero_run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&zero_run.id, 0, 0, 0, 0, 0, 0.0, 0, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert!(result.is_empty(), "all-zero metric run should be excluded");
+}
+
+#[test]
+fn test_run_metrics_includes_partial_nonzero_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Zero tokens but nonzero duration — should be included
+    let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run.id, 0, 0, 0, 0, 1, 0.0, 2500, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "run with nonzero duration should be included"
+    );
+    assert_eq!(result[0].duration_ms, Some(2500));
+    assert_eq!(result[0].input_tokens, Some(0));
+    assert_eq!(result[0].output_tokens, Some(0));
+}
+
+#[test]
+fn test_run_metrics_includes_worktree_and_repo_id() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.0, 5000, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].worktree_id.as_deref(), Some("w1"));
+    // repo_id is null when created via create_named_worktree_run (worktree context)
+    assert_eq!(result[0].repo_id, None);
+}
