@@ -8,6 +8,7 @@ use tracing::warn;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::github::has_merged_pr;
+use crate::issue_source::{IssueSourceManager, VantageConfig};
 use crate::worktree::WorktreeManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +102,32 @@ impl Ticket {
     }
 }
 
+/// Best-effort Vantage merged notification. Resolves sdlc_root from issue
+/// sources and calls `vantage::notify_merged`. Failures are logged as warnings.
+fn notify_vantage_merged(conn: &Connection, repo_id: &str, deliverable_id: &str) {
+    let sources = match IssueSourceManager::new(conn).list(repo_id) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("Vantage merged: failed to list issue sources for repo {repo_id}: {e}");
+            return;
+        }
+    };
+    let vantage_source = match sources.iter().find(|s| s.source_type == "vantage") {
+        Some(s) => s,
+        None => return,
+    };
+    let cfg: VantageConfig = match serde_json::from_str(&vantage_source.config_json) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Vantage merged: failed to parse config: {e}");
+            return;
+        }
+    };
+    if let Err(e) = crate::vantage::notify_merged(deliverable_id, &cfg.sdlc_root, None) {
+        tracing::warn!("Vantage merged notification failed for {deliverable_id}: {e}");
+    }
+}
+
 fn ticket_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
     let id = id.into();
     move |e| match e {
@@ -113,13 +140,15 @@ pub struct TicketSyncer<'a> {
     conn: &'a Connection,
 }
 
-const CLOSED_TICKET_ARTIFACTS_SQL: &str = "SELECT r.local_path, w.path, w.branch, r.remote_url
+const CLOSED_TICKET_ARTIFACTS_SQL: &str = "\
+    SELECT r.local_path, w.path, w.branch, r.remote_url, t.source_type, t.source_id, w.repo_id
      FROM worktrees w
      JOIN repos r ON r.id = w.repo_id
+     JOIN tickets t ON t.id = w.ticket_id
      WHERE w.repo_id = ?1
        AND w.status != 'merged'
        AND w.ticket_id IS NOT NULL
-       AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')";
+       AND t.state = 'closed'";
 
 impl<'a> TicketSyncer<'a> {
     pub fn new(conn: &'a Connection) -> Self {
@@ -536,17 +565,31 @@ impl<'a> TicketSyncer<'a> {
         merge_check: impl Fn(&str, &str) -> bool,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
-        let artifacts: Vec<(String, String, String, String)> = query_collect(
-            self.conn,
-            CLOSED_TICKET_ARTIFACTS_SQL,
-            params![repo_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )?;
+        // Also includes ticket source info for Vantage write-back.
+        let artifacts: Vec<(String, String, String, String, String, String, String)> =
+            query_collect(
+                self.conn,
+                CLOSED_TICKET_ARTIFACTS_SQL,
+                params![repo_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )?;
 
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
-        for (repo_path, worktree_path, branch, remote_url) in &artifacts {
+        for (repo_path, worktree_path, branch, remote_url, source_type, source_id, wt_repo_id) in
+            &artifacts
+        {
             if !merge_check(remote_url, branch) {
                 // Ticket is closed but PR not yet merged — leave the worktree alone.
                 continue;
@@ -558,6 +601,11 @@ impl<'a> TicketSyncer<'a> {
             )?;
             count += 1;
             WorktreeManager::remove_artifacts(repo_path, worktree_path, branch);
+
+            // Notify Vantage of the merge (best-effort)
+            if source_type == "vantage" {
+                notify_vantage_merged(self.conn, wt_repo_id, source_id);
+            }
         }
 
         Ok(count)

@@ -55,9 +55,9 @@ pub(super) struct ResumeContext {
 }
 
 /// Vantage context needed to write back pipeline status.
-struct VantageContext {
-    deliverable_id: String,
-    sdlc_root: String,
+pub(super) struct VantageContext {
+    pub deliverable_id: String,
+    pub sdlc_root: String,
 }
 
 /// If the workflow's ticket is a Vantage deliverable, resolve the sdlc_root
@@ -179,6 +179,8 @@ pub(super) struct ExecutionState<'a> {
     pub conductor_bin_dir: Option<std::path::PathBuf>,
     /// Additional plugin directories to pass to agent sessions.
     pub extra_plugin_dirs: Vec<String>,
+    /// Vantage context for lifecycle write-backs (resolved once at run start).
+    pub vantage_ctx: Option<VantageContext>,
 }
 
 impl ExecutionState<'_> {
@@ -590,6 +592,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         triggered_by_hook: input.triggered_by_hook,
         conductor_bin_dir: input.conductor_bin_dir.clone(),
         extra_plugin_dirs: input.extra_plugin_dirs.clone(),
+        vantage_ctx: None,
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -603,15 +606,19 @@ pub(super) fn run_workflow_engine(
     state: &mut ExecutionState<'_>,
     workflow: &WorkflowDef,
 ) -> Result<WorkflowResult> {
-    // Notify Vantage on dispatch (best-effort — don't fail the workflow)
-    let vantage_ctx = resolve_vantage_context(state.conn, state);
-    if let Some(ref ctx) = vantage_ctx {
-        if let Err(e) = crate::vantage::notify_dispatched(
+    // Resolve Vantage context once and store on state for lifecycle write-backs.
+    if state.vantage_ctx.is_none() {
+        state.vantage_ctx = resolve_vantage_context(state.conn, state);
+    }
+
+    // Notify Vantage: in_progress (best-effort — don't fail the workflow)
+    if let Some(ref ctx) = state.vantage_ctx {
+        if let Err(e) = crate::vantage::notify_in_progress(
             &ctx.deliverable_id,
             &ctx.sdlc_root,
             &state.workflow_run_id,
         ) {
-            tracing::warn!("Vantage dispatch notification failed: {e}");
+            tracing::warn!("Vantage in_progress notification failed: {e}");
         }
     }
 
@@ -675,24 +682,6 @@ pub(super) fn run_workflow_engine(
             );
         }
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
-
-        // Notify Vantage of completion (best-effort)
-        if let Some(ref ctx) = vantage_ctx {
-            let pr_url = state.inputs.get("pr_url").map(|s| s.as_str());
-            let wt_slug = if state.worktree_slug.is_empty() {
-                None
-            } else {
-                Some(state.worktree_slug.as_str())
-            };
-            if let Err(e) = crate::vantage::notify_completed(
-                &ctx.deliverable_id,
-                &ctx.sdlc_root,
-                pr_url,
-                wt_slug,
-            ) {
-                tracing::warn!("Vantage completion notification failed: {e}");
-            }
-        }
     } else {
         state
             .agent_mgr
@@ -711,7 +700,7 @@ pub(super) fn run_workflow_engine(
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
 
         // Notify Vantage of failure (best-effort)
-        if let Some(ref ctx) = vantage_ctx {
+        if let Some(ref ctx) = state.vantage_ctx {
             if let Err(e) =
                 crate::vantage::notify_failed(&ctx.deliverable_id, &ctx.sdlc_root, &summary)
             {
@@ -1165,6 +1154,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         triggered_by_hook: wf_run.is_triggered_by_hook(),
         conductor_bin_dir: input.conductor_bin_dir.clone(),
         extra_plugin_dirs: vec![],
+        vantage_ctx: None,
     };
 
     run_workflow_engine(&mut state, &workflow)
@@ -1332,6 +1322,8 @@ pub(super) fn record_step_success(
     };
     state.step_results.insert(step_key, step_result);
 
+    let has_pr_approved = markers_for_ctx.contains(&"pr_review_approved".to_string());
+
     state.contexts.push(ContextEntry {
         step: step_name.to_string(),
         iteration,
@@ -1340,6 +1332,18 @@ pub(super) fn record_step_success(
         structured_output: structured_output_for_ctx,
         output_file: output_file_for_ctx,
     });
+
+    // Notify Vantage of PR approval when the pr_review_approved marker is present.
+    if has_pr_approved {
+        if let Some(ref ctx) = state.vantage_ctx {
+            let pr_url = state.inputs.get("pr_url").map(|s| s.as_str());
+            if let Err(e) =
+                crate::vantage::notify_pr_approved(&ctx.deliverable_id, &ctx.sdlc_root, pr_url)
+            {
+                tracing::warn!("Vantage pr_approved notification failed: {e}");
+            }
+        }
+    }
 }
 
 /// Resolve child workflow inputs: substitute variables, apply defaults, and

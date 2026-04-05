@@ -121,8 +121,8 @@ fn run_sdlc(sdlc_root: &str, args: &[&str]) -> Result<std::process::Output> {
     Ok(output)
 }
 
-/// Update Vantage conductor status to "dispatched" when a workflow starts.
-pub fn notify_dispatched(
+/// Update Vantage conductor status to "in_progress" when work begins.
+pub fn notify_in_progress(
     deliverable_id: &str,
     sdlc_root: &str,
     workflow_run_id: &str,
@@ -134,43 +134,59 @@ pub fn notify_dispatched(
             "deliverable",
             "set",
             deliverable_id,
-            "conductor.status=dispatched",
-            &format!("conductor.dispatched_at={now}"),
+            "conductor.status=in_progress",
+            &format!("conductor.in_progress_at={now}"),
             &format!("conductor.workflow_run_id={workflow_run_id}"),
         ],
     )?;
-    tracing::info!("Vantage: marked {deliverable_id} as dispatched (run={workflow_run_id})");
+    tracing::info!("Vantage: marked {deliverable_id} as in_progress (run={workflow_run_id})");
     Ok(())
 }
 
-/// Update Vantage conductor status to "completed" when a workflow succeeds.
-pub fn notify_completed(
+/// Update Vantage conductor status to "pr_approved" when a review step
+/// completes with the `pr_review_approved` marker.
+pub fn notify_pr_approved(
     deliverable_id: &str,
     sdlc_root: &str,
     pr_url: Option<&str>,
-    worktree_slug: Option<&str>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mut args = vec![
         "deliverable",
         "set",
         deliverable_id,
-        "conductor.status=completed",
+        "conductor.status=pr_approved",
     ];
-    let completed_at = format!("conductor.completed_at={now}");
-    args.push(&completed_at);
+    let ts_arg = format!("conductor.pr_approved_at={now}");
+    args.push(&ts_arg);
     let pr_arg;
     if let Some(url) = pr_url {
         pr_arg = format!("conductor.pr_url={url}");
         args.push(&pr_arg);
     }
-    let wt_arg;
-    if let Some(slug) = worktree_slug {
-        wt_arg = format!("conductor.worktree_slug={slug}");
-        args.push(&wt_arg);
+    run_sdlc(sdlc_root, &args)?;
+    tracing::info!("Vantage: marked {deliverable_id} as pr_approved");
+    Ok(())
+}
+
+/// Update Vantage conductor status to "merged" when the PR is merged.
+pub fn notify_merged(deliverable_id: &str, sdlc_root: &str, pr_url: Option<&str>) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut args = vec![
+        "deliverable",
+        "set",
+        deliverable_id,
+        "conductor.status=merged",
+    ];
+    let ts_arg = format!("conductor.merged_at={now}");
+    args.push(&ts_arg);
+    let pr_arg;
+    if let Some(url) = pr_url {
+        pr_arg = format!("conductor.pr_url={url}");
+        args.push(&pr_arg);
     }
     run_sdlc(sdlc_root, &args)?;
-    tracing::info!("Vantage: marked {deliverable_id} as completed");
+    tracing::info!("Vantage: marked {deliverable_id} as merged");
     Ok(())
 }
 

@@ -186,6 +186,7 @@ mod tests {
             triggered_by_hook: false,
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],
+            vantage_ctx: None,
         }
     }
 
