@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { api } from "../api/client";
-import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow } from "../api/types";
+import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow } from "../api/types";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 
 type SortKey = "avg_input" | "avg_output" | "avg_cache_read" | "run_count";
 type TrendGranularity = "daily" | "weekly";
+type HistMetric = "duration" | "input_tokens" | "output_tokens";
 
 function fmtK(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -28,6 +29,12 @@ export function WorkflowAnalyticsPage() {
   const [heatmap, setHeatmap] = useState<StepTokenHeatmapRow[]>([]);
   const [heatmapLoading, setHeatmapLoading] = useState(false);
   const [heatmapError, setHeatmapError] = useState<string | null>(null);
+
+  const [histMetric, setHistMetric] = useState<HistMetric>("duration");
+  const [histDays, setHistDays] = useState<7 | 30 | 90>(30);
+  const [runMetrics, setRunMetrics] = useState<WorkflowRunMetricsRow[]>([]);
+  const [runMetricsLoading, setRunMetricsLoading] = useState(false);
+  const [runMetricsError, setRunMetricsError] = useState<string | null>(null);
 
   useEffect(() => {
     setAggLoading(true);
@@ -57,10 +64,67 @@ export function WorkflowAnalyticsPage() {
       .finally(() => setHeatmapLoading(false));
   }, [selectedWorkflow]);
 
+  useEffect(() => {
+    if (!selectedWorkflow) return;
+    setRunMetricsLoading(true);
+    setRunMetricsError(null);
+    api.getRunMetrics(selectedWorkflow, histDays)
+      .then(setRunMetrics)
+      .catch((e) => setRunMetricsError(e instanceof Error ? e.message : "Failed to load run metrics"))
+      .finally(() => setRunMetricsLoading(false));
+  }, [selectedWorkflow, histDays]);
+
   const sorted = [...aggregates].sort((a, b) => {
     const av = a[sortKey], bv = b[sortKey];
     return sortAsc ? av - bv : bv - av;
   });
+
+  const histogramBins = useMemo(() => {
+    const values = runMetrics
+      .map((r) => {
+        if (histMetric === "duration") return r.duration_ms;
+        if (histMetric === "input_tokens") return r.input_tokens;
+        return r.output_tokens;
+      })
+      .filter((v): v is number => v !== null && v !== undefined);
+
+    if (values.length < 5) return null;
+
+    const n = values.length;
+    const k = Math.ceil(Math.log2(n)) + 1;
+    const minVal = Math.min(...values);
+    const maxVal = Math.max(...values);
+    const range = maxVal - minVal;
+    const width = range === 0 ? 1 : range / k;
+
+    const bins: { label: string; count: number }[] = Array.from({ length: k }, (_, i) => {
+      const lo = minVal + i * width;
+      const hi = lo + width;
+      const label = histMetric === "duration"
+        ? `${(lo / 1000).toFixed(1)}s`
+        : `${fmtK(lo)}`;
+      return { label, count: 0 };
+    });
+
+    for (const v of values) {
+      const idx = Math.min(Math.floor((v - minVal) / width), k - 1);
+      bins[idx].count++;
+    }
+
+    // Compute mean + stddev of bin counts for outlier highlighting
+    const counts = bins.map((b) => b.count);
+    const mean = counts.reduce((a, c) => a + c, 0) / counts.length;
+    const variance = counts.reduce((a, c) => a + (c - mean) ** 2, 0) / counts.length;
+    const sigma = Math.sqrt(variance);
+    const threshold = mean + 2 * sigma;
+
+    const maxCount = Math.max(...counts, 1);
+    return bins.map((b) => ({
+      ...b,
+      pct: Math.round((b.count / maxCount) * 100),
+      outlier: b.count > threshold,
+    }));
+  }, [runMetrics, histMetric]);
 
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortAsc((p) => !p);
@@ -210,7 +274,73 @@ export function WorkflowAnalyticsPage() {
             )}
           </section>
 
-          {/* Section 3: Step token heatmap */}
+          {/* Section 3: Run distribution histogram */}
+          <section>
+            <div className="flex items-center gap-4 mb-3">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+                Run Distribution — {selectedWorkflow}
+              </h3>
+              <div className="flex items-center gap-2 text-xs">
+                <button
+                  onClick={() => setHistMetric("duration")}
+                  className={`px-2 py-0.5 rounded ${histMetric === "duration" ? "bg-indigo-100 text-indigo-700 font-medium" : "text-gray-500 hover:text-gray-700"}`}
+                >
+                  Duration
+                </button>
+                <button
+                  onClick={() => setHistMetric("input_tokens")}
+                  className={`px-2 py-0.5 rounded ${histMetric === "input_tokens" ? "bg-indigo-100 text-indigo-700 font-medium" : "text-gray-500 hover:text-gray-700"}`}
+                >
+                  Input Tokens
+                </button>
+                <button
+                  onClick={() => setHistMetric("output_tokens")}
+                  className={`px-2 py-0.5 rounded ${histMetric === "output_tokens" ? "bg-indigo-100 text-indigo-700 font-medium" : "text-gray-500 hover:text-gray-700"}`}
+                >
+                  Output Tokens
+                </button>
+              </div>
+              <div className="flex items-center gap-2 text-xs ml-auto">
+                {([7, 30, 90] as const).map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setHistDays(d)}
+                    className={`px-2 py-0.5 rounded ${histDays === d ? "bg-indigo-100 text-indigo-700 font-medium" : "text-gray-500 hover:text-gray-700"}`}
+                  >
+                    {d}d
+                  </button>
+                ))}
+              </div>
+            </div>
+            {runMetricsLoading ? (
+              <LoadingSpinner />
+            ) : runMetricsError ? (
+              <p className="text-sm text-red-500">{runMetricsError}</p>
+            ) : histogramBins === null ? (
+              <p className="text-sm text-gray-500">Not enough data (need at least 5 completed runs with {histMetric === "duration" ? "duration" : "token"} data).</p>
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <div className="px-4 py-3 divide-y divide-gray-50">
+                  {histogramBins.map((bin, i) => (
+                    <div key={i} className="py-1">
+                      <div className="flex items-center justify-between gap-2 mb-0.5">
+                        <span className="text-xs font-mono text-gray-500 w-20 shrink-0">{bin.label}</span>
+                        <span className="text-xs font-mono tabular-nums text-gray-400 shrink-0">{bin.count}</span>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${bin.outlier ? "bg-amber-400" : "bg-indigo-400"}`}
+                          style={{ width: `${bin.pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Section 4: Step token heatmap */}
           <section>
             <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
               Step Token Heatmap — {selectedWorkflow}

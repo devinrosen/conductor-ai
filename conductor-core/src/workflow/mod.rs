@@ -46,7 +46,7 @@ pub use types::{
     PendingGateRow, RunIdSlot, StepResult, StepTokenHeatmapRow, WorkflowExecConfig,
     WorkflowExecInput, WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput,
     WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
-    WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    WorkflowRunMetricsRow, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 use crate::agent_config::AgentSpec;

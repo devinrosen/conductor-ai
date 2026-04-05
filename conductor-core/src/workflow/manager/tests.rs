@@ -2292,3 +2292,66 @@ fn test_step_heatmap_ordered_by_avg_total_tokens_desc() {
     assert_eq!(result[0].step_name, "step-high");
     assert_eq!(result[1].step_name, "step-low");
 }
+
+// ── get_run_metrics ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_run_metrics_empty_when_no_runs() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_run_metrics("no-such-wf", 30)
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_run_metrics_excludes_non_completed_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // pending — should not appear
+    create_named_worktree_run(&conn, "w1", "metrics-wf");
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_run_metrics_returns_completed_run_data() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.0, 5000, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].input_tokens, Some(100));
+    assert_eq!(result[0].output_tokens, Some(200));
+    assert_eq!(result[0].duration_ms, Some(5000));
+}
+
+#[test]
+fn test_run_metrics_filters_by_workflow_name() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run_a.id, 100, 200, 0, 0, 1, 0.0, 1000, None)
+        .unwrap();
+
+    let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
+    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run_b.id, 999, 999, 0, 0, 1, 0.0, 9999, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("wf-a", 30).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].input_tokens, Some(100));
+}

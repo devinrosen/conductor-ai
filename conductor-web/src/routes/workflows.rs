@@ -11,8 +11,8 @@ use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
     RunIdSlot, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
-    WorkflowManager, WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    WorkflowManager, WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
+    WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -887,6 +887,24 @@ pub async fn get_step_heatmap(
     let mgr = WorkflowManager::new(&db);
     let limit = q.runs.unwrap_or(20);
     let rows = mgr.get_step_token_heatmap(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/runs?workflow_name=&days=30
+#[derive(Deserialize)]
+pub struct RunMetricsQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+pub async fn get_run_metrics(
+    State(state): State<AppState>,
+    Query(q): Query<RunMetricsQuery>,
+) -> Result<Json<Vec<WorkflowRunMetricsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let rows = mgr.get_run_metrics(&q.workflow_name, days)?;
     Ok(Json(rows))
 }
 

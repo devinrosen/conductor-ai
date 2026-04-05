@@ -15,7 +15,8 @@ use crate::workflow::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PR
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
     ActiveWorkflowCounts, PendingGateRow, StepTokenHeatmapRow, WorkflowRun, WorkflowRunContext,
-    WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate,
+    WorkflowTokenTrendRow,
 };
 
 impl<'a> WorkflowManager<'a> {
@@ -1013,6 +1014,32 @@ impl<'a> WorkflowManager<'a> {
                 avg_output: row.get(2)?,
                 avg_cache_read: row.get(3)?,
                 run_count: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Raw per-run metrics for completed runs of a workflow within the given day window.
+    /// Returns one row per run with duration_ms, input_tokens, output_tokens.
+    /// Binning happens client-side to avoid extra round-trips when switching metric toggles.
+    pub fn get_run_metrics(
+        &self,
+        workflow_name: &str,
+        days: u32,
+    ) -> Result<Vec<WorkflowRunMetricsRow>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT total_duration_ms, total_input_tokens, total_output_tokens \
+             FROM workflow_runs \
+             WHERE workflow_name = ?1 \
+               AND status = 'completed' \
+               AND started_at >= datetime('now', '-' || ?2 || ' days') \
+             ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map(params![workflow_name, days], |row| {
+            Ok(WorkflowRunMetricsRow {
+                duration_ms: row.get(0)?,
+                input_tokens: row.get(1)?,
+                output_tokens: row.get(2)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
