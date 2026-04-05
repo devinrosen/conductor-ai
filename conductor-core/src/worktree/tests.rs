@@ -186,6 +186,10 @@ fn test_check_main_health_clean_repo() {
     let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
     assert!(!health.is_dirty, "clean repo should not be dirty");
     assert!(health.dirty_files.is_empty());
+    assert_eq!(
+        health.commits_behind, 0,
+        "clean repo should be 0 commits behind"
+    );
 }
 
 #[test]
@@ -214,6 +218,34 @@ fn test_check_main_health_no_remote_ref_commits_behind_zero() {
     assert_eq!(
         health.commits_behind, 0,
         "commits_behind should be 0 when remote tracking ref is absent"
+    );
+}
+
+#[test]
+fn test_check_main_health_commits_behind_positive() {
+    let (_tmp, remote, local) = setup_repo_with_remote();
+
+    // Clone the remote to a second directory, commit a new file, and push
+    let tmp2 = TempDir::new().unwrap();
+    let other = tmp2.path().join("other");
+    git(
+        &["clone", &remote.to_string_lossy(), &other.to_string_lossy()],
+        tmp2.path(),
+    );
+    git(&["config", "user.email", "test@test.com"], &other);
+    git(&["config", "user.name", "Test"], &other);
+    fs::write(other.join("behind.txt"), "behind").unwrap();
+    git(&["add", "behind.txt"], &other);
+    git(&["commit", "-m", "remote-only commit"], &other);
+    git(&["push", "origin", "main"], &other);
+
+    // Fetch in local so origin/main tracking ref is updated, but do NOT merge
+    git(&["fetch", "origin"], &local);
+
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert_eq!(
+        health.commits_behind, 1,
+        "local should be 1 commit behind origin/main after remote push + fetch"
     );
 }
 
