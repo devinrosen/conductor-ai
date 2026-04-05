@@ -186,7 +186,10 @@ fn test_check_main_health_clean_repo() {
     let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
     assert!(!health.is_dirty, "clean repo should not be dirty");
     assert!(health.dirty_files.is_empty());
-    assert_eq!(health.commits_behind, 0, "clean repo should be 0 commits behind");
+    assert_eq!(
+        health.commits_behind, 0,
+        "clean repo should be 0 commits behind"
+    );
 }
 
 #[test]
