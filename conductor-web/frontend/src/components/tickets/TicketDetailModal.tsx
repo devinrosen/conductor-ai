@@ -7,15 +7,7 @@ import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 import { formatDuration, formatTokens } from "../../utils/agentStats";
 import { deriveWorktreeSlug } from "../../utils/worktreeUtils";
 import { CreateWorktreeForm } from "../worktrees/CreateWorktreeForm";
-
-function isSafeUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
+import { isSafeUrl } from "../../utils/urlUtils";
 
 interface TicketDetailModalProps {
   ticket: Ticket;
