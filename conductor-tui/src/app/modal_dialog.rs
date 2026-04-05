@@ -23,8 +23,16 @@ impl App {
                 ticket_id,
                 from_pr,
                 from_branch,
+                force_dirty,
             } => {
-                self.spawn_worktree_create(repo_slug, wt_name, ticket_id, from_pr, from_branch);
+                self.spawn_worktree_create(
+                    repo_slug,
+                    wt_name,
+                    ticket_id,
+                    from_pr,
+                    from_branch,
+                    force_dirty,
+                );
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
                 let Some(bg_tx) = self.bg_tx.clone() else {

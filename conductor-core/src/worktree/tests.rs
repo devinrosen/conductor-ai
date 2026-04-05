@@ -123,7 +123,8 @@ fn test_ensure_base_up_to_date_clean_fast_forward() {
     git(&["push", "origin", "main"], &other);
 
     // Local is now behind origin/main
-    let warnings = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main").unwrap();
+    let warnings =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false).unwrap();
     assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 
     // Verify local main now has the new file
@@ -137,7 +138,7 @@ fn test_ensure_base_up_to_date_dirty_working_tree() {
     // Make the working tree dirty
     fs::write(local.join("dirty.txt"), "uncommitted").unwrap();
 
-    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main");
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
@@ -170,11 +171,78 @@ fn test_ensure_base_up_to_date_diverged_branch() {
     git(&["commit", "-m", "local diverge"], &local);
 
     // Now ensure_base_up_to_date should warn about divergence
-    let warnings = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main").unwrap();
+    let warnings =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false).unwrap();
     assert!(
         warnings.iter().any(|w| w.contains("diverged")),
         "expected divergence warning, got: {:?}",
         warnings
+    );
+}
+
+#[test]
+fn test_check_main_health_clean_repo() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert!(!health.is_dirty, "clean repo should not be dirty");
+    assert!(health.dirty_files.is_empty());
+    assert!(
+        !health.fetch_failed,
+        "fetch should succeed against local remote"
+    );
+}
+
+#[test]
+fn test_check_main_health_dirty_repo() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Make the working tree dirty
+    fs::write(local.join("dirty_health.txt"), "uncommitted").unwrap();
+
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert!(health.is_dirty, "repo with untracked file should be dirty");
+    assert!(
+        !health.dirty_files.is_empty(),
+        "dirty_files should be non-empty"
+    );
+}
+
+#[test]
+fn test_check_main_health_fetch_failed() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Break the remote URL so fetch fails
+    git(
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://invalid.invalid/fake.git",
+        ],
+        &local,
+    );
+
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert!(health.fetch_failed, "fetch should fail with broken remote");
+    assert_eq!(
+        health.commits_behind, 0,
+        "commits_behind should be 0 when fetch failed"
+    );
+}
+
+#[test]
+fn test_ensure_base_up_to_date_force_dirty_skips_check() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Make the working tree dirty
+    fs::write(local.join("dirty_force.txt"), "uncommitted").unwrap();
+
+    // With force_dirty=true, the dirty check is skipped — should succeed
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", true);
+    assert!(
+        result.is_ok(),
+        "force_dirty=true should skip dirty check; got: {:?}",
+        result.err()
     );
 }
 
@@ -251,7 +319,8 @@ fn test_ensure_base_up_to_date_detached_head() {
     // Detach HEAD in local
     git(&["checkout", "--detach", "HEAD"], &local);
 
-    let warnings = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main").unwrap();
+    let warnings =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false).unwrap();
     // Should succeed (checkout main, then ff) with no warnings
     assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 
@@ -625,7 +694,7 @@ fn test_create_auto_clones_missing_local_path() {
         .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("myrepo", "feat-auto-clone", None, None, None);
+    let result = mgr.create("myrepo", "feat-auto-clone", None, None, None, false);
     assert!(
         result.is_ok(),
         "expected Ok, got: {:?}",
@@ -664,7 +733,7 @@ fn test_create_clone_fails_with_bad_remote() {
         .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("badrepo", "feat-should-fail", None, None, None);
+    let result = mgr.create("badrepo", "feat-should-fail", None, None, None, false);
     assert!(result.is_err(), "expected Err for bad remote");
     match result.unwrap_err() {
         ConductorError::Git(_) => {}
@@ -860,7 +929,7 @@ fn test_create_from_pr_propagates_fetch_error() {
     .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("test-repo", "from-pr-test", None, None, Some(42));
+    let result = mgr.create("test-repo", "from-pr-test", None, None, Some(42), false);
     // fetch_pr_branch will fail because the local repo has no GitHub remote
     let err = result.unwrap_err();
     assert!(
@@ -1082,7 +1151,14 @@ fn test_create_auto_registers_feature_for_non_default_base() {
 
     let mgr = WorktreeManager::new(&conn, &config);
     let (wt, _warnings) = mgr
-        .create("myrepo", "feat-child", Some("feat/parent"), None, None)
+        .create(
+            "myrepo",
+            "feat-child",
+            Some("feat/parent"),
+            None,
+            None,
+            false,
+        )
         .expect("create should succeed");
 
     // Worktree should have feat/parent as its base branch
@@ -1140,6 +1216,7 @@ fn test_create_links_ticket_to_auto_registered_feature() {
             Some("feat/parent"),
             Some("t1"),
             None,
+            false,
         )
         .expect("create should succeed");
 
@@ -1184,7 +1261,7 @@ fn test_create_skips_auto_registration_for_default_branch() {
     // Create a worktree from main (default branch)
     let mgr = WorktreeManager::new(&conn, &config);
     let (wt, _warnings) = mgr
-        .create("myrepo", "feat-on-main", None, None, None)
+        .create("myrepo", "feat-on-main", None, None, None, false)
         .expect("create should succeed");
 
     // base_branch should be "main" (default) — auto-registration should skip it

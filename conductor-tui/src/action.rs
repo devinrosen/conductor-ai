@@ -259,6 +259,16 @@ pub enum Action {
         message: String,
     },
 
+    // Background result for pre-creation main branch health check
+    MainHealthCheckComplete {
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        from_pr: Option<u32>,
+        from_branch: Option<String>,
+        status: Result<conductor_core::worktree::MainHealthStatus, String>,
+    },
+
     // Background results for worktree creation
     WorktreeCreated {
         wt_id: String,

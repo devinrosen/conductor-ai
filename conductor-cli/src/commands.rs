@@ -446,6 +446,9 @@ pub enum WorktreeCommands {
         /// Auto-start an agent after creation (requires --ticket)
         #[arg(long)]
         auto_agent: bool,
+        /// Proceed even if the base branch has uncommitted changes
+        #[arg(long)]
+        force: bool,
     },
     /// List worktrees
     List {

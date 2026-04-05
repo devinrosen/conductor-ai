@@ -185,7 +185,14 @@ pub(super) fn tool_create_worktree(
     };
 
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    match wt_mgr.create(repo_slug, name, None, resolved_ticket_id.as_deref(), None) {
+    match wt_mgr.create(
+        repo_slug,
+        name,
+        None,
+        resolved_ticket_id.as_deref(),
+        None,
+        false,
+    ) {
         Ok((wt, warnings)) => {
             let mut msg = format!(
                 "Worktree created.\nslug: {}\nbranch: {}\npath: {}\n",

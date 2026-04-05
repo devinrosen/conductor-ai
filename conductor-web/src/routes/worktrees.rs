@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use conductor_core::config::Config;
 use conductor_core::db::open_database;
@@ -28,6 +28,18 @@ pub struct CreateWorktreeRequest {
     pub name: String,
     pub from_branch: Option<String>,
     pub ticket_id: Option<String>,
+    /// When `true`, proceed even if the base branch has uncommitted changes.
+    pub force: Option<bool>,
+}
+
+/// Structured body returned as HTTP 409 when the base branch is dirty or stale
+/// and `force` is not set.
+#[derive(Serialize)]
+pub struct MainDirtyConflict {
+    pub code: &'static str,
+    pub message: &'static str,
+    pub dirty_files: Vec<String>,
+    pub commits_behind: u32,
 }
 
 #[derive(Deserialize)]
@@ -73,7 +85,7 @@ pub async fn create_worktree(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
     Json(body): Json<CreateWorktreeRequest>,
-) -> Result<(StatusCode, Json<Worktree>), ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Look up repo slug quickly before spawning the blocking work.
     let repo_slug = {
         let db = state.db.lock().await;
@@ -85,23 +97,60 @@ pub async fn create_worktree(
     let name = body.name.clone();
     let from_branch = body.from_branch.clone();
     let ticket_id = body.ticket_id.clone();
-    let wt = tokio::task::spawn_blocking(move || {
+    let force = body.force.unwrap_or(false);
+
+    // Run health check off-thread before creating the worktree.
+    let health_result = {
+        let db_path2 = db_path.clone();
+        let config2 = config.clone();
+        let repo_slug2 = repo_slug.clone();
+        let from_branch2 = from_branch.clone();
+        tokio::task::spawn_blocking(move || {
+            let (conn, config) = open_db_and_config(&db_path2, config2)?;
+            WorktreeManager::new(&conn, &config)
+                .check_main_health(&repo_slug2, from_branch2.as_deref())
+        })
+        .await??
+    };
+
+    // If dirty and not force: return 409 with structured body.
+    if health_result.is_dirty && !force {
+        let body = serde_json::to_value(MainDirtyConflict {
+            code: "main_dirty",
+            message: "base branch has uncommitted changes; pass force=true to proceed anyway",
+            dirty_files: health_result.dirty_files,
+            commits_behind: health_result.commits_behind,
+        })
+        .unwrap_or_default();
+        return Ok((StatusCode::CONFLICT, Json(body)));
+    }
+
+    let (wt, warnings) = tokio::task::spawn_blocking(move || {
         let (conn, config) = open_db_and_config(&db_path, config)?;
-        let (wt, _warnings) = WorktreeManager::new(&conn, &config).create(
+        WorktreeManager::new(&conn, &config).create(
             &repo_slug,
             &name,
             from_branch.as_deref(),
             ticket_id.as_deref(),
             None,
-        )?;
-        Ok::<_, conductor_core::error::ConductorError>(wt)
+            force,
+        )
     })
     .await??;
+
     state.events.emit(ConductorEvent::WorktreeCreated {
         id: wt.id.clone(),
         repo_id: wt.repo_id.clone(),
     });
-    Ok((StatusCode::CREATED, Json(wt)))
+
+    let mut body = serde_json::to_value(&wt).unwrap_or_default();
+    if !warnings.is_empty() {
+        body["warnings"] = serde_json::json!(warnings);
+    }
+    if health_result.commits_behind > 0 {
+        body["commits_behind"] = serde_json::json!(health_result.commits_behind);
+    }
+    Ok((StatusCode::CREATED, Json(body)))
 }
 
 pub async fn get_worktree(
