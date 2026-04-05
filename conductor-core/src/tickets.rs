@@ -852,12 +852,7 @@ impl<'a> TicketSyncer<'a> {
         }
 
         if let Some(lbl) = label {
-            sql.push_str(
-                " AND EXISTS ( \
-                   SELECT 1 FROM ticket_labels tl \
-                   WHERE tl.ticket_id = t.id AND tl.label = ? \
-                 )",
-            );
+            sql.push_str(&format!(" AND {}", Self::label_exists_subquery()));
             param_values.push(Box::new(lbl.to_string()));
         }
 
