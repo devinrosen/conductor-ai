@@ -142,6 +142,10 @@ Only terminal runs (`completed`, `failed`, `cancelled`) are eligible — filteri
 on `running` or `paused` is rejected by the validator. No `scope` or `ordered`
 options apply.
 
+**`filter` is required for `over = workflow_runs`.** Without it, the set is every
+terminal run in the DB — unbounded and almost never the right intent. The validator
+rejects a `foreach workflow_runs` block without at least one `filter` key.
+
 **`{{item}}` fields:** `id`, `workflow_name`, `status`, `started_at`, `ticket_id`
 
 ---
@@ -377,7 +381,9 @@ Type-specific:
 5. **`scope` required for `over = tickets`** — error if missing.
 6. **`ordered` rejected for non-tickets** — error.
 7. **`skip_dependents` requires `ordered = true`** — warn if set without it.
-8. **`filter.status` must be terminal** — error if `running` or `paused` on
+8. **`filter` required for `over = workflow_runs`** — error if absent. Without it
+   the set is every terminal run in the DB, which is almost never correct.
+9. **`filter.status` must be terminal** — error if `running` or `paused` on
    `over = workflow_runs`.
 
 Cycle detection is **not** run at validate time (runtime data).
@@ -451,7 +457,14 @@ child workflow run.
    workflow is the same thing with less ceremony. The supervisor concept lives on
    as a usage pattern, not a distinct primitive.
 
-7. **No shared context between parent and child workflows** — consistent with the
+7. **`filter` required for `over = workflow_runs`** — an unfiltered `foreach
+   workflow_runs` would iterate over every terminal run in the DB, which is
+   unbounded and almost never correct. Requiring at least one `filter` key forces
+   the author to express intent explicitly. `over = tickets` and `over = repos`
+   do not require a filter because their sets are naturally bounded (tickets scoped
+   to a repo; repos are the registered set).
+
+8. **No shared context between parent and child workflows** — consistent with the
    shallow composition model from RFC 008.
 
 ---
@@ -478,11 +491,9 @@ coordination.
 
 **4. `foreach workflow_runs` and the daemon**
 
-AUTONOMOUS-SDLC notes that the Tier B supervisor is a forcing function for the v2
-daemon. A cron-triggered `foreach workflow_runs` workflow gets most of the value
-under v1's polling model, but reacting to run completion *events* rather than
-polling is strictly better. This is not a blocker for implementing the primitive —
-it's a note that the polling approach is a known approximation.
+A cron-triggered `foreach workflow_runs` workflow is a known polling approximation
+of event-driven remediation. Good enough for v1; the v2 daemon makes it reactive.
+Not a blocker — noted in AUTONOMOUS-SDLC.md.
 
 ---
 
