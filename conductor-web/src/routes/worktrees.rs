@@ -7,7 +7,9 @@ use conductor_core::config::Config;
 use conductor_core::db::open_database;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
-use conductor_core::worktree::{Worktree, WorktreeManager, WorktreeWithStatus};
+use conductor_core::worktree::{
+    Worktree, WorktreeCreateOptions, WorktreeManager, WorktreeWithStatus,
+};
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -147,11 +149,13 @@ pub async fn create_worktree(
         WorktreeManager::new(&conn, &config).create(
             &repo_slug,
             &name,
-            from_branch.as_deref(),
-            ticket_id.as_deref(),
-            None,
-            force,
-            Some(&health_result),
+            WorktreeCreateOptions {
+                from_branch,
+                ticket_id,
+                force_dirty: force,
+                pre_health: Some(health_result),
+                ..Default::default()
+            },
         )
     })
     .await??;

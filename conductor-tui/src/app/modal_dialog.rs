@@ -1,6 +1,6 @@
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
-use conductor_core::worktree::WorktreeManager;
+use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal};
@@ -28,11 +28,13 @@ impl App {
                 self.spawn_worktree_create(
                     repo_slug,
                     wt_name,
-                    ticket_id,
-                    from_pr,
-                    from_branch,
-                    force_dirty,
-                    None,
+                    WorktreeCreateOptions {
+                        ticket_id,
+                        from_pr,
+                        from_branch,
+                        force_dirty,
+                        ..Default::default()
+                    },
                 );
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {

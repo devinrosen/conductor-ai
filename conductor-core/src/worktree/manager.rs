@@ -61,6 +61,29 @@ fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithSta
     })
 }
 
+/// Options for creating a new worktree.
+///
+/// Passed to [`WorktreeManager::create`] to avoid a long positional argument list.
+/// All fields are optional and default to `None` / `false`.
+#[derive(Debug, Default)]
+pub struct WorktreeCreateOptions {
+    /// When `Some(n)`, the worktree is backed by the branch of PR #n instead
+    /// of a newly-created branch. `from_branch` is ignored in that case.
+    pub from_pr: Option<u32>,
+    /// Start the worktree from an existing branch name instead of creating a
+    /// new one.  Ignored when `from_pr` is set.
+    pub from_branch: Option<String>,
+    /// Associate the new worktree with this ticket ID.
+    pub ticket_id: Option<String>,
+    /// When `true`, skip the dirty-state check. Use only after the caller has
+    /// explicitly confirmed the user wants to proceed with uncommitted changes.
+    pub force_dirty: bool,
+    /// Pre-computed health status from a prior `check_main_health()` call.
+    /// When `Some` and the working tree is clean, the redundant `git status`
+    /// inside `ensure_base_up_to_date()` is skipped.
+    pub pre_health: Option<super::git_helpers::MainHealthStatus>,
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -100,20 +123,22 @@ impl<'a> WorktreeManager<'a> {
     /// `ensure_base_up_to_date()` is skipped. Use this only after the caller has
     /// explicitly confirmed the user wants to proceed with uncommitted changes.
     ///
-    /// When `pre_health` is `Some` and the health status shows a clean working tree,
+    /// When `opts.pre_health` is `Some` and the health status shows a clean working tree,
     /// the redundant `git status --porcelain` call inside `ensure_base_up_to_date()` is
     /// skipped. Callers that already ran `check_main_health()` should pass the result here.
-    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
         repo_slug: &str,
         name: &str,
-        from_branch: Option<&str>,
-        ticket_id: Option<&str>,
-        from_pr: Option<u32>,
-        force_dirty: bool,
-        pre_health: Option<&super::git_helpers::MainHealthStatus>,
+        opts: WorktreeCreateOptions,
     ) -> Result<(Worktree, Vec<String>)> {
+        let WorktreeCreateOptions {
+            from_pr,
+            from_branch,
+            ticket_id,
+            force_dirty,
+            pre_health,
+        } = opts;
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
@@ -171,7 +196,6 @@ impl<'a> WorktreeManager<'a> {
         } else {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
             let base = from_branch
-                .map(|b| b.to_string())
                 .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
             let pre_verified_clean = pre_health
                 .map(|h| !h.is_dirty && !h.status_check_failed)
@@ -212,7 +236,7 @@ impl<'a> WorktreeManager<'a> {
             slug: wt_slug,
             branch,
             path: wt_path.to_string_lossy().to_string(),
-            ticket_id: ticket_id.map(|s| s.to_string()),
+            ticket_id,
             status: WorktreeStatus::Active,
             created_at: now,
             completed_at: None,

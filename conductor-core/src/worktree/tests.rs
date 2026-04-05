@@ -698,7 +698,7 @@ fn test_create_auto_clones_missing_local_path() {
         .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("myrepo", "feat-auto-clone", None, None, None, false, None);
+    let result = mgr.create("myrepo", "feat-auto-clone", Default::default());
     assert!(
         result.is_ok(),
         "expected Ok, got: {:?}",
@@ -737,7 +737,7 @@ fn test_create_clone_fails_with_bad_remote() {
         .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("badrepo", "feat-should-fail", None, None, None, false, None);
+    let result = mgr.create("badrepo", "feat-should-fail", Default::default());
     assert!(result.is_err(), "expected Err for bad remote");
     match result.unwrap_err() {
         ConductorError::Git(_) => {}
@@ -936,11 +936,10 @@ fn test_create_from_pr_propagates_fetch_error() {
     let result = mgr.create(
         "test-repo",
         "from-pr-test",
-        None,
-        None,
-        Some(42),
-        false,
-        None,
+        WorktreeCreateOptions {
+            from_pr: Some(42),
+            ..Default::default()
+        },
     );
     // fetch_pr_branch will fail because the local repo has no GitHub remote
     let err = result.unwrap_err();
@@ -1166,11 +1165,10 @@ fn test_create_auto_registers_feature_for_non_default_base() {
         .create(
             "myrepo",
             "feat-child",
-            Some("feat/parent"),
-            None,
-            None,
-            false,
-            None,
+            WorktreeCreateOptions {
+                from_branch: Some("feat/parent".to_string()),
+                ..Default::default()
+            },
         )
         .expect("create should succeed");
 
@@ -1226,11 +1224,11 @@ fn test_create_links_ticket_to_auto_registered_feature() {
         .create(
             "myrepo",
             "feat-child",
-            Some("feat/parent"),
-            Some("t1"),
-            None,
-            false,
-            None,
+            WorktreeCreateOptions {
+                from_branch: Some("feat/parent".to_string()),
+                ticket_id: Some("t1".to_string()),
+                ..Default::default()
+            },
         )
         .expect("create should succeed");
 
@@ -1275,7 +1273,7 @@ fn test_create_skips_auto_registration_for_default_branch() {
     // Create a worktree from main (default branch)
     let mgr = WorktreeManager::new(&conn, &config);
     let (wt, _warnings) = mgr
-        .create("myrepo", "feat-on-main", None, None, None, false, None)
+        .create("myrepo", "feat-on-main", Default::default())
         .expect("create should succeed");
 
     // base_branch should be "main" (default) — auto-registration should skip it

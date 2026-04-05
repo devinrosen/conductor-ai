@@ -6,7 +6,7 @@ use conductor_core::config::Config;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::worktree::WorktreeManager;
+use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
 use crate::commands::WorktreeCommands;
 use crate::handlers::agent::run_agent;
@@ -81,11 +81,13 @@ pub fn handle_worktree(
             let (wt, warnings) = mgr.create(
                 &repo,
                 &name,
-                effective_from.as_deref(),
-                ticket.as_deref(),
-                from_pr,
-                force_dirty,
-                pre_health.as_ref(),
+                WorktreeCreateOptions {
+                    from_branch: effective_from,
+                    ticket_id: ticket.clone(),
+                    from_pr,
+                    force_dirty,
+                    pre_health,
+                },
             )?;
 
             for warning in &warnings {
