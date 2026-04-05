@@ -42,6 +42,22 @@ pub struct MainDirtyConflict {
     pub commits_behind: u32,
 }
 
+/// Typed success body returned as HTTP 201 when a worktree is created.
+/// Extends the core `Worktree` fields with optional runtime metadata.
+#[derive(Serialize)]
+pub struct CreateWorktreeResponse {
+    #[serde(flatten)]
+    pub worktree: Worktree,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub commits_behind: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 #[derive(Deserialize)]
 pub struct LinkTicketRequest {
     pub ticket_id: String,
@@ -85,7 +101,7 @@ pub async fn create_worktree(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
     Json(body): Json<CreateWorktreeRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+) -> Result<(StatusCode, Json<CreateWorktreeResponse>), ApiError> {
     // Look up repo slug quickly before spawning the blocking work.
     let repo_slug = {
         let db = state.db.lock().await;
@@ -115,16 +131,17 @@ pub async fn create_worktree(
 
     // If dirty and not force: return 409 with structured body.
     if health_result.is_dirty && !force {
-        let body = serde_json::to_value(MainDirtyConflict {
+        let conflict_body = serde_json::to_value(MainDirtyConflict {
             code: "main_dirty",
             message: "base branch has uncommitted changes; pass force=true to proceed anyway",
             dirty_files: health_result.dirty_files,
             commits_behind: health_result.commits_behind,
         })
-        .unwrap_or_default();
-        return Ok((StatusCode::CONFLICT, Json(body)));
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        return Err(ApiError::Conflict(conflict_body));
     }
 
+    let commits_behind = health_result.commits_behind;
     let (wt, warnings) = tokio::task::spawn_blocking(move || {
         let (conn, config) = open_db_and_config(&db_path, config)?;
         WorktreeManager::new(&conn, &config).create(
@@ -134,6 +151,7 @@ pub async fn create_worktree(
             ticket_id.as_deref(),
             None,
             force,
+            true, // skip_fetch: health check already fetched above
         )
     })
     .await??;
@@ -143,14 +161,14 @@ pub async fn create_worktree(
         repo_id: wt.repo_id.clone(),
     });
 
-    let mut body = serde_json::to_value(&wt).unwrap_or_default();
-    if !warnings.is_empty() {
-        body["warnings"] = serde_json::json!(warnings);
-    }
-    if health_result.commits_behind > 0 {
-        body["commits_behind"] = serde_json::json!(health_result.commits_behind);
-    }
-    Ok((StatusCode::CREATED, Json(body)))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateWorktreeResponse {
+            worktree: wt,
+            warnings,
+            commits_behind,
+        }),
+    ))
 }
 
 pub async fn get_worktree(

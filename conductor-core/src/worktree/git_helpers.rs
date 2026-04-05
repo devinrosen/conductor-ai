@@ -16,6 +16,9 @@ pub struct MainHealthStatus {
     pub commits_behind: u32,
     /// Whether `git fetch origin` failed (network error, no remote, etc.).
     pub fetch_failed: bool,
+    /// Whether `git status --porcelain` itself failed (e.g. not a git repo).
+    /// When true, `is_dirty` and `dirty_files` are unreliable.
+    pub status_check_failed: bool,
 }
 
 /// Run a read-only health check on `base_branch` inside `repo_path`.
@@ -28,21 +31,29 @@ pub struct MainHealthStatus {
 /// Does not modify any git state (no checkout, no merge).
 pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus {
     // 1. Check dirty state
-    let (is_dirty, dirty_files) = match git_in(repo_path).args(["status", "--porcelain"]).output() {
-        Ok(o) if o.status.success() && !o.stdout.is_empty() => {
-            let files: Vec<String> = String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| {
-                    l.trim_start_matches(|c: char| !c.is_whitespace())
-                        .trim()
-                        .to_string()
-                })
-                .collect();
-            (true, files)
-        }
-        _ => (false, Vec::new()),
-    };
+    let (is_dirty, dirty_files, status_check_failed) =
+        match git_in(repo_path).args(["status", "--porcelain"]).output() {
+            Ok(o) if o.status.success() && !o.stdout.is_empty() => {
+                let files: Vec<String> = String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| {
+                        l.trim_start_matches(|c: char| !c.is_whitespace())
+                            .trim()
+                            .to_string()
+                    })
+                    .collect();
+                (true, files, false)
+            }
+            Ok(o) if o.status.success() => {
+                // Empty stdout → working tree is clean
+                (false, Vec::new(), false)
+            }
+            _ => {
+                // Command failed or non-zero exit — cannot determine dirty state
+                (false, Vec::new(), true)
+            }
+        };
 
     // 2. Fetch from remote
     let fetch_failed = !git_in(repo_path)
@@ -73,6 +84,7 @@ pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus
         dirty_files,
         commits_behind,
         fetch_failed,
+        status_check_failed,
     }
 }
 
@@ -130,10 +142,15 @@ pub(super) fn detect_remote_head(repo_path: &str) -> Option<String> {
 ///
 /// When `force_dirty` is `true`, the dirty-state check is skipped (the caller has
 /// already confirmed the user wants to proceed despite uncommitted changes).
+///
+/// When `skip_fetch` is `true`, the `git fetch origin` step is skipped because the
+/// caller already ran `check_main_health()` (which includes a fetch). This avoids a
+/// redundant network round-trip when creating a worktree after a health check.
 pub(super) fn ensure_base_up_to_date(
     repo_path: &str,
     base_branch: &str,
     force_dirty: bool,
+    skip_fetch: bool,
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
 
@@ -147,15 +164,18 @@ pub(super) fn ensure_base_up_to_date(
         }
     }
 
-    // 2. Fetch from remote (soft failure — warn and allow local-only creation)
-    let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
-    match fetch {
-        Ok(o) if o.status.success() => {}
-        _ => {
-            warnings.push(
-                "could not fetch from origin; creating worktree from local state".to_string(),
-            );
-            return Ok(warnings);
+    // 2. Fetch from remote (soft failure — warn and allow local-only creation).
+    //    Skip when the caller already fetched as part of a health check.
+    if !skip_fetch {
+        let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
+        match fetch {
+            Ok(o) if o.status.success() => {}
+            _ => {
+                warnings.push(
+                    "could not fetch from origin; creating worktree from local state".to_string(),
+                );
+                return Ok(warnings);
+            }
         }
     }
 

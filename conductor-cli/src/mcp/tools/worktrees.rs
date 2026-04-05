@@ -192,6 +192,7 @@ pub(super) fn tool_create_worktree(
         resolved_ticket_id.as_deref(),
         None,
         false,
+        false,
     ) {
         Ok((wt, warnings)) => {
             let mut msg = format!(

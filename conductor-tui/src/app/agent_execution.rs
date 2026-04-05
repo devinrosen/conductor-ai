@@ -411,6 +411,9 @@ impl App {
                 let db = conductor_core::config::db_path();
                 let conn = conductor_core::db::open_database(&db)?;
                 let wt_mgr = WorktreeManager::new(&conn, &config);
+                // skip_fetch when from_pr is None: check_main_health was already
+                // run (and fetched) before spawn_worktree_create is called.
+                let skip_fetch = from_pr.is_none();
                 let (wt, warnings) = wt_mgr.create(
                     &repo_slug,
                     &name,
@@ -418,6 +421,7 @@ impl App {
                     ticket_id.as_deref(),
                     from_pr,
                     force_dirty,
+                    skip_fetch,
                 )?;
 
                 Ok((wt, warnings))

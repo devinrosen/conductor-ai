@@ -78,6 +78,8 @@ pub fn handle_worktree(
                 false
             };
 
+            // skip_fetch when from_pr is None: check_main_health already fetched above.
+            let skip_fetch = from_pr.is_none();
             let (wt, warnings) = mgr.create(
                 &repo,
                 &name,
@@ -85,6 +87,7 @@ pub fn handle_worktree(
                 ticket.as_deref(),
                 from_pr,
                 force_dirty,
+                skip_fetch,
             )?;
 
             for warning in &warnings {

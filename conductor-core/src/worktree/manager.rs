@@ -99,6 +99,12 @@ impl<'a> WorktreeManager<'a> {
     /// When `force_dirty` is `true`, the dirty-state check inside
     /// `ensure_base_up_to_date()` is skipped. Use this only after the caller has
     /// explicitly confirmed the user wants to proceed with uncommitted changes.
+    ///
+    /// When `skip_fetch` is `true`, the `git fetch origin` inside
+    /// `ensure_base_up_to_date()` is skipped because the caller already ran
+    /// `check_main_health()` (which fetches). Pass `true` whenever the caller ran
+    /// a health check immediately before `create()` to avoid a redundant fetch.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
         repo_slug: &str,
@@ -107,6 +113,7 @@ impl<'a> WorktreeManager<'a> {
         ticket_id: Option<&str>,
         from_pr: Option<u32>,
         force_dirty: bool,
+        skip_fetch: bool,
     ) -> Result<(Worktree, Vec<String>)> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
@@ -167,7 +174,7 @@ impl<'a> WorktreeManager<'a> {
             let base = from_branch
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
-            let warnings = ensure_base_up_to_date(&repo.local_path, &base, force_dirty)?;
+            let warnings = ensure_base_up_to_date(&repo.local_path, &base, force_dirty, skip_fetch)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",
