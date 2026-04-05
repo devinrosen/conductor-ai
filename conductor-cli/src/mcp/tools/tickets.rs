@@ -3,7 +3,18 @@ use std::path::Path;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_arg_usize, open_db_and_config, tool_err, tool_ok};
+
+fn parse_comma_arg(args: &serde_json::Map<String, Value>, key: &str) -> Vec<String> {
+    get_arg(args, key)
+        .map(|s| {
+            s.split(',')
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 pub(super) fn tool_list_tickets(
     db_path: &Path,
@@ -14,14 +25,7 @@ pub(super) fn tool_list_tickets(
 
     let repo_slug = require_arg!(args, "repo");
 
-    let labels: Vec<String> = get_arg(args, "label")
-        .map(|s| {
-            s.split(',')
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+    let labels = parse_comma_arg(args, "label");
     let search = get_arg(args, "search").map(|s| s.to_string());
     let include_closed = get_arg(args, "include_closed") == Some("true");
 
@@ -181,14 +185,11 @@ pub(super) fn tool_upsert_ticket(
     let state = require_arg!(args, "state");
     let body = get_arg(args, "body").unwrap_or("").to_string();
     let url = get_arg(args, "url").unwrap_or("").to_string();
-    let labels_raw = get_arg(args, "labels").unwrap_or("");
-    let labels: Vec<String> = labels_raw
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let labels = parse_comma_arg(args, "labels");
     let assignee = get_arg(args, "assignee").map(|s| s.to_string());
     let priority = get_arg(args, "priority").map(|s| s.to_string());
+    let blocked_by = parse_comma_arg(args, "blocked_by");
+    let children = parse_comma_arg(args, "children");
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
@@ -211,6 +212,8 @@ pub(super) fn tool_upsert_ticket(
         priority,
         url,
         raw_json: "{}".to_string(),
+        blocked_by,
+        children,
     };
 
     let syncer = TicketSyncer::new(&conn);
@@ -220,6 +223,46 @@ pub(super) fn tool_upsert_ticket(
         )),
         Err(e) => tool_err(format!("upsert failed: {e}")),
     }
+}
+
+pub(super) fn tool_get_ready_tickets(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::tickets::TicketSyncer;
+
+    let repo_slug = require_arg!(args, "repo");
+    let root_ticket_id = get_arg(args, "root_ticket_id").map(|s| s.to_string());
+    let label = get_arg(args, "label").map(|s| s.to_string());
+    let limit = get_arg_usize(args, "limit").unwrap_or(50);
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+    let syncer = TicketSyncer::new(&conn);
+    let tickets = match syncer.get_ready_tickets(
+        &repo.id,
+        root_ticket_id.as_deref(),
+        label.as_deref(),
+        limit,
+    ) {
+        Ok(t) => t,
+        Err(e) => return tool_err(e),
+    };
+    if tickets.is_empty() {
+        return tool_ok(format!("No ready tickets for {repo_slug}."));
+    }
+    let mut out = String::new();
+    for t in tickets {
+        out.push_str(&format!("#{} — {} [{}]\n", t.source_id, t.title, t.url));
+    }
+    tool_ok(out)
 }
 
 pub(super) fn tool_delete_ticket(
@@ -405,6 +448,8 @@ mod tests {
             url: "https://github.com/x/y/issues/42".to_string(),
             raw_json: "{}".to_string(),
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
         };
         let syncer = TicketSyncer::new(&conn);
         syncer.sync_and_close_tickets(&repo.id, "github", &[ticket]);
@@ -636,6 +681,61 @@ mod tests {
             result.is_error,
             Some(true),
             "whitespace in labels should be trimmed and succeed"
+        );
+    }
+
+    // ---- get_ready_tickets tests ----
+
+    #[test]
+    fn test_get_ready_tickets_missing_repo() {
+        let (_f, db) = make_test_db();
+        let result = tool_get_ready_tickets(&db, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "ghost-repo"));
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_get_ready_tickets_empty_result() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "test-repo"));
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("No ready tickets"), "got: {text}");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_happy_path() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        // Upsert a ticket
+        let args = full_ticket_args("test-repo");
+        let upsert = tool_upsert_ticket(&db, &args);
+        assert_ne!(upsert.is_error, Some(true));
+
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "test-repo"));
+        assert_ne!(result.is_error, Some(true), "got: {:?}", result.content);
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("#42"),
+            "expected ticket source_id in output, got: {text}"
         );
     }
 

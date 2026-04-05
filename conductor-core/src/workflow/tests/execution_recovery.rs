@@ -217,6 +217,42 @@ fn test_recover_stuck_steps_failed_child_marks_step_failed() {
 }
 
 #[test]
+fn test_recover_stuck_steps_skips_step_with_purged_child_run() {
+    // A step whose child_run_id references an agent run that no longer exists
+    // (e.g. purged) must be left in 'running' status and not cause an error.
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let parent = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let wf_run = wf_mgr
+        .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    let step_id = wf_mgr
+        .insert_step(&wf_run.id, "agent-step", "actor", false, 0, 0)
+        .unwrap();
+
+    // Point the step at a child_run_id that does not exist in agent_runs.
+    conn.execute(
+        "UPDATE workflow_run_steps SET status = 'running', child_run_id = 'nonexistent-run-id' \
+         WHERE id = ?1",
+        rusqlite::params![step_id],
+    )
+    .unwrap();
+
+    let recovered = wf_mgr.recover_stuck_steps().unwrap();
+    assert_eq!(recovered, 0, "purged child run should not be recovered");
+
+    let steps = wf_mgr.get_workflow_steps(&wf_run.id).unwrap();
+    assert_eq!(
+        steps[0].status,
+        WorkflowStepStatus::Running,
+        "step must remain in 'running' when child_run_id is missing from agent_runs"
+    );
+}
+
+#[test]
 fn test_fetch_child_final_output_returns_last_completed_step() {
     let conn = setup_db();
     let (mgr, run_id) = create_child_run(&conn);

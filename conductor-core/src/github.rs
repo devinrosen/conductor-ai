@@ -300,6 +300,8 @@ pub fn sync_github_issues(
                 url: issue["url"].as_str().unwrap_or("").to_string(),
                 raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
                 label_details,
+                blocked_by: vec![],
+                children: vec![],
             }
         })
         .collect();
@@ -367,6 +369,8 @@ pub fn fetch_github_issue(
         url: issue["url"].as_str().unwrap_or("").to_string(),
         raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
         label_details,
+        blocked_by: vec![],
+        children: vec![],
     })
 }
 
