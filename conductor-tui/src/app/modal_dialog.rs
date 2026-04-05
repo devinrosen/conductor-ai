@@ -32,6 +32,7 @@ impl App {
                     from_pr,
                     from_branch,
                     force_dirty,
+                    None,
                 );
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {

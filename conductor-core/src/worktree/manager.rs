@@ -100,6 +100,10 @@ impl<'a> WorktreeManager<'a> {
     /// `ensure_base_up_to_date()` is skipped. Use this only after the caller has
     /// explicitly confirmed the user wants to proceed with uncommitted changes.
     ///
+    /// When `pre_health` is `Some` and the health status shows a clean working tree,
+    /// the redundant `git status --porcelain` call inside `ensure_base_up_to_date()` is
+    /// skipped. Callers that already ran `check_main_health()` should pass the result here.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
         repo_slug: &str,
@@ -108,6 +112,7 @@ impl<'a> WorktreeManager<'a> {
         ticket_id: Option<&str>,
         from_pr: Option<u32>,
         force_dirty: bool,
+        pre_health: Option<&super::git_helpers::MainHealthStatus>,
     ) -> Result<(Worktree, Vec<String>)> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
@@ -168,7 +173,11 @@ impl<'a> WorktreeManager<'a> {
             let base = from_branch
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
-            let warnings = ensure_base_up_to_date(&repo.local_path, &base, force_dirty)?;
+            let pre_verified_clean = pre_health
+                .map(|h| !h.is_dirty && !h.status_check_failed)
+                .unwrap_or(false);
+            let warnings =
+                ensure_base_up_to_date(&repo.local_path, &base, force_dirty, pre_verified_clean)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",

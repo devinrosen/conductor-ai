@@ -304,6 +304,7 @@ impl App {
                             health.commits_behind
                         ));
                     }
+                    let pre_health = Some(health);
                     self.spawn_worktree_create(
                         repo_slug,
                         wt_name,
@@ -311,6 +312,7 @@ impl App {
                         from_pr,
                         from_branch,
                         false,
+                        pre_health,
                     );
                 }
             },

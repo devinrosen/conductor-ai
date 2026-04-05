@@ -383,6 +383,7 @@ impl App {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_worktree_create(
         &mut self,
         repo_slug: String,
@@ -391,6 +392,7 @@ impl App {
         from_pr: Option<u32>,
         from_branch: Option<String>,
         force_dirty: bool,
+        pre_health: Option<conductor_core::worktree::MainHealthStatus>,
     ) {
         // Guard before setting the non-dismissable Progress modal: if bg_tx is
         // None (only possible before init() completes), skip rather than
@@ -418,6 +420,7 @@ impl App {
                     ticket_id.as_deref(),
                     from_pr,
                     force_dirty,
+                    pre_health.as_ref(),
                 )?;
 
                 Ok((wt, warnings))
