@@ -43,7 +43,16 @@ impl<'a> WorkflowManager<'a> {
         let stuck: Vec<(String, String, WorkflowStepStatus, Option<String>)> = running_steps
             .into_iter()
             .filter_map(|(step_id, child_run_id)| {
-                let run = child_runs.get(&child_run_id)?;
+                let Some(run) = child_runs.get(&child_run_id) else {
+                    tracing::warn!(
+                        step_id = %step_id,
+                        child_run_id = %child_run_id,
+                        "recover_stuck_steps: running step references a child_run_id not found \
+                         in agent_runs — the agent run may have been purged; \
+                         step will remain in 'running' status"
+                    );
+                    return None;
+                };
                 let step_status = match run.status {
                     AgentRunStatus::Completed => WorkflowStepStatus::Completed,
                     AgentRunStatus::Failed | AgentRunStatus::Cancelled => {
