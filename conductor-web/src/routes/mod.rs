@@ -267,6 +267,10 @@ pub fn api_router() -> Router<AppState> {
             "/api/workflows/analytics/heatmap",
             get(workflows::get_step_heatmap),
         )
+        .route(
+            "/api/workflows/analytics/runs",
+            get(workflows::get_run_metrics),
+        )
         // Workflow Templates
         .route("/api/templates", get(workflows::list_templates))
         .route(

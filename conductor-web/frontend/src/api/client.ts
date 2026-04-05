@@ -33,6 +33,7 @@ import type {
   WorkflowTokenAggregate,
   WorkflowTokenTrendRow,
   StepTokenHeatmapRow,
+  WorkflowRunMetricsRow,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -287,6 +288,10 @@ export const api = {
   getStepTokenHeatmap: (workflowName: string, runs = 20) =>
     request<StepTokenHeatmapRow[]>(
       `/workflows/analytics/heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getRunMetrics: (workflowName: string, days = 30) =>
+    request<WorkflowRunMetricsRow[]>(
+      `/workflows/analytics/runs?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
     ),
 
   // Notifications

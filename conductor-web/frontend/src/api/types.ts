@@ -282,6 +282,12 @@ export interface StepTokenHeatmapRow {
   run_count: number;
 }
 
+export interface WorkflowRunMetricsRow {
+  duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+}
+
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)
 
 export interface WorkflowInputDecl {
