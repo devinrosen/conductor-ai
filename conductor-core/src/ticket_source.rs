@@ -1,8 +1,9 @@
 use crate::error::{ConductorError, Result};
 use crate::github;
-use crate::issue_source::{GitHubConfig, IssueSource, JiraConfig};
+use crate::issue_source::{GitHubConfig, IssueSource, JiraConfig, VantageConfig};
 use crate::jira_acli;
 use crate::tickets::TicketInput;
+use crate::vantage;
 
 /// Typed dispatch for ticket sources.
 ///
@@ -13,6 +14,7 @@ use crate::tickets::TicketInput;
 pub enum TicketSource {
     GitHub(GitHubConfig),
     Jira(JiraConfig),
+    Vantage(VantageConfig, Option<String>),
 }
 
 impl TicketSource {
@@ -32,7 +34,21 @@ impl TicketSource {
                     .map_err(|e| ConductorError::TicketSync(format!("invalid jira config: {e}")))?;
                 Ok(Self::Jira(cfg))
             }
+            "vantage" => {
+                let cfg = serde_json::from_str::<VantageConfig>(&s.config_json).map_err(|e| {
+                    ConductorError::TicketSync(format!("invalid vantage config: {e}"))
+                })?;
+                Ok(Self::Vantage(cfg, None))
+            }
             other => Err(ConductorError::UnknownSourceType(other.to_string())),
+        }
+    }
+
+    /// Returns a new `TicketSource` with the given repo slug attached (used by Vantage sync).
+    pub fn with_repo_slug(self, repo_slug: &str) -> Self {
+        match self {
+            Self::Vantage(cfg, _) => Self::Vantage(cfg, Some(repo_slug.to_string())),
+            other => other,
         }
     }
 
@@ -43,6 +59,10 @@ impl TicketSource {
         match self {
             Self::GitHub(cfg) => github::sync_github_issues(&cfg.owner, &cfg.repo, token),
             Self::Jira(cfg) => jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url),
+            Self::Vantage(cfg, repo_slug) => {
+                let slug = repo_slug.as_deref().unwrap_or("");
+                vantage::sync_vantage_deliverables(&cfg.project_id, &cfg.sdlc_root, slug)
+            }
         }
     }
 
@@ -60,16 +80,18 @@ impl TicketSource {
                 github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
             }
             Self::Jira(cfg) => jira_acli::fetch_jira_issue(source_id, &cfg.url),
+            Self::Vantage(cfg, _) => vantage::fetch_vantage_deliverable(source_id, &cfg.sdlc_root),
         }
     }
 
-    /// Returns the canonical source-type string (`"github"` / `"jira"`).
+    /// Returns the canonical source-type string (`"github"` / `"jira"` / `"vantage"`).
     ///
     /// Used when passing `source_type` to `sync_and_close_tickets`.
     pub fn source_type_str(&self) -> &'static str {
         match self {
             Self::GitHub(_) => "github",
             Self::Jira(_) => "jira",
+            Self::Vantage(_, _) => "vantage",
         }
     }
 
@@ -79,6 +101,8 @@ impl TicketSource {
     /// - `"github"` with `Some(json)`: validates it parses as JSON and returns it.
     /// - `"jira"` with `None`: returns an error (config is required).
     /// - `"jira"` with `Some(json)`: validates and returns it.
+    /// - `"vantage"` with `None`: returns an error (config is required).
+    /// - `"vantage"` with `Some(json)`: validates and returns it.
     /// - Any other type: returns `UnknownSourceType`.
     pub fn default_config(
         source_type: &str,
@@ -86,7 +110,7 @@ impl TicketSource {
         remote_url: &str,
     ) -> Result<String> {
         match (source_type, config_json) {
-            ("github" | "jira", Some(json)) => {
+            ("github" | "jira" | "vantage", Some(json)) => {
                 serde_json::from_str::<serde_json::Value>(json).map_err(|e| {
                     ConductorError::InvalidInput(format!("invalid JSON config: {e}"))
                 })?;
@@ -108,9 +132,22 @@ impl TicketSource {
                  (e.g. --config '{\"jql\":\"project = KEY AND status != Done\",\"url\":\"https://...\"}')"
                     .to_string(),
             )),
+            ("vantage", None) => Err(ConductorError::InvalidInput(
+                "--config is required for vantage sources \
+                 (e.g. --config '{\"project_id\":\"PROJ-001\",\"sdlc_root\":\"/path/to/sdlc\"}')"
+                    .to_string(),
+            )),
             (other, _) => Err(ConductorError::UnknownSourceType(other.to_string())),
         }
     }
+}
+
+/// Extract dependency deliverable IDs from a ticket's stored `raw_json`.
+///
+/// Delegates to `vantage::get_parent_deliverable_ids`. Returns an empty vec for
+/// non-Vantage tickets, malformed JSON, or missing `dependencies` field.
+pub fn get_dependency_ids(raw_json: &str) -> Vec<String> {
+    vantage::get_parent_deliverable_ids(raw_json)
 }
 
 #[cfg(test)]
@@ -286,5 +323,109 @@ mod tests {
             ConductorError::UnknownSourceType(t) => assert_eq!(t, "linear"),
             _ => panic!("expected UnknownSourceType error, got {err:?}"),
         }
+    }
+
+    // --- Vantage variant ---
+
+    #[test]
+    fn from_issue_source_valid_vantage() {
+        let src = make_issue_source(
+            "vantage",
+            r#"{"project_id":"PROJ-001","sdlc_root":"/path/to/sdlc"}"#,
+        );
+        let ts = TicketSource::from_issue_source(&src).unwrap();
+        match ts {
+            TicketSource::Vantage(cfg, slug) => {
+                assert_eq!(cfg.project_id, "PROJ-001");
+                assert_eq!(cfg.sdlc_root, "/path/to/sdlc");
+                assert!(slug.is_none());
+            }
+            _ => panic!("expected Vantage variant"),
+        }
+    }
+
+    #[test]
+    fn from_issue_source_invalid_vantage_config() {
+        let src = make_issue_source("vantage", "not-json");
+        let err = TicketSource::from_issue_source(&src).unwrap_err();
+        match err {
+            ConductorError::TicketSync(msg) => {
+                assert!(
+                    msg.contains("invalid vantage config"),
+                    "unexpected msg: {msg}"
+                );
+            }
+            _ => panic!("expected TicketSync error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn with_repo_slug_sets_slug_on_vantage() {
+        let src = make_issue_source(
+            "vantage",
+            r#"{"project_id":"PROJ-001","sdlc_root":"/path"}"#,
+        );
+        let ts = TicketSource::from_issue_source(&src).unwrap();
+        let ts = ts.with_repo_slug("my-repo");
+        match ts {
+            TicketSource::Vantage(_, slug) => assert_eq!(slug, Some("my-repo".to_string())),
+            _ => panic!("expected Vantage variant"),
+        }
+    }
+
+    #[test]
+    fn with_repo_slug_is_noop_on_github() {
+        let src = make_issue_source("github", r#"{"owner":"acme","repo":"widget"}"#);
+        let ts = TicketSource::from_issue_source(&src).unwrap();
+        let ts = ts.with_repo_slug("ignored");
+        match ts {
+            TicketSource::GitHub(cfg) => assert_eq!(cfg.owner, "acme"),
+            _ => panic!("expected GitHub variant"),
+        }
+    }
+
+    #[test]
+    fn source_type_str_vantage() {
+        let src = make_issue_source(
+            "vantage",
+            r#"{"project_id":"PROJ-001","sdlc_root":"/path"}"#,
+        );
+        let ts = TicketSource::from_issue_source(&src).unwrap();
+        assert_eq!(ts.source_type_str(), "vantage");
+    }
+
+    #[test]
+    fn default_config_vantage_with_valid_json() {
+        let json = r#"{"project_id":"PROJ-001","sdlc_root":"/path/to/sdlc"}"#;
+        let result = TicketSource::default_config("vantage", Some(json), "").unwrap();
+        assert_eq!(result, json);
+    }
+
+    #[test]
+    fn default_config_vantage_no_config_returns_error() {
+        let err = TicketSource::default_config("vantage", None, "").unwrap_err();
+        match err {
+            ConductorError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("--config is required for vantage"),
+                    "unexpected msg: {msg}"
+                );
+            }
+            _ => panic!("expected InvalidInput error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn get_dependency_ids_delegates_to_vantage() {
+        let json = serde_json::json!({ "id": "D-001", "dependencies": ["D-002", "D-003"] });
+        let ids = super::get_dependency_ids(&serde_json::to_string(&json).unwrap());
+        assert_eq!(ids, vec!["D-002", "D-003"]);
+    }
+
+    #[test]
+    fn get_dependency_ids_empty_for_missing_field() {
+        let json = serde_json::json!({ "id": "D-001" });
+        let ids = super::get_dependency_ids(&serde_json::to_string(&json).unwrap());
+        assert!(ids.is_empty());
     }
 }
