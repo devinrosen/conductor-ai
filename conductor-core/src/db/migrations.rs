@@ -1851,6 +1851,20 @@ mod tests {
     // Migration 062 tests
     // -----------------------------------------------------------------------
 
+    /// Inserts a minimal repo (`r1`) and two tickets (`t1`, `t2`) used by migration 062
+    /// fixture tests.
+    fn insert_ticket_dependency_fixtures(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');",
+        )
+        .unwrap();
+    }
+
     /// Verifies that `ticket_dependencies` exists on a fresh DB after all migrations.
     #[test]
     fn test_ticket_dependencies_table_exists() {
@@ -1869,14 +1883,9 @@ mod tests {
         run(&conn).unwrap();
 
         // Insert a minimal repo and two tickets.
+        insert_ticket_dependency_fixtures(&conn);
         conn.execute_batch(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');
-             INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
         )
         .unwrap();
 
@@ -1914,14 +1923,9 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         run(&conn).unwrap();
 
+        insert_ticket_dependency_fixtures(&conn);
         conn.execute_batch(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');
-             INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
         )
         .unwrap();
 
@@ -1949,14 +1953,9 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         run(&conn).unwrap();
 
+        insert_ticket_dependency_fixtures(&conn);
         conn.execute_batch(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');
-             INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
         )
         .unwrap();
 
@@ -1977,15 +1976,7 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         run(&conn).unwrap();
 
-        conn.execute_batch(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');",
-        )
-        .unwrap();
+        insert_ticket_dependency_fixtures(&conn);
 
         let result = conn.execute(
             "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type)
@@ -2004,15 +1995,7 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         run(&conn).unwrap();
 
-        conn.execute_batch(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
-             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');",
-        )
-        .unwrap();
+        insert_ticket_dependency_fixtures(&conn);
 
         conn.execute_batch(
             "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type)
