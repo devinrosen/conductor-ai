@@ -1,18 +1,37 @@
-# RFC 010: `for_each_ticket` Workflow Step Type
+# RFC 010: `foreach` Workflow Step Type
 
 **Status:** Draft
 **Date:** 2026-04-04
 **Author:** Devin
 **Closes:** RFC 009 (remaining workflow engine primitives)
+**Supersedes:** initial `for_each_ticket` draft
 **Tracks:** [#1743](https://github.com/devinrosen/conductor-ai/issues/1743)
 
 ---
 
 ## Problem
 
-RFC 009 built the data model for ticket dependencies: the `ticket_dependencies` table, `TicketInput.blocked_by`/`.children`, `get_ready_tickets()`, and the `conductor_get_ready_tickets` MCP tool. What it deliberately deferred was the workflow engine primitive that acts on that graph.
+RFC 009 built the ticket dependency data model: the `ticket_dependencies` table,
+`get_ready_tickets()`, and the `conductor_get_ready_tickets` MCP tool. What it
+deferred was the workflow engine primitive that acts on that graph.
 
-Today a workflow can operate on a single ticket. There is no mechanism to drive work across a set of tickets — fanning out in dependency order, parallelizing where safe, sequencing where required, and recovering when a child fails. That gap is what this RFC closes.
+But the need is broader than tickets. The Autonomous SDLC vision
+([docs/AUTONOMOUS-SDLC.md](../AUTONOMOUS-SDLC.md)) calls for workflows that
+drive work across multiple object types:
+
+- **Tickets** — fan out over a sprint's deliverables in dependency order
+- **Repos** — assess test coverage across every registered repo and file issues
+- **Workflow runs** — find failed runs and create GH issues to improve the workflow
+
+The initial draft of this RFC proposed `for_each_ticket` as a ticket-specific
+keyword. That would require separate `for_each_repo` and `for_each_workflow_run`
+primitives later, and a separate `supervisor` workflow type from AUTONOMOUS-SDLC
+stage 7b that is really just `foreach workflow_runs { filter = "failed" }`.
+
+This RFC proposes a single general `foreach` step type with a typed `over` field.
+Dep-aware dispatch — the unique value for tickets — is opt-in via `ordered = true`
+and is only valid for `over = tickets`. All other types get simple parallel fan-out.
+One primitive replaces three.
 
 ---
 
@@ -20,248 +39,362 @@ Today a workflow can operate on a single ticket. There is no mechanism to drive 
 
 ### 1. DSL syntax
 
-A new top-level step type, `for_each_ticket`, fits the existing grammar as a new production under `node`:
+`foreach` is a new production under `node` in the workflow grammar:
 
 ```
-for_each_ticket IDENT "{" for_each_kv* "}"
-for_each_kv := "scope"       "=" scope_block
-             | "max_parallel" "=" NUMBER
-             | "workflow"     "=" STRING
-             | "inputs"       "=" map
-             | "on_child_fail" "=" ("halt" | "continue" | "skip_dependents")
-             | "on_cycle"     "=" ("fail" | "warn")
-scope_block  := "{" ("ticket_id" | "label" | "query") "=" STRING "}"
+foreach IDENT "{" foreach_kv* "}"
+foreach_kv := "over"          "=" ("tickets" | "repos" | "workflow_runs")
+            | "scope"         "=" scope_block
+            | "filter"        "=" map
+            | "ordered"       "=" ("true" | "false")
+            | "on_cycle"      "=" ("fail" | "warn")
+            | "max_parallel"  "=" NUMBER
+            | "workflow"      "=" STRING
+            | "inputs"        "=" map
+            | "on_child_fail" "=" ("halt" | "continue" | "skip_dependents")
+scope_block := "{" ("ticket_id" | "label") "=" STRING "}"
 ```
 
-**Example — process all children of a parent ticket in dependency order:**
+#### Examples
+
+**Fan out over a sprint's tickets in dependency order:**
 
 ```
-for_each_ticket sprint-work {
-  scope       = { ticket_id = "{{inputs.root_ticket_id}}" }
+foreach sprint-work {
+  over         = tickets
+  scope        = { ticket_id = "{{inputs.root_ticket_id}}" }
+  ordered      = true
   max_parallel = 3
-  workflow    = "ticket-to-pr"
-  inputs      = { ticket_id = "{{item.id}}" }
+  workflow     = "ticket-to-pr"
+  inputs       = { ticket_id = "{{item.id}}" }
   on_child_fail = skip_dependents
 }
 ```
 
-**Example — process all open tickets with a label:**
+**Assess test coverage across all registered repos:**
 
 ```
-for_each_ticket backend-tickets {
-  scope        = { label = "backend" }
+foreach coverage-check {
+  over         = repos
   max_parallel = 2
-  workflow     = "ticket-to-pr"
-  inputs       = { ticket_id = "{{item.id}}" }
+  workflow     = "assess-coverage"
+  inputs       = { repo_slug = "{{item.slug}}" }
   on_child_fail = continue
 }
 ```
 
-#### Scope variants
+**Find failed workflow runs and file improvement issues:**
 
-| Variant | Semantics |
-|---|---|
-| `ticket_id = "..."` | Fan out over all direct children (`parent_of` edges) of the given ticket. Respects `blocks` ordering among children. |
-| `label = "..."` | Fan out over all open tickets with the given label in the repo. Ordering derived from any `blocks` edges between them. |
-| `query = "..."` | Reserved for a future filter expression. Not implemented in v1 — the parser accepts and stores it but execution emits an error. |
-
-#### `max_parallel` is required
-
-No default is provided. Forcing the author to state a concurrency cap prevents runaway fan-out on large projects. The validator rejects a `for_each_ticket` block without `max_parallel`.
-
-#### `on_child_fail` (default: `skip_dependents`)
-
-| Value | Semantics |
-|---|---|
-| `halt` | Cancel all in-flight child runs and fail the step immediately. No new tickets are dispatched. |
-| `continue` | Log the failure, mark the ticket, and keep dispatching remaining ready tickets. The step succeeds if at least one child succeeded. |
-| `skip_dependents` | Mark the failed ticket's direct and transitive dependents as `skipped`. Other unrelated tickets continue normally. *(default)* |
-
-#### `on_cycle` (default: `fail`)
-
-| Value | Semantics |
-|---|---|
-| `fail` | Abort the step with a clear error listing the cycle. *(default)* |
-| `warn` | Log the cycle, break it by ignoring the back-edge, and continue. |
-
-#### `{{item}}` template variable
-
-Each child workflow run receives `{{item.id}}`, `{{item.title}}`, `{{item.url}}`, and `{{item.source_id}}` for the ticket being processed, in addition to any explicitly listed `inputs`. This mirrors how `parallel` call-level inputs work.
+```
+foreach failed-runs {
+  over         = workflow_runs
+  filter       = { status = "failed" }
+  max_parallel = 4
+  workflow     = "diagnose-and-issue"
+  inputs       = { run_id = "{{item.id}}" }
+  on_child_fail = continue
+}
+```
 
 ---
 
-### 2. Engine execution model
+### 2. `over` types
 
-#### Phase 1 — cycle detection (at step start)
+#### `tickets`
 
-Before dispatching any child run, the engine performs a DFS over the dependency subgraph for the resolved ticket set:
+Fans out over tickets in the workflow's repo. Scope is required.
 
-1. Call `get_ready_tickets()` with the step's scope to build the full candidate set.
-2. Load all `ticket_dependencies` edges between tickets in that set.
-3. Run DFS; if a back-edge is found, either fail or warn based on `on_cycle`.
+| Scope variant | Semantics |
+|---|---|
+| `ticket_id = "..."` | All direct children (`parent_of` edges) of the given ticket |
+| `label = "..."` | All open tickets with the given label in the repo |
 
-This is static with respect to the current DB state. It runs once at step start, not repeatedly. Cycles introduced by a re-sync mid-run are not detected until the next step start or workflow run.
+`ordered = true` enables dep-aware dispatch: the engine calls `get_ready_tickets()`
+on each tick and holds tickets whose blockers are not yet resolved. Without
+`ordered`, all in-scope tickets are dispatched immediately up to `max_parallel`.
 
-**Why at step start rather than at `workflow validate` time?**
+`on_child_fail = skip_dependents` is only meaningful when `ordered = true`. The
+validator warns if it is set on an unordered ticket fan-out.
 
-The ticket set is runtime data — the validator cannot resolve `{{inputs.root_ticket_id}}` at parse time. Static analysis at validate-time is not possible for `ticket_id` and `label` scopes. The step start check is the earliest safe point.
+`on_cycle` applies only when `ordered = true`. Ignored otherwise.
 
-#### Phase 2 — dispatch loop
+**`{{item}}` fields:** `id`, `title`, `url`, `source_id`, `state`, `labels`
 
-The engine maintains a per-step in-memory queue. On each DB poll tick while the step is active:
+#### `repos`
 
-1. Call `get_ready_tickets()` with the step's scope and exclude tickets already dispatched, in-flight, completed, or skipped.
-2. Compute `available_slots = max_parallel - in_flight_count`.
-3. Dispatch up to `available_slots` tickets by creating child `workflow_runs` linked to the parent step via `parent_run_id`.
-4. If the queue is empty and `in_flight_count == 0`: the step is done — succeed or fail based on child outcomes.
-5. If the queue is non-empty but `in_flight_count == 0` and no tickets are ready: all remaining tickets are blocked by unresolved dependencies or failed dependents — surface as a warning and end the step.
+Fans out over all repos registered in conductor (`repos` table). No `scope` or
+`ordered` options — repos are independent, unordered, and all included by default.
+A `filter` map is accepted for future use but not evaluated in v1 (validator warns
+if provided).
 
-The dispatch loop reuses the existing DB poll tick already used for orphan reaping and background sync. No new timer or goroutine is needed.
+**`{{item}}` fields:** `slug`, `local_path`, `remote_url`
+
+#### `workflow_runs`
+
+Fans out over workflow runs. A `filter` map narrows the set:
+
+| Filter key | Accepted values |
+|---|---|
+| `status` | `completed`, `failed`, `cancelled` |
+| `workflow_name` | any string (exact match) |
+
+Only terminal runs (`completed`, `failed`, `cancelled`) are eligible — filtering
+on `running` or `paused` is rejected by the validator. No `scope` or `ordered`
+options apply.
+
+**`{{item}}` fields:** `id`, `workflow_name`, `status`, `started_at`, `ticket_id`
+
+---
+
+### 3. Options reference
+
+#### `max_parallel` (required for all types)
+
+No default. The validator rejects a `foreach` block without it. Forces the
+workflow author to make an explicit concurrency decision.
+
+#### `on_child_fail` (default: `continue` for repos/workflow_runs, `skip_dependents` for ordered tickets)
+
+| Value | Semantics |
+|---|---|
+| `halt` | Cancel in-flight child runs and fail the step immediately |
+| `continue` | Log the failure and keep dispatching remaining items. Step succeeds if at least one child succeeded. |
+| `skip_dependents` | *(tickets + `ordered = true` only)* Mark the failed ticket's transitive dependents as `skipped`. Unrelated tickets continue normally. |
+
+The default differs by type because `skip_dependents` is only meaningful with a
+dep graph. For `repos` and `workflow_runs`, `continue` is almost always the right
+behaviour — a coverage check failing on one repo should not halt the others.
+
+#### `ordered` (tickets only, default: `false`)
+
+When `true`, activates dep-aware dispatch via `get_ready_tickets()`. When `false`,
+all in-scope tickets are queued immediately. The validator rejects `ordered = true`
+on non-ticket `over` values.
+
+#### `on_cycle` (tickets + `ordered = true` only, default: `fail`)
+
+| Value | Semantics |
+|---|---|
+| `fail` | Abort at step start with a clear error naming the cycle |
+| `warn` | Log the cycle, break it by dropping the back-edge, and continue |
+
+---
+
+### 4. Engine execution model
+
+The engine behaviour is the same across all `over` types; the differences are in
+how items are collected and whether ordering is applied.
+
+#### Phase 1 — item collection and cycle detection (at step start)
+
+1. Resolve the full item set from the DB based on `over`, `scope`, and `filter`.
+2. For `over = tickets` with `ordered = true`: load `ticket_dependencies` edges
+   within the set; run DFS cycle detection; fail or warn based on `on_cycle`.
+3. Write one `workflow_run_step_fan_out_items` row per item with `status = 'pending'`.
+
+Cycle detection runs at step start, not at `workflow validate` time. The item set
+is runtime data — `{{inputs.root_ticket_id}}` cannot be resolved statically.
+
+#### Phase 2 — dispatch loop (DB poll tick)
+
+On each tick while the step is active:
+
+1. Query `workflow_run_step_fan_out_items` for `pending` items in this step.
+2. For `ordered = true` tickets: filter to items whose blockers are all `completed`
+   (using `get_ready_tickets()`). For all other types: all `pending` items are eligible.
+3. Compute `available_slots = max_parallel - in_flight_count`.
+4. Dispatch up to `available_slots` items by creating child `workflow_runs` linked
+   via `parent_run_id`; update row status to `running`.
+5. **Done condition:** queue empty and `in_flight_count == 0` → succeed or fail
+   based on child outcomes.
+6. **Stall condition:** queue non-empty but no items are eligible and
+   `in_flight_count == 0` → all remaining items are permanently blocked; surface
+   as a warning and end the step.
 
 #### Phase 3 — completion handling
 
-When a child run transitions to a terminal state (`completed`, `failed`, `cancelled`):
+When a child run reaches a terminal state:
 
-1. Record the outcome in the step's tracking table (see §3).
-2. Apply `on_child_fail` semantics if the run failed.
-3. Re-evaluate the dispatch loop on the next tick.
+1. Update the `workflow_run_step_fan_out_items` row and `fan_out_*` counters.
+2. Apply `on_child_fail` semantics if failed.
+3. For `skip_dependents`: walk the dep graph from the failed ticket and mark all
+   transitively blocked items as `skipped`.
+4. Re-evaluate the dispatch loop on the next tick.
 
-The parent `for_each_ticket` step does not bubble child markers up — its own output is a summary context describing how many tickets succeeded/failed/were skipped.
+The `foreach` step's own output is a summary context:
+```json
+{
+  "markers": [],
+  "context": "foreach sprint-work: 12 completed, 1 failed, 2 skipped of 15 tickets"
+}
+```
 
 ---
 
-### 3. DB schema
+### 5. DB schema
 
-Two additions support tracking fan-out state and enabling resumability.
+#### `workflow_run_step_fan_out_items`
 
-#### `workflow_run_step_fan_out_tickets`
-
-Tracks per-ticket dispatch state for each active `for_each_ticket` step:
+Replaces the ticket-specific `workflow_run_step_fan_out_tickets` table from the
+initial draft. Generalised to handle any `over` type via a `item_type` column and
+a nullable `item_id` (ULID into the relevant table) plus a `item_ref` freeform
+field for display.
 
 ```sql
-CREATE TABLE workflow_run_step_fan_out_tickets (
-    id              TEXT PRIMARY KEY,           -- ULID
-    step_run_id     TEXT NOT NULL REFERENCES workflow_run_steps(id) ON DELETE CASCADE,
-    ticket_id       TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    child_run_id    TEXT REFERENCES workflow_runs(id),
-    status          TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
-    dispatched_at   TEXT,
-    completed_at    TEXT,
-    UNIQUE (step_run_id, ticket_id)
+CREATE TABLE workflow_run_step_fan_out_items (
+    id           TEXT PRIMARY KEY,
+    step_run_id  TEXT NOT NULL REFERENCES workflow_run_steps(id) ON DELETE CASCADE,
+    item_type    TEXT NOT NULL CHECK (item_type IN ('ticket', 'repo', 'workflow_run')),
+    item_id      TEXT NOT NULL,   -- FK enforced at application level; type-dependent
+    item_ref     TEXT NOT NULL,   -- human-readable label (ticket title, repo slug, run id)
+    child_run_id TEXT REFERENCES workflow_runs(id),
+    status       TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+    dispatched_at TEXT,
+    completed_at  TEXT,
+    UNIQUE (step_run_id, item_type, item_id)
 );
+
+CREATE INDEX idx_fan_out_items_step ON workflow_run_step_fan_out_items(step_run_id, status);
 ```
 
-`status` transitions:
-- `pending` → `running` when a child run is created
-- `running` → `completed` | `failed` when the child run reaches a terminal state
-- `pending` → `skipped` when `on_child_fail = skip_dependents` propagates through the dep graph
+No typed FK on `item_id` — the three target tables (`tickets`, `repos`,
+`workflow_runs`) cannot all be referenced from a single column in SQLite without
+a polymorphic FK workaround. The application layer enforces referential integrity.
 
 #### `workflow_run_steps` additions
 
-Two new columns on the existing table:
-
 ```sql
-ALTER TABLE workflow_run_steps ADD COLUMN fan_out_total    INTEGER;
+ALTER TABLE workflow_run_steps ADD COLUMN fan_out_total     INTEGER;
 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER DEFAULT 0;
 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed    INTEGER DEFAULT 0;
 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped   INTEGER DEFAULT 0;
 ```
 
-These are updated atomically as tickets complete and drive progress display in TUI/web.
+---
+
+### 6. Resumability
+
+On restart, the engine finds `workflow_run_steps` with `status = 'running'` whose
+snapshot node is `foreach`. It reconstructs the in-memory queue from
+`workflow_run_step_fan_out_items`:
+
+- `pending` → add to queue (not yet dispatched)
+- `running` → child run exists; if still running, monitor; if orphaned, apply
+  `on_child_fail` semantics
+- `completed` | `failed` | `skipped` → already terminal, skip
+
+No work is re-dispatched. Consistent with the engine's snapshot-based resume model.
 
 ---
 
-### 4. Resumability
+### 7. Cycle detection algorithm
 
-On restart, the engine finds any `workflow_run_steps` with `status = 'running'` whose workflow node is `for_each_ticket`. It reconstructs the in-memory queue by querying `workflow_run_step_fan_out_tickets`:
-
-- `status = 'pending'`: not yet dispatched — add to queue
-- `status = 'running'`: child run exists — check child run status; if still running, continue monitoring; if terminal (run was orphaned), apply `on_child_fail` semantics
-- `status = 'completed'` | `'failed'` | `'skipped'`: already terminal — skip
-
-This makes fan-out resumable across process restarts without re-dispatching completed work, consistent with the existing engine's snapshot-based resume model.
-
----
-
-### 5. Cycle detection algorithm
+Applies only to `over = tickets` with `ordered = true`.
 
 ```
-fn detect_ticket_cycles(tickets: &[TicketId], deps: &[(TicketId, TicketId)]) -> Option<Vec<TicketId>>
+fn detect_ticket_cycles(
+    tickets: &[TicketId],
+    deps: &[(TicketId, TicketId)],
+) -> Option<Vec<TicketId>>
 ```
 
-Standard iterative DFS with a `visited` set and a `stack` set (current path):
+Standard DFS with a `visited` set and a `stack` set (current path):
 
 1. Build an adjacency list from `deps` filtered to tickets in scope.
 2. For each unvisited ticket, run DFS.
-3. On entering a node, add to `stack`. On leaving, remove from `stack`.
-4. If a neighbor is already in `stack`, a cycle exists — return the cycle path.
-5. If no cycle is found, return `None`.
+3. On entering a node: add to `stack`. On leaving: remove from `stack`.
+4. If a neighbor is already in `stack`: cycle found — return the path.
 
-The cycle path returned is used in the error/warning message:
+Error message format:
 ```
 Ticket cycle detected: TICKET-42 → TICKET-17 → TICKET-8 → TICKET-42
 ```
 
-`on_cycle = warn` breaks the cycle by ignoring the back-edge (not inserting the back-edge into the adjacency list for dispatch ordering). The tickets remain in scope; they just lose their dependency constraint on each other.
+`on_cycle = warn` drops the back-edge from the adjacency list before dispatch.
+The tickets remain in scope; they just lose the circular constraint.
 
 ---
 
-### 6. Global/repo-level concurrency cap
+### 8. Global concurrency cap
 
-`max_parallel` is step-scoped. RFC 009 identified the risk of multiple simultaneous `for_each_ticket` workflows across repos saturating the machine.
+`max_parallel` is step-scoped. Multiple concurrent `foreach` steps across repos
+could still saturate the machine.
 
-**V1 approach:** No global cap is enforced. `max_parallel` is the author's responsibility. Document the risk clearly in the DSL reference.
+**V1:** No global cap. `max_parallel` is the author's responsibility. Documented
+as a known gap.
 
-**V2 path:** A future `[defaults] max_agent_runs` in `config.toml` can impose a machine-wide cap. The dispatch loop already has the hook: before claiming an available slot, check global in-flight count against the cap. No schema change is needed — `workflow_runs` already records status.
-
-This is filed as a known gap, not a blocker for this RFC.
+**V2 path:** A `[defaults] max_agent_runs` in `config.toml` imposes a machine-wide
+cap. The dispatch loop hook is already present: before claiming a slot, check total
+`workflow_runs` with `status = 'running'` against the global cap. No schema change
+needed.
 
 ---
 
-### 7. AST representation
-
-New variant added to `WorkflowNode` in `conductor-core/src/workflow_dsl/types.rs`:
+### 9. AST representation
 
 ```rust
+// conductor-core/src/workflow_dsl/types.rs
+
 enum WorkflowNode {
     // ... existing variants ...
-    ForEachTicket(ForEachTicketNode),
+    ForEach(ForEachNode),
 }
 
-struct ForEachTicketNode {
+struct ForEachNode {
     pub name:          String,
-    pub scope:         TicketScope,
+    pub over:          ForeachOver,
+    pub scope:         Option<TicketScope>,   // tickets only
+    pub filter:        HashMap<String, String>,
+    pub ordered:       bool,                  // tickets only
+    pub on_cycle:      OnCycle,               // tickets + ordered only
     pub max_parallel:  u32,
     pub workflow:      String,
     pub inputs:        HashMap<String, String>,
     pub on_child_fail: OnChildFail,
-    pub on_cycle:      OnCycle,
 }
 
-enum TicketScope {
-    TicketId(String),   // value may contain {{variable}} references
-    Label(String),
-    Query(String),      // reserved; errors at execution time
-}
-
-enum OnChildFail { Halt, Continue, SkipDependents }
-enum OnCycle     { Fail, Warn }
+enum ForeachOver    { Tickets, Repos, WorkflowRuns }
+enum TicketScope    { TicketId(String), Label(String) }
+enum OnChildFail    { Halt, Continue, SkipDependents }
+enum OnCycle        { Fail, Warn }
 ```
 
 ---
 
-### 8. TUI and web surface
+### 10. Validator additions
 
-#### TUI — `for_each_ticket` step row
+For all `foreach` nodes:
 
-In the workflow run detail view, a `for_each_ticket` step shows a progress bar:
+1. **`over` present** — error if missing.
+2. **`max_parallel` present** — error if missing.
+3. **`workflow` resolves** — error if the named `.wf` file is not found.
+4. **Input compatibility** — warn if the referenced workflow has a `required` input
+   not covered by `inputs` or `{{item.*}}`.
+
+Type-specific:
+
+5. **`scope` required for `over = tickets`** — error if missing.
+6. **`ordered` rejected for non-tickets** — error.
+7. **`skip_dependents` requires `ordered = true`** — warn if set without it.
+8. **`filter.status` must be terminal** — error if `running` or `paused` on
+   `over = workflow_runs`.
+
+Cycle detection is **not** run at validate time (runtime data).
+
+---
+
+### 11. TUI and web surface
+
+#### TUI — `foreach` step row
+
+Progress bar in the workflow run detail view:
 
 ```
-► sprint-work   [████████░░░░░░░]  8/15  (2 running, 5 pending, 0 failed)
+► sprint-work [████████░░░░░░░]  8/15  (2 running, 5 pending, 0 failed)
 ```
 
-Expanding the step (e.g., pressing `→` or `Enter`) shows per-ticket rows:
+Expanding the step (`→` or `Enter`) shows per-item rows. Label adapts to `over` type:
 
 ```
   ✓ TICKET-12   Build auth module          completed
@@ -269,97 +402,123 @@ Expanding the step (e.g., pressing `→` or `Enter`) shows per-ticket rows:
   ◐ TICKET-17   Implement token refresh    running
   ◐ TICKET-23   Add logout flow            running
   ⏳ TICKET-42   Write auth tests           pending  (blocked by TICKET-17)
-  ⏳ TICKET-5    Update OpenAPI spec        pending
-  …
+  ✗ TICKET-5    Update OpenAPI spec        failed
+  ⊘ TICKET-9    Integration tests          skipped  (dep failed)
 ```
 
-A `⛔` icon indicates a ticket skipped due to a failed dependency (when `on_child_fail = skip_dependents`).
+For `over = repos`:
+```
+  ✓ conductor-ai       completed
+  ◐ conductor-web      running
+  ⏳ conductor-mobile   pending
+```
 
-The worktree/run list gains a lock icon (`🔒`) next to any worktree whose associated ticket is `pending` in an active fan-out.
+A lock icon appears next to any worktree whose ticket is `pending` in an active
+ordered fan-out.
 
-#### Web — fan-out progress panel
+#### Web
 
-The `/workflows/<run-id>` detail page renders the `for_each_ticket` step as a collapsible panel with the same counters and per-ticket status table. Clicking a ticket row navigates to the child workflow run detail.
-
----
-
-### 9. `conductor workflow validate` additions
-
-The validator gains two new checks for `for_each_ticket` nodes:
-
-1. **`max_parallel` present** — error if missing.
-2. **`workflow` resolves** — error if the named workflow file is not found in `.conductor/workflows/`.
-3. **Input compatibility** — warn if the referenced workflow declares a `required` input that is not satisfied by the `inputs` map and is not `{{item.*}}`.
-
-Cycle detection is **not** run at validate time (ticket data is runtime state).
+The `/workflows/<run-id>` detail page renders `foreach` as a collapsible panel
+with counters and a per-item status table. Clicking an item row navigates to the
+child workflow run.
 
 ---
 
 ## Decisions Made
 
-1. **`max_parallel` required, no default** — follows RFC 009's intent. Forces explicit concurrency decisions.
+1. **`foreach` over `for_each_ticket`** — one keyword handles tickets, repos, and
+   workflow runs. Eliminates the need for a separate `supervisor` workflow type
+   (AUTONOMOUS-SDLC stage 7b) and any future `for_each_repo` primitive.
 
-2. **`skip_dependents` as the default `on_child_fail`** — more useful than `halt` for real projects where one ticket failing should not block unrelated work. `continue` is too permissive as a default; `skip_dependents` expresses the natural intent.
+2. **`ordered = true` opt-in** — not all ticket fan-outs need dep ordering (e.g.,
+   "check stale docs on all sprint tickets" doesn't). Making it explicit keeps
+   simple fan-outs simple and makes the dep-ordering cost visible to the author.
 
-3. **Cycle detection at step start, not validate time** — ticket data is runtime state; static analysis cannot resolve ticket IDs. Step start is the earliest safe detection point.
+3. **Different `on_child_fail` defaults per type** — `skip_dependents` for ordered
+   tickets (dep graph makes it meaningful); `continue` for repos and workflow runs
+   (failures on one item should not halt unrelated items).
 
-4. **No shared context between parent and child workflows** — consistent with the shallow composition model from RFC 008. Child workflows start fresh; only `{{item.*}}` and explicit `inputs` cross the boundary.
+4. **Single `fan_out_items` table, polymorphic `item_type`** — avoids three
+   separate tracking tables. SQLite's lack of typed polymorphic FKs is handled at
+   the application layer, consistent with how `workflow_runs.ticket_id` is already
+   treated (nullable, unenforced FK).
 
-5. **`query` scope reserved, not implemented in v1** — the scope of a filter expression language is large enough to warrant its own RFC. The parser slot is reserved so existing `.wf` files using `query` do not break when the feature ships.
+5. **`filter` reserved but unevaluated for `repos` in v1** — the grammar slot is
+   open so `.wf` files using it don't break when filtering ships.
 
-6. **No global concurrency cap in v1** — deferred to a `config.toml` default in v2. Documents the known gap rather than shipping a half-implemented cap.
+6. **`supervisor` workflow type removed from AUTONOMOUS-SDLC** — `foreach
+   workflow_runs { filter = { status = "failed" } }` inside a cron-triggered
+   workflow is the same thing with less ceremony. The supervisor concept lives on
+   as a usage pattern, not a distinct primitive.
 
-7. **Fan-out state persisted in a dedicated table** — `workflow_run_step_fan_out_tickets` instead of inlining state into `workflow_run_steps`. This keeps the core step table clean and makes per-ticket queries cheap.
+7. **No shared context between parent and child workflows** — consistent with the
+   shallow composition model from RFC 008.
 
 ---
 
 ## Open Questions
 
-**1. Should failed child runs block the parent step from succeeding?**
+**1. `min_success` threshold**
 
-`on_child_fail = continue` allows the step to succeed with partial failures. Is there a minimum success threshold analogous to `parallel`'s `min_success`? V1 leaves this implicit: `continue` means the step succeeds regardless; `halt` and `skip_dependents` fail the step if any child fails. A `min_success = N` option could be added later without a schema change.
+`on_child_fail = continue` allows the step to succeed with any number of failures.
+Should there be a `min_success = N` option analogous to `parallel`'s `min_success`?
+V1 leaves this implicit. Can be added later without schema changes.
 
-**2. Should `{{item}}` include the full ticket object or just IDs?**
+**2. `{{item.raw_json}}` for tickets**
 
-Exposing `{{item.raw_json}}` would give child workflows access to the full upstream payload without a separate MCP call. The downside is coupling child workflow prompts to source-specific JSON structure. V1 exposes only typed fields (`id`, `title`, `url`, `source_id`, `state`). Raw JSON access can be added in a follow-up if agent prompts need it.
+Exposing the full upstream ticket payload would let child workflows access fields
+not in the typed `{{item.*}}` set. Deferred — couples child prompts to
+source-specific JSON structure. Revisit if a concrete agent prompt needs it.
 
-**3. Cross-repo fan-out**
+**3. Cross-repo ticket fan-out**
 
-`for_each_ticket` operates on tickets in the workflow's registered repo. A fan-out over tickets from multiple repos (e.g., a Vantage project spanning two GitHub repos) is not supported in v1. This requires resolving which worktree to create for each ticket, which touches the feature branch coordination work from RFC 008.
+A Vantage project spanning two GitHub repos would require resolving which worktree
+to create per ticket. Not supported in v1. Touches RFC 008 feature branch
+coordination.
+
+**4. `foreach workflow_runs` and the daemon**
+
+AUTONOMOUS-SDLC notes that the Tier B supervisor is a forcing function for the v2
+daemon. A cron-triggered `foreach workflow_runs` workflow gets most of the value
+under v1's polling model, but reacting to run completion *events* rather than
+polling is strictly better. This is not a blocker for implementing the primitive —
+it's a note that the polling approach is a known approximation.
 
 ---
 
 ## Prerequisites
 
-- RFC 009 implementation complete: `ticket_dependencies` table, `get_ready_tickets()`, `conductor_get_ready_tickets` MCP tool — **all done as of 2026-04-04**
+- RFC 009 implementation: `ticket_dependencies` table, `get_ready_tickets()`,
+  `conductor_get_ready_tickets` MCP tool — **done as of 2026-04-04**
 - No other blocking dependencies
 
 ---
 
 ## Implementation Order
 
-1. DB migration: `workflow_run_step_fan_out_tickets` table + `fan_out_*` columns on `workflow_run_steps`
-2. AST: `ForEachTicketNode` + supporting enums in `types.rs`
-3. Parser: extend lexer and recursive descent parser for `for_each_ticket` syntax
-4. Validator: `max_parallel` required, workflow resolves, input compatibility checks
-5. Engine: cycle detection, dispatch loop, completion handler, resumability
-6. CLI: `workflow run-show` renders fan-out progress (ticket count, per-ticket status)
-7. TUI: fan-out progress bar and per-ticket expansion in workflow run detail view
-8. Web: fan-out progress panel in run detail page
-9. Update `docs/workflow/engine.md` with `for_each_ticket` construct documentation
+1. DB migration: `workflow_run_step_fan_out_items` table + `fan_out_*` columns
+2. AST: `ForEachNode` + supporting enums in `types.rs`
+3. Parser: lexer + recursive descent parser for `foreach` syntax
+4. Validator: all checks from §10
+5. Engine: item collection, cycle detection, dispatch loop, completion handler,
+   resumability — for all three `over` types
+6. CLI: `workflow run-show` renders fan-out progress
+7. TUI: progress bar + per-item expansion in workflow run detail view
+8. Web: fan-out progress panel
+9. Update `docs/workflow/engine.md` with `foreach` construct documentation
 
-Steps 1–6 are the core and should land together. Steps 7–9 are independent follow-ups.
+Steps 1–6 land together. Steps 7–9 are independent follow-ups.
 
 ---
 
 ## What This Enables
 
-Once implemented, a single workflow file can drive a full sprint autonomously:
+**Sprint automation (tickets, ordered):**
 
 ```
 workflow process-sprint {
   meta {
-    description = "Process all tickets in a sprint deliverable"
+    description = "Implement all tickets in a sprint deliverable"
     trigger     = "manual"
     targets     = ["repo"]
   }
@@ -368,8 +527,10 @@ workflow process-sprint {
     root_ticket_id  required
   }
 
-  for_each_ticket sprint-work {
+  foreach sprint-work {
+    over         = tickets
     scope        = { ticket_id = "{{inputs.root_ticket_id}}" }
+    ordered      = true
     max_parallel = 3
     workflow     = "ticket-to-pr"
     inputs       = { ticket_id = "{{item.id}}" }
@@ -378,10 +539,46 @@ workflow process-sprint {
 }
 ```
 
-Run against a Vantage project deliverable or GitHub epic, conductor:
-- Resolves all child tickets in dependency order
-- Spawns up to 3 concurrent `ticket-to-pr` runs
-- Respects blocking relationships — holds TICKET-42 until TICKET-17 completes
-- Detects and surfaces cycles at step start rather than deadlocking
-- Skips TICKET-42's dependents if TICKET-42 fails
-- Resumes cleanly after a process restart, without re-dispatching completed tickets
+**Cross-repo test coverage audit (repos):**
+
+```
+workflow coverage-audit {
+  meta {
+    description = "Assess test coverage and file issues across all repos"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  foreach coverage-check {
+    over         = repos
+    max_parallel = 2
+    workflow     = "assess-coverage"
+    inputs       = { repo_slug = "{{item.slug}}" }
+    on_child_fail = continue
+  }
+}
+```
+
+**Workflow failure triage (workflow_runs) — replaces AUTONOMOUS-SDLC supervisor:**
+
+```
+workflow triage-failures {
+  meta {
+    description = "Find failed workflow runs and file improvement issues"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  foreach failed-runs {
+    over         = workflow_runs
+    filter       = { status = "failed" }
+    max_parallel = 4
+    workflow     = "diagnose-and-issue"
+    inputs       = { run_id = "{{item.id}}" }
+    on_child_fail = continue
+  }
+}
+```
+
+When run on a cron schedule, `triage-failures` is the AUTONOMOUS-SDLC stage 7b
+supervisor — without requiring a new primitive.
