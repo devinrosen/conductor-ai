@@ -385,6 +385,7 @@ pub fn poll_data() -> Option<PollResult> {
     let worktrees = wt_mgr.list(None, true).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
     let ticket_labels = ticket_syncer.get_all_labels().unwrap_or_default();
+    let ticket_dependencies = ticket_syncer.get_all_dependencies().unwrap_or_default();
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
@@ -519,6 +520,7 @@ pub fn poll_data() -> Option<PollResult> {
         worktrees,
         tickets,
         ticket_labels,
+        ticket_dependencies,
         latest_agent_runs,
         ticket_agent_totals,
         latest_workflow_runs_by_worktree,

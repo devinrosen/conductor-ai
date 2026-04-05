@@ -903,6 +903,7 @@ impl App {
                 self.state.data.worktrees = payload.worktrees;
                 self.state.data.tickets = payload.tickets;
                 self.state.data.ticket_labels = payload.ticket_labels;
+                self.state.data.ticket_dependencies = payload.ticket_dependencies;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
                 self.state.data.latest_workflow_runs_by_worktree =
