@@ -247,8 +247,14 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("#{} ", t.source_id),
                     Style::default().fg(state.theme.group_header),
                 ),
-                Span::raw(&t.title),
             ];
+            if let Some(login) = &t.assignee {
+                spans.push(Span::styled(
+                    format!("@{login} "),
+                    Style::default().fg(state.theme.label_secondary),
+                ));
+            }
+            spans.push(Span::raw(&t.title));
             let labels = state
                 .data
                 .ticket_labels
