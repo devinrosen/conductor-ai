@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use conductor_core::config::Config;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::events::EventBus;
@@ -45,6 +45,37 @@ pub fn seeded_state() -> (AppState, NamedTempFile) {
             "/tmp/ws/feat-test",
         );
     })
+}
+
+/// AppState with repo `r1` pointing at a real git TempDir that has an uncommitted
+/// file, making the working tree dirty. Used to test the HTTP 409 path in
+/// `create_worktree`.
+///
+/// The caller must keep all three returned values alive for the duration of the
+/// test — dropping any of them may delete the underlying file or directory.
+pub fn seeded_state_with_dirty_repo() -> (AppState, NamedTempFile, TempDir) {
+    let git_dir = TempDir::new().expect("create temp git dir");
+    let git_path = git_dir.path().to_str().unwrap().to_owned();
+
+    // Initialise a real git repo so that `git status --porcelain` succeeds.
+    let run = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&git_path)
+            .output()
+            .expect("git command failed");
+    };
+    run(&["init"]);
+    run(&["-c", "user.email=test@test.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init"]);
+
+    // Write an uncommitted file so that `git status --porcelain` reports dirty.
+    std::fs::write(git_dir.path().join("dirty.txt"), "dirty").expect("write dirty file");
+
+    let git_path_for_seed = git_path.clone();
+    let (state, tmp) = state_with_file_db(move |conn| {
+        conductor_core::test_helpers::insert_test_repo(conn, "r1", "test-repo", &git_path_for_seed);
+    });
+    (state, tmp, git_dir)
 }
 
 /// AppState with repo `r1`, worktree `w1`, and agent_run `ar1` pre-seeded.
