@@ -387,6 +387,353 @@ mod tests {
     use super::*;
     use crate::test_helpers::create_test_conn;
 
+    // ── fake-sdlc helpers ─────────────────────────────────────────────────────
+    //
+    // Tests that exercise code paths depending on the `sdlc` binary use a fake
+    // shell script written to a tempdir.  A process-wide mutex serialises all
+    // PATH-mutating tests so concurrent test threads cannot interfere with each
+    // other's PATH value.
+    //
+    // `set_var` is `unsafe` in Rust ≥ 1.81 because the underlying C function is
+    // not re-entrant.  Holding the mutex while calling it is sufficient to make
+    // it sound within our single-process test binary.
+
+    #[cfg(unix)]
+    mod sdlc_integration {
+        use super::*;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        static PATH_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        /// Write a shell script named `sdlc` into `dir` and make it executable.
+        fn write_fake_sdlc(dir: &std::path::Path, script: &str) {
+            let path = dir.join("sdlc");
+            fs::write(&path, format!("#!/bin/sh\n{script}")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        /// Run `f` with PATH prepended by `dir`.  Restores the original PATH
+        /// afterwards even if `f` panics.
+        fn with_sdlc_on_path<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
+            let _guard = PATH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            let orig = std::env::var("PATH").unwrap_or_default();
+            let new_path = format!("{}:{}", dir.display(), orig);
+            unsafe { std::env::set_var("PATH", &new_path) };
+            // Use a catch_unwind-style guard via a local struct.
+            struct Restore(String);
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    unsafe { std::env::set_var("PATH", &self.0) };
+                }
+            }
+            let _restore = Restore(orig);
+            f()
+        }
+
+        /// Run `f` with PATH set to an empty tempdir so `sdlc` cannot be found.
+        fn with_no_sdlc<T>(f: impl FnOnce() -> T) -> T {
+            let dir = tempfile::tempdir().unwrap();
+            let _guard = PATH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            let orig = std::env::var("PATH").unwrap_or_default();
+            unsafe { std::env::set_var("PATH", dir.path()) };
+            struct Restore(String);
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    unsafe { std::env::set_var("PATH", &self.0) };
+                }
+            }
+            let _restore = Restore(orig);
+            f()
+        }
+
+        // ── run_sdlc error paths ──────────────────────────────────────────────
+
+        #[test]
+        fn test_sync_sdlc_not_found_returns_helpful_error() {
+            with_no_sdlc(|| {
+                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo").err().unwrap();
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("sdlc not found") || msg.contains("Install"),
+                    "expected helpful sdlc-not-found message, got: {msg}"
+                );
+            });
+        }
+
+        #[test]
+        fn test_fetch_sdlc_not_found_returns_helpful_error() {
+            with_no_sdlc(|| {
+                let err = fetch_vantage_deliverable("D-001", "").err().unwrap();
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("sdlc not found") || msg.contains("Install"),
+                    "expected helpful sdlc-not-found message, got: {msg}"
+                );
+            });
+        }
+
+        #[test]
+        fn test_sync_sdlc_exits_nonzero_returns_error() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "echo 'something went wrong' >&2; exit 1");
+            with_sdlc_on_path(dir.path(), || {
+                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo").err().unwrap();
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("sdlc exited"),
+                    "expected sdlc exit error, got: {msg}"
+                );
+            });
+        }
+
+        #[test]
+        fn test_sync_sdlc_returns_invalid_json_returns_parse_error() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "echo 'not valid json {{'");
+            with_sdlc_on_path(dir.path(), || {
+                let err = sync_vantage_deliverables("PROJ-1", "", "my-repo").err().unwrap();
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("failed to parse"),
+                    "expected parse error, got: {msg}"
+                );
+            });
+        }
+
+        #[test]
+        fn test_fetch_sdlc_exits_nonzero_returns_error() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "echo 'not found' >&2; exit 2");
+            with_sdlc_on_path(dir.path(), || {
+                let err = fetch_vantage_deliverable("D-001", "").err().unwrap();
+                assert!(err.to_string().contains("sdlc exited"));
+            });
+        }
+
+        #[test]
+        fn test_fetch_null_response_returns_not_found() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "echo 'null'");
+            with_sdlc_on_path(dir.path(), || {
+                let err = fetch_vantage_deliverable("D-999", "").err().unwrap();
+                assert!(
+                    matches!(err, crate::error::ConductorError::TicketNotFound { .. }),
+                    "expected TicketNotFound, got: {err}"
+                );
+            });
+        }
+
+        #[test]
+        fn test_fetch_invalid_json_returns_parse_error() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "echo 'oops'");
+            with_sdlc_on_path(dir.path(), || {
+                let err = fetch_vantage_deliverable("D-001", "").err().unwrap();
+                assert!(err.to_string().contains("failed to parse"));
+            });
+        }
+
+        // ── sync_vantage_deliverables filtering ───────────────────────────────
+
+        #[test]
+        fn test_sync_filters_out_wrong_codebase() {
+            let list = serde_json::json!([
+                {
+                    "id": "D-001", "title": "A", "status": "draft",
+                    "codebase": "other-repo",
+                    "execution_mode": "conductor",
+                    "conductor": { "status": "ready" },
+                    "body": "body text",
+                },
+            ]);
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
+            with_sdlc_on_path(dir.path(), || {
+                let tickets =
+                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                assert!(
+                    tickets.is_empty(),
+                    "deliverable with wrong codebase should be filtered out"
+                );
+            });
+        }
+
+        #[test]
+        fn test_sync_filters_out_non_conductor_execution_mode() {
+            let list = serde_json::json!([
+                {
+                    "id": "D-002", "title": "B", "status": "draft",
+                    "codebase": "my-repo",
+                    "execution_mode": "manual",
+                    "conductor": { "status": "ready" },
+                    "body": "body text",
+                },
+            ]);
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
+            with_sdlc_on_path(dir.path(), || {
+                let tickets =
+                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                assert!(tickets.is_empty(), "non-conductor mode should be filtered out");
+            });
+        }
+
+        #[test]
+        fn test_sync_filters_out_pre_ready_conductor_status() {
+            let list = serde_json::json!([
+                {
+                    "id": "D-003", "title": "C", "status": "draft",
+                    "codebase": "my-repo",
+                    "execution_mode": "conductor",
+                    "conductor": { "status": "pending_audit" },
+                    "body": "body text",
+                },
+            ]);
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
+            with_sdlc_on_path(dir.path(), || {
+                let tickets =
+                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                assert!(
+                    tickets.is_empty(),
+                    "pre-ready conductor status should be filtered out"
+                );
+            });
+        }
+
+        #[test]
+        fn test_sync_returns_matching_deliverable() {
+            let list = serde_json::json!([
+                {
+                    "id": "D-004", "title": "Matched", "status": "in_progress",
+                    "codebase": "my-repo",
+                    "execution_mode": "conductor",
+                    "conductor": { "status": "ready" },
+                    "body": "Implementation details here",
+                    "type": "feature",
+                },
+            ]);
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
+            with_sdlc_on_path(dir.path(), || {
+                let tickets =
+                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                assert_eq!(tickets.len(), 1);
+                assert_eq!(tickets[0].source_id, "D-004");
+                assert_eq!(tickets[0].title, "Matched");
+                assert_eq!(tickets[0].state, "in_progress");
+                assert!(tickets[0].labels.contains(&"my-repo".to_string()));
+                assert!(tickets[0].labels.contains(&"feature".to_string()));
+            });
+        }
+
+        #[test]
+        fn test_sync_skips_items_missing_id() {
+            let list = serde_json::json!([
+                { "title": "No ID", "codebase": "my-repo", "execution_mode": "conductor", "conductor": { "status": "ready" }, "body": "x" },
+                { "id": "D-005", "title": "Has ID", "status": "draft", "codebase": "my-repo", "execution_mode": "conductor", "conductor": { "status": "ready" }, "body": "y" },
+            ]);
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
+            with_sdlc_on_path(dir.path(), || {
+                let tickets =
+                    sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                assert_eq!(tickets.len(), 1);
+                assert_eq!(tickets[0].source_id, "D-005");
+            });
+        }
+
+        // ── fetch_vantage_deliverable happy path ──────────────────────────────
+
+        #[test]
+        fn test_fetch_returns_parsed_ticket() {
+            let detail = serde_json::json!({
+                "id": "D-010",
+                "title": "Fetched deliverable",
+                "status": "in_progress",
+                "codebase": "my-repo",
+                "body": "Full description here",
+            });
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), &format!("echo '{detail}'"));
+            with_sdlc_on_path(dir.path(), || {
+                let ticket = fetch_vantage_deliverable("D-010", "").unwrap();
+                assert_eq!(ticket.source_id, "D-010");
+                assert_eq!(ticket.title, "Fetched deliverable");
+                assert_eq!(ticket.body, "Full description here");
+            });
+        }
+
+        // ── VantageLifecycle notification methods ─────────────────────────────
+
+        fn make_lifecycle() -> VantageLifecycle {
+            VantageLifecycle {
+                deliverable_id: "D-001".to_string(),
+                sdlc_root: String::new(),
+            }
+        }
+
+        #[test]
+        fn test_on_dispatched_succeeds_when_sdlc_exits_zero() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "exit 0");
+            with_sdlc_on_path(dir.path(), || {
+                let lc = make_lifecycle();
+                assert!(
+                    lc.on_dispatched("run-001").is_ok(),
+                    "on_dispatched should succeed when sdlc exits 0"
+                );
+            });
+        }
+
+        #[test]
+        fn test_on_dispatched_fails_when_sdlc_exits_nonzero() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "echo 'permission denied' >&2; exit 1");
+            with_sdlc_on_path(dir.path(), || {
+                let lc = make_lifecycle();
+                assert!(
+                    lc.on_dispatched("run-001").is_err(),
+                    "on_dispatched should propagate sdlc failure"
+                );
+            });
+        }
+
+        #[test]
+        fn test_on_completed_succeeds_with_optional_args() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "exit 0");
+            with_sdlc_on_path(dir.path(), || {
+                let lc = make_lifecycle();
+                assert!(lc
+                    .on_completed(Some("https://github.com/org/repo/pull/42"), Some("wt-slug"))
+                    .is_ok());
+                assert!(lc.on_completed(None, None).is_ok());
+            });
+        }
+
+        #[test]
+        fn test_on_failed_succeeds_when_sdlc_exits_zero() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "exit 0");
+            with_sdlc_on_path(dir.path(), || {
+                let lc = make_lifecycle();
+                assert!(lc.on_failed("workflow step timed out").is_ok());
+            });
+        }
+
+        #[test]
+        fn test_on_failed_propagates_sdlc_error() {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_sdlc(dir.path(), "exit 3");
+            with_sdlc_on_path(dir.path(), || {
+                let lc = make_lifecycle();
+                assert!(lc.on_failed("reason").is_err());
+            });
+        }
+    }
+
     #[test]
     fn test_parse_vantage_deliverable_basic() {
         let json = serde_json::json!({
