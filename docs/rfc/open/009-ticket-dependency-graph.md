@@ -1,6 +1,6 @@
 # RFC 009: Ticket Dependency Graph
 
-**Status:** Draft
+**Status:** Partially Implemented — workflow engine primitives deferred to [RFC 010](010-for-each-ticket-workflow-step.md)
 **Date:** 2026-04-01
 **Author:** Devin
 
@@ -44,7 +44,7 @@ CREATE TABLE ticket_dependencies (
     from_ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
     to_ticket_id   TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
     dep_type       TEXT NOT NULL DEFAULT 'blocks',
-    PRIMARY KEY (from_ticket_id, to_ticket_id)
+    PRIMARY KEY (from_ticket_id, to_ticket_id, dep_type)
 );
 ```
 
@@ -234,11 +234,10 @@ This requires a `ticket_impact` table populated by static label-to-path mappings
 
 ## Next Steps
 
-- [ ] Open a GH issue for the `ticket_dependencies` schema migration (prerequisite, self-contained)
-- [ ] Add `blocked_by` and `children` to `TicketInput`; update `TicketSyncer::upsert_tickets()` to write the join table in a second pass
-- [ ] Implement the ready-ticket query as `TicketSyncer::get_ready_tickets()`
-- [ ] Expose `conductor_get_ready_tickets` as an MCP tool
-- [ ] Design and implement the `for_each_ticket` step type in the workflow engine
+- [x] Open a GH issue for the `ticket_dependencies` schema migration (prerequisite, self-contained)
+- [x] Add `blocked_by` and `children` to `TicketInput`; update `TicketSyncer::upsert_tickets()` to write the join table in a second pass
+- [x] Implement the ready-ticket query as `TicketSyncer::get_ready_tickets()`
+- [x] Expose `conductor_get_ready_tickets` as an MCP tool
+- [ ] Design and implement the `foreach` step type (generalised fan-out over tickets, repos, and workflow runs) — tracked in [RFC 010](010-for-each-ticket-workflow-step.md) / [#1743](https://github.com/devinrosen/conductor-ai/issues/1743). Dep-aware dispatch for tickets uses `ordered = true`; cycle detection is part of that path.
 - [ ] Update `map_vantage_status()` to extract blocking relationships into `TicketInput.blocked_by` (depends on `feat/vantage-ticket-source` merge)
-- [ ] Add cycle detection to the fan-out step
-- [ ] TUI/web dependency display in ticket detail view
+- [x] TUI/web dependency display in ticket detail view
