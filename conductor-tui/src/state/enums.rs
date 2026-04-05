@@ -389,6 +389,9 @@ pub enum ConfirmAction {
         ticket_id: Option<String>,
         from_pr: Option<u32>,
         from_branch: Option<String>,
+        /// When true, skip the dirty-state error in `ensure_base_up_to_date()`.
+        /// Set after the user confirms they want to proceed despite uncommitted changes.
+        force_dirty: bool,
     },
     DeleteWorktree {
         repo_slug: String,

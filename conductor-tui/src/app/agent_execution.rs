@@ -390,6 +390,7 @@ impl App {
         ticket_id: Option<String>,
         from_pr: Option<u32>,
         from_branch: Option<String>,
+        force_dirty: bool,
     ) {
         // Guard before setting the non-dismissable Progress modal: if bg_tx is
         // None (only possible before init() completes), skip rather than
@@ -416,6 +417,7 @@ impl App {
                     from_branch.as_deref(),
                     ticket_id.as_deref(),
                     from_pr,
+                    force_dirty,
                 )?;
 
                 Ok((wt, warnings))

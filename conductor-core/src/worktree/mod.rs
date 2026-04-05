@@ -5,6 +5,7 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+pub use git_helpers::MainHealthStatus;
 pub use manager::WorktreeManager;
 pub use types::{Worktree, WorktreeStatus, WorktreeWithStatus};
 
