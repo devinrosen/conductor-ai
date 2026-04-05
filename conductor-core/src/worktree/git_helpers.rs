@@ -132,15 +132,20 @@ pub(super) fn detect_remote_head(repo_path: &str) -> Option<String> {
 ///
 /// When `force_dirty` is `true`, the dirty-state check is skipped (the caller has
 /// already confirmed the user wants to proceed despite uncommitted changes).
+///
+/// When `pre_verified_clean` is `true`, the dirty-state check is also skipped because
+/// the caller has already confirmed the working tree is clean via `check_main_health`.
+/// Use this to avoid running `git status --porcelain` twice on the happy path.
 pub(super) fn ensure_base_up_to_date(
     repo_path: &str,
     base_branch: &str,
     force_dirty: bool,
+    pre_verified_clean: bool,
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
 
     // 1. Check for uncommitted changes in the repo working tree
-    if !force_dirty {
+    if !force_dirty && !pre_verified_clean {
         let output = git_in(repo_path).args(["status", "--porcelain"]).output()?;
         if output.status.success() && !output.stdout.is_empty() {
             return Err(ConductorError::InvalidInput(

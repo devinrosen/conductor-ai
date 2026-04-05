@@ -307,10 +307,13 @@ impl App {
                     self.spawn_worktree_create(
                         repo_slug,
                         wt_name,
-                        ticket_id,
-                        from_pr,
-                        from_branch,
-                        false,
+                        conductor_core::worktree::WorktreeCreateOptions {
+                            ticket_id,
+                            from_pr,
+                            from_branch,
+                            pre_health: Some(health),
+                            ..Default::default()
+                        },
                     );
                 }
             },

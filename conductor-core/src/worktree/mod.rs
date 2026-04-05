@@ -6,7 +6,7 @@ mod types;
 mod tests;
 
 pub use git_helpers::MainHealthStatus;
-pub use manager::WorktreeManager;
+pub use manager::{WorktreeCreateOptions, WorktreeManager};
 pub use types::{Worktree, WorktreeStatus, WorktreeWithStatus};
 
 // Column constants used by both types.rs and manager.rs — live here to avoid circular deps.

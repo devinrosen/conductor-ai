@@ -152,7 +152,7 @@ pub(super) fn tool_create_worktree(
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
-    use conductor_core::worktree::WorktreeManager;
+    use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
     let repo_slug = require_arg!(args, "repo");
     let name = require_arg!(args, "name");
@@ -188,10 +188,10 @@ pub(super) fn tool_create_worktree(
     match wt_mgr.create(
         repo_slug,
         name,
-        None,
-        resolved_ticket_id.as_deref(),
-        None,
-        false,
+        WorktreeCreateOptions {
+            ticket_id: resolved_ticket_id,
+            ..Default::default()
+        },
     ) {
         Ok((wt, warnings)) => {
             let mut msg = format!(
