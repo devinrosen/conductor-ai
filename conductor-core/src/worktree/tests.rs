@@ -242,8 +242,7 @@ fn test_ensure_base_up_to_date_skips_status_when_pre_verified_clean() {
 
     // With pre_verified_clean=true, the git status check is skipped
     // (the fetch may fail too since there's no network, but that's a soft warning)
-    let result =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, true);
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, true);
     assert!(
         result.is_ok(),
         "pre_verified_clean=true should skip dirty check; got: {:?}",
@@ -934,7 +933,15 @@ fn test_create_from_pr_propagates_fetch_error() {
     .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("test-repo", "from-pr-test", None, None, Some(42), false, None);
+    let result = mgr.create(
+        "test-repo",
+        "from-pr-test",
+        None,
+        None,
+        Some(42),
+        false,
+        None,
+    );
     // fetch_pr_branch will fail because the local repo has no GitHub remote
     let err = result.unwrap_err();
     assert!(
