@@ -11,11 +11,10 @@ pub struct MainHealthStatus {
     pub is_dirty: bool,
     /// List of files with uncommitted changes (populated when `is_dirty` is true).
     pub dirty_files: Vec<String>,
-    /// Number of commits the local base branch is behind `origin/<branch>`.
-    /// Zero if fetch failed or the remote ref doesn't exist.
+    /// Number of commits the local base branch is behind `origin/<branch>`,
+    /// computed from cached remote refs (no network fetch).
+    /// Zero if the remote tracking ref doesn't exist yet.
     pub commits_behind: u32,
-    /// Whether `git fetch origin` failed (network error, no remote, etc.).
-    pub fetch_failed: bool,
     /// Whether `git status --porcelain` itself failed (e.g. not a git repo).
     /// When true, `is_dirty` and `dirty_files` are unreliable.
     pub status_check_failed: bool,
@@ -25,10 +24,10 @@ pub struct MainHealthStatus {
 ///
 /// Checks:
 /// 1. `git status --porcelain` — detects dirty files (does NOT abort, just records them)
-/// 2. `git fetch origin` — soft failure sets `fetch_failed`
-/// 3. `git rev-list --count HEAD..origin/<branch>` — computes `commits_behind`
+/// 2. `git rev-list --count HEAD..origin/<branch>` — computes `commits_behind` from
+///    cached remote refs (no network fetch; the actual fetch happens later in `create()`)
 ///
-/// Does not modify any git state (no checkout, no merge).
+/// Does not modify any git state (no checkout, no merge, no fetch).
 pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus {
     // 1. Check dirty state
     let (is_dirty, dirty_files, status_check_failed) =
@@ -55,18 +54,10 @@ pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus
             }
         };
 
-    // 2. Fetch from remote
-    let fetch_failed = !git_in(repo_path)
-        .args(["fetch", "origin"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    // 3. Count commits behind (only if fetch succeeded and remote ref exists)
-    let commits_behind = if fetch_failed {
-        0
-    } else {
-        let remote_ref = format!("origin/{base_branch}");
+    // 2. Count commits behind using cached remote refs (no fetch — avoids double
+    //    fetch with the subsequent ensure_base_up_to_date call in create()).
+    let remote_ref = format!("origin/{base_branch}");
+    let commits_behind = {
         let count_out = git_in(repo_path)
             .args(["rev-list", "--count", &format!("HEAD..{remote_ref}")])
             .output();
@@ -83,7 +74,6 @@ pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus
         is_dirty,
         dirty_files,
         commits_behind,
-        fetch_failed,
         status_check_failed,
     }
 }

@@ -186,10 +186,6 @@ fn test_check_main_health_clean_repo() {
     let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
     assert!(!health.is_dirty, "clean repo should not be dirty");
     assert!(health.dirty_files.is_empty());
-    assert!(
-        !health.fetch_failed,
-        "fetch should succeed against local remote"
-    );
 }
 
 #[test]
@@ -208,25 +204,16 @@ fn test_check_main_health_dirty_repo() {
 }
 
 #[test]
-fn test_check_main_health_fetch_failed() {
+fn test_check_main_health_no_remote_ref_commits_behind_zero() {
     let (_tmp, _, local) = setup_repo_with_remote();
 
-    // Break the remote URL so fetch fails
-    git(
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "https://invalid.invalid/fake.git",
-        ],
-        &local,
-    );
+    // Remove the remote so origin/<branch> ref doesn't exist — commits_behind must be 0.
+    git(&["remote", "remove", "origin"], &local);
 
     let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
-    assert!(health.fetch_failed, "fetch should fail with broken remote");
     assert_eq!(
         health.commits_behind, 0,
-        "commits_behind should be 0 when fetch failed"
+        "commits_behind should be 0 when remote tracking ref is absent"
     );
 }
 
