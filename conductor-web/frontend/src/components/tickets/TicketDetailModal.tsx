@@ -7,6 +7,7 @@ import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 import { formatDuration, formatTokens } from "../../utils/agentStats";
 import { deriveWorktreeSlug } from "../../utils/worktreeUtils";
 import { CreateWorktreeForm } from "../worktrees/CreateWorktreeForm";
+import { isSafeUrl } from "../../utils/urlUtils";
 
 interface TicketDetailModalProps {
   ticket: Ticket;
@@ -104,14 +105,18 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
             <dt className="font-medium text-gray-500">URL</dt>
             <dd>
               {ticket.url ? (
-                <a
-                  href={ticket.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-indigo-600 hover:underline truncate block"
-                >
-                  {ticket.url}
-                </a>
+                isSafeUrl(ticket.url) ? (
+                  <a
+                    href={ticket.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-indigo-600 hover:underline truncate block"
+                  >
+                    {ticket.url}
+                  </a>
+                ) : (
+                  <span className="text-sm text-gray-700 truncate block">{ticket.url}</span>
+                )
               ) : (
                 <span className="text-gray-400">-</span>
               )}
