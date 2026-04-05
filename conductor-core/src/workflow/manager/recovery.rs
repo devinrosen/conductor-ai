@@ -58,7 +58,6 @@ impl<'a> WorkflowManager<'a> {
         let mut recovered = 0usize;
 
         for (step_id, child_run_id, step_status, result_text) in stuck {
-
             self.update_step_status_full(
                 &step_id,
                 step_status,
