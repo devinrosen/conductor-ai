@@ -1835,11 +1835,7 @@ fn create_named_worktree_run(
         .unwrap()
 }
 
-fn create_named_repo_run(
-    conn: &rusqlite::Connection,
-    repo_id: &str,
-    wf_name: &str,
-) -> WorkflowRun {
+fn create_named_repo_run(conn: &rusqlite::Connection, repo_id: &str, wf_name: &str) -> WorkflowRun {
     let parent_id = make_parent_id(conn, "w1");
     WorkflowManager::new(conn)
         .create_workflow_run_with_targets(
@@ -1858,12 +1854,7 @@ fn create_named_repo_run(
         .unwrap()
 }
 
-fn complete_with_metrics(
-    conn: &rusqlite::Connection,
-    run_id: &str,
-    input: i64,
-    output: i64,
-) {
+fn complete_with_metrics(conn: &rusqlite::Connection, run_id: &str, input: i64, output: i64) {
     let mgr = WorkflowManager::new(conn);
     mgr.update_workflow_status(run_id, WorkflowRunStatus::Completed, None)
         .unwrap();
@@ -1908,9 +1899,24 @@ fn test_token_aggregates_excludes_non_completed_runs() {
 fn test_token_aggregates_groups_and_averages() {
     let conn = setup_db();
 
-    complete_with_metrics(&conn, &create_named_worktree_run(&conn, "w1", "wf-a").id, 100, 200);
-    complete_with_metrics(&conn, &create_named_worktree_run(&conn, "w1", "wf-a").id, 300, 400);
-    complete_with_metrics(&conn, &create_named_worktree_run(&conn, "w1", "wf-b").id, 50, 50);
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-a").id,
+        100,
+        200,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-a").id,
+        300,
+        400,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-b").id,
+        50,
+        50,
+    );
 
     let result = WorkflowManager::new(&conn)
         .get_workflow_token_aggregates(None)
@@ -1933,9 +1939,19 @@ fn test_token_aggregates_repo_filter_some() {
     let conn = setup_db();
 
     // r1 run — use create_named_repo_run so repo_id is set directly (worktree runs have repo_id NULL)
-    complete_with_metrics(&conn, &create_named_repo_run(&conn, "r1", "wf-a").id, 100, 200);
+    complete_with_metrics(
+        &conn,
+        &create_named_repo_run(&conn, "r1", "wf-a").id,
+        100,
+        200,
+    );
     // r2 run
-    complete_with_metrics(&conn, &create_named_repo_run(&conn, "r2", "wf-a").id, 999, 999);
+    complete_with_metrics(
+        &conn,
+        &create_named_repo_run(&conn, "r2", "wf-a").id,
+        999,
+        999,
+    );
 
     let result = WorkflowManager::new(&conn)
         .get_workflow_token_aggregates(Some("r1"))
@@ -1950,8 +1966,18 @@ fn test_token_aggregates_repo_filter_some() {
 fn test_token_aggregates_repo_filter_none_includes_all() {
     let conn = setup_db();
 
-    complete_with_metrics(&conn, &create_named_worktree_run(&conn, "w1", "wf-a").id, 100, 200);
-    complete_with_metrics(&conn, &create_named_repo_run(&conn, "r2", "wf-b").id, 50, 50);
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-a").id,
+        100,
+        200,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_repo_run(&conn, "r2", "wf-b").id,
+        50,
+        50,
+    );
 
     let result = WorkflowManager::new(&conn)
         .get_workflow_token_aggregates(None)
@@ -1964,9 +1990,24 @@ fn test_token_aggregates_repo_filter_none_includes_all() {
 fn test_token_aggregates_ordered_by_total_desc() {
     let conn = setup_db();
 
-    complete_with_metrics(&conn, &create_named_worktree_run(&conn, "w1", "low-wf").id, 10, 10);
-    complete_with_metrics(&conn, &create_named_worktree_run(&conn, "w1", "high-wf").id, 500, 500);
-    complete_with_metrics(&conn, &create_named_worktree_run(&conn, "w1", "mid-wf").id, 100, 100);
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "low-wf").id,
+        10,
+        10,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "high-wf").id,
+        500,
+        500,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "mid-wf").id,
+        100,
+        100,
+    );
 
     let result = WorkflowManager::new(&conn)
         .get_workflow_token_aggregates(None)
