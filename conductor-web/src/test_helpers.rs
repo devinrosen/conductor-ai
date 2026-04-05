@@ -66,7 +66,16 @@ pub fn seeded_state_with_dirty_repo() -> (AppState, NamedTempFile, TempDir) {
             .expect("git command failed");
     };
     run(&["init"]);
-    run(&["-c", "user.email=test@test.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init"]);
+    run(&[
+        "-c",
+        "user.email=test@test.com",
+        "-c",
+        "user.name=Test",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
 
     // Write an uncommitted file so that `git status --porcelain` reports dirty.
     std::fs::write(git_dir.path().join("dirty.txt"), "dirty").expect("write dirty file");

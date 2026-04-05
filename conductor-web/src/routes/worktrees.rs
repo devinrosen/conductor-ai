@@ -470,7 +470,9 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "main_dirty");
         assert!(
-            json["dirty_files"].as_array().map_or(false, |a| !a.is_empty()),
+            json["dirty_files"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()),
             "expected non-empty dirty_files, got: {json}"
         );
     }
