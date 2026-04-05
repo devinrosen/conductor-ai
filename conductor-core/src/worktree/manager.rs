@@ -174,7 +174,8 @@ impl<'a> WorktreeManager<'a> {
             let base = from_branch
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
-            let warnings = ensure_base_up_to_date(&repo.local_path, &base, force_dirty, skip_fetch)?;
+            let warnings =
+                ensure_base_up_to_date(&repo.local_path, &base, force_dirty, skip_fetch)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",

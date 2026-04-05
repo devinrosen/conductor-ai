@@ -124,8 +124,7 @@ fn test_ensure_base_up_to_date_clean_fast_forward() {
 
     // Local is now behind origin/main
     let warnings =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false)
-            .unwrap();
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
     assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 
     // Verify local main now has the new file
@@ -139,8 +138,7 @@ fn test_ensure_base_up_to_date_dirty_working_tree() {
     // Make the working tree dirty
     fs::write(local.join("dirty.txt"), "uncommitted").unwrap();
 
-    let result =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false);
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
@@ -174,8 +172,7 @@ fn test_ensure_base_up_to_date_diverged_branch() {
 
     // Now ensure_base_up_to_date should warn about divergence
     let warnings =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false)
-            .unwrap();
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
     assert!(
         warnings.iter().any(|w| w.contains("diverged")),
         "expected divergence warning, got: {:?}",
@@ -241,8 +238,7 @@ fn test_ensure_base_up_to_date_force_dirty_skips_check() {
     fs::write(local.join("dirty_force.txt"), "uncommitted").unwrap();
 
     // With force_dirty=true, the dirty check is skipped — should succeed
-    let result =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", true, false);
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", true, false);
     assert!(
         result.is_ok(),
         "force_dirty=true should skip dirty check; got: {:?}",
@@ -324,8 +320,7 @@ fn test_ensure_base_up_to_date_detached_head() {
     git(&["checkout", "--detach", "HEAD"], &local);
 
     let warnings =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false)
-            .unwrap();
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
     // Should succeed (checkout main, then ff) with no warnings
     assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 
@@ -738,7 +733,15 @@ fn test_create_clone_fails_with_bad_remote() {
         .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("badrepo", "feat-should-fail", None, None, None, false, false);
+    let result = mgr.create(
+        "badrepo",
+        "feat-should-fail",
+        None,
+        None,
+        None,
+        false,
+        false,
+    );
     assert!(result.is_err(), "expected Err for bad remote");
     match result.unwrap_err() {
         ConductorError::Git(_) => {}
@@ -934,7 +937,15 @@ fn test_create_from_pr_propagates_fetch_error() {
     .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("test-repo", "from-pr-test", None, None, Some(42), false, false);
+    let result = mgr.create(
+        "test-repo",
+        "from-pr-test",
+        None,
+        None,
+        Some(42),
+        false,
+        false,
+    );
     // fetch_pr_branch will fail because the local repo has no GitHub remote
     let err = result.unwrap_err();
     assert!(
