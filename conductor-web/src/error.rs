@@ -36,7 +36,8 @@ impl IntoResponse for ApiError {
                     | ConductorError::FeedbackNotFound { .. }
                     | ConductorError::AgentRunNotInConversation { .. }
                     | ConductorError::FeedbackRunMismatch { .. }
-                    | ConductorError::ConversationNotFound { .. } => StatusCode::NOT_FOUND,
+                    | ConductorError::ConversationNotFound { .. }
+                    | ConductorError::FeatureNotFound { .. } => StatusCode::NOT_FOUND,
                     ConductorError::RepoAlreadyExists { .. }
                     | ConductorError::WorktreeAlreadyExists { .. }
                     | ConductorError::IssueSourceAlreadyExists { .. }
@@ -96,6 +97,13 @@ mod tests {
         let err = ApiError::Internal("something went wrong".into());
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn feature_not_found_maps_to_404() {
+        let err = ApiError::Core(ConductorError::FeatureNotFound { name: "my-feature".into() });
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
