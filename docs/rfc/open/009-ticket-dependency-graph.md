@@ -1,6 +1,6 @@
 # RFC 009: Ticket Dependency Graph
 
-**Status:** Draft
+**Status:** Partially Implemented — workflow engine primitives deferred to [RFC 010](010-for-each-ticket-workflow-step.md)
 **Date:** 2026-04-01
 **Author:** Devin
 
@@ -234,11 +234,11 @@ This requires a `ticket_impact` table populated by static label-to-path mappings
 
 ## Next Steps
 
-- [ ] Open a GH issue for the `ticket_dependencies` schema migration (prerequisite, self-contained)
-- [ ] Add `blocked_by` and `children` to `TicketInput`; update `TicketSyncer::upsert_tickets()` to write the join table in a second pass
-- [ ] Implement the ready-ticket query as `TicketSyncer::get_ready_tickets()`
-- [ ] Expose `conductor_get_ready_tickets` as an MCP tool
-- [ ] Design and implement the `for_each_ticket` step type in the workflow engine
+- [x] Open a GH issue for the `ticket_dependencies` schema migration (prerequisite, self-contained)
+- [x] Add `blocked_by` and `children` to `TicketInput`; update `TicketSyncer::upsert_tickets()` to write the join table in a second pass
+- [x] Implement the ready-ticket query as `TicketSyncer::get_ready_tickets()`
+- [x] Expose `conductor_get_ready_tickets` as an MCP tool
+- [ ] Design and implement the `for_each_ticket` step type in the workflow engine — tracked in [RFC 010](010-for-each-ticket-workflow-step.md) / [#1743](https://github.com/devinrosen/conductor-ai/issues/1743)
 - [ ] Update `map_vantage_status()` to extract blocking relationships into `TicketInput.blocked_by` (depends on `feat/vantage-ticket-source` merge)
-- [ ] Add cycle detection to the fan-out step
-- [ ] TUI/web dependency display in ticket detail view
+- [ ] Add cycle detection to the fan-out step — covered in RFC 010
+- [x] TUI/web dependency display in ticket detail view
