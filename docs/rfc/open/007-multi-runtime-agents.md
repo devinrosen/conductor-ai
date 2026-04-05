@@ -88,13 +88,13 @@ pub struct AgentDef {
 ```toml
 # ~/.conductor/config.toml
 
-# CLI-based runtimes (tmux spawn + exit polling, same pattern as Claude)
+# CLI-based runtimes (tmux spawn + stdout-redirect + file poll, same pattern as Claude)
 [runtimes.gemini]
 type = "cli"
 binary = "gemini"
-args = ["-m", "{{model}}", "-p", "{{prompt}}", "--output-format", "json", "--approval-mode=yolo"]
+args = ["-m", "{{model}}", "-p", "{{prompt}}", "--approval-mode=yolo"]
 default_model = "gemini-2.5-flash"
-result_field = "response"
+result_field = "response"        # dot-path into JSON stdout
 token_fields = "stats.models.*.tokens.total"
 
 # API-based runtimes (synchronous HTTP, no tmux)
@@ -208,22 +208,26 @@ Config for a `CliRuntime` entry specifies the binary, arg template, output forma
 [runtimes.gemini]
 type = "cli"
 binary = "gemini"
-args = ["-m", "{{model}}", "-p", "{{prompt}}", "--output-format", "json", "--approval-mode=yolo"]
+args = ["-m", "{{model}}", "-p", "{{prompt}}", "--approval-mode=yolo"]
 default_model = "gemini-2.5-flash"
-result_field = "response"                        # jq-style path into JSON output
+result_field = "response"                        # jq-style path into JSON stdout
 token_fields = "stats.models.*.tokens.total"     # optional, for cost tracking
 ```
 
 `{{prompt}}` and `{{model}}` are the only substitution variables. If `prompt_via = "stdin"`, the prompt is written to the process's stdin instead of substituted into args.
 
-**Gemini CLI invocation shape** (researched 2026-03-28):
+`CliRuntime` always redirects stdout to `~/.conductor/workspaces/<run-id>/output.json` — no `output-format` flag needed in `args`; the runtime handles capture transparently. `result_field` and `token_fields` are dot-paths into the parsed JSON file.
+
+**Gemini CLI invocation shape** (confirmed via headless docs 2026-04-05):
 - Binary: `gemini` (npm: `@google/gemini-cli`)
-- Prompt flag: `-p "<prompt>"` — forces headless mode, process exits after response
-- Model flag: `-m gemini-2.5-flash`
-- Output: `--output-format json` → `{ "response": "...", "stats": { "models": { "gemini-2.5-flash": { "tokens": { "total": N } } } } }`
-- Tool approval: `--approval-mode=yolo` to suppress interactive prompts
-- Exit codes: `0` success, `1` error, `42` input error, `53` turn limit exceeded
+- Prompt flag: `-p`/`--prompt` — activates headless mode automatically (non-TTY also triggers it); process exits after response
+- Model flag: `-m <model-id>`
+- Output: JSON to **stdout** → `{ "response": "...", "stats": { "models": { "gemini-2.5-flash": { "tokens": { "total": N } } } } }`
+- `CliRuntime` captures output by redirecting stdout to a file in the tmux command: `gemini -m {{model}} -p {{prompt}} > ~/.conductor/workspaces/<run-id>/output.json`; polls for file existence to detect completion — same mechanism as `ClaudeRuntime`
+- Tool approval: `--approval-mode=yolo` to suppress interactive prompts (flag name to be verified against CLI reference during implementation)
+- Exit codes: `0` success, `1` general/API error, `42` invalid input, `53` turn limit exceeded — `42` and `53` map to `failed` status
 - No dollar cost in output — token counts only
+- **Future:** Gemini CLI also supports JSONL streaming output (newline-delimited events including tool invocations and results), which could enable live tool-call display in the TUI. Deferred — plain JSON is sufficient for now.
 
 **OpenAIRuntime** — API-based, no tmux:
 - `spawn()` → synchronous HTTP POST to OpenAI API, writes result to DB
@@ -336,6 +340,8 @@ ALTER TABLE repos ADD COLUMN runtime_overrides TEXT;  -- JSON, nullable
 7. **CLI-based runtimes use a single generic `CliRuntime`**, not per-tool implementations. Any CLI agent that accepts a prompt (via flag or stdin) and exits on completion can be configured via `[runtimes.<name>]` with `type = "cli"` — no code changes required to add a new CLI tool. `ClaudeRuntime` stays separate because it has deep conductor integration (`--run-id`, resume, event parsing) that doesn't generalize.
 
 8. **Per-repo runtime overrides live in SQLite**, not in a checked-in config file. A nullable `runtime_overrides TEXT` (JSON) column on `repos` stores a map of runtime name → override settings. Because `~/.conductor/conductor.db` is local to each user, this is safe for multi-developer repos — no shared state. The resolution chain is: per-repo SQLite → global `config.toml [runtimes.<name>]` → compiled-in defaults. `RepoManager` exposes a typed accessor so callers never parse JSON directly.
+
+9. **CliRuntime output capture via stdout redirect.** Confirmed via Gemini CLI headless docs: CLI runtimes write their JSON result to stdout and exit. `CliRuntime` captures this by appending `> <output-file>` to the tmux command (e.g. `gemini ... > ~/.conductor/workspaces/<run-id>/output.json`) and polling for that file's existence to detect completion. This is the same file-based polling mechanism `ClaudeRuntime` uses today — no new polling infrastructure required.
 
 ---
 
