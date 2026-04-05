@@ -151,7 +151,6 @@ pub async fn create_worktree(
             ticket_id.as_deref(),
             None,
             force,
-            true, // skip_fetch: health check already fetched above
         )
     })
     .await??;

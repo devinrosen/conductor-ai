@@ -142,15 +142,10 @@ pub(super) fn detect_remote_head(repo_path: &str) -> Option<String> {
 ///
 /// When `force_dirty` is `true`, the dirty-state check is skipped (the caller has
 /// already confirmed the user wants to proceed despite uncommitted changes).
-///
-/// When `skip_fetch` is `true`, the `git fetch origin` step is skipped because the
-/// caller already ran `check_main_health()` (which includes a fetch). This avoids a
-/// redundant network round-trip when creating a worktree after a health check.
 pub(super) fn ensure_base_up_to_date(
     repo_path: &str,
     base_branch: &str,
     force_dirty: bool,
-    skip_fetch: bool,
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
 
@@ -165,17 +160,14 @@ pub(super) fn ensure_base_up_to_date(
     }
 
     // 2. Fetch from remote (soft failure — warn and allow local-only creation).
-    //    Skip when the caller already fetched as part of a health check.
-    if !skip_fetch {
-        let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
-        match fetch {
-            Ok(o) if o.status.success() => {}
-            _ => {
-                warnings.push(
-                    "could not fetch from origin; creating worktree from local state".to_string(),
-                );
-                return Ok(warnings);
-            }
+    let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
+    match fetch {
+        Ok(o) if o.status.success() => {}
+        _ => {
+            warnings.push(
+                "could not fetch from origin; creating worktree from local state".to_string(),
+            );
+            return Ok(warnings);
         }
     }
 
