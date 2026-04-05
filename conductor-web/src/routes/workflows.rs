@@ -8,11 +8,10 @@ use serde::{Deserialize, Serialize};
 use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
-use conductor_core::workflow::estimation;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
     RunIdSlot, WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -105,27 +104,6 @@ pub struct WorkflowRunResponse {
     repo_slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     worktree_slug: Option<String>,
-    /// Total number of steps in the workflow definition (from definition_snapshot).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    total_steps: Option<usize>,
-    /// Position of the current (or last completed/failed) step (1-indexed).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    current_step: Option<i64>,
-    /// Name of the current active step (for display).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    current_step_name: Option<String>,
-    /// Current iteration for do-while loops (0 = first pass).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    current_iteration: Option<i64>,
-    /// Max iterations configured for the active do-while loop, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_iterations: Option<i64>,
-    /// Estimated total workflow duration in milliseconds (hybrid: LLM + historical).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    estimated_duration_ms: Option<i64>,
-    /// Estimated remaining milliseconds for in-progress runs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    estimated_remaining_ms: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -173,7 +151,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
-            node_count: def.total_nodes(),
+            node_count: def.body.len(),
             group: def.group.clone(),
             targets: def.targets.clone(),
         }
@@ -778,9 +756,9 @@ pub async fn list_all_workflow_runs_handler(
         mgr.list_active_workflow_runs(&statuses)?
     };
 
-    // Batch-fetch running/waiting/failed steps for progress computation
+    // Batch-fetch only running/waiting steps for all runs (filter pushed to SQL)
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    let mut progress_steps_by_run = mgr.get_progress_steps_for_runs(&run_ids)?;
+    let mut steps_by_run = mgr.get_active_steps_for_runs(&run_ids)?;
 
     // Build slug lookup maps for repo_slug / worktree_slug enrichment
     let repo_slug_map: HashMap<String, String> = RepoManager::new(&db, &config)
@@ -798,76 +776,10 @@ pub async fn list_all_workflow_runs_handler(
         .map(|wt| (wt.id, wt.slug))
         .collect();
 
-    // ── Time estimation: batch-fetch historical durations and LLM estimates ──
-    let active_run_ids: Vec<&str> = runs
-        .iter()
-        .filter(|r| {
-            matches!(
-                r.status,
-                WorkflowRunStatus::Running | WorkflowRunStatus::Pending
-            )
-        })
-        .map(|r| r.id.as_str())
-        .collect();
-    let plan_estimates = mgr.get_plan_estimates_for_runs(&active_run_ids)?;
-
-    // Collect unique workflow names for active runs and query historical durations
-    let active_workflow_names: std::collections::HashSet<&str> = runs
-        .iter()
-        .filter(|r| {
-            matches!(
-                r.status,
-                WorkflowRunStatus::Running | WorkflowRunStatus::Pending
-            )
-        })
-        .map(|r| r.workflow_name.as_str())
-        .collect();
-    let historical_durations: HashMap<String, Vec<i64>> = active_workflow_names
-        .into_iter()
-        .filter_map(|name| {
-            mgr.get_completed_run_durations(name, 15)
-                .ok()
-                .map(|d| (name.to_string(), d))
-        })
-        .collect();
-
     let responses: Vec<WorkflowRunResponse> = runs
         .into_iter()
         .map(|run| {
-            let all_progress_steps = progress_steps_by_run.remove(&run.id).unwrap_or_default();
-
-            // Split into active (running/waiting) and failed steps
-            let mut active_steps = Vec::new();
-            let mut failed_steps = Vec::new();
-            for step in &all_progress_steps {
-                match step.status {
-                    WorkflowStepStatus::Running | WorkflowStepStatus::Waiting => {
-                        active_steps.push(step.clone());
-                    }
-                    WorkflowStepStatus::Failed => {
-                        failed_steps.push(step.clone());
-                    }
-                    _ => {}
-                }
-            }
-
-            // Determine the "current" step — prefer active, fall back to failed
-            let current = active_steps.first().or(failed_steps.first());
-            let current_step = current.map(|s| s.position + 1); // 1-indexed
-            let current_step_name = current.map(|s| s.step_name.clone());
-            let current_iteration = current.map(|s| s.iteration);
-
-            // Compute total_steps and max_iterations from definition_snapshot
-            let def: Option<WorkflowDef> = run
-                .definition_snapshot
-                .as_deref()
-                .and_then(|snap| serde_json::from_str(snap).ok());
-            let total_steps = def.as_ref().map(|d| d.top_level_steps());
-            let max_iterations = current_step_name
-                .as_deref()
-                .and_then(|name| def.as_ref().and_then(|d| d.max_iterations_for_step(name)))
-                .map(|v| v as i64);
-
+            let active_steps = steps_by_run.remove(&run.id).unwrap_or_default();
             let repo_slug = run
                 .repo_id
                 .as_deref()
@@ -878,36 +790,11 @@ pub async fn list_all_workflow_runs_handler(
                 .as_deref()
                 .and_then(|id| wt_slug_map.get(id))
                 .cloned();
-            // Compute time estimates for active runs
-            let is_active = matches!(
-                run.status,
-                WorkflowRunStatus::Running | WorkflowRunStatus::Pending
-            );
-            let (estimated_duration_ms, estimated_remaining_ms) = if is_active {
-                let llm_est = plan_estimates.get(&run.id).copied();
-                let hist = historical_durations
-                    .get(&run.workflow_name)
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[]);
-                let est = estimation::estimate_duration_ms(llm_est, hist);
-                let remaining = est.map(|e| estimation::estimated_remaining_ms(e, &run.started_at));
-                (est, remaining)
-            } else {
-                (None, None)
-            };
-
             WorkflowRunResponse {
                 run,
                 active_steps,
                 repo_slug,
                 worktree_slug,
-                total_steps,
-                current_step,
-                current_step_name,
-                current_iteration,
-                max_iterations,
-                estimated_duration_ms,
-                estimated_remaining_ms,
             }
         })
         .collect();
@@ -1559,7 +1446,6 @@ mod tests {
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
-                on_stale: true,
             },
             slack: conductor_core::config::SlackConfig::default(),
         }
