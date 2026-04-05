@@ -5,11 +5,16 @@ use conductor_core::error::ConductorError;
 pub enum ApiError {
     Core(ConductorError),
     Internal(String),
+    /// A structured 409 Conflict response with a typed JSON body (e.g. dirty-branch check).
+    Conflict(serde_json::Value),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            ApiError::Conflict(body) => {
+                return (StatusCode::CONFLICT, axum::Json(body)).into_response();
+            }
             ApiError::Internal(msg) => {
                 tracing::error!(error = %msg, "internal request error");
                 (StatusCode::INTERNAL_SERVER_ERROR, msg)
