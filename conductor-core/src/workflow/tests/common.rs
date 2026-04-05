@@ -284,6 +284,10 @@ pub(super) fn make_test_step(
         output_file: None,
         gate_options: None,
         gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 

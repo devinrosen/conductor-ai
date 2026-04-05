@@ -30,6 +30,9 @@ import type {
   PushSubscribeRequest,
   VapidPublicKeyResponse,
   PushSubscribeResponse,
+  WorkflowTokenAggregate,
+  WorkflowTokenTrendRow,
+  StepTokenHeatmapRow,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -271,6 +274,20 @@ export const api = {
     }),
   rejectGate: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/gate/reject`, { method: "POST" }),
+
+  // Workflow token analytics
+  getWorkflowTokenAggregates: (repoId?: string) =>
+    request<WorkflowTokenAggregate[]>(
+      repoId ? `/workflows/analytics/aggregates?repo_id=${encodeURIComponent(repoId)}` : `/workflows/analytics/aggregates`,
+    ),
+  getWorkflowTokenTrend: (workflowName: string, granularity: "daily" | "weekly" = "daily") =>
+    request<WorkflowTokenTrendRow[]>(
+      `/workflows/analytics/trend?workflow_name=${encodeURIComponent(workflowName)}&granularity=${granularity}`,
+    ),
+  getStepTokenHeatmap: (workflowName: string, runs = 20) =>
+    request<StepTokenHeatmapRow[]>(
+      `/workflows/analytics/heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
 
   // Notifications
   listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>

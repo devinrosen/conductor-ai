@@ -15,7 +15,7 @@ use crate::workflow::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PR
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
     ActiveWorkflowCounts, PendingGateRow, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
-    WorkflowStepSummary,
+    WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow,
 };
 
 impl<'a> WorkflowManager<'a> {
@@ -118,7 +118,14 @@ impl<'a> WorkflowManager<'a> {
     pub fn get_workflow_steps(&self, workflow_run_id: &str) -> Result<Vec<WorkflowRunStep>> {
         query_collect(
             self.conn,
-            &format!("SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE workflow_run_id = ?1 ORDER BY position"),
+            &format!(
+                "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
+                 FROM workflow_run_steps s \
+                 LEFT JOIN agent_runs ar ON s.child_run_id = ar.id \
+                 WHERE s.workflow_run_id = ?1 \
+                 ORDER BY s.position",
+                cols = &*STEP_COLUMNS_WITH_PREFIX
+            ),
             params![workflow_run_id],
             row_to_workflow_step,
         )
@@ -159,14 +166,17 @@ impl<'a> WorkflowManager<'a> {
                 .map(|i| format!("?{}", offset + i))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!(" AND status IN ({status_placeholders})")
+            format!(" AND s.status IN ({status_placeholders})")
         } else {
             String::new()
         };
         let sql = format!(
-            "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
-             WHERE workflow_run_id IN ({placeholders}){status_clause} \
-             ORDER BY workflow_run_id, position"
+            "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
+             FROM workflow_run_steps s \
+             LEFT JOIN agent_runs ar ON s.child_run_id = ar.id \
+             WHERE s.workflow_run_id IN ({placeholders}){status_clause} \
+             ORDER BY s.workflow_run_id, s.position",
+            cols = &*STEP_COLUMNS_WITH_PREFIX
         );
         let combined = run_ids
             .iter()
@@ -187,7 +197,11 @@ impl<'a> WorkflowManager<'a> {
 
     pub fn get_step_by_id(&self, step_id: &str) -> Result<Option<WorkflowRunStep>> {
         let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE id = ?1"
+            "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
+             FROM workflow_run_steps s \
+             LEFT JOIN agent_runs ar ON s.child_run_id = ar.id \
+             WHERE s.id = ?1",
+            cols = &*STEP_COLUMNS_WITH_PREFIX
         ))?;
         let mut rows = stmt.query_map(params![step_id], row_to_workflow_step)?;
         match rows.next() {
@@ -877,5 +891,130 @@ impl<'a> WorkflowManager<'a> {
             )
             .optional()?;
         Ok(status.as_deref() == Some("cancelled"))
+    }
+
+    /// Aggregate token usage per workflow name across all completed runs.
+    /// When `repo_id` is `Some`, restricts to runs for that repo.
+    pub fn get_workflow_token_aggregates(
+        &self,
+        repo_id: Option<&str>,
+    ) -> Result<Vec<WorkflowTokenAggregate>> {
+        let (sql, param): (String, Vec<rusqlite::types::Value>) = if let Some(rid) = repo_id {
+            (
+                "SELECT workflow_name, \
+                        COALESCE(AVG(total_input_tokens), 0.0) as avg_input, \
+                        COALESCE(AVG(total_output_tokens), 0.0) as avg_output, \
+                        COALESCE(AVG(total_cache_read_input_tokens), 0.0) as avg_cache_read, \
+                        COALESCE(AVG(total_cache_creation_input_tokens), 0.0) as avg_cache_creation, \
+                        COUNT(*) as run_count \
+                 FROM workflow_runs \
+                 WHERE status = 'completed' AND total_input_tokens IS NOT NULL \
+                   AND repo_id = ?1 \
+                 GROUP BY workflow_name \
+                 ORDER BY (AVG(total_input_tokens) + AVG(total_output_tokens)) DESC"
+                    .to_string(),
+                vec![rusqlite::types::Value::Text(rid.to_owned())],
+            )
+        } else {
+            (
+                "SELECT workflow_name, \
+                        COALESCE(AVG(total_input_tokens), 0.0) as avg_input, \
+                        COALESCE(AVG(total_output_tokens), 0.0) as avg_output, \
+                        COALESCE(AVG(total_cache_read_input_tokens), 0.0) as avg_cache_read, \
+                        COALESCE(AVG(total_cache_creation_input_tokens), 0.0) as avg_cache_creation, \
+                        COUNT(*) as run_count \
+                 FROM workflow_runs \
+                 WHERE status = 'completed' AND total_input_tokens IS NOT NULL \
+                 GROUP BY workflow_name \
+                 ORDER BY (AVG(total_input_tokens) + AVG(total_output_tokens)) DESC"
+                    .to_string(),
+                vec![],
+            )
+        };
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(param.iter()), |row| {
+            Ok(WorkflowTokenAggregate {
+                workflow_name: row.get(0)?,
+                avg_input: row.get(1)?,
+                avg_output: row.get(2)?,
+                avg_cache_read: row.get(3)?,
+                avg_cache_creation: row.get(4)?,
+                run_count: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Token totals grouped by time period (daily or weekly) for a specific workflow.
+    pub fn get_workflow_token_trend(
+        &self,
+        workflow_name: &str,
+        granularity: &str,
+    ) -> Result<Vec<WorkflowTokenTrendRow>> {
+        let fmt = if granularity == "weekly" {
+            "%Y-%W"
+        } else {
+            "%Y-%m-%d"
+        };
+        let sql = format!(
+            "SELECT strftime('{fmt}', started_at) as period, \
+                    COALESCE(SUM(total_input_tokens), 0) as total_input, \
+                    COALESCE(SUM(total_output_tokens), 0) as total_output, \
+                    COALESCE(SUM(total_cache_read_input_tokens), 0) as total_cache_read, \
+                    COALESCE(SUM(total_cache_creation_input_tokens), 0) as total_cache_creation \
+             FROM workflow_runs \
+             WHERE workflow_name = ?1 AND status = 'completed' AND total_input_tokens IS NOT NULL \
+             GROUP BY period \
+             ORDER BY period DESC \
+             LIMIT 30"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(params![workflow_name], |row| {
+            Ok(WorkflowTokenTrendRow {
+                period: row.get(0)?,
+                total_input: row.get(1)?,
+                total_output: row.get(2)?,
+                total_cache_read: row.get(3)?,
+                total_cache_creation: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Per-step average token usage across the N most recent completed runs of a workflow.
+    pub fn get_step_token_heatmap(
+        &self,
+        workflow_name: &str,
+        limit_runs: usize,
+    ) -> Result<Vec<StepTokenHeatmapRow>> {
+        let sql = format!(
+            "SELECT wrs.step_name, \
+                    COALESCE(AVG(ar.input_tokens), 0.0) as avg_input, \
+                    COALESCE(AVG(ar.output_tokens), 0.0) as avg_output, \
+                    COALESCE(AVG(ar.cache_read_input_tokens), 0.0) as avg_cache_read, \
+                    COUNT(DISTINCT wr.id) as run_count \
+             FROM workflow_runs wr \
+             JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
+             JOIN agent_runs ar ON ar.id = wrs.child_run_id \
+             WHERE wr.workflow_name = ?1 AND wr.status = 'completed' \
+               AND wr.id IN ( \
+                 SELECT id FROM workflow_runs \
+                 WHERE workflow_name = ?1 AND status = 'completed' \
+                 ORDER BY started_at DESC LIMIT {limit_runs} \
+               ) \
+             GROUP BY wrs.step_name \
+             ORDER BY (AVG(ar.input_tokens) + AVG(ar.output_tokens)) DESC"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(params![workflow_name], |row| {
+            Ok(StepTokenHeatmapRow {
+                step_name: row.get(0)?,
+                avg_input: row.get(1)?,
+                avg_output: row.get(2)?,
+                avg_cache_read: row.get(3)?,
+                run_count: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }

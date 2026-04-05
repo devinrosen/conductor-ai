@@ -1642,6 +1642,18 @@ fn render_step_list(
         ])));
     }
 
+    // Find the index of the step with the highest combined token usage
+    let max_token_idx: Option<usize> = {
+        let mut best: Option<(usize, i64)> = None;
+        for (i, step) in state.data.workflow_steps.iter().enumerate() {
+            let total = step.input_tokens.unwrap_or(0) + step.output_tokens.unwrap_or(0);
+            if total > 0 && best.is_none_or(|(_, b)| total > b) {
+                best = Some((i, total));
+            }
+        }
+        best.map(|(i, _)| i)
+    };
+
     items.extend(
         state
             .data
@@ -1666,7 +1678,13 @@ fn render_step_list(
                     Span::raw("  "),
                     Span::styled(
                         format!("{:<20}", step.step_name),
-                        Style::default().add_modifier(Modifier::BOLD),
+                        if max_token_idx == Some(i) {
+                            Style::default()
+                                .add_modifier(Modifier::BOLD)
+                                .fg(state.theme.label_accent)
+                        } else {
+                            Style::default().add_modifier(Modifier::BOLD)
+                        },
                     ),
                     Span::styled(
                         format!("  [{:<5}]", step.role),
@@ -1677,6 +1695,23 @@ fn render_step_list(
                         Style::default().fg(state.theme.label_accent),
                     ),
                 ];
+
+                // Token columns: show compact ↑/↓ counts when present
+                if let (Some(inp), Some(out)) = (step.input_tokens, step.output_tokens) {
+                    let fmt_k = |n: i64| -> String {
+                        if n >= 1_000_000 {
+                            format!("{:.1}M", n as f64 / 1_000_000.0)
+                        } else if n >= 1_000 {
+                            format!("{:.1}k", n as f64 / 1_000.0)
+                        } else {
+                            format!("{n}")
+                        }
+                    };
+                    spans.push(Span::styled(
+                        format!("  ↑{} ↓{}", fmt_k(inp), fmt_k(out)),
+                        Style::default().fg(state.theme.label_secondary),
+                    ));
+                }
 
                 if step.iteration > 0 {
                     spans.push(Span::styled(

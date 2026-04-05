@@ -97,6 +97,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <NavLink to="/workflows" className={linkClass}>
           Workflows
         </NavLink>
+        <NavLink to="/workflows/analytics" className={linkClass}>
+          Analytics
+        </NavLink>
         <NavLink to="/tickets" className={linkClass}>
           Tickets <ShortcutHint keys="g t" />
         </NavLink>

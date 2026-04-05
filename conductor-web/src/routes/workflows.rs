@@ -10,8 +10,9 @@ use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
-    RunIdSlot, WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    RunIdSlot, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowManager, WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -835,6 +836,58 @@ pub async fn get_workflow_steps(
     let mgr = WorkflowManager::new(&db);
     let steps = mgr.get_workflow_steps(&id)?;
     Ok(Json(steps))
+}
+
+/// GET /api/workflows/analytics/aggregates?repo_id=
+#[derive(Deserialize)]
+pub struct AggregatesQuery {
+    pub repo_id: Option<String>,
+}
+
+pub async fn get_token_aggregates(
+    State(state): State<AppState>,
+    Query(q): Query<AggregatesQuery>,
+) -> Result<Json<Vec<WorkflowTokenAggregate>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let rows = mgr.get_workflow_token_aggregates(q.repo_id.as_deref())?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/trend?workflow_name=&granularity=daily|weekly
+#[derive(Deserialize)]
+pub struct TrendQuery {
+    pub workflow_name: String,
+    pub granularity: Option<String>,
+}
+
+pub async fn get_token_trend(
+    State(state): State<AppState>,
+    Query(q): Query<TrendQuery>,
+) -> Result<Json<Vec<WorkflowTokenTrendRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let granularity = q.granularity.as_deref().unwrap_or("daily");
+    let rows = mgr.get_workflow_token_trend(&q.workflow_name, granularity)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/heatmap?workflow_name=&runs=20
+#[derive(Deserialize)]
+pub struct HeatmapQuery {
+    pub workflow_name: String,
+    pub runs: Option<usize>,
+}
+
+pub async fn get_step_heatmap(
+    State(state): State<AppState>,
+    Query(q): Query<HeatmapQuery>,
+) -> Result<Json<Vec<StepTokenHeatmapRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_token_heatmap(&q.workflow_name, limit)?;
+    Ok(Json(rows))
 }
 
 /// GET /api/workflows/runs/{id}/steps/{step_name}/log
