@@ -8,6 +8,7 @@ import { RepoDetailPage } from "./pages/RepoDetailPage";
 import { WorktreeDetailPage } from "./pages/WorktreeDetailPage";
 import { WorkflowRunDetailPage } from "./pages/WorkflowRunDetailPage";
 import { WorkflowDefDetailPage } from "./pages/WorkflowDefDetailPage";
+import { WorkflowAnalyticsPage } from "./pages/WorkflowAnalyticsPage";
 import { TicketsPage } from "./pages/TicketsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { GettingStartedPage } from "./pages/GettingStartedPage";
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
       { index: true, element: <ActivityPage /> },
       { path: "repos", element: <ReposPage /> },
       { path: "workflows", element: <WorkflowsPage /> },
+      { path: "workflows/analytics", element: <WorkflowAnalyticsPage /> },
       { path: "tickets", element: <TicketsPage /> },
       { path: "repos/:repoId", element: <RepoDetailPage /> },
       {

@@ -251,6 +251,35 @@ export interface WorkflowRunStep {
   context_out: string | null;
   gate_options: string | null;
   gate_selections: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+}
+
+export interface WorkflowTokenAggregate {
+  workflow_name: string;
+  avg_input: number;
+  avg_output: number;
+  avg_cache_read: number;
+  avg_cache_creation: number;
+  run_count: number;
+}
+
+export interface WorkflowTokenTrendRow {
+  period: string;
+  total_input: number;
+  total_output: number;
+  total_cache_read: number;
+  total_cache_creation: number;
+}
+
+export interface StepTokenHeatmapRow {
+  step_name: string;
+  avg_input: number;
+  avg_output: number;
+  avg_cache_read: number;
+  run_count: number;
 }
 
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)

@@ -254,6 +254,19 @@ pub fn api_router() -> Router<AppState> {
             "/api/workflows/runs/{id}/gate/reject",
             post(workflows::reject_gate),
         )
+        // Workflow token analytics
+        .route(
+            "/api/workflows/analytics/aggregates",
+            get(workflows::get_token_aggregates),
+        )
+        .route(
+            "/api/workflows/analytics/trend",
+            get(workflows::get_token_trend),
+        )
+        .route(
+            "/api/workflows/analytics/heatmap",
+            get(workflows::get_step_heatmap),
+        )
         // Workflow Templates
         .route("/api/templates", get(workflows::list_templates))
         .route(

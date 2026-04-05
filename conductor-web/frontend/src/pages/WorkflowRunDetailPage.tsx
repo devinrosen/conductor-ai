@@ -393,6 +393,14 @@ export function WorkflowRunDetailPage() {
                           })()}
                         </span>
                       )}
+                      {step.input_tokens != null && step.cache_read_input_tokens != null && (step.input_tokens + step.cache_read_input_tokens) > 0 && (() => {
+                        const pct = Math.round(step.cache_read_input_tokens / (step.input_tokens + step.cache_read_input_tokens) * 100);
+                        return (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${pct < 20 ? "bg-amber-50 text-amber-600" : "bg-green-50 text-green-700"}`}>
+                            {pct}% cache
+                          </span>
+                        );
+                      })()}
                       {step.gate_type && step.status === "waiting" && (
                         <button
                           onClick={(e) => { e.stopPropagation(); openGateModal(step); }}
@@ -487,6 +495,42 @@ export function WorkflowRunDetailPage() {
             </div>
           </div>
         )}
+
+        {/* Token Waterfall — steps ranked by total tokens */}
+        {(() => {
+          const tokSteps = steps
+            .filter((s) => s.input_tokens != null && s.output_tokens != null)
+            .map((s) => ({ ...s, total: (s.input_tokens ?? 0) + (s.output_tokens ?? 0) }))
+            .filter((s) => s.total > 0)
+            .sort((a, b) => b.total - a.total);
+          if (tokSteps.length === 0) return null;
+          const maxTotal = tokSteps[0].total;
+          return (
+            <div className="mt-4">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                Token Waterfall
+              </h3>
+              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <div className="divide-y divide-gray-100">
+                  {tokSteps.map((s) => (
+                    <div key={s.id} className="px-4 py-2">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs text-gray-700 truncate">{s.step_name.replace(/^workflow:/, "")}</span>
+                        <span className="text-xs text-gray-500 font-mono tabular-nums shrink-0">{s.total.toLocaleString()}</span>
+                      </div>
+                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-400 rounded-full"
+                          style={{ width: `${Math.round((s.total / maxTotal) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </section>
 
       {/* Step detail panel */}

@@ -130,6 +130,10 @@ pub struct WorkflowRunStep {
     pub gate_options: Option<String>,
     /// User-selected gate option values as JSON `["val1","val2"]` (set on approval).
     pub gate_selections: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
 }
 
 /// Lightweight summary of the currently-running step for a workflow run.
@@ -463,4 +467,35 @@ pub fn resolve_conductor_bin_dir() -> Option<std::path::PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+}
+
+/// Per-workflow aggregate token usage, averaged across completed runs.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowTokenAggregate {
+    pub workflow_name: String,
+    pub avg_input: f64,
+    pub avg_output: f64,
+    pub avg_cache_read: f64,
+    pub avg_cache_creation: f64,
+    pub run_count: i64,
+}
+
+/// Token totals for a time-series trend row (daily or weekly bucket).
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowTokenTrendRow {
+    pub period: String,
+    pub total_input: i64,
+    pub total_output: i64,
+    pub total_cache_read: i64,
+    pub total_cache_creation: i64,
+}
+
+/// Per-step token averages across recent runs of the same workflow.
+#[derive(Debug, Clone, Serialize)]
+pub struct StepTokenHeatmapRow {
+    pub step_name: String,
+    pub avg_input: f64,
+    pub avg_output: f64,
+    pub avg_cache_read: f64,
+    pub run_count: i64,
 }

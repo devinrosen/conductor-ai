@@ -359,6 +359,10 @@ fn snap_workflow_run_detail_with_steps() {
             output_file: None,
             gate_options: None,
             gate_selections: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         },
         WorkflowRunStep {
             id: "step2".into(),
@@ -389,6 +393,10 @@ fn snap_workflow_run_detail_with_steps() {
             output_file: None,
             gate_options: None,
             gate_selections: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         },
     ];
 
