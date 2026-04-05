@@ -104,23 +104,21 @@ export function WorkflowAnalyticsPage() {
     const range = maxVal - minVal;
     const width = range === 0 ? 1 : range / k;
 
-    const bins: { label: string; count: number; runIds: string[]; startedAts: string[] }[] = Array.from({ length: k }, (_, i) => {
+    const bins: { label: string; runs: { runId: string; startedAt: string }[] }[] = Array.from({ length: k }, (_, i) => {
       const lo = minVal + i * width;
       const label = histMetric === "duration"
         ? `${(lo / 1000).toFixed(1)}s`
         : `${fmtK(lo)}`;
-      return { label, count: 0, runIds: [], startedAts: [] };
+      return { label, runs: [] };
     });
 
     for (const { run, value } of paired) {
       const idx = Math.min(Math.floor((value - minVal) / width), k - 1);
-      bins[idx].count++;
-      bins[idx].runIds.push(run.run_id);
-      bins[idx].startedAts.push(run.started_at);
+      bins[idx].runs.push({ runId: run.run_id, startedAt: run.started_at });
     }
 
     // Compute mean + stddev of bin counts for outlier highlighting
-    const counts = bins.map((b) => b.count);
+    const counts = bins.map((b) => b.runs.length);
     const mean = counts.reduce((a, c) => a + c, 0) / counts.length;
     const variance = counts.reduce((a, c) => a + (c - mean) ** 2, 0) / counts.length;
     const sigma = Math.sqrt(variance);
@@ -129,8 +127,8 @@ export function WorkflowAnalyticsPage() {
     const maxCount = Math.max(...counts, 1);
     return bins.map((b) => ({
       ...b,
-      pct: Math.round((b.count / maxCount) * 100),
-      outlier: b.count > threshold,
+      pct: Math.round((b.runs.length / maxCount) * 100),
+      outlier: b.runs.length > threshold,
     }));
   }, [runMetrics, histMetric]);
 
@@ -338,7 +336,7 @@ export function WorkflowAnalyticsPage() {
                       >
                         <div className="flex items-center justify-between gap-2 mb-0.5">
                           <span className="text-xs font-mono text-gray-500 w-20 shrink-0">{bin.label}</span>
-                          <span className="text-xs font-mono tabular-nums text-gray-400 shrink-0">{bin.count}</span>
+                          <span className="text-xs font-mono tabular-nums text-gray-400 shrink-0">{bin.runs.length}</span>
                         </div>
                         <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                           <div
@@ -354,7 +352,7 @@ export function WorkflowAnalyticsPage() {
                   <div className="mt-3 rounded-lg border border-gray-200 bg-white p-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-semibold text-gray-600">
-                        Runs in bucket "{histogramBins[selectedBucketIdx].label}" — {histogramBins[selectedBucketIdx].count} runs
+                        Runs in bucket "{histogramBins[selectedBucketIdx].label}" — {histogramBins[selectedBucketIdx].runs.length} runs
                       </span>
                       <button
                         onClick={() => setSelectedBucketIdx(null)}
@@ -364,11 +362,11 @@ export function WorkflowAnalyticsPage() {
                       </button>
                     </div>
                     <ul className="space-y-1">
-                      {histogramBins[selectedBucketIdx].runIds.map((runId, j) => (
+                      {histogramBins[selectedBucketIdx].runs.map(({ runId, startedAt }) => (
                         <li key={runId} className="text-xs font-mono flex items-center gap-2">
                           <span className="text-gray-500">{runId.slice(0, 12)}…</span>
                           <span className="text-gray-400">
-                            {new Date(histogramBins[selectedBucketIdx]!.startedAts[j]).toLocaleString()}
+                            {new Date(startedAt).toLocaleString()}
                           </span>
                         </li>
                       ))}
