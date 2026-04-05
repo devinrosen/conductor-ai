@@ -283,6 +283,8 @@ export interface StepTokenHeatmapRow {
 }
 
 export interface WorkflowRunMetricsRow {
+  run_id: string;
+  started_at: string;
   duration_ms: number | null;
   input_tokens: number | null;
   output_tokens: number | null;

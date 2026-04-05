@@ -35,6 +35,7 @@ export function WorkflowAnalyticsPage() {
   const [runMetrics, setRunMetrics] = useState<WorkflowRunMetricsRow[]>([]);
   const [runMetricsLoading, setRunMetricsLoading] = useState(false);
   const [runMetricsError, setRunMetricsError] = useState<string | null>(null);
+  const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null);
 
   useEffect(() => {
     setAggLoading(true);
@@ -74,22 +75,28 @@ export function WorkflowAnalyticsPage() {
       .finally(() => setRunMetricsLoading(false));
   }, [selectedWorkflow, histDays]);
 
+  useEffect(() => {
+    setSelectedBucketIdx(null);
+  }, [selectedWorkflow, histMetric, histDays]);
+
   const sorted = [...aggregates].sort((a, b) => {
     const av = a[sortKey], bv = b[sortKey];
     return sortAsc ? av - bv : bv - av;
   });
 
   const histogramBins = useMemo(() => {
-    const values = runMetrics
+    const paired = runMetrics
       .map((r) => {
-        if (histMetric === "duration") return r.duration_ms;
-        if (histMetric === "input_tokens") return r.input_tokens;
-        return r.output_tokens;
+        const v = histMetric === "duration" ? r.duration_ms
+          : histMetric === "input_tokens" ? r.input_tokens
+          : r.output_tokens;
+        return v !== null && v !== undefined ? { run: r, value: v } : null;
       })
-      .filter((v): v is number => v !== null && v !== undefined);
+      .filter((x): x is { run: WorkflowRunMetricsRow; value: number } => x !== null);
 
-    if (values.length < 5) return null;
+    if (paired.length < 5) return null;
 
+    const values = paired.map((p) => p.value);
     const n = values.length;
     const k = Math.ceil(Math.log2(n)) + 1;
     const minVal = Math.min(...values);
@@ -97,21 +104,21 @@ export function WorkflowAnalyticsPage() {
     const range = maxVal - minVal;
     const width = range === 0 ? 1 : range / k;
 
-    const bins: { label: string; count: number }[] = Array.from({ length: k }, (_, i) => {
+    const bins: { label: string; runs: { runId: string; startedAt: string }[] }[] = Array.from({ length: k }, (_, i) => {
       const lo = minVal + i * width;
       const label = histMetric === "duration"
         ? `${(lo / 1000).toFixed(1)}s`
         : `${fmtK(lo)}`;
-      return { label, count: 0 };
+      return { label, runs: [] };
     });
 
-    for (const v of values) {
-      const idx = Math.min(Math.floor((v - minVal) / width), k - 1);
-      bins[idx].count++;
+    for (const { run, value } of paired) {
+      const idx = Math.min(Math.floor((value - minVal) / width), k - 1);
+      bins[idx].runs.push({ runId: run.run_id, startedAt: run.started_at });
     }
 
     // Compute mean + stddev of bin counts for outlier highlighting
-    const counts = bins.map((b) => b.count);
+    const counts = bins.map((b) => b.runs.length);
     const mean = counts.reduce((a, c) => a + c, 0) / counts.length;
     const variance = counts.reduce((a, c) => a + (c - mean) ** 2, 0) / counts.length;
     const sigma = Math.sqrt(variance);
@@ -120,8 +127,8 @@ export function WorkflowAnalyticsPage() {
     const maxCount = Math.max(...counts, 1);
     return bins.map((b) => ({
       ...b,
-      pct: Math.round((b.count / maxCount) * 100),
-      outlier: b.count > threshold,
+      pct: Math.round((b.runs.length / maxCount) * 100),
+      outlier: b.runs.length > threshold,
     }));
   }, [runMetrics, histMetric]);
 
@@ -318,24 +325,55 @@ export function WorkflowAnalyticsPage() {
             ) : histogramBins === null ? (
               <p className="text-sm text-gray-500">Not enough data (need at least 5 completed runs with {histMetric === "duration" ? "duration" : "token"} data).</p>
             ) : (
-              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-                <div className="px-4 py-3 divide-y divide-gray-50">
-                  {histogramBins.map((bin, i) => (
-                    <div key={i} className="py-1">
-                      <div className="flex items-center justify-between gap-2 mb-0.5">
-                        <span className="text-xs font-mono text-gray-500 w-20 shrink-0">{bin.label}</span>
-                        <span className="text-xs font-mono tabular-nums text-gray-400 shrink-0">{bin.count}</span>
+              <>
+                <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                  <div className="px-4 py-3 divide-y divide-gray-50">
+                    {histogramBins.map((bin, i) => (
+                      <div
+                        key={i}
+                        className={`py-1 cursor-pointer rounded px-1 -mx-1 ${selectedBucketIdx === i ? "bg-indigo-50 ring-1 ring-indigo-200" : "hover:bg-gray-50"}`}
+                        onClick={() => setSelectedBucketIdx(selectedBucketIdx === i ? null : i)}
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-0.5">
+                          <span className="text-xs font-mono text-gray-500 w-20 shrink-0">{bin.label}</span>
+                          <span className="text-xs font-mono tabular-nums text-gray-400 shrink-0">{bin.runs.length}</span>
+                        </div>
+                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${bin.outlier ? "bg-amber-400" : "bg-indigo-400"}`}
+                            style={{ width: `${bin.pct}%` }}
+                          />
+                        </div>
                       </div>
-                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${bin.outlier ? "bg-amber-400" : "bg-indigo-400"}`}
-                          style={{ width: `${bin.pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+                {selectedBucketIdx !== null && histogramBins[selectedBucketIdx] && (
+                  <div className="mt-3 rounded-lg border border-gray-200 bg-white p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold text-gray-600">
+                        Runs in bucket "{histogramBins[selectedBucketIdx].label}" — {histogramBins[selectedBucketIdx].runs.length} runs
+                      </span>
+                      <button
+                        onClick={() => setSelectedBucketIdx(null)}
+                        className="text-xs text-gray-400 hover:text-gray-600"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <ul className="space-y-1">
+                      {histogramBins[selectedBucketIdx].runs.map(({ runId, startedAt }) => (
+                        <li key={runId} className="text-xs font-mono flex items-center gap-2">
+                          <span className="text-gray-500">{runId.slice(0, 12)}…</span>
+                          <span className="text-gray-400">
+                            {new Date(startedAt).toLocaleString()}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
             )}
           </section>
 
