@@ -280,7 +280,7 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::routes::api_router;
-    use crate::test_helpers::seeded_state;
+    use crate::test_helpers::{seeded_state, seeded_state_with_dirty_repo};
 
     async fn send_get(uri: &str, state: AppState) -> (StatusCode, Vec<u8>) {
         let app = api_router().with_state(state);
@@ -455,5 +455,39 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_worktree_returns_409_when_base_branch_is_dirty() {
+        let (state, _tmp, _git_dir) = seeded_state_with_dirty_repo();
+        let (status, body) = send_post(
+            "/api/repos/r1/worktrees",
+            r#"{"name":"new-feature"}"#,
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "main_dirty");
+        assert!(
+            json["dirty_files"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()),
+            "expected non-empty dirty_files, got: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_worktree_bypasses_dirty_409_when_force_is_true() {
+        let (state, _tmp, _git_dir) = seeded_state_with_dirty_repo();
+        let (status, _) = send_post(
+            "/api/repos/r1/worktrees",
+            r#"{"name":"new-feature","force":true}"#,
+            state,
+        )
+        .await;
+        // The 409 gate must be bypassed; the exact status (likely 500 from git
+        // failing to create the worktree in a temp dir) doesn't matter here.
+        assert_ne!(status, StatusCode::CONFLICT);
     }
 }
