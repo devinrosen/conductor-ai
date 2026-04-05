@@ -50,6 +50,7 @@ export function WorktreeRow({
       <td className="px-4 py-2">
         <button
           onClick={() => onDelete(worktree.id)}
+          aria-label={`Delete worktree ${worktree.branch}`}
           className="text-xs text-red-600 hover:underline"
         >
           Delete
