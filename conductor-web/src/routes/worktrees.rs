@@ -189,7 +189,7 @@ pub async fn get_worktree(
 pub async fn delete_worktree(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Worktree>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let db_path = state.db_path.clone();
     let config = state.config.read().await.clone();
     let wt = tokio::task::spawn_blocking(move || {
@@ -201,7 +201,7 @@ pub async fn delete_worktree(
         id: wt.id.clone(),
         repo_id: wt.repo_id.clone(),
     });
-    Ok(Json(wt))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_worktree_for_repo(
@@ -218,7 +218,7 @@ pub async fn get_worktree_for_repo(
 pub async fn delete_worktree_for_repo(
     State(state): State<AppState>,
     Path((repo_id, id)): Path<(String, String)>,
-) -> Result<Json<Worktree>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let db_path = state.db_path.clone();
     let config = state.config.read().await.clone();
     let wt = tokio::task::spawn_blocking(move || {
@@ -230,7 +230,7 @@ pub async fn delete_worktree_for_repo(
         id: wt.id.clone(),
         repo_id: wt.repo_id.clone(),
     });
-    Ok(Json(wt))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -370,12 +370,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_worktree_for_repo_returns_200_with_matching_repo() {
+    async fn delete_worktree_for_repo_returns_204_with_matching_repo() {
         let (state, _tmp) = seeded_state();
-        let (status, body) = send_delete("/api/repos/r1/worktrees/w1", state).await;
-        assert_eq!(status, StatusCode::OK);
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["id"], "w1");
+        let (status, _) = send_delete("/api/repos/r1/worktrees/w1", state).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
@@ -398,12 +396,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_worktree_returns_200() {
+    async fn delete_worktree_returns_204() {
         let (state, _tmp) = seeded_state();
-        let (status, body) = send_delete("/api/worktrees/w1", state).await;
-        assert_eq!(status, StatusCode::OK);
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["id"], "w1");
+        let (status, _) = send_delete("/api/worktrees/w1", state).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]

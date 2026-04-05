@@ -449,7 +449,7 @@ async fn test_ticket_detail_empty() {
 
     // Call detail for a ticket with no agent runs or linked worktrees
     let resp = client
-        .get(format!("{base}/api/tickets/nonexistent-id/detail"))
+        .get(format!("{base}/api/tickets/nonexistent-id"))
         .send()
         .await
         .unwrap();
@@ -1341,7 +1341,7 @@ async fn test_mark_all_read() {
     .await;
     let client = reqwest::Client::new();
     let resp = client
-        .post(format!("{base}/api/notifications/read-all"))
+        .post(format!("{base}/api/notifications/read"))
         .send()
         .await
         .unwrap();
@@ -1430,7 +1430,7 @@ async fn test_patch_global_model_set_and_clear() {
 #[tokio::test]
 async fn test_list_features_empty() {
     let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
-    let resp = reqwest::get(format!("{base}/api/repos/test-repo/features"))
+    let resp = reqwest::get(format!("{base}/api/repos/r1/features"))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);

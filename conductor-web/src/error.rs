@@ -2,11 +2,16 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use conductor_core::error::ConductorError;
 
+#[derive(Debug)]
 pub enum ApiError {
     Core(ConductorError),
     Internal(String),
     /// A structured 409 Conflict response with a typed JSON body (e.g. dirty-branch check).
     Conflict(serde_json::Value),
+    /// 404 Not Found for cases not covered by ConductorError variants.
+    NotFound(String),
+    /// 503 Service Unavailable (e.g. optional feature not configured).
+    ServiceUnavailable(String),
 }
 
 impl IntoResponse for ApiError {
@@ -15,6 +20,8 @@ impl IntoResponse for ApiError {
             ApiError::Conflict(body) => {
                 return (StatusCode::CONFLICT, axum::Json(body)).into_response();
             }
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            ApiError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             ApiError::Internal(msg) => {
                 tracing::error!(error = %msg, "internal request error");
                 (StatusCode::INTERNAL_SERVER_ERROR, msg)
