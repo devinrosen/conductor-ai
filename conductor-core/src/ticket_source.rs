@@ -80,9 +80,7 @@ impl TicketSource {
                 github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
             }
             Self::Jira(cfg) => jira_acli::fetch_jira_issue(source_id, &cfg.url),
-            Self::Vantage(cfg, _) => {
-                vantage::fetch_vantage_deliverable(source_id, &cfg.sdlc_root)
-            }
+            Self::Vantage(cfg, _) => vantage::fetch_vantage_deliverable(source_id, &cfg.sdlc_root),
         }
     }
 
@@ -352,7 +350,10 @@ mod tests {
         let err = TicketSource::from_issue_source(&src).unwrap_err();
         match err {
             ConductorError::TicketSync(msg) => {
-                assert!(msg.contains("invalid vantage config"), "unexpected msg: {msg}");
+                assert!(
+                    msg.contains("invalid vantage config"),
+                    "unexpected msg: {msg}"
+                );
             }
             _ => panic!("expected TicketSync error, got {err:?}"),
         }
