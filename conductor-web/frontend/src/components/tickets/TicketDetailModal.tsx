@@ -8,7 +8,6 @@ import { formatDuration, formatTokens } from "../../utils/agentStats";
 import { deriveWorktreeSlug } from "../../utils/worktreeUtils";
 import { isSafeUrl } from "../../utils/urlUtils";
 import { CreateWorktreeForm } from "../worktrees/CreateWorktreeForm";
-import { isSafeUrl } from "../../utils/urlUtils";
 
 interface TicketDetailModalProps {
   ticket: Ticket;
