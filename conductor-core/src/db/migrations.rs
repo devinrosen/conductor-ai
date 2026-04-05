@@ -1997,4 +1997,38 @@ mod tests {
             "CHECK constraint must reject invalid dep_type"
         );
     }
+
+    #[test]
+    fn test_ticket_dependencies_both_dep_types_for_same_pair() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        conn.execute_batch(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');",
+        )
+        .unwrap();
+
+        conn.execute_batch(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type)
+             VALUES ('t1', 't2', 'blocks');
+             INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type)
+             VALUES ('t1', 't2', 'parent_of');",
+        )
+        .expect("both dep_types for the same ticket pair must be storable");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies WHERE from_ticket_id = 't1' AND to_ticket_id = 't2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2, "both 'blocks' and 'parent_of' rows must coexist");
+    }
 }
