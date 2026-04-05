@@ -14,8 +14,8 @@ use super::WorkflowManager;
 use crate::workflow::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX};
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
-    ActiveWorkflowCounts, PendingGateRow, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
-    WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow,
+    ActiveWorkflowCounts, PendingGateRow, StepTokenHeatmapRow, WorkflowRun, WorkflowRunContext,
+    WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 impl<'a> WorkflowManager<'a> {

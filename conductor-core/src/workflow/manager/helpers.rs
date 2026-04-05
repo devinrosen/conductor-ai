@@ -154,7 +154,11 @@ pub(in crate::workflow) fn row_to_workflow_step(
         gate_selections: row.get("gate_selections")?,
         input_tokens: row.get::<_, Option<i64>>("input_tokens").unwrap_or(None),
         output_tokens: row.get::<_, Option<i64>>("output_tokens").unwrap_or(None),
-        cache_read_input_tokens: row.get::<_, Option<i64>>("cache_read_input_tokens").unwrap_or(None),
-        cache_creation_input_tokens: row.get::<_, Option<i64>>("cache_creation_input_tokens").unwrap_or(None),
+        cache_read_input_tokens: row
+            .get::<_, Option<i64>>("cache_read_input_tokens")
+            .unwrap_or(None),
+        cache_creation_input_tokens: row
+            .get::<_, Option<i64>>("cache_creation_input_tokens")
+            .unwrap_or(None),
     })
 }
