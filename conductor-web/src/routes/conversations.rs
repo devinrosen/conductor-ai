@@ -315,7 +315,6 @@ mod tests {
 
     // ── respond_to_feedback tests ─────────────────────────────────────────────
 
-
     #[tokio::test]
     async fn respond_to_feedback_returns_404_for_unknown_run() {
         let (state, _tmp) = seeded_state();
