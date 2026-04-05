@@ -101,7 +101,9 @@ mod tests {
 
     #[test]
     fn feature_not_found_maps_to_404() {
-        let err = ApiError::Core(ConductorError::FeatureNotFound { name: "my-feature".into() });
+        let err = ApiError::Core(ConductorError::FeatureNotFound {
+            name: "my-feature".into(),
+        });
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
