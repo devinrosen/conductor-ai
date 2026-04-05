@@ -45,8 +45,8 @@ pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, MetadataEntry,
     PendingGateRow, RunIdSlot, StepResult, StepTokenHeatmapRow, WorkflowExecConfig,
     WorkflowExecInput, WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
-    WorkflowRunMetricsRow, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow,
+    WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 use crate::agent_config::AgentSpec;

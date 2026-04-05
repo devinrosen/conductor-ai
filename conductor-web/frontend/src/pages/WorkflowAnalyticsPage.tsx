@@ -99,7 +99,6 @@ export function WorkflowAnalyticsPage() {
 
     const bins: { label: string; count: number }[] = Array.from({ length: k }, (_, i) => {
       const lo = minVal + i * width;
-      const hi = lo + width;
       const label = histMetric === "duration"
         ? `${(lo / 1000).toFixed(1)}s`
         : `${fmtK(lo)}`;
