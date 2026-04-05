@@ -37,7 +37,8 @@ pub fn sync_vantage_deliverables(
     );
 
     let mut tickets = Vec::with_capacity(items.len());
-    let mut skipped = 0usize;
+    let mut skipped_codebase = 0usize;
+    let mut skipped_mode_or_status = 0usize;
     for item in &items {
         let id = item["id"].as_str().unwrap_or("");
         if id.is_empty() {
@@ -46,7 +47,7 @@ pub fn sync_vantage_deliverables(
         // Only sync deliverables whose codebase matches this repo
         let codebase = item["codebase"].as_str().unwrap_or("");
         if codebase != repo_slug {
-            skipped += 1;
+            skipped_codebase += 1;
             tracing::debug!("Vantage sync: skipping {id} (codebase={codebase:?} != {repo_slug:?})");
             continue;
         }
@@ -54,7 +55,7 @@ pub fn sync_vantage_deliverables(
         let exec_mode = item["execution_mode"].as_str().unwrap_or("");
         let conductor_status = item["conductor"]["status"].as_str().unwrap_or("");
         if exec_mode != "conductor" || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status) {
-            skipped += 1;
+            skipped_mode_or_status += 1;
             tracing::debug!(
                 "Vantage sync: skipping {id} (execution_mode={exec_mode:?}, conductor.status={conductor_status:?})"
             );
@@ -77,10 +78,24 @@ pub fn sync_vantage_deliverables(
         tickets.push(ticket);
     }
 
-    tracing::info!(
-        "Vantage sync: matched {} deliverables, skipped {skipped} (filtered out)",
-        tickets.len(),
-    );
+    let total_skipped = skipped_codebase + skipped_mode_or_status;
+    if tickets.is_empty() && total_skipped > 0 {
+        tracing::warn!(
+            project_id,
+            repo_slug,
+            skipped_codebase,
+            skipped_mode_or_status,
+            "Vantage sync: 0 deliverables matched for repo {repo_slug:?} — \
+             {skipped_codebase} skipped (codebase mismatch), \
+             {skipped_mode_or_status} skipped (execution_mode != 'conductor' or pre-ready status). \
+             Check that deliverables have codebase={repo_slug:?} and execution_mode='conductor'."
+        );
+    } else {
+        tracing::info!(
+            "Vantage sync: matched {} deliverables, skipped {total_skipped} (filtered out)",
+            tickets.len(),
+        );
+    }
 
     Ok(tickets)
 }
