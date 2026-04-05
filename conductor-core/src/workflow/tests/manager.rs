@@ -2199,23 +2199,6 @@ fn insert_running_root_run(conn: &Connection, run_id: &str) {
     .unwrap();
 }
 
-/// Insert a terminal step with an explicit ended_at timestamp.
-fn insert_terminal_step(
-    conn: &Connection,
-    step_id: &str,
-    run_id: &str,
-    status: &str,
-    ended_at: &str,
-) {
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, ended_at) \
-         VALUES (?1, ?2, 'step-a', 'actor', 0, ?3, 0, ?4)",
-        params![step_id, run_id, status, ended_at],
-    )
-    .unwrap();
-}
-
 /// Insert a non-terminal step (pending/running/waiting) with no ended_at.
 fn insert_non_terminal_step(conn: &Connection, step_id: &str, run_id: &str, status: &str) {
     conn.execute(
@@ -2232,7 +2215,7 @@ fn test_reap_stuck_workflow_runs_detects_stale_run() {
     let conn = setup_db();
     insert_running_root_run(&conn, "stuck-run");
     // Step completed with an old ended_at — well past any reasonable threshold.
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s1",
         "stuck-run",
@@ -2316,7 +2299,7 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
         params![parent.id],
     )
     .unwrap();
-    insert_terminal_step(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
@@ -2329,21 +2312,21 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
     insert_workflow_run(&conn, "completed-run", "test-wf", "completed", None);
     insert_workflow_run(&conn, "failed-run", "test-wf", "failed", None);
     insert_workflow_run(&conn, "waiting-run", "test-wf", "waiting", None);
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s1",
         "completed-run",
         "completed",
         "2020-01-01T00:00:00Z",
     );
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s2",
         "failed-run",
         "completed",
         "2020-01-01T00:00:00Z",
     );
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s3",
         "waiting-run",
@@ -2373,9 +2356,9 @@ fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
     insert_running_root_run(&conn, "stuck-1");
     insert_running_root_run(&conn, "stuck-2");
     insert_running_root_run(&conn, "stuck-3");
-    insert_terminal_step(&conn, "s1", "stuck-1", "completed", "2020-01-01T00:00:00Z");
-    insert_terminal_step(&conn, "s2", "stuck-2", "failed", "2020-01-01T00:00:00Z");
-    insert_terminal_step(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s1", "stuck-1", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s2", "stuck-2", "failed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();

@@ -4,6 +4,80 @@ use std::process::Command;
 use crate::error::{ConductorError, Result, SubprocessFailure};
 use crate::git::{check_gh_output, check_output, git_in};
 
+/// Structured result of a pre-creation health check on the base branch.
+#[derive(Debug, Clone)]
+pub struct MainHealthStatus {
+    /// Whether the base branch has uncommitted local changes.
+    pub is_dirty: bool,
+    /// List of files with uncommitted changes (populated when `is_dirty` is true).
+    pub dirty_files: Vec<String>,
+    /// Number of commits the local base branch is behind `origin/<branch>`,
+    /// computed from cached remote refs (no network fetch).
+    /// Zero if the remote tracking ref doesn't exist yet.
+    pub commits_behind: u32,
+    /// Whether `git status --porcelain` itself failed (e.g. not a git repo).
+    /// When true, `is_dirty` and `dirty_files` are unreliable.
+    pub status_check_failed: bool,
+}
+
+/// Run a read-only health check on `base_branch` inside `repo_path`.
+///
+/// Checks:
+/// 1. `git status --porcelain` — detects dirty files (does NOT abort, just records them)
+/// 2. `git rev-list --count HEAD..origin/<branch>` — computes `commits_behind` from
+///    cached remote refs (no network fetch; the actual fetch happens later in `create()`)
+///
+/// Does not modify any git state (no checkout, no merge, no fetch).
+pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus {
+    // 1. Check dirty state
+    let (is_dirty, dirty_files, status_check_failed) =
+        match git_in(repo_path).args(["status", "--porcelain"]).output() {
+            Ok(o) if o.status.success() && !o.stdout.is_empty() => {
+                let files: Vec<String> = String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| {
+                        l.trim_start_matches(|c: char| !c.is_whitespace())
+                            .trim()
+                            .to_string()
+                    })
+                    .collect();
+                (true, files, false)
+            }
+            Ok(o) if o.status.success() => {
+                // Empty stdout → working tree is clean
+                (false, Vec::new(), false)
+            }
+            _ => {
+                // Command failed or non-zero exit — cannot determine dirty state
+                (false, Vec::new(), true)
+            }
+        };
+
+    // 2. Count commits behind using cached remote refs (no fetch — avoids double
+    //    fetch with the subsequent ensure_base_up_to_date call in create()).
+    let remote_ref = format!("origin/{base_branch}");
+    let commits_behind = {
+        let count_out = git_in(repo_path)
+            .args(["rev-list", "--count", &format!("HEAD..{remote_ref}")])
+            .output();
+        match count_out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u32>()
+                .unwrap_or(0),
+            _ => 0,
+        }
+    };
+
+    MainHealthStatus {
+        is_dirty,
+        dirty_files,
+        commits_behind,
+        status_check_failed,
+    }
+}
+
 /// Resolve the base branch for a repo using a priority order:
 /// 1. The configured default branch (from DB) if it exists locally
 /// 2. `git symbolic-ref refs/remotes/origin/HEAD` (remote default)
@@ -54,19 +128,28 @@ pub(super) fn detect_remote_head(repo_path: &str) -> Option<String> {
 /// Ensure the base branch is up to date with the remote before creating a worktree.
 ///
 /// Returns a list of non-fatal warnings (fetch failure, diverged branch, etc.).
-/// Returns `Err` only for hard failures like a dirty working tree.
-pub(super) fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<String>> {
+/// Returns `Err` only for hard failures like a dirty working tree (unless `force_dirty` is true).
+///
+/// When `force_dirty` is `true`, the dirty-state check is skipped (the caller has
+/// already confirmed the user wants to proceed despite uncommitted changes).
+pub(super) fn ensure_base_up_to_date(
+    repo_path: &str,
+    base_branch: &str,
+    force_dirty: bool,
+) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
 
     // 1. Check for uncommitted changes in the repo working tree
-    let output = git_in(repo_path).args(["status", "--porcelain"]).output()?;
-    if output.status.success() && !output.stdout.is_empty() {
-        return Err(ConductorError::InvalidInput(
-            "uncommitted changes on base branch, please commit or stash first".to_string(),
-        ));
+    if !force_dirty {
+        let output = git_in(repo_path).args(["status", "--porcelain"]).output()?;
+        if output.status.success() && !output.stdout.is_empty() {
+            return Err(ConductorError::InvalidInput(
+                "uncommitted changes on base branch, please commit or stash first".to_string(),
+            ));
+        }
     }
 
-    // 2. Fetch from remote (soft failure — warn and allow local-only creation)
+    // 2. Fetch from remote (soft failure — warn and allow local-only creation).
     let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
     match fetch {
         Ok(o) if o.status.success() => {}

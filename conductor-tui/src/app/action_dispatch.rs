@@ -258,6 +258,62 @@ impl App {
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
             Action::LinkTicket => self.handle_link_ticket(),
+            Action::MainHealthCheckComplete {
+                repo_slug,
+                wt_name,
+                ticket_id,
+                from_pr,
+                from_branch,
+                status,
+            } => match status {
+                Err(e) => {
+                    self.state.modal = Modal::Error {
+                        message: format!("Main branch health check failed: {e}"),
+                    };
+                }
+                Ok(health) if health.is_dirty => {
+                    let mut message = format!(
+                        "Base branch has {} uncommitted change(s):\n",
+                        health.dirty_files.len()
+                    );
+                    for f in health.dirty_files.iter().take(10) {
+                        message.push_str(&format!("  {f}\n"));
+                    }
+                    if health.dirty_files.len() > 10 {
+                        message
+                            .push_str(&format!("  … and {} more\n", health.dirty_files.len() - 10));
+                    }
+                    message.push_str("\nProceed anyway?");
+                    self.state.modal = Modal::Confirm {
+                        title: "Dirty Base Branch".to_string(),
+                        message,
+                        on_confirm: crate::state::ConfirmAction::CreateWorktree {
+                            repo_slug,
+                            wt_name,
+                            ticket_id,
+                            from_pr,
+                            from_branch,
+                            force_dirty: true,
+                        },
+                    };
+                }
+                Ok(health) => {
+                    if health.commits_behind > 0 {
+                        self.state.status_message = Some(format!(
+                            "Base branch is {} commit(s) behind origin (will fast-forward)",
+                            health.commits_behind
+                        ));
+                    }
+                    self.spawn_worktree_create(
+                        repo_slug,
+                        wt_name,
+                        ticket_id,
+                        from_pr,
+                        from_branch,
+                        false,
+                    );
+                }
+            },
             Action::FeatureBranchesLoaded {
                 repo_slug,
                 wt_name,

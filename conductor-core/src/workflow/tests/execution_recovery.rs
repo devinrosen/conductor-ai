@@ -582,3 +582,231 @@ fn test_restore_completed_step_restores_gate_feedback() {
     // Gate feedback should be restored for downstream steps
     assert_eq!(state.last_gate_feedback.as_deref(), Some("LGTM, ship it"));
 }
+
+// ── reap_finalization_stuck_workflow_runs tests ─────────────────────────────
+
+#[test]
+fn test_reap_finalization_all_completed_marks_completed() {
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 1);
+
+    let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+    assert_eq!(count, 1);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Completed);
+}
+
+#[test]
+fn test_reap_finalization_any_failed_marks_failed() {
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Failed, 1);
+
+    let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+    assert_eq!(count, 1);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Failed);
+}
+
+#[test]
+fn test_reap_finalization_timed_out_step_marks_failed() {
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::TimedOut, 0);
+
+    let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+    assert_eq!(count, 1);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Failed);
+}
+
+#[test]
+fn test_reap_finalization_step_still_running_not_touched() {
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    // One step still running — run must NOT be reaped
+    let step_id = wf_mgr
+        .insert_step(&run_id, "step", "actor", false, 0, 0)
+        .unwrap();
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+    let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+    assert_eq!(count, 0);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Running);
+}
+
+#[test]
+fn test_reap_finalization_already_terminal_not_touched() {
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    wf_mgr
+        .update_workflow_status(&run_id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
+
+    let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn test_reap_finalization_zero_steps_uses_started_at() {
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    // A running workflow run with NO steps — should fall back to started_at as age ref.
+    // Threshold -1 ensures elapsed > -1 is always true, avoiding same-second false negatives.
+    let (run_id, _) = make_running_wf(&conn, "flow");
+
+    let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+    assert_eq!(count, 1);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    // No failed steps → Completed
+    assert_eq!(run.status, WorkflowRunStatus::Completed);
+}
+
+#[test]
+fn test_reap_finalization_updates_parent_agent_run() {
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let agent_mgr = AgentManager::new(&conn);
+
+    let (run_id, parent_id) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
+
+    wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+
+    let parent = agent_mgr.get_run(&parent_id).unwrap().unwrap();
+    assert_eq!(parent.status, crate::agent::AgentRunStatus::Completed);
+}
+
+#[test]
+fn test_reap_finalization_updates_parent_agent_run_on_failure() {
+    // Verifies that the parent agent_run is marked `failed` (not `completed`) when
+    // at least one workflow step has a failed status.
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let agent_mgr = AgentManager::new(&conn);
+
+    let (run_id, parent_id) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Failed, 0);
+
+    wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+
+    let parent = agent_mgr.get_run(&parent_id).unwrap().unwrap();
+    assert_eq!(parent.status, crate::agent::AgentRunStatus::Failed);
+}
+
+#[test]
+fn test_reap_finalization_skipped_step_counts_as_success() {
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Skipped, 0);
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 1);
+
+    let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+    assert_eq!(count, 1);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Completed);
+}
+
+#[test]
+fn test_reap_finalization_child_run_not_reaped() {
+    // Verifies that child workflow runs (parent_workflow_run_id IS NOT NULL) are excluded.
+    // The reaper must only finalize root runs to avoid double-finalization of sub-workflows.
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let agent_mgr = AgentManager::new(&conn);
+
+    // Create a root workflow run (parent_workflow_run_id = NULL via make_running_wf).
+    let (root_run_id, parent_agent_id) = make_running_wf(&conn, "root");
+
+    // Create a child workflow run with parent_workflow_run_id set to root_run_id.
+    let child_agent = agent_mgr
+        .create_run(Some("w1"), "child", None, None)
+        .unwrap();
+    let child_run = wf_mgr
+        .create_workflow_run_with_targets(
+            "child",
+            Some("w1"),
+            None,
+            None,
+            &child_agent.id,
+            false,
+            "manual",
+            None,
+            Some(&root_run_id),
+            None,
+            None,
+        )
+        .unwrap();
+    wf_mgr
+        .update_workflow_status(&child_run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+    insert_terminal_step(&conn, &child_run.id, WorkflowStepStatus::Completed, 0);
+
+    // Only the root run (no parent_workflow_run_id) should be reaped.
+    insert_terminal_step(&conn, &root_run_id, WorkflowStepStatus::Completed, 0);
+    let _ = parent_agent_id;
+
+    let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
+    assert_eq!(count, 1);
+
+    // Root finalized, child left untouched.
+    let root = wf_mgr.get_workflow_run(&root_run_id).unwrap().unwrap();
+    assert_eq!(root.status, WorkflowRunStatus::Completed);
+
+    let child = wf_mgr.get_workflow_run(&child_run.id).unwrap().unwrap();
+    assert_eq!(child.status, WorkflowRunStatus::Running);
+}
+
+#[test]
+fn test_reap_finalization_respects_threshold() {
+    // Verifies that a recently-finished run is NOT reaped when threshold_secs hasn't elapsed.
+    // All existing tests use threshold=-1 (bypass), but production uses threshold=60.
+    // Using i64::MAX ensures elapsed time will never exceed the threshold.
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
+
+    let count = wf_mgr
+        .reap_finalization_stuck_workflow_runs(i64::MAX)
+        .unwrap();
+    assert_eq!(count, 0);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Running);
+}

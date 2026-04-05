@@ -1,9 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
 
-use crate::db::{query_collect, with_in_clause};
+use crate::agent::status::AgentRunStatus;
+use crate::db::query_collect;
 use crate::error::Result;
 
 use super::helpers::{purge_where_clause, row_to_workflow_run};
@@ -20,27 +21,43 @@ impl<'a> WorkflowManager<'a> {
     /// thread could write the step's final status back to the DB.
     /// Returns the number of steps recovered.
     pub fn recover_stuck_steps(&self) -> Result<usize> {
-        // Single JOIN query: avoids N+1 per-step lookups and skips the
-        // per-run plan-step fetch that AgentManager::get_run() would do.
-        let stuck: Vec<(String, String, String, Option<String>)> = query_collect(
+        // Step 1: fetch running workflow steps that have a child_run_id.
+        let running_steps: Vec<(String, String)> = query_collect(
             self.conn,
-            "SELECT wrs.id, ar.id, ar.status, ar.result_text \
-             FROM workflow_run_steps wrs \
-             JOIN agent_runs ar ON ar.id = wrs.child_run_id \
-             WHERE wrs.status = 'running' \
-               AND ar.status IN ('completed', 'failed', 'cancelled')",
+            "SELECT id, child_run_id FROM workflow_run_steps \
+             WHERE status = 'running' AND child_run_id IS NOT NULL",
             params![],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+
+        if running_steps.is_empty() {
+            return Ok(0);
+        }
+
+        // Step 2: batch-fetch the agent runs via AgentManager.
+        let agent_mgr = crate::agent::AgentManager::new(self.conn);
+        let child_ids: Vec<&str> = running_steps.iter().map(|(_, id)| id.as_str()).collect();
+        let child_runs = agent_mgr.get_runs_by_ids(&child_ids)?;
+
+        // Filter in Rust to those with terminal statuses.
+        let stuck: Vec<(String, String, WorkflowStepStatus, Option<String>)> = running_steps
+            .into_iter()
+            .filter_map(|(step_id, child_run_id)| {
+                let run = child_runs.get(&child_run_id)?;
+                let step_status = match run.status {
+                    AgentRunStatus::Completed => WorkflowStepStatus::Completed,
+                    AgentRunStatus::Failed | AgentRunStatus::Cancelled => {
+                        WorkflowStepStatus::Failed
+                    }
+                    _ => return None,
+                };
+                Some((step_id, child_run_id, step_status, run.result_text.clone()))
+            })
+            .collect();
 
         let mut recovered = 0usize;
 
-        for (step_id, child_run_id, ar_status, result_text) in stuck {
-            let step_status = match ar_status.as_str() {
-                "completed" => WorkflowStepStatus::Completed,
-                _ => WorkflowStepStatus::Failed,
-            };
-
+        for (step_id, child_run_id, step_status, result_text) in stuck {
             self.update_step_status_full(
                 &step_id,
                 step_status,
@@ -82,29 +99,15 @@ impl<'a> WorkflowManager<'a> {
             return Ok(0);
         }
 
-        // Batch-fetch all parent agent run statuses in a single IN-clause query
-        // to avoid N+1 per-run lookups.
+        // Batch-fetch all parent agent runs via AgentManager to avoid N+1 lookups.
         let parent_ids: Vec<String> = waiting_runs
             .iter()
             .map(|(_, parent_run_id)| parent_run_id.clone())
             .collect();
 
-        let parent_statuses: HashMap<String, String> = with_in_clause(
-            "SELECT id, status FROM agent_runs WHERE id IN",
-            &[],
-            &parent_ids,
-            |sql, params| -> Result<HashMap<String, String>> {
-                let mut stmt = self.conn.prepare(sql)?;
-                let mut rows = stmt.query(params)?;
-                let mut map = HashMap::new();
-                while let Some(row) = rows.next()? {
-                    let id: String = row.get(0)?;
-                    let status: String = row.get(1)?;
-                    map.insert(id, status);
-                }
-                Ok(map)
-            },
-        )?;
+        let agent_mgr = crate::agent::AgentManager::new(self.conn);
+        let id_refs: Vec<&str> = parent_ids.iter().map(String::as_str).collect();
+        let parent_runs = agent_mgr.get_runs_by_ids(&id_refs)?;
 
         let mut reaped = 0usize;
         let now = Utc::now();
@@ -113,8 +116,8 @@ impl<'a> WorkflowManager<'a> {
             // A missing parent (None) is also treated as dead — if the agent run
             // has been purged from the DB its executor is certainly gone.
             let dead_parent = !matches!(
-                parent_statuses.get(&parent_run_id).map(String::as_str),
-                Some("running") | Some("waiting_for_feedback")
+                parent_runs.get(&parent_run_id).map(|r| &r.status),
+                Some(AgentRunStatus::Running) | Some(AgentRunStatus::WaitingForFeedback)
             );
 
             // Check if the active gate step's timeout has elapsed.
@@ -158,11 +161,14 @@ impl<'a> WorkflowManager<'a> {
 
             // Mark the active gate step as timed_out.
             if let Some(ref step) = gate_step {
-                let now_str = now.to_rfc3339();
-                self.conn.execute(
-                    "UPDATE workflow_run_steps SET status = 'timed_out', ended_at = ?1 \
-                     WHERE id = ?2",
-                    params![now_str, step.id],
+                self.update_step_status(
+                    &step.id,
+                    WorkflowStepStatus::TimedOut,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
                 )?;
             }
 
@@ -218,6 +224,103 @@ impl<'a> WorkflowManager<'a> {
             params![threshold_secs],
             |row| row.get(0),
         )
+    }
+
+    /// Directly finalize workflow runs that are stuck in `running` status because
+    /// the finalization DB write (`update_workflow_status`) failed after all steps
+    /// already reached terminal states.
+    ///
+    /// A run is eligible when ALL of the following hold:
+    /// 1. `status = 'running'`
+    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
+    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
+    /// 4. The most recent step `ended_at` (or the run's own `started_at` when
+    ///    no steps exist) is older than `threshold_secs`
+    ///
+    /// Unlike `detect_stuck_workflow_run_ids`, this function writes the correct
+    /// terminal status directly without resetting steps or re-running the engine:
+    /// - Any `failed` or `timed_out` step → `Failed`
+    /// - All `completed`/`skipped`/`cancelled` steps → `Completed`
+    ///
+    /// The parent `agent_runs` row is updated best-effort (failures are logged,
+    /// not returned as errors).
+    ///
+    /// Returns the number of runs finalized.
+    pub fn reap_finalization_stuck_workflow_runs(
+        &self,
+        threshold_secs: i64,
+    ) -> crate::error::Result<usize> {
+        // Find root running workflow runs where all steps are terminal and
+        // the last step (or the run itself) ended more than threshold_secs ago.
+        let stuck: Vec<(String, String, bool)> = query_collect(
+            self.conn,
+            "SELECT id, parent_run_id, has_failure FROM ( \
+               SELECT wr.id, wr.parent_run_id, \
+                 COALESCE( \
+                   (SELECT MAX(ended_at) FROM workflow_run_steps wrs2 \
+                    WHERE wrs2.workflow_run_id = wr.id), \
+                   wr.started_at \
+                 ) AS age_ref, \
+                 EXISTS ( \
+                   SELECT 1 FROM workflow_run_steps wrs3 \
+                   WHERE wrs3.workflow_run_id = wr.id \
+                     AND wrs3.status IN ('failed', 'timed_out') \
+                 ) AS has_failure \
+               FROM workflow_runs wr \
+               WHERE wr.status = 'running' \
+                 AND wr.parent_workflow_run_id IS NULL \
+                 AND NOT EXISTS ( \
+                   SELECT 1 FROM workflow_run_steps wrs \
+                   WHERE wrs.workflow_run_id = wr.id \
+                     AND wrs.status IN ('running', 'pending', 'waiting') \
+                 ) \
+             ) \
+             WHERE age_ref IS NOT NULL \
+               AND (CAST(strftime('%s', 'now') AS INTEGER) \
+                    - CAST(strftime('%s', age_ref) AS INTEGER)) > ?1",
+            params![threshold_secs],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        let mut finalized = 0usize;
+
+        for (run_id, parent_run_id, has_failure) in stuck {
+            let final_status = if has_failure {
+                WorkflowRunStatus::Failed
+            } else {
+                WorkflowRunStatus::Completed
+            };
+
+            let summary =
+                "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'"
+                    .to_string();
+
+            self.update_workflow_status(&run_id, final_status.clone(), Some(&summary))?;
+            tracing::info!(
+                run_id = %run_id,
+                status = %final_status,
+                "Reaper finalized stuck workflow run"
+            );
+
+            // Best-effort: update the parent agent_runs row if still running.
+            let agent_mgr = crate::agent::AgentManager::new(self.conn);
+            let update_result = if has_failure {
+                agent_mgr.update_run_failed_if_running(&parent_run_id, &summary)
+            } else {
+                agent_mgr.update_run_completed_if_running(&parent_run_id, &summary)
+            };
+            if let Err(e) = update_result {
+                tracing::warn!(
+                    run_id = %run_id,
+                    parent_run_id = %parent_run_id,
+                    "Failed to update parent agent_runs row (best-effort, non-fatal): {e}"
+                );
+            }
+
+            finalized += 1;
+        }
+
+        Ok(finalized)
     }
 
     /// Find the most-recently-started child workflow run that can be resumed:

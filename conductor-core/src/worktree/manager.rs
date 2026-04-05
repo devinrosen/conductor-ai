@@ -71,6 +71,23 @@ impl<'a> WorktreeManager<'a> {
         Self { conn, config }
     }
 
+    /// Run a read-only health check on the base branch of `repo_slug`.
+    ///
+    /// Resolves the base branch in the same priority order as `create()`.
+    /// Returns a `MainHealthStatus` describing dirty state and staleness.
+    pub fn check_main_health(
+        &self,
+        repo_slug: &str,
+        base_branch: Option<&str>,
+    ) -> Result<super::git_helpers::MainHealthStatus> {
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_slug(repo_slug)?;
+        let base = base_branch
+            .map(|b| b.to_string())
+            .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
+        Ok(check_main_health(&repo.local_path, &base))
+    }
+
     /// Create a new worktree, ensuring the base branch is up to date first.
     ///
     /// Returns the created worktree and a list of non-fatal warnings
@@ -78,6 +95,11 @@ impl<'a> WorktreeManager<'a> {
     ///
     /// When `from_pr` is `Some(n)`, the worktree is backed by the branch of PR #n
     /// instead of a newly-created branch.  `from_branch` is ignored in that case.
+    ///
+    /// When `force_dirty` is `true`, the dirty-state check inside
+    /// `ensure_base_up_to_date()` is skipped. Use this only after the caller has
+    /// explicitly confirmed the user wants to proceed with uncommitted changes.
+    ///
     pub fn create(
         &self,
         repo_slug: &str,
@@ -85,6 +107,7 @@ impl<'a> WorktreeManager<'a> {
         from_branch: Option<&str>,
         ticket_id: Option<&str>,
         from_pr: Option<u32>,
+        force_dirty: bool,
     ) -> Result<(Worktree, Vec<String>)> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
@@ -145,7 +168,7 @@ impl<'a> WorktreeManager<'a> {
             let base = from_branch
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
-            let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
+            let warnings = ensure_base_up_to_date(&repo.local_path, &base, force_dirty)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",

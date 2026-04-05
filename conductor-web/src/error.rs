@@ -5,11 +5,16 @@ use conductor_core::error::ConductorError;
 pub enum ApiError {
     Core(ConductorError),
     Internal(String),
+    /// A structured 409 Conflict response with a typed JSON body (e.g. dirty-branch check).
+    Conflict(serde_json::Value),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            ApiError::Conflict(body) => {
+                return (StatusCode::CONFLICT, axum::Json(body)).into_response();
+            }
             ApiError::Internal(msg) => {
                 tracing::error!(error = %msg, "internal request error");
                 (StatusCode::INTERNAL_SERVER_ERROR, msg)
@@ -23,17 +28,19 @@ impl IntoResponse for ApiError {
                     | ConductorError::AgentRunNotFound { .. }
                     | ConductorError::FeedbackNotFound { .. }
                     | ConductorError::AgentRunNotInConversation { .. }
-                    | ConductorError::FeedbackRunMismatch { .. } => StatusCode::NOT_FOUND,
+                    | ConductorError::FeedbackRunMismatch { .. }
+                    | ConductorError::ConversationNotFound { .. } => StatusCode::NOT_FOUND,
                     ConductorError::RepoAlreadyExists { .. }
                     | ConductorError::WorktreeAlreadyExists { .. }
                     | ConductorError::IssueSourceAlreadyExists { .. }
                     | ConductorError::TicketAlreadyLinked
-                    | ConductorError::WorkflowRunAlreadyActive { .. } => StatusCode::CONFLICT,
+                    | ConductorError::WorkflowRunAlreadyActive { .. }
+                    | ConductorError::ConversationHasActiveRun { .. } => StatusCode::CONFLICT,
                     ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
-                    ConductorError::NoPendingFeedbackForRun { .. }
-                    | ConductorError::Agent(_)
+                    ConductorError::Agent(_)
                     | ConductorError::InvalidInput(_)
-                    | ConductorError::UnknownSourceType(_) => StatusCode::BAD_REQUEST,
+                    | ConductorError::UnknownSourceType(_)
+                    | ConductorError::NoPendingFeedbackForRun { .. } => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 let msg = err.to_string();
