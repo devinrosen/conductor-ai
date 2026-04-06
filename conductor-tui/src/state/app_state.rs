@@ -11,10 +11,10 @@ use ratatui::widgets::ListState;
 
 use super::workflow_rows::{count_children_rows, count_steps_for_run, max_iteration_for_run};
 use super::{
-    build_worktree_tree, build_worktree_tree_indices, parse_target_label, push_children,
-    push_steps_for_run, ColumnFocus, DashboardRow, DataCache, FilterState, Modal, RepoDetailFocus,
-    TargetType, TreePosition, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow,
-    WorkflowsFocus,
+    build_ticket_tree_indices, build_worktree_tree, build_worktree_tree_indices,
+    parse_target_label, push_children, push_steps_for_run, ColumnFocus, DashboardRow, DataCache,
+    FilterState, Modal, RepoDetailFocus, TargetType, TreePosition, View, WorkflowDefFocus,
+    WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
 };
 use crate::theme::Theme;
 
@@ -51,6 +51,10 @@ pub struct AppState {
     // Pre-filtered ticket lists (closed + text filter applied); index into these for nav/actions
     pub filtered_tickets: Vec<Ticket>,
     pub filtered_detail_tickets: Vec<Ticket>,
+    /// Parallel tree-position metadata for `filtered_detail_tickets` (same length).
+    pub detail_ticket_tree_positions: Vec<TreePosition>,
+    /// Set of ticket IDs whose children are currently collapsed in the ticket list.
+    pub collapsed_ticket_ids: HashSet<String>,
 
     // Agent activity list navigation (replaces the old Paragraph scroll offset)
     pub agent_list_state: RefCell<ListState>,
@@ -177,6 +181,8 @@ impl AppState {
             pr_last_fetched_at: None,
             filtered_tickets: Vec::new(),
             filtered_detail_tickets: Vec::new(),
+            detail_ticket_tree_positions: Vec::new(),
+            collapsed_ticket_ids: HashSet::new(),
             agent_list_state: RefCell::new(ListState::default()),
             repo_agent_list_state: RefCell::new(ListState::default()),
             worktree_detail_focus: super::WorktreeDetailFocus::InfoPanel,
@@ -327,16 +333,73 @@ impl AppState {
         });
 
         let detail_filter_query = self.detail_ticket_filter.as_query();
-        self.filtered_detail_tickets = self
-            .detail_tickets
-            .iter()
-            .filter(|t| self.show_closed_tickets || t.state != "closed")
-            .filter(|t| match detail_filter_query.as_deref() {
-                Some(f) if !f.is_empty() => t.matches_filter(f),
-                _ => true,
-            })
-            .cloned()
-            .collect();
+
+        // Build DFS tree order for detail tickets; also get child→parent map for
+        // ancestor promotion during text filter (reuse instead of rebuilding).
+        let (dfs_indices, dfs_positions, child_to_parent) =
+            build_ticket_tree_indices(&self.detail_tickets, &self.data.ticket_dependencies);
+
+        // When a text filter is active, find all ticket IDs that match plus their ancestors.
+        let include_set: Option<std::collections::HashSet<&str>> =
+            if let Some(f) = detail_filter_query.as_deref() {
+                if !f.is_empty() {
+                    let mut set = std::collections::HashSet::new();
+                    for t in &self.detail_tickets {
+                        if t.matches_filter(f) {
+                            set.insert(t.id.as_str());
+                            // Walk up the ancestor chain.
+                            let mut cur = t.id.as_str();
+                            while let Some(&parent) = child_to_parent.get(cur) {
+                                if !set.insert(parent) {
+                                    break; // already added this ancestor
+                                }
+                                cur = parent;
+                            }
+                        }
+                    }
+                    Some(set)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        let mut filtered = Vec::with_capacity(self.detail_tickets.len());
+        let mut positions = Vec::with_capacity(self.detail_tickets.len());
+
+        // Walk DFS order; track whether each ancestor is collapsed to skip subtrees.
+        // We use the `child_to_parent` map to check collapse status up the chain.
+        'outer: for (dfs_idx, pos) in dfs_indices.iter().zip(dfs_positions.iter()) {
+            let t = &self.detail_tickets[*dfs_idx];
+
+            // Check if any ancestor is collapsed.
+            let mut cur = t.id.as_str();
+            while let Some(&parent) = child_to_parent.get(cur) {
+                if self.collapsed_ticket_ids.contains(parent) {
+                    continue 'outer;
+                }
+                cur = parent;
+            }
+
+            // Apply show_closed filter.
+            if !self.show_closed_tickets && t.state == "closed" {
+                continue;
+            }
+
+            // Apply text/include filter.
+            if let Some(ref set) = include_set {
+                if !set.contains(t.id.as_str()) {
+                    continue;
+                }
+            }
+
+            filtered.push(t.clone());
+            positions.push(pos.clone());
+        }
+
+        self.filtered_detail_tickets = filtered;
+        self.detail_ticket_tree_positions = positions;
     }
 
     /// Returns (current_index, list_length) for the currently focused pane.

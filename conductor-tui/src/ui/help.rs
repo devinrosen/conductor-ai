@@ -70,6 +70,7 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        help_line("Space", "Collapse/expand parent ticket (tree view)", theme),
         help_line("I", "Toggle agent-issues filter", theme),
         Line::from(""),
         Line::from(Span::styled(

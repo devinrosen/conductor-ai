@@ -370,6 +370,8 @@ pub enum Action {
     },
 
     // Workflow actions
+    /// Toggle collapse/expand for the selected parent ticket row.
+    ToggleTicketCollapse,
     /// Toggle expand/collapse for the hovered parent run row.
     ToggleWorkflowRunCollapse,
     /// Toggle collapse/expand for the workflow definitions pane (Space key on Defs focus).

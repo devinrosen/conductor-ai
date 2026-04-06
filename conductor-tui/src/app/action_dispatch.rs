@@ -439,6 +439,36 @@ impl App {
             // Agent issue creation toggle
             Action::ToggleAgentIssues => self.handle_toggle_agent_issues(),
 
+            // Ticket tree collapse/expand toggle
+            Action::ToggleTicketCollapse => {
+                let idx = self.state.detail_ticket_index;
+                let is_parent = self
+                    .state
+                    .detail_ticket_tree_positions
+                    .get(idx)
+                    .is_some_and(|p| p.is_parent);
+                if is_parent {
+                    if let Some(ticket_id) = self
+                        .state
+                        .filtered_detail_tickets
+                        .get(idx)
+                        .map(|t| t.id.clone())
+                    {
+                        if self.state.collapsed_ticket_ids.contains(&ticket_id) {
+                            self.state.collapsed_ticket_ids.remove(&ticket_id);
+                        } else {
+                            self.state.collapsed_ticket_ids.insert(ticket_id);
+                        }
+                        self.state.rebuild_filtered_tickets();
+                        // Clamp index after visibility change.
+                        let len = self.state.filtered_detail_tickets.len();
+                        if len > 0 && self.state.detail_ticket_index >= len {
+                            self.state.detail_ticket_index = len - 1;
+                        }
+                    }
+                }
+            }
+
             // Ticket closed visibility toggle
             Action::ToggleClosedTickets => {
                 self.state.show_closed_tickets = !self.state.show_closed_tickets;

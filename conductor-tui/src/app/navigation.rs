@@ -81,6 +81,35 @@ fn workflow_picker_visual_line(items: &[WorkflowPickerItem], selected: usize) ->
 }
 
 impl App {
+    /// Update `status_message` to show unresolved blockers for the currently selected ticket,
+    /// or clear it if the ticket has no unresolved blockers.
+    pub(super) fn update_selected_ticket_blocked_message(&mut self) {
+        if let Some(ticket) = self
+            .state
+            .filtered_detail_tickets
+            .get(self.state.detail_ticket_index)
+        {
+            let blockers: Vec<String> = self
+                .state
+                .data
+                .ticket_dependencies
+                .get(&ticket.id)
+                .map(|d| {
+                    d.active_blockers()
+                        .map(|b| format!("#{}", b.source_id))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if blockers.is_empty() {
+                self.state.status_message = None;
+                self.state.status_message_at = None;
+            } else {
+                self.state.status_message = Some(format!("blocked by: {}", blockers.join(", ")));
+                self.state.status_message_at = Some(std::time::Instant::now());
+            }
+        }
+    }
+
     pub(super) fn half_page_size(&self) -> usize {
         let (_, height) = crossterm::terminal::size().unwrap_or((80, 24));
         // Agent activity pane is roughly the bottom half of the terminal.
@@ -538,6 +567,7 @@ impl App {
                 RepoDetailFocus::Tickets => {
                     self.state.detail_ticket_index =
                         self.state.detail_ticket_index.saturating_sub(1);
+                    self.update_selected_ticket_blocked_message();
                 }
                 RepoDetailFocus::Prs => {
                     self.state.detail_pr_index = self.state.detail_pr_index.saturating_sub(1);
@@ -709,6 +739,7 @@ impl App {
                         &mut self.state.detail_ticket_index,
                         self.state.filtered_detail_tickets.len(),
                     );
+                    self.update_selected_ticket_blocked_message();
                 }
                 RepoDetailFocus::Prs => {
                     clamp_increment(&mut self.state.detail_pr_index, self.state.detail_prs.len());

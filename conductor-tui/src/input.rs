@@ -391,6 +391,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('y') => return Action::CopyTicketUrl,
             KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Char('L') => return Action::EnterLabelFilter,
+            KeyCode::Char(' ') if state.column_focus == crate::state::ColumnFocus::Content => {
+                return Action::ToggleTicketCollapse;
+            }
             _ => {}
         }
     }
