@@ -361,6 +361,18 @@ pub struct PendingGateRow {
     pub branch: Option<String>,
     /// Ticket source_id (e.g. "1151") from the linked ticket, if any.
     pub ticket_ref: Option<String>,
+    /// Human-readable title extracted from `definition_snapshot`. Use `display_name()` for rendering.
+    pub workflow_title: Option<String>,
+}
+
+impl PendingGateRow {
+    /// Returns the human-readable display name for this gate's workflow.
+    /// Uses `workflow_title` if present; falls back to `workflow_name`.
+    pub fn display_name(&self) -> &str {
+        self.workflow_title
+            .as_deref()
+            .unwrap_or(&self.workflow_name)
+    }
 }
 
 /// Counts of active workflow runs (pending / running / waiting) for a single repo.
@@ -507,6 +519,8 @@ pub struct WorkflowTokenAggregate {
     pub avg_cache_read: f64,
     pub avg_cache_creation: f64,
     pub run_count: i64,
+    /// Human-readable title extracted from any definition_snapshot for this workflow.
+    pub workflow_title: Option<String>,
 }
 
 /// Token totals for a time-series trend row (daily or weekly bucket).

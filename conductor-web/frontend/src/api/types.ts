@@ -214,6 +214,7 @@ export interface WorkflowDefSummary {
 export interface WorkflowRun {
   id: string;
   workflow_name: string;
+  workflow_title?: string | null;
   worktree_id: string | null;
   parent_run_id: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "waiting";
@@ -260,6 +261,7 @@ export interface WorkflowRunStep {
 
 export interface WorkflowTokenAggregate {
   workflow_name: string;
+  workflow_title?: string | null;
   avg_input: number;
   avg_output: number;
   avg_cache_read: number;

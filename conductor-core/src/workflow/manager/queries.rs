@@ -14,9 +14,9 @@ use super::WorkflowManager;
 use crate::workflow::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX};
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
-    ActiveWorkflowCounts, PendingGateRow, StepTokenHeatmapRow, WorkflowRun, WorkflowRunContext,
-    WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate,
-    WorkflowTokenTrendRow,
+    extract_workflow_title, ActiveWorkflowCounts, PendingGateRow, StepTokenHeatmapRow, WorkflowRun,
+    WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
+    WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 impl<'a> WorkflowManager<'a> {
@@ -675,7 +675,7 @@ impl<'a> WorkflowManager<'a> {
         let placeholders = sql_placeholders_from(WorkflowRunStatus::ACTIVE.len(), 2);
         let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
-            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref \
+            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
              FROM workflow_run_steps s \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
@@ -907,7 +907,8 @@ impl<'a> WorkflowManager<'a> {
                         COALESCE(AVG(total_output_tokens), 0.0) as avg_output, \
                         COALESCE(AVG(total_cache_read_input_tokens), 0.0) as avg_cache_read, \
                         COALESCE(AVG(total_cache_creation_input_tokens), 0.0) as avg_cache_creation, \
-                        COUNT(*) as run_count \
+                        COUNT(*) as run_count, \
+                        MAX(definition_snapshot) as definition_snapshot \
                  FROM workflow_runs \
                  WHERE status = 'completed' AND total_input_tokens IS NOT NULL \
                    AND repo_id = ?1 \
@@ -923,7 +924,8 @@ impl<'a> WorkflowManager<'a> {
                         COALESCE(AVG(total_output_tokens), 0.0) as avg_output, \
                         COALESCE(AVG(total_cache_read_input_tokens), 0.0) as avg_cache_read, \
                         COALESCE(AVG(total_cache_creation_input_tokens), 0.0) as avg_cache_creation, \
-                        COUNT(*) as run_count \
+                        COUNT(*) as run_count, \
+                        MAX(definition_snapshot) as definition_snapshot \
                  FROM workflow_runs \
                  WHERE status = 'completed' AND total_input_tokens IS NOT NULL \
                  GROUP BY workflow_name \
@@ -934,6 +936,8 @@ impl<'a> WorkflowManager<'a> {
         };
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(param.iter()), |row| {
+            let definition_snapshot: Option<String> = row.get(6)?;
+            let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
             Ok(WorkflowTokenAggregate {
                 workflow_name: row.get(0)?,
                 avg_input: row.get(1)?,
@@ -941,6 +945,7 @@ impl<'a> WorkflowManager<'a> {
                 avg_cache_read: row.get(3)?,
                 avg_cache_creation: row.get(4)?,
                 run_count: row.get(5)?,
+                workflow_title,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

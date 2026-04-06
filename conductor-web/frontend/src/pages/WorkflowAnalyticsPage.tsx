@@ -201,7 +201,7 @@ export function WorkflowAnalyticsPage() {
                     key={row.workflow_name}
                     className={`hover:bg-gray-50 ${selectedWorkflow === row.workflow_name ? "bg-indigo-50" : ""}`}
                   >
-                    <td className="px-4 py-2 font-medium text-gray-800">{row.workflow_name}</td>
+                    <td className="px-4 py-2 font-medium text-gray-800">{row.workflow_title ?? row.workflow_name}</td>
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtK(row.avg_input)}</td>
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtK(row.avg_output)}</td>
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtK(row.avg_cache_read)}</td>

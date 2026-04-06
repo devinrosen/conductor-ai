@@ -114,12 +114,15 @@ pub(super) fn pending_gate_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Resu
     let target_label: Option<String> = row.get("target_label")?;
     let branch: Option<String> = row.get("branch")?;
     let ticket_ref: Option<String> = row.get("ticket_ref")?;
+    let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
+    let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
     Ok(PendingGateRow {
         step,
         workflow_name,
         target_label,
         branch,
         ticket_ref,
+        workflow_title,
     })
 }
 

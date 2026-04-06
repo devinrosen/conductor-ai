@@ -1068,6 +1068,7 @@ mod tests {
             target_label: None,
             branch: None,
             ticket_ref: None,
+            workflow_title: None,
         }
     }
 
