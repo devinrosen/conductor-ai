@@ -256,7 +256,7 @@ impl WorkflowPickerItem {
 
     pub fn name(&self) -> &str {
         match self {
-            WorkflowPickerItem::Workflow(def) => &def.name,
+            WorkflowPickerItem::Workflow(def) => def.display_name(),
             WorkflowPickerItem::Header(label) => label.as_str(),
             WorkflowPickerItem::StartAgent => "Start agent",
             WorkflowPickerItem::Skip => "Skip",
