@@ -10,6 +10,8 @@ use super::{
     WorkflowPickerItem, WorkflowPickerTarget,
 };
 
+pub use crate::ui::graph::{GraphData, GraphNavState, GraphNodeType};
+
 #[derive(Clone)]
 pub enum Modal {
     None,
@@ -183,6 +185,12 @@ pub enum Modal {
         notifications: Vec<conductor_core::notification_manager::Notification>,
         selected: usize,
     },
+    /// Full-screen DAG graph view for ticket dependencies or workflow step graphs.
+    GraphView {
+        data: GraphData<GraphNodeType>,
+        nav: GraphNavState,
+        title: String,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -244,6 +252,9 @@ impl fmt::Debug for Modal {
             }
             Modal::Notifications { selected, .. } => {
                 write!(f, "Modal::Notifications(selected={selected})")
+            }
+            Modal::GraphView { ref title, .. } => {
+                write!(f, "Modal::GraphView(title={title:?})")
             }
         }
     }

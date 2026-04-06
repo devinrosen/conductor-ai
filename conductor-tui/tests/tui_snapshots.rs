@@ -9,6 +9,9 @@ use conductor_tui::state::{
     RepoDetailFocus, TreePosition, View, WorktreeDetailFocus,
 };
 use conductor_tui::ui;
+use conductor_tui::ui::graph::{
+    EdgeType, GraphData, GraphEdge, GraphNavState, GraphNodeType, TicketGraphNode,
+};
 use ratatui::{backend::TestBackend, Terminal};
 
 // ─── Fixture helpers ────────────────────────────────────────────────────────
@@ -621,5 +624,76 @@ fn snap_modal_theme_picker() {
         original_theme: default_theme,
         original_name: "conductor".into(),
     };
+    insta::assert_snapshot!(render_to_string(&state));
+}
+
+#[test]
+fn snap_graph_view() {
+    let mut state = make_state();
+
+    // 4 connected nodes: A blocks B, C is parent of D
+    // 2 unconnected nodes (not in the graph)
+    let nodes = vec![
+        GraphNodeType::Ticket(TicketGraphNode {
+            id: "01TKT00000000000000000001A".into(),
+            source_id: "101".into(),
+            title: "Setup CI pipeline".into(),
+            state: "closed".into(),
+            labels: "infra".into(),
+            assignee: None,
+            has_worktree: false,
+        }),
+        GraphNodeType::Ticket(TicketGraphNode {
+            id: "01TKT00000000000000000002B".into(),
+            source_id: "102".into(),
+            title: "Add deployment step".into(),
+            state: "open".into(),
+            labels: "".into(),
+            assignee: None,
+            has_worktree: false,
+        }),
+        GraphNodeType::Ticket(TicketGraphNode {
+            id: "01TKT00000000000000000003C".into(),
+            source_id: "103".into(),
+            title: "Auth epic".into(),
+            state: "open".into(),
+            labels: "epic".into(),
+            assignee: Some("alice".into()),
+            has_worktree: false,
+        }),
+        GraphNodeType::Ticket(TicketGraphNode {
+            id: "01TKT00000000000000000004D".into(),
+            source_id: "104".into(),
+            title: "OAuth login flow".into(),
+            state: "open".into(),
+            labels: "".into(),
+            assignee: None,
+            has_worktree: false,
+        }),
+    ];
+
+    let edges = vec![
+        GraphEdge {
+            from: "01TKT00000000000000000001A".into(),
+            to: "01TKT00000000000000000002B".into(),
+            edge_type: EdgeType::BlockedBy,
+        },
+        GraphEdge {
+            from: "01TKT00000000000000000003C".into(),
+            to: "01TKT00000000000000000004D".into(),
+            edge_type: EdgeType::ParentChild,
+        },
+    ];
+
+    state.modal = Modal::GraphView {
+        data: GraphData {
+            nodes,
+            edges,
+            unconnected_count: 2,
+        },
+        nav: GraphNavState::default(),
+        title: "Dependency Graph — my-app tickets".into(),
+    };
+
     insta::assert_snapshot!(render_to_string(&state));
 }

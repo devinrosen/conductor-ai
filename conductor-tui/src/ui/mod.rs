@@ -1,5 +1,6 @@
 mod common;
 mod dashboard;
+pub mod graph;
 mod help;
 pub(crate) mod helpers;
 mod modal;
@@ -260,5 +261,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             notifications,
             selected,
         } => modal::render_notifications(frame, area, notifications, *selected, &state.theme),
+        Modal::GraphView { data, nav, title } => {
+            frame.render_widget(ratatui::widgets::Clear, area);
+            graph::render_graph_view(frame, area, data, nav, title, &state.theme);
+        }
     }
 }

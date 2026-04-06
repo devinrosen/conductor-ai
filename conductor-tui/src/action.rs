@@ -429,4 +429,26 @@ pub enum Action {
 
     // No-op (unhandled key)
     None,
+
+    // ── Graph view actions ─────────────────────────────────────────────────
+    /// Open the ticket dependency graph for the current repo's tickets.
+    OpenTicketGraphView,
+    /// Stub: open workflow step graph (keybinding reserved for future use).
+    OpenWorkflowStepGraphView,
+    /// Move graph selection left (to previous layer).
+    GraphNavLeft,
+    /// Move graph selection right (to next layer).
+    GraphNavRight,
+    /// Move graph selection up (to previous node in layer).
+    GraphNavUp,
+    /// Move graph selection down (to next node in layer).
+    GraphNavDown,
+    /// Pan the graph viewport left.
+    GraphPanLeft,
+    /// Pan the graph viewport right.
+    GraphPanRight,
+    /// Pan the graph viewport up.
+    GraphPanUp,
+    /// Pan the graph viewport down.
+    GraphPanDown,
 }
