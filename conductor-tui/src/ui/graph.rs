@@ -375,11 +375,7 @@ pub struct ComputedLayout {
 /// `layers` must be the pre-computed result of `data.compute_layers()`.
 /// `node_width` and `h_gap` control horizontal spacing and are computed
 /// dynamically by the caller based on available screen width.
-pub fn compute_layout(
-    layers: Vec<Vec<String>>,
-    node_width: u16,
-    h_gap: u16,
-) -> ComputedLayout {
+pub fn compute_layout(layers: Vec<Vec<String>>, node_width: u16, h_gap: u16) -> ComputedLayout {
     if layers.is_empty() {
         return ComputedLayout::default();
     }
