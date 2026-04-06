@@ -987,7 +987,8 @@ mod tests {
         });
 
         let ticket = parse_vantage_deliverable(&json);
-        let raw: serde_json::Value = serde_json::from_str(ticket.raw_json.as_deref().unwrap()).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(ticket.raw_json.as_deref().unwrap()).unwrap();
         assert_eq!(raw["custom_field"], "preserved");
     }
 
