@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::path::Path;
 use std::process::Command;
 
 use rusqlite::Connection;
@@ -36,6 +38,9 @@ pub fn sync_vantage_deliverables(
         project_id,
     );
 
+    // Pre-read all deliverable frontmatter files once to avoid N file reads in the loop.
+    let frontmatter_cache = preload_deliverable_frontmatter(sdlc_root);
+
     let mut tickets = Vec::with_capacity(items.len());
     let mut skipped_codebase = 0usize;
     let mut skipped_mode_or_status = 0usize;
@@ -51,10 +56,13 @@ pub fn sync_vantage_deliverables(
             tracing::debug!("Vantage sync: skipping {id} (codebase={codebase:?} != {repo_slug:?})");
             continue;
         }
-        // Only sync conductor-mode deliverables in actionable pipeline states
-        let exec_mode = item["execution_mode"].as_str().unwrap_or("");
-        let conductor_status = item["conductor"]["status"].as_str().unwrap_or("");
-        if exec_mode != "conductor" || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status) {
+        // Only sync conductor-mode deliverables in actionable pipeline states.
+        // The sdlc CLI may not include these fields in JSON output, so fall back
+        // to the pre-loaded YAML frontmatter cache.
+        let (exec_mode, conductor_status) = resolve_conductor_fields(item, id, &frontmatter_cache);
+        if exec_mode != "conductor"
+            || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status.as_str())
+        {
             skipped_mode_or_status += 1;
             tracing::debug!(
                 "Vantage sync: skipping {id} (execution_mode={exec_mode:?}, conductor.status={conductor_status:?})"
@@ -119,6 +127,102 @@ pub fn fetch_vantage_deliverable(deliverable_id: &str, sdlc_root: &str) -> Resul
     }
 
     Ok(parse_vantage_deliverable(&value))
+}
+
+/// Pre-read all `.md` files from `{sdlc_root}/deliverables/` and parse their
+/// frontmatter into `(execution_mode, conductor.status)` pairs, keyed by
+/// deliverable ID (filename stem). This avoids N individual file reads inside
+/// the sync loop.
+fn preload_deliverable_frontmatter(sdlc_root: &str) -> HashMap<String, (String, String)> {
+    let mut cache = HashMap::new();
+    if sdlc_root.is_empty() {
+        return cache;
+    }
+    let dir = Path::new(sdlc_root).join("deliverables");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::debug!(
+                "Vantage sync: could not read deliverables dir {}: {e}",
+                dir.display()
+            );
+            return cache;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let id = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Some(fields) = parse_conductor_frontmatter(&contents) {
+                cache.insert(id, fields);
+            }
+        }
+    }
+    cache
+}
+
+/// Resolve `execution_mode` and `conductor.status` for a deliverable.
+///
+/// First checks the CLI JSON output; if the fields are missing (the sdlc CLI
+/// may not serialize them), falls back to the pre-loaded frontmatter cache.
+fn resolve_conductor_fields(
+    item: &serde_json::Value,
+    id: &str,
+    frontmatter_cache: &HashMap<String, (String, String)>,
+) -> (String, String) {
+    let exec_mode = item["execution_mode"].as_str().unwrap_or("").to_string();
+    let conductor_status = item["conductor"]["status"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    if !exec_mode.is_empty() && !conductor_status.is_empty() {
+        return (exec_mode, conductor_status);
+    }
+
+    // Fall back to pre-loaded frontmatter cache.
+    if let Some((cached_mode, cached_status)) = frontmatter_cache.get(id) {
+        let mode = if exec_mode.is_empty() {
+            cached_mode.clone()
+        } else {
+            exec_mode
+        };
+        let status = if conductor_status.is_empty() {
+            cached_status.clone()
+        } else {
+            conductor_status
+        };
+        return (mode, status);
+    }
+
+    (exec_mode, conductor_status)
+}
+
+/// Extract `execution_mode` and `conductor.status` from YAML frontmatter.
+///
+/// Expects `---` delimited frontmatter at the start of the file.
+fn parse_conductor_frontmatter(contents: &str) -> Option<(String, String)> {
+    let trimmed = contents.trim_start();
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    let after_open = &trimmed[3..];
+    let end = after_open.find("\n---")?;
+    let frontmatter = &after_open[..end];
+
+    let yaml: serde_json::Value = serde_yml::from_str(frontmatter).ok()?;
+    let exec_mode = yaml["execution_mode"].as_str().unwrap_or("").to_string();
+    let conductor_status = yaml["conductor"]["status"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    Some((exec_mode, conductor_status))
 }
 
 /// Run the `sdlc` CLI with the given arguments, optionally setting --sdlc-root.
@@ -838,6 +942,41 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_conductor_frontmatter_full() {
+        let md =
+            "---\nid: D-136\nexecution_mode: conductor\nconductor:\n  status: ready\n---\n# Body";
+        let (em, cs) = parse_conductor_frontmatter(md).unwrap();
+        assert_eq!(em, "conductor");
+        assert_eq!(cs, "ready");
+    }
+
+    #[test]
+    fn test_parse_conductor_frontmatter_missing_fields() {
+        let md = "---\nid: D-001\nstatus: draft\n---\n# Body";
+        let (em, cs) = parse_conductor_frontmatter(md).unwrap();
+        assert_eq!(em, "");
+        assert_eq!(cs, "");
+    }
+
+    #[test]
+    fn test_parse_conductor_frontmatter_no_frontmatter() {
+        let md = "# Just a heading\nNo frontmatter here.";
+        assert!(parse_conductor_frontmatter(md).is_none());
+    }
+
+    #[test]
+    fn test_resolve_conductor_fields_from_json() {
+        let item = serde_json::json!({
+            "execution_mode": "conductor",
+            "conductor": { "status": "ready" }
+        });
+        let cache = std::collections::HashMap::new();
+        let (em, cs) = resolve_conductor_fields(&item, "D-001", &cache);
+        assert_eq!(em, "conductor");
+        assert_eq!(cs, "ready");
+    }
+
+    #[test]
     fn test_parse_vantage_raw_json_preserved() {
         let json = serde_json::json!({
             "id": "D-099",
@@ -1022,5 +1161,58 @@ mod tests {
         let result = VantageLifecycle::resolve(&conn, "t1", "r1").unwrap();
         assert_eq!(result.deliverable_id, "D-042");
         assert_eq!(result.sdlc_root, "/path/to/sdlc");
+    }
+
+    // ── resolve_conductor_fields + frontmatter fallback ──────────────────
+
+    #[test]
+    fn resolve_conductor_fields_json_present_returns_json_values() {
+        let item = serde_json::json!({
+            "id": "D-100",
+            "execution_mode": "conductor",
+            "conductor": { "status": "ready" },
+        });
+        let cache = std::collections::HashMap::new();
+        let (mode, status) = resolve_conductor_fields(&item, "D-100", &cache);
+        assert_eq!(mode, "conductor");
+        assert_eq!(status, "ready");
+    }
+
+    #[test]
+    fn resolve_conductor_fields_falls_back_to_frontmatter_cache() {
+        let item = serde_json::json!({
+            "id": "D-200",
+        });
+        let mut cache = std::collections::HashMap::new();
+        cache.insert(
+            "D-200".to_string(),
+            ("conductor".to_string(), "dispatched".to_string()),
+        );
+        let (mode, status) = resolve_conductor_fields(&item, "D-200", &cache);
+        assert_eq!(mode, "conductor");
+        assert_eq!(status, "dispatched");
+    }
+
+    #[test]
+    fn preload_deliverable_frontmatter_reads_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let deliverables_dir = dir.path().join("deliverables");
+        std::fs::create_dir_all(&deliverables_dir).unwrap();
+        std::fs::write(
+            deliverables_dir.join("D-300.md"),
+            "---\nexecution_mode: conductor\nconductor:\n  status: ready\n---\n# Hello\n",
+        )
+        .unwrap();
+        let cache = preload_deliverable_frontmatter(dir.path().to_str().unwrap());
+        assert_eq!(cache.len(), 1);
+        let (mode, status) = cache.get("D-300").unwrap();
+        assert_eq!(mode, "conductor");
+        assert_eq!(status, "ready");
+    }
+
+    #[test]
+    fn preload_deliverable_frontmatter_empty_sdlc_root() {
+        let cache = preload_deliverable_frontmatter("");
+        assert!(cache.is_empty());
     }
 }

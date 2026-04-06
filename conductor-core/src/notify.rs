@@ -44,6 +44,35 @@ fn maybe_send_slack(config: &NotificationConfig, text: &str) {
     }
 }
 
+/// Send a message to the configured Slack webhook synchronously.
+///
+/// Returns `Ok(())` if sent, or an error if Slack is not configured or the
+/// request failed. Unlike `maybe_send_slack` this blocks until delivery
+/// completes, which is appropriate for CLI commands that exit immediately.
+pub fn send_slack_sync(config: &NotificationConfig, text: &str) -> crate::error::Result<()> {
+    let url = config
+        .slack
+        .webhook_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| {
+            crate::error::ConductorError::Config(
+                "Slack webhook_url is not configured in ~/.conductor/config.toml".to_string(),
+            )
+        })?;
+    let escaped = escape_slack_mrkdwn(text);
+    let body = serde_json::json!({ "text": escaped });
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .build();
+    agent.post(url).send_json(&body).map_err(|e| {
+        crate::error::ConductorError::Notification(format!(
+            "Slack webhook POST to {url} failed: {e}"
+        ))
+    })?;
+    Ok(())
+}
+
 /// Persist an in-app notification record. Logs a warning on failure.
 fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
     let mgr = NotificationManager::new(conn);
@@ -1981,5 +2010,49 @@ mod tests {
         assert!(title.contains("Quality Gate"), "title: {title}");
         assert!(body.contains("check-quality"), "body: {body}");
         assert!(body.contains("review-pr"), "body: {body}");
+    }
+
+    // --- send_slack_sync: missing webhook URL error path ---
+
+    #[test]
+    fn send_slack_sync_missing_url_returns_config_error() {
+        let cfg = NotificationConfig {
+            enabled: true,
+            workflows: WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+            },
+            slack: SlackConfig::default(), // webhook_url = None
+        };
+        let result = send_slack_sync(&cfg, "test message");
+        assert!(result.is_err(), "expected error when webhook_url is None");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::ConductorError::Config(_)),
+            "expected Config error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn send_slack_sync_empty_url_returns_config_error() {
+        let cfg = NotificationConfig {
+            enabled: true,
+            workflows: WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+            },
+            slack: SlackConfig {
+                webhook_url: Some("".to_string()),
+                signing_secret: None,
+            },
+        };
+        let result = send_slack_sync(&cfg, "test message");
+        assert!(result.is_err(), "expected error when webhook_url is empty");
     }
 }
