@@ -237,6 +237,27 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(state.theme.border_inactive)
     };
     let detail_filter = state.detail_ticket_filter.as_query();
+
+    // Compute column widths from the same closed-ticket-filtered set that is
+    // shown, but ignoring the text query so widths stay stable while typing.
+    const MAX_ASSIGNEE_DISPLAY: usize = 20;
+    let width_tickets = state
+        .detail_tickets
+        .iter()
+        .filter(|t| state.show_closed_tickets || t.state != "closed");
+    let id_width = width_tickets
+        .clone()
+        .map(|t| t.source_id.len())
+        .max()
+        .unwrap_or(4);
+    let assignee_width = width_tickets
+        .map(|t| match t.assignee.as_deref() {
+            Some(login) => (login.len() + 1).min(MAX_ASSIGNEE_DISPLAY), // +1 for @
+            None => "unclaimed".len(),
+        })
+        .max()
+        .unwrap_or("unclaimed".len());
+
     let ticket_items: Vec<ListItem> = state
         .filtered_detail_tickets
         .iter()
@@ -284,19 +305,34 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     "⊘ ",
                     Style::default().fg(state.theme.label_error),
                 ));
+            } else {
+                spans.push(super::common::ticket_worktree_dot_span(state, &t.id));
             }
-
-            spans.push(super::common::ticket_worktree_dot_span(state, &t.id));
+            let id_str = super::common::truncate(&t.source_id, id_width);
             spans.push(Span::styled(
-                format!("#{} ", t.source_id),
+                format!("#{:<width$} ", id_str, width = id_width),
                 Style::default().fg(state.theme.group_header),
             ));
 
-            if let Some(login) = &t.assignee {
-                spans.push(Span::styled(
-                    format!("@{login} "),
-                    Style::default().fg(state.theme.label_secondary),
-                ));
+            match &t.assignee {
+                Some(login) => {
+                    let login_str =
+                        super::common::truncate(login, assignee_width.saturating_sub(1));
+                    spans.push(Span::styled(
+                        format!(
+                            "@{:<width$} ",
+                            login_str,
+                            width = assignee_width.saturating_sub(1)
+                        ),
+                        Style::default().fg(state.theme.label_secondary),
+                    ));
+                }
+                None => {
+                    spans.push(Span::styled(
+                        format!("{:<width$} ", "unclaimed", width = assignee_width),
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
             }
             spans.push(Span::raw(&t.title));
             let labels = state
