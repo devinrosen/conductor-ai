@@ -66,7 +66,9 @@ pub fn send_slack_sync(config: &NotificationConfig, text: &str) -> crate::error:
         .timeout(std::time::Duration::from_secs(10))
         .build();
     agent.post(url).send_json(&body).map_err(|e| {
-        crate::error::ConductorError::Notification(format!("Slack webhook POST to {url} failed: {e}"))
+        crate::error::ConductorError::Notification(format!(
+            "Slack webhook POST to {url} failed: {e}"
+        ))
     })?;
     Ok(())
 }
@@ -2053,5 +2055,4 @@ mod tests {
         let result = send_slack_sync(&cfg, "test message");
         assert!(result.is_err(), "expected error when webhook_url is empty");
     }
-
 }

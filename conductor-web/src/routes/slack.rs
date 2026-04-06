@@ -54,9 +54,7 @@ fn verify_slack_signature(
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
     // Reject requests with timestamps older than 5 minutes to prevent replays.
-    let ts: i64 = timestamp
-        .parse()
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let ts: i64 = timestamp.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -75,8 +73,7 @@ fn verify_slack_signature(
     let hex_digest = sig_header
         .strip_prefix("v0=")
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    let expected_bytes =
-        hex::decode(hex_digest).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let expected_bytes = hex::decode(hex_digest).map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     let base_string = format!("v0:{timestamp}:{}", String::from_utf8_lossy(body));
     let mut mac =
@@ -232,10 +229,7 @@ mod tests {
         let ts = fresh_timestamp();
         let headers = make_headers(&ts, "v0=badhash");
         assert_eq!(verify_slack_signature(None, &headers, b"body"), Ok(()));
-        assert_eq!(
-            verify_slack_signature(Some(""), &headers, b"body"),
-            Ok(())
-        );
+        assert_eq!(verify_slack_signature(Some(""), &headers, b"body"), Ok(()));
     }
 
     #[test]
@@ -262,10 +256,7 @@ mod tests {
     #[test]
     fn missing_timestamp_header_rejected() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "X-Slack-Signature",
-            HeaderValue::from_static("v0=deadbeef"),
-        );
+        headers.insert("X-Slack-Signature", HeaderValue::from_static("v0=deadbeef"));
         assert_eq!(
             verify_slack_signature(Some("secret"), &headers, b"body"),
             Err(StatusCode::UNAUTHORIZED)
