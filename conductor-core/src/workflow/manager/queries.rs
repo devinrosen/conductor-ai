@@ -1350,3 +1350,29 @@ impl<'a> WorkflowManager<'a> {
         Ok(signals)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::pct_change;
+
+    #[test]
+    fn test_pct_change_helper() {
+        // Both None → None.
+        assert_eq!(pct_change(None, None), None);
+        // Recent None → None.
+        assert_eq!(pct_change(None, Some(100.0)), None);
+        // Baseline None → None.
+        assert_eq!(pct_change(Some(100.0), None), None);
+        // Baseline zero → None (avoids division by zero).
+        assert_eq!(pct_change(Some(100.0), Some(0.0)), None);
+        // No change → 0%.
+        let v = pct_change(Some(100.0), Some(100.0)).unwrap();
+        assert!((v - 0.0).abs() < 1e-9, "expected 0% got {v}");
+        // Positive change → positive pct.
+        let v = pct_change(Some(150.0), Some(100.0)).unwrap();
+        assert!((v - 50.0).abs() < 1e-9, "expected 50% got {v}");
+        // Negative change → negative pct.
+        let v = pct_change(Some(80.0), Some(100.0)).unwrap();
+        assert!((v - (-20.0)).abs() < 1e-9, "expected -20% got {v}");
+    }
+}
