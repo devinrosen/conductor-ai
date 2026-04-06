@@ -15,9 +15,9 @@ use crate::workflow::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PR
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
     extract_workflow_title, ActiveWorkflowCounts, PendingGateRow, StepFailureHeatmapRow,
-    StepTokenHeatmapRow, WorkflowFailureRateTrendRow, WorkflowRun, WorkflowRunContext,
-    WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate,
-    WorkflowTokenTrendRow,
+    StepTokenHeatmapRow, WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRun,
+    WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
+    WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 impl<'a> WorkflowManager<'a> {
@@ -1108,5 +1108,84 @@ impl<'a> WorkflowManager<'a> {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Compute P50/P75/P95/P99 percentiles for duration, cost, and total tokens.
+    ///
+    /// Returns `None` when there are no qualifying completed runs with duration data.
+    pub fn get_workflow_percentiles(
+        &self,
+        workflow_name: &str,
+        days: u32,
+    ) -> crate::error::Result<Option<WorkflowPercentiles>> {
+        let mut stmt = self.conn.prepare_cached(
+            "WITH ranked AS ( \
+               SELECT \
+                 total_duration_ms, \
+                 total_cost_usd, \
+                 (COALESCE(total_input_tokens, 0) + COALESCE(total_output_tokens, 0)) AS total_tokens, \
+                 ROW_NUMBER() OVER (ORDER BY total_duration_ms)   AS rn_dur, \
+                 ROW_NUMBER() OVER (ORDER BY total_cost_usd)      AS rn_cost, \
+                 ROW_NUMBER() OVER (ORDER BY (COALESCE(total_input_tokens,0) + COALESCE(total_output_tokens,0))) AS rn_tok, \
+                 COUNT(*) OVER () AS cnt \
+               FROM workflow_runs \
+               WHERE workflow_name = ?1 \
+                 AND status = 'completed' \
+                 AND started_at >= datetime('now', '-' || ?2 || ' days') \
+                 AND total_duration_ms IS NOT NULL \
+             ) \
+             SELECT \
+               AVG(CASE WHEN rn_dur  = (cnt * 50 + 99) / 100 THEN total_duration_ms END) AS p50_duration_ms, \
+               AVG(CASE WHEN rn_dur  = (cnt * 75 + 99) / 100 THEN total_duration_ms END) AS p75_duration_ms, \
+               AVG(CASE WHEN rn_dur  = (cnt * 95 + 99) / 100 THEN total_duration_ms END) AS p95_duration_ms, \
+               AVG(CASE WHEN rn_dur  = (cnt * 99 + 99) / 100 THEN total_duration_ms END) AS p99_duration_ms, \
+               AVG(CASE WHEN rn_cost = (cnt * 50 + 99) / 100 THEN total_cost_usd    END) AS p50_cost_usd, \
+               AVG(CASE WHEN rn_cost = (cnt * 75 + 99) / 100 THEN total_cost_usd    END) AS p75_cost_usd, \
+               AVG(CASE WHEN rn_cost = (cnt * 95 + 99) / 100 THEN total_cost_usd    END) AS p95_cost_usd, \
+               AVG(CASE WHEN rn_cost = (cnt * 99 + 99) / 100 THEN total_cost_usd    END) AS p99_cost_usd, \
+               AVG(CASE WHEN rn_tok  = (cnt * 50 + 99) / 100 THEN total_tokens      END) AS p50_total_tokens, \
+               AVG(CASE WHEN rn_tok  = (cnt * 75 + 99) / 100 THEN total_tokens      END) AS p75_total_tokens, \
+               AVG(CASE WHEN rn_tok  = (cnt * 95 + 99) / 100 THEN total_tokens      END) AS p95_total_tokens, \
+               AVG(CASE WHEN rn_tok  = (cnt * 99 + 99) / 100 THEN total_tokens      END) AS p99_total_tokens, \
+               MAX(cnt) AS run_count \
+             FROM ranked",
+        )?;
+        let row = stmt.query_row(params![workflow_name, days], |row| {
+            let run_count: Option<i64> = row.get(12)?;
+            Ok((
+                row.get::<_, Option<f64>>(0)?,
+                row.get::<_, Option<f64>>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, Option<f64>>(5)?,
+                row.get::<_, Option<f64>>(6)?,
+                row.get::<_, Option<f64>>(7)?,
+                row.get::<_, Option<f64>>(8)?,
+                row.get::<_, Option<f64>>(9)?,
+                row.get::<_, Option<f64>>(10)?,
+                row.get::<_, Option<f64>>(11)?,
+                run_count,
+            ))
+        })?;
+        let run_count = row.12.unwrap_or(0);
+        if run_count == 0 {
+            return Ok(None);
+        }
+        Ok(Some(WorkflowPercentiles {
+            p50_duration_ms: row.0,
+            p75_duration_ms: row.1,
+            p95_duration_ms: row.2,
+            p99_duration_ms: row.3,
+            p50_cost_usd: row.4,
+            p75_cost_usd: row.5,
+            p95_cost_usd: row.6,
+            p99_cost_usd: row.7,
+            p50_total_tokens: row.8,
+            p75_total_tokens: row.9,
+            p95_total_tokens: row.10,
+            p99_total_tokens: row.11,
+            run_count,
+        }))
     }
 }

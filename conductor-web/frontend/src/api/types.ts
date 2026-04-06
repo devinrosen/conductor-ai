@@ -314,6 +314,22 @@ export interface StepFailureHeatmapRow {
   avg_retry_count: number;
 }
 
+export interface WorkflowPercentiles {
+  p50_duration_ms: number | null;
+  p75_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  p99_duration_ms: number | null;
+  p50_cost_usd: number | null;
+  p75_cost_usd: number | null;
+  p95_cost_usd: number | null;
+  p99_cost_usd: number | null;
+  p50_total_tokens: number | null;
+  p75_total_tokens: number | null;
+  p95_total_tokens: number | null;
+  p99_total_tokens: number | null;
+  run_count: number;
+}
+
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)
 
 export interface WorkflowInputDecl {

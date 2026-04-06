@@ -2758,3 +2758,111 @@ fn test_step_failure_heatmap_ordered_by_failure_rate_desc() {
     assert_eq!(result[0].step_name, "step-always-fails");
     assert_eq!(result[1].step_name, "step-never-fails");
 }
+
+#[test]
+fn test_get_workflow_percentiles_empty() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let result = mgr.get_workflow_percentiles("nonexistent-wf", 30).unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_get_workflow_percentiles_no_duration() {
+    // A completed run with no duration_ms should be excluded.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "pct-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    // persist_workflow_metrics with duration 0 — but do NOT set total_duration_ms directly
+    // because persist_workflow_metrics sets it. Instead insert a run with NULL duration_ms
+    // by completing without calling persist_workflow_metrics.
+    let result = mgr.get_workflow_percentiles("pct-wf", 30).unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_get_workflow_percentiles_single_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "pct-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.05, 5000, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_percentiles("pct-wf", 30).unwrap();
+    assert!(result.is_some());
+    let p = result.unwrap();
+    assert_eq!(p.run_count, 1);
+    // With a single run, all percentiles collapse to that run's value.
+    assert!(p.p50_duration_ms.is_some());
+    assert!((p.p50_duration_ms.unwrap() - 5000.0).abs() < 1.0);
+    assert!(p.p95_duration_ms.is_some());
+}
+
+#[test]
+fn test_get_workflow_percentiles_multi_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Insert 10 runs with durations 1000, 2000, …, 10000 ms
+    for i in 1..=10u64 {
+        let run = create_named_worktree_run(&conn, "w1", "pct-wf");
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        mgr.persist_workflow_metrics(
+            &run.id,
+            (i * 100) as i64,
+            (i * 50) as i64,
+            0,
+            0,
+            1,
+            (i as f64) * 0.01,
+            (i * 1000) as i64,
+            None,
+        )
+        .unwrap();
+    }
+
+    let result = mgr.get_workflow_percentiles("pct-wf", 30).unwrap();
+    assert!(result.is_some());
+    let p = result.unwrap();
+    assert_eq!(p.run_count, 10);
+    // P50 should be around the median (5000–6000 ms range)
+    assert!(p.p50_duration_ms.is_some());
+    let p50 = p.p50_duration_ms.unwrap();
+    assert!((4000.0..=7000.0).contains(&p50), "p50={p50}");
+    // P99 should be near the top
+    assert!(p.p99_duration_ms.is_some());
+    let p99 = p.p99_duration_ms.unwrap();
+    assert!(p99 >= 8000.0, "p99={p99}");
+    // Cost and token percentiles should also be present
+    assert!(p.p50_cost_usd.is_some());
+    assert!(p.p50_total_tokens.is_some());
+}
+
+#[test]
+fn test_get_workflow_percentiles_excludes_other_workflows() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run_a.id, 100, 200, 0, 0, 1, 0.10, 5000, None)
+        .unwrap();
+
+    let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
+    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run_b.id, 999, 999, 0, 0, 1, 9.99, 99000, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_percentiles("wf-a", 30).unwrap();
+    assert!(result.is_some());
+    let p = result.unwrap();
+    assert_eq!(p.run_count, 1);
+    assert!((p.p50_duration_ms.unwrap() - 5000.0).abs() < 1.0);
+}

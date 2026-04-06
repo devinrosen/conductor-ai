@@ -11,9 +11,9 @@ use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
     RunIdSlot, StepFailureHeatmapRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig,
-    WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowResumeStandalone,
-    WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus, WorkflowRunStep, WorkflowTokenAggregate,
-    WorkflowTokenTrendRow,
+    WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
+    WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -945,6 +945,24 @@ pub async fn get_failure_heatmap(
     let limit = q.runs.unwrap_or(20);
     let rows = mgr.get_step_failure_heatmap(&q.workflow_name, limit)?;
     Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/percentiles?workflow_name=&days=30
+#[derive(Deserialize)]
+pub struct PercentilesQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+pub async fn get_workflow_percentiles(
+    State(state): State<AppState>,
+    Query(q): Query<PercentilesQuery>,
+) -> Result<Json<Option<WorkflowPercentiles>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let result = mgr.get_workflow_percentiles(&q.workflow_name, days)?;
+    Ok(Json(result))
 }
 
 /// GET /api/workflows/runs/{id}/steps/{step_name}/log

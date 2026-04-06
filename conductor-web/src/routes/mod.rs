@@ -279,6 +279,10 @@ pub fn api_router() -> Router<AppState> {
             "/api/workflows/analytics/failure-heatmap",
             get(workflows::get_failure_heatmap),
         )
+        .route(
+            "/api/workflows/analytics/percentiles",
+            get(workflows::get_workflow_percentiles),
+        )
         // Workflow Templates
         .route("/api/templates", get(workflows::list_templates))
         .route(

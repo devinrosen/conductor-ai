@@ -567,6 +567,27 @@ pub struct StepFailureHeatmapRow {
     pub avg_retry_count: f64,
 }
 
+/// P50/P75/P95/P99 percentile distributions for duration, cost, and tokens.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowPercentiles {
+    // Duration percentiles (milliseconds)
+    pub p50_duration_ms: Option<f64>,
+    pub p75_duration_ms: Option<f64>,
+    pub p95_duration_ms: Option<f64>,
+    pub p99_duration_ms: Option<f64>,
+    // Cost percentiles (USD)
+    pub p50_cost_usd: Option<f64>,
+    pub p75_cost_usd: Option<f64>,
+    pub p95_cost_usd: Option<f64>,
+    pub p99_cost_usd: Option<f64>,
+    // Total token percentiles (input + output)
+    pub p50_total_tokens: Option<f64>,
+    pub p75_total_tokens: Option<f64>,
+    pub p95_total_tokens: Option<f64>,
+    pub p99_total_tokens: Option<f64>,
+    pub run_count: i64,
+}
+
 /// Raw per-run metrics for histogram distribution (one row per completed run).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunMetricsRow {
