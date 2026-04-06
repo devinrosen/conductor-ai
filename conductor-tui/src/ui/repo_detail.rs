@@ -7,7 +7,7 @@ use ratatui::Frame;
 use conductor_core::github::GithubPr;
 
 use super::helpers::{shorten_paths, visual_idx_with_headers};
-use crate::state::{AppState, ColumnFocus, RepoDetailFocus, VisualRow};
+use crate::state::{AppState, ColumnFocus, RepoDetailFocus, TreePosition, VisualRow};
 
 fn pr_group_key(pr: &GithubPr) -> &'static str {
     if pr.is_draft {
@@ -242,18 +242,13 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .iter()
         .enumerate()
         .map(|(i, t)| {
+            let default_pos = TreePosition::default();
             let pos = state
                 .detail_ticket_tree_positions
                 .get(i)
-                .cloned()
-                .unwrap_or_default();
+                .unwrap_or(&default_pos);
 
-            let is_parent = state
-                .data
-                .ticket_dependencies
-                .get(&t.id)
-                .is_some_and(|d| !d.children.is_empty());
-
+            let is_parent = pos.is_parent;
             let is_collapsed = state.collapsed_ticket_ids.contains(&t.id);
 
             let is_blocked = state

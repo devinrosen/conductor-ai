@@ -441,23 +441,23 @@ impl App {
 
             // Ticket tree collapse/expand toggle
             Action::ToggleTicketCollapse => {
-                if let Some(ticket) = self
+                let idx = self.state.detail_ticket_index;
+                let is_parent = self
                     .state
-                    .filtered_detail_tickets
-                    .get(self.state.detail_ticket_index)
-                    .cloned()
-                {
-                    let is_parent = self
+                    .detail_ticket_tree_positions
+                    .get(idx)
+                    .is_some_and(|p| p.is_parent);
+                if is_parent {
+                    if let Some(ticket_id) = self
                         .state
-                        .data
-                        .ticket_dependencies
-                        .get(&ticket.id)
-                        .is_some_and(|d| !d.children.is_empty());
-                    if is_parent {
-                        if self.state.collapsed_ticket_ids.contains(&ticket.id) {
-                            self.state.collapsed_ticket_ids.remove(&ticket.id);
+                        .filtered_detail_tickets
+                        .get(idx)
+                        .map(|t| t.id.clone())
+                    {
+                        if self.state.collapsed_ticket_ids.contains(&ticket_id) {
+                            self.state.collapsed_ticket_ids.remove(&ticket_id);
                         } else {
-                            self.state.collapsed_ticket_ids.insert(ticket.id);
+                            self.state.collapsed_ticket_ids.insert(ticket_id);
                         }
                         self.state.rebuild_filtered_tickets();
                         // Clamp index after visibility change.

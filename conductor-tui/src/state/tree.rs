@@ -40,6 +40,8 @@ pub struct TreePosition {
     pub depth: usize,
     pub is_last_sibling: bool,
     pub ancestors_are_last: Vec<bool>,
+    /// True if this node has at least one child in the tree.
+    pub is_parent: bool,
 }
 
 impl TreePosition {
@@ -120,14 +122,18 @@ fn dfs_tree_order<'a>(
         if !visited.insert(idx) {
             continue;
         }
+        let branch = get_branch(idx);
+        let has_children = children_of
+            .get(branch)
+            .is_some_and(|c| !c.is_empty());
         positions.push(TreePosition {
             depth,
             is_last_sibling: is_last,
             ancestors_are_last: ancestors_are_last.clone(),
+            is_parent: has_children,
         });
         indices.push(idx);
 
-        let branch = get_branch(idx);
         if let Some(children) = children_of.get(branch) {
             let len = children.len();
             let mut child_ancestors = ancestors_are_last;
@@ -142,10 +148,15 @@ fn dfs_tree_order<'a>(
     // Append any unvisited items (cycle members) as depth-0 roots.
     for i in 0..n {
         if !visited.contains(&i) {
+            let branch = get_branch(i);
+            let has_children = children_of
+                .get(branch)
+                .is_some_and(|c| !c.is_empty());
             positions.push(TreePosition {
                 depth: 0,
                 is_last_sibling: true,
                 ancestors_are_last: Vec::new(),
+                is_parent: has_children,
             });
             indices.push(i);
             visited.insert(i);
@@ -189,16 +200,17 @@ pub fn build_worktree_tree(
 }
 
 /// Tree-order tickets by parent/child relationships from `ticket_dependencies`, returning
-/// indices into the input slice and parallel `TreePosition`s — no cloning.
+/// indices into the input slice, parallel `TreePosition`s, and the child→parent reverse map
+/// (so callers can reuse it without rebuilding).
 ///
 /// The `deps` map is keyed by ticket ID; each entry's `.children` field lists child tickets.
 /// Tickets whose parent is not present in the input slice are treated as roots.
-pub fn build_ticket_tree_indices(
-    tickets: &[Ticket],
-    deps: &HashMap<String, TicketDependencies>,
-) -> (Vec<usize>, Vec<TreePosition>) {
+pub fn build_ticket_tree_indices<'a>(
+    tickets: &'a [Ticket],
+    deps: &'a HashMap<String, TicketDependencies>,
+) -> (Vec<usize>, Vec<TreePosition>, HashMap<&'a str, &'a str>) {
     // Build a child_id → parent_id reverse map.
-    let mut child_to_parent: HashMap<&str, &str> = HashMap::new();
+    let mut child_to_parent: HashMap<&'a str, &'a str> = HashMap::new();
     for (parent_id, dep) in deps {
         for child in &dep.children {
             child_to_parent.insert(child.id.as_str(), parent_id.as_str());
@@ -212,7 +224,8 @@ pub fn build_ticket_tree_indices(
             .copied()
             .unwrap_or("")
     };
-    dfs_tree_order(tickets.len(), get_branch, get_parent, "")
+    let (indices, positions) = dfs_tree_order(tickets.len(), get_branch, get_parent, "");
+    (indices, positions, child_to_parent)
 }
 
 /// Reorder branch picker items into tree order based on `base_branch` parent-child relationships.
@@ -250,4 +263,128 @@ pub fn build_branch_picker_tree(
     }
 
     (result, positions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conductor_core::tickets::{Ticket, TicketDependencies};
+
+    fn make_ticket(id: &str) -> Ticket {
+        Ticket {
+            id: id.to_string(),
+            repo_id: "repo1".to_string(),
+            source_type: "github".to_string(),
+            source_id: id.to_string(),
+            title: format!("Ticket {id}"),
+            state: "open".to_string(),
+            body: String::new(),
+            labels: String::new(),
+            assignee: None,
+            priority: None,
+            url: String::new(),
+            synced_at: "2026-01-01T00:00:00Z".to_string(),
+            raw_json: String::new(),
+            workflow: None,
+            agent_map: None,
+        }
+    }
+
+    fn make_child_dep(child_ids: &[&str]) -> TicketDependencies {
+        TicketDependencies {
+            children: child_ids.iter().map(|id| make_ticket(id)).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_build_ticket_tree_indices_flat() {
+        let tickets = vec![make_ticket("a"), make_ticket("b"), make_ticket("c")];
+        let deps = HashMap::new();
+        let (indices, positions, child_to_parent) =
+            build_ticket_tree_indices(&tickets, &deps);
+
+        assert_eq!(indices.len(), 3);
+        assert_eq!(positions.len(), 3);
+        assert!(child_to_parent.is_empty());
+        // All root nodes: depth 0, not parents
+        for pos in &positions {
+            assert_eq!(pos.depth, 0);
+            assert!(!pos.is_parent);
+        }
+    }
+
+    #[test]
+    fn test_build_ticket_tree_indices_parent_child() {
+        // parent "a" has child "b"
+        let tickets = vec![make_ticket("a"), make_ticket("b")];
+        let mut deps = HashMap::new();
+        deps.insert("a".to_string(), make_child_dep(&["b"]));
+
+        let (indices, positions, child_to_parent) =
+            build_ticket_tree_indices(&tickets, &deps);
+
+        assert_eq!(indices.len(), 2);
+        assert_eq!(child_to_parent.get("b"), Some(&"a"));
+
+        // Find position for "a" (parent) and "b" (child)
+        let pos_a = positions.iter().zip(indices.iter()).find(|(_, &i)| tickets[i].id == "a").map(|(p, _)| p).unwrap();
+        let pos_b = positions.iter().zip(indices.iter()).find(|(_, &i)| tickets[i].id == "b").map(|(p, _)| p).unwrap();
+
+        assert!(pos_a.is_parent, "a should be marked is_parent");
+        assert_eq!(pos_a.depth, 0);
+        assert!(!pos_b.is_parent, "b should not be marked is_parent");
+        assert_eq!(pos_b.depth, 1);
+    }
+
+    #[test]
+    fn test_build_ticket_tree_indices_dfs_order() {
+        // Tree: root -> [a, b]; a -> [c]
+        let tickets = vec![
+            make_ticket("root"),
+            make_ticket("a"),
+            make_ticket("b"),
+            make_ticket("c"),
+        ];
+        let mut deps = HashMap::new();
+        deps.insert("root".to_string(), make_child_dep(&["a", "b"]));
+        deps.insert("a".to_string(), make_child_dep(&["c"]));
+
+        let (indices, positions, _) = build_ticket_tree_indices(&tickets, &deps);
+
+        let id_order: Vec<&str> = indices.iter().map(|&i| tickets[i].id.as_str()).collect();
+        // DFS: root, a, c, b
+        assert_eq!(id_order, vec!["root", "a", "c", "b"]);
+
+        let pos_root = &positions[0];
+        let pos_a = &positions[1];
+        let pos_c = &positions[2];
+        let pos_b = &positions[3];
+
+        assert!(pos_root.is_parent);
+        assert_eq!(pos_root.depth, 0);
+        assert!(pos_a.is_parent);
+        assert_eq!(pos_a.depth, 1);
+        assert!(!pos_c.is_parent);
+        assert_eq!(pos_c.depth, 2);
+        assert!(!pos_b.is_parent);
+        assert_eq!(pos_b.depth, 1);
+    }
+
+    #[test]
+    fn test_build_ticket_tree_indices_returns_child_to_parent_map() {
+        let tickets = vec![
+            make_ticket("parent"),
+            make_ticket("child1"),
+            make_ticket("child2"),
+        ];
+        let mut deps = HashMap::new();
+        deps.insert("parent".to_string(), make_child_dep(&["child1", "child2"]));
+
+        let (_, _, child_to_parent) = build_ticket_tree_indices(&tickets, &deps);
+
+        assert_eq!(child_to_parent.get("child1"), Some(&"parent"));
+        assert_eq!(child_to_parent.get("child2"), Some(&"parent"));
+        assert_eq!(child_to_parent.get("parent"), None);
+    }
 }

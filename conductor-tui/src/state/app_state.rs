@@ -334,18 +334,10 @@ impl AppState {
 
         let detail_filter_query = self.detail_ticket_filter.as_query();
 
-        // Build DFS tree order for detail tickets.
-        let (dfs_indices, dfs_positions) =
+        // Build DFS tree order for detail tickets; also get child→parent map for
+        // ancestor promotion during text filter (reuse instead of rebuilding).
+        let (dfs_indices, dfs_positions, child_to_parent) =
             build_ticket_tree_indices(&self.detail_tickets, &self.data.ticket_dependencies);
-
-        // Build reverse child→parent map for ancestor promotion during text filter.
-        let mut child_to_parent: std::collections::HashMap<&str, &str> =
-            std::collections::HashMap::new();
-        for (parent_id, dep) in &self.data.ticket_dependencies {
-            for child in &dep.children {
-                child_to_parent.insert(child.id.as_str(), parent_id.as_str());
-            }
-        }
 
         // When a text filter is active, find all ticket IDs that match plus their ancestors.
         let include_set: Option<std::collections::HashSet<&str>> =
