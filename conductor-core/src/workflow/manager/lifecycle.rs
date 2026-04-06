@@ -78,6 +78,9 @@ impl<'a> WorkflowManager<'a> {
             ],
         )?;
 
+        let workflow_title = definition_snapshot
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v["title"].as_str().map(String::from));
         Ok(WorkflowRun {
             id,
             workflow_name: workflow_name.to_string(),
@@ -99,6 +102,7 @@ impl<'a> WorkflowManager<'a> {
             iteration: 0,
             blocked_on: None,
             feature_id: feature_id.map(String::from),
+            workflow_title,
             total_input_tokens: None,
             total_output_tokens: None,
             total_cache_read_input_tokens: None,

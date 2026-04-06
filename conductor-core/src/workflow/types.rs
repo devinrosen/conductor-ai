@@ -76,6 +76,9 @@ pub struct WorkflowRun {
     pub blocked_on: Option<BlockedOn>,
     /// Optional feature ID linking this run to a feature branch.
     pub feature_id: Option<String>,
+    /// Human-readable title extracted from `definition_snapshot` at load time.
+    /// `None` when no title is present in the snapshot. Use `display_name()` for rendering.
+    pub workflow_title: Option<String>,
     // Aggregated metrics (populated at run completion)
     pub total_input_tokens: Option<i64>,
     pub total_output_tokens: Option<i64>,
@@ -95,13 +98,12 @@ impl WorkflowRun {
     }
 
     /// Returns the human-readable display name for this run.
-    /// Extracts `title` from `definition_snapshot` if present; falls back to `workflow_name`.
-    pub fn display_name(&self) -> String {
-        self.definition_snapshot
+    /// Uses `workflow_title` (extracted from `definition_snapshot` at load time) if present;
+    /// falls back to `workflow_name`.
+    pub fn display_name(&self) -> &str {
+        self.workflow_title
             .as_deref()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v["title"].as_str().map(String::from))
-            .unwrap_or_else(|| self.workflow_name.clone())
+            .unwrap_or(&self.workflow_name)
     }
 }
 
@@ -527,6 +529,9 @@ mod tests {
     use super::*;
 
     fn make_run(workflow_name: &str, definition_snapshot: Option<&str>) -> WorkflowRun {
+        let workflow_title = definition_snapshot
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v["title"].as_str().map(String::from));
         WorkflowRun {
             id: "test-id".into(),
             workflow_name: workflow_name.into(),
@@ -548,6 +553,7 @@ mod tests {
             iteration: 0,
             blocked_on: None,
             feature_id: None,
+            workflow_title,
             total_input_tokens: None,
             total_output_tokens: None,
             total_cache_read_input_tokens: None,

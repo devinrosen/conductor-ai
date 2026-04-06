@@ -1143,7 +1143,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{:<20}", truncate(&run.display_name(), 20)),
+                            format!("{:<20}", truncate(run.display_name(), 20)),
                             Style::default().add_modifier(Modifier::BOLD),
                         ),
                     ];
@@ -1217,7 +1217,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{:<20}", truncate(&run.display_name(), 20)),
+                            format!("{:<20}", truncate(run.display_name(), 20)),
                             Style::default()
                                 .fg(state.theme.label_secondary)
                                 .add_modifier(Modifier::BOLD),

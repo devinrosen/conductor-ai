@@ -1584,6 +1584,7 @@ mod tests {
             iteration: 0,
             blocked_on: None,
             feature_id: None,
+            workflow_title: None,
             total_input_tokens: None,
             total_output_tokens: None,
             total_cache_read_input_tokens: None,
