@@ -2833,7 +2833,7 @@ fn test_get_workflow_percentiles_multi_run() {
     // P50 should be around the median (5000–6000 ms range)
     assert!(p.p50_duration_ms.is_some());
     let p50 = p.p50_duration_ms.unwrap();
-    assert!(p50 >= 4000.0 && p50 <= 7000.0, "p50={p50}");
+    assert!((4000.0..=7000.0).contains(&p50), "p50={p50}");
     // P99 should be near the top
     assert!(p.p99_duration_ms.is_some());
     let p99 = p.p99_duration_ms.unwrap();
