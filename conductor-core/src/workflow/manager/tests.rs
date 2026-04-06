@@ -2840,7 +2840,7 @@ fn test_step_retry_analytics_mixed() {
         ("w1", 0_i64, "completed"),
         ("w2", 1_i64, "completed"),
         ("w3", 3_i64, "failed"),
-        ("w4", 0_i64, "failed"),
+        ("w1", 0_i64, "failed"),
     ]
     .iter()
     .enumerate()

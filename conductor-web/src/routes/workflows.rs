@@ -949,9 +949,15 @@ pub async fn get_failure_heatmap(
 }
 
 /// GET /api/workflows/analytics/step-retries?workflow_name=&runs=20
+#[derive(Deserialize)]
+pub struct StepRetryQuery {
+    pub workflow_name: String,
+    pub runs: Option<usize>,
+}
+
 pub async fn get_step_retry_analytics(
     State(state): State<AppState>,
-    Query(q): Query<FailureHeatmapQuery>,
+    Query(q): Query<StepRetryQuery>,
 ) -> Result<Json<Vec<StepRetryAnalyticsRow>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
