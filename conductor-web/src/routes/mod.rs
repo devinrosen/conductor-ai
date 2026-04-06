@@ -80,6 +80,10 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
         .route(
+            "/api/repos/{id}/tickets/deps",
+            get(tickets::list_ticket_deps),
+        )
+        .route(
             "/api/repos/{id}/workflows",
             get(workflows::list_repo_workflow_defs),
         )

@@ -4,6 +4,7 @@ import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
 import type { AgentRun, Ticket } from "../api/types";
+import { buildTicketTree, isActivelyBlocked } from "../utils/ticketTree";
 import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
@@ -45,6 +46,11 @@ export function RepoDetailPage() {
     refetch: refetchTickets,
   } = useApi(() => api.listTickets(repoId!, showClosedTickets), [repoId, showClosedTickets]);
 
+  const {
+    data: ticketDeps,
+    refetch: refetchTicketDeps,
+  } = useApi(() => api.listTicketDeps(repoId!), [repoId]);
+
   const { data: latestRuns, refetch: refetchRuns } = useApi(
     () => api.latestRunsByWorktreeForRepo(repoId!),
     [repoId],
@@ -73,6 +79,11 @@ export function RepoDetailPage() {
   const activeRepoAgent: AgentRun | undefined = repoAgentRuns?.find(
     (r) => r.status === "running" || r.status === "waiting_for_feedback",
   );
+
+  const ticketTree = useMemo(() => {
+    if (!tickets || !ticketDeps) return null;
+    return buildTicketTree(tickets, ticketDeps);
+  }, [tickets, ticketDeps]);
 
   async function handleStartRepoAgent() {
     if (!repoAgentPrompt.trim()) return;
@@ -104,7 +115,10 @@ export function RepoDetailPage() {
       if (!ev.data || ev.data.repo_id === repoId) refetchWorktrees();
     };
     const handleTicketsChange = (ev: ConductorEventData) => {
-      if (!ev.data || ev.data.repo_id === repoId) refetchTickets();
+      if (!ev.data || ev.data.repo_id === repoId) {
+        refetchTickets();
+        refetchTicketDeps();
+      }
     };
     const handleAgentChange = (_ev: ConductorEventData) => {
       refetchRuns();
@@ -129,7 +143,7 @@ export function RepoDetailPage() {
       },
     };
     return map;
-  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals, refetchSources, refetchRepoAgentRuns]);
+  }, [repoId, refetchWorktrees, refetchTickets, refetchTicketDeps, refetchRuns, refetchTotals, refetchSources, refetchRepoAgentRuns]);
 
   useConductorEvents(sseHandlers);
 
@@ -609,24 +623,28 @@ export function RepoDetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {tickets.map((t) => (
+                  {(ticketTree ? ticketTree.ordered : tickets).map((t, i) => (
                     <TicketRow
                       key={t.id}
                       ticket={t}
                       agentTotals={ticketTotals?.[t.id]}
                       onClick={setSelectedTicket}
+                      treePosition={ticketTree?.positions[i]}
+                      blocked={ticketDeps ? isActivelyBlocked(t.id, ticketDeps) : false}
                     />
                   ))}
                 </tbody>
               </table>
             </div>
             <div className="md:hidden space-y-2">
-              {tickets.map((t) => (
+              {(ticketTree ? ticketTree.ordered : tickets).map((t, i) => (
                 <TicketCard
                   key={t.id}
                   ticket={t}
                   agentTotals={ticketTotals?.[t.id]}
                   onClick={setSelectedTicket}
+                  treePosition={ticketTree?.positions[i]}
+                  blocked={ticketDeps ? isActivelyBlocked(t.id, ticketDeps) : false}
                 />
               ))}
             </div>

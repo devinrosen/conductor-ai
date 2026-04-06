@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -161,6 +163,19 @@ pub async fn ticket_detail(
         worktrees,
         dependencies,
     }))
+}
+
+pub async fn list_ticket_deps(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<HashMap<String, TicketDependencies>>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    // Validate repo exists
+    RepoManager::new(&db, &config).get_by_id(&repo_id)?;
+    let syncer = TicketSyncer::new(&db);
+    let deps = syncer.get_all_dependencies()?;
+    Ok(Json(deps))
 }
 
 #[cfg(test)]
