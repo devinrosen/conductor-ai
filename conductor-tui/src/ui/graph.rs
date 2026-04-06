@@ -81,6 +81,127 @@ impl<N> Default for GraphData<N> {
     }
 }
 
+impl<N> GraphData<N> {
+    /// Topological sort into layers for DAG layout.
+    /// Returns a Vec of layers, each layer holding the node IDs (strings) at that depth.
+    /// Nodes with no edges are excluded (they are tracked via `unconnected_count`).
+    pub fn compute_layers(&self) -> Vec<Vec<String>> {
+        if self.nodes.is_empty() {
+            return Vec::new();
+        }
+
+        let mut connected_ids: HashSet<&str> = HashSet::new();
+        for edge in &self.edges {
+            connected_ids.insert(&edge.from);
+            connected_ids.insert(&edge.to);
+        }
+
+        let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut in_degree: HashMap<&str, usize> = HashMap::new();
+
+        for id in &connected_ids {
+            adj.entry(id).or_default();
+            in_degree.entry(id).or_insert(0);
+        }
+
+        for edge in &self.edges {
+            if connected_ids.contains(edge.from.as_str())
+                && connected_ids.contains(edge.to.as_str())
+            {
+                adj.entry(&edge.from).or_default().push(&edge.to);
+                *in_degree.entry(&edge.to).or_insert(0) += 1;
+            }
+        }
+
+        let mut layer_of: HashMap<&str, usize> = HashMap::new();
+        let mut queue: VecDeque<&str> = VecDeque::new();
+        for (&id, &deg) in &in_degree {
+            if deg == 0 {
+                queue.push_back(id);
+                layer_of.insert(id, 0);
+            }
+        }
+
+        while let Some(node) = queue.pop_front() {
+            let cur_layer = layer_of[node];
+            if let Some(children) = adj.get(node) {
+                for &child in children {
+                    let new_layer = cur_layer + 1;
+                    let entry = layer_of.entry(child).or_insert(0);
+                    if new_layer > *entry {
+                        *entry = new_layer;
+                    }
+                    let deg = in_degree.get_mut(child).unwrap();
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(child);
+                    }
+                }
+            }
+        }
+
+        for id in &connected_ids {
+            layer_of.entry(id).or_insert(0);
+        }
+
+        let max_layer = layer_of.values().copied().max().unwrap_or(0);
+        let mut layers: Vec<Vec<&str>> = vec![Vec::new(); max_layer + 1];
+        for &id in &connected_ids {
+            layers[layer_of[id]].push(id);
+        }
+
+        // Barycenter ordering
+        let mut layer_pos: HashMap<&str, usize> = HashMap::new();
+        for (l, layer_nodes) in layers.iter_mut().enumerate() {
+            if l == 0 {
+                layer_nodes.sort();
+            } else {
+                let barycenters: Vec<(&str, f64)> = layer_nodes
+                    .iter()
+                    .map(|&node| {
+                        let preds: Vec<f64> = connected_ids
+                            .iter()
+                            .filter(|&&src| {
+                                adj.get(src)
+                                    .map(|children| children.contains(&node))
+                                    .unwrap_or(false)
+                            })
+                            .filter_map(|&src| layer_pos.get(src).map(|&p| p as f64))
+                            .collect();
+                        let bc = if preds.is_empty() {
+                            0.0
+                        } else {
+                            preds.iter().sum::<f64>() / preds.len() as f64
+                        };
+                        (node, bc)
+                    })
+                    .collect();
+                layer_nodes.sort_by(|a, b| {
+                    let ba = barycenters
+                        .iter()
+                        .find(|(n, _)| n == a)
+                        .map(|(_, bc)| *bc)
+                        .unwrap_or(0.0);
+                    let bb = barycenters
+                        .iter()
+                        .find(|(n, _)| n == b)
+                        .map(|(_, bc)| *bc)
+                        .unwrap_or(0.0);
+                    ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            for (pos, &node) in layer_nodes.iter().enumerate() {
+                layer_pos.insert(node, pos);
+            }
+        }
+
+        layers
+            .into_iter()
+            .map(|l| l.into_iter().map(|s| s.to_string()).collect())
+            .collect()
+    }
+}
+
 // ─── Nav state ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default)]
@@ -250,132 +371,15 @@ pub struct ComputedLayout {
 
 // ─── Layout algorithm ────────────────────────────────────────────────────────
 
-/// Run just the topological sort + barycenter ordering to get the layer
-/// structure. Returns `layers[i] = ordered list of node IDs in layer i`.
-/// Used to determine layer count before computing dynamic node widths.
-pub fn compute_layers(data: &GraphData<GraphNodeType>) -> Vec<Vec<String>> {
-    if data.nodes.is_empty() {
-        return Vec::new();
-    }
-
-    let mut connected_ids: HashSet<&str> = HashSet::new();
-    for edge in &data.edges {
-        connected_ids.insert(&edge.from);
-        connected_ids.insert(&edge.to);
-    }
-
-    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
-
-    for id in &connected_ids {
-        adj.entry(id).or_default();
-        in_degree.entry(id).or_insert(0);
-    }
-
-    for edge in &data.edges {
-        if connected_ids.contains(edge.from.as_str()) && connected_ids.contains(edge.to.as_str()) {
-            adj.entry(&edge.from).or_default().push(&edge.to);
-            *in_degree.entry(&edge.to).or_insert(0) += 1;
-        }
-    }
-
-    let mut layer_of: HashMap<&str, usize> = HashMap::new();
-    let mut queue: VecDeque<&str> = VecDeque::new();
-    for (&id, &deg) in &in_degree {
-        if deg == 0 {
-            queue.push_back(id);
-            layer_of.insert(id, 0);
-        }
-    }
-
-    while let Some(node) = queue.pop_front() {
-        let cur_layer = layer_of[node];
-        if let Some(children) = adj.get(node) {
-            for &child in children {
-                let new_layer = cur_layer + 1;
-                let entry = layer_of.entry(child).or_insert(0);
-                if new_layer > *entry {
-                    *entry = new_layer;
-                }
-                let deg = in_degree.get_mut(child).unwrap();
-                *deg -= 1;
-                if *deg == 0 {
-                    queue.push_back(child);
-                }
-            }
-        }
-    }
-
-    for id in &connected_ids {
-        layer_of.entry(id).or_insert(0);
-    }
-
-    let max_layer = layer_of.values().copied().max().unwrap_or(0);
-    let mut layers: Vec<Vec<&str>> = vec![Vec::new(); max_layer + 1];
-    for &id in &connected_ids {
-        layers[layer_of[id]].push(id);
-    }
-
-    // Barycenter ordering
-    let mut layer_pos: HashMap<&str, usize> = HashMap::new();
-    for (l, layer_nodes) in layers.iter_mut().enumerate() {
-        if l == 0 {
-            layer_nodes.sort();
-        } else {
-            let barycenters: Vec<(&str, f64)> = layer_nodes
-                .iter()
-                .map(|&node| {
-                    let preds: Vec<f64> = connected_ids
-                        .iter()
-                        .filter(|&&src| {
-                            adj.get(src)
-                                .map(|children| children.contains(&node))
-                                .unwrap_or(false)
-                        })
-                        .filter_map(|&src| layer_pos.get(src).map(|&p| p as f64))
-                        .collect();
-                    let bc = if preds.is_empty() {
-                        0.0
-                    } else {
-                        preds.iter().sum::<f64>() / preds.len() as f64
-                    };
-                    (node, bc)
-                })
-                .collect();
-            layer_nodes.sort_by(|a, b| {
-                let ba = barycenters
-                    .iter()
-                    .find(|(n, _)| n == a)
-                    .map(|(_, bc)| *bc)
-                    .unwrap_or(0.0);
-                let bb = barycenters
-                    .iter()
-                    .find(|(n, _)| n == b)
-                    .map(|(_, bc)| *bc)
-                    .unwrap_or(0.0);
-                ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-        for (pos, &node) in layer_nodes.iter().enumerate() {
-            layer_pos.insert(node, pos);
-        }
-    }
-
-    layers
-        .into_iter()
-        .map(|l| l.into_iter().map(|s| s.to_string()).collect())
-        .collect()
-}
-
 /// Compute a layered DAG layout for the connected nodes in `data`.
+/// `layers` must be the pre-computed result of `data.compute_layers()`.
 /// `node_width` and `h_gap` control horizontal spacing and are computed
 /// dynamically by the caller based on available screen width.
 pub fn compute_layout(
-    data: &GraphData<GraphNodeType>,
+    layers: Vec<Vec<String>>,
     node_width: u16,
     h_gap: u16,
 ) -> ComputedLayout {
-    let layers = compute_layers(data);
     if layers.is_empty() {
         return ComputedLayout::default();
     }
@@ -682,9 +686,9 @@ pub fn render_graph_view(
     let footer_area = chunks[2];
 
     // ── Dynamic node sizing ──────────────────────────────────────────────────
-    // Count layers first (topology-only pass, no position assignment).
-    // Then divide the available content width evenly across layers.
-    let layers = compute_layers(data);
+    // Compute layers once (topology-only pass) to determine count for node width,
+    // then pass the pre-computed layers directly into compute_layout.
+    let layers = data.compute_layers();
     let num_layers = layers.len().max(1);
     let node_width = if content_area.width == 0 {
         NODE_WIDTH_MIN
@@ -694,7 +698,7 @@ pub fn render_graph_view(
         (available / num_layers as u16).clamp(NODE_WIDTH_MIN, NODE_WIDTH_MAX)
     };
 
-    let layout = compute_layout(data, node_width, H_GAP);
+    let layout = compute_layout(layers, node_width, H_GAP);
 
     // Title bar
     let title_line = Line::from(vec![

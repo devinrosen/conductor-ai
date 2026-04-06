@@ -641,6 +641,7 @@ fn snap_graph_view() {
             state: "closed".into(),
             labels: "infra".into(),
             assignee: None,
+            has_worktree: false,
         }),
         GraphNodeType::Ticket(TicketGraphNode {
             id: "01TKT00000000000000000002B".into(),
@@ -649,6 +650,7 @@ fn snap_graph_view() {
             state: "open".into(),
             labels: "".into(),
             assignee: None,
+            has_worktree: false,
         }),
         GraphNodeType::Ticket(TicketGraphNode {
             id: "01TKT00000000000000000003C".into(),
@@ -657,6 +659,7 @@ fn snap_graph_view() {
             state: "open".into(),
             labels: "epic".into(),
             assignee: Some("alice".into()),
+            has_worktree: false,
         }),
         GraphNodeType::Ticket(TicketGraphNode {
             id: "01TKT00000000000000000004D".into(),
@@ -665,6 +668,7 @@ fn snap_graph_view() {
             state: "open".into(),
             labels: "".into(),
             assignee: None,
+            has_worktree: false,
         }),
     ];
 

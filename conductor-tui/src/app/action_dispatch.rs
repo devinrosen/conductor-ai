@@ -1162,8 +1162,7 @@ impl App {
                     ..
                 } = self.state.modal
                 {
-                    let layers = crate::ui::graph::compute_layers(data);
-                    let max_layer = layers.len().saturating_sub(1);
+                    let max_layer = data.compute_layers().len().saturating_sub(1);
                     if nav.selected_layer < max_layer {
                         nav.selected_layer += 1;
                         nav.selected_node_idx = 0;
@@ -1182,8 +1181,11 @@ impl App {
                     ..
                 } = self.state.modal
                 {
-                    let layers = crate::ui::graph::compute_layers(data);
-                    let layer_len = layers.get(nav.selected_layer).map(|l| l.len()).unwrap_or(0);
+                    let layer_len = data
+                        .compute_layers()
+                        .get(nav.selected_layer)
+                        .map(|l| l.len())
+                        .unwrap_or(0);
                     if nav.selected_node_idx + 1 < layer_len {
                         nav.selected_node_idx += 1;
                     }
