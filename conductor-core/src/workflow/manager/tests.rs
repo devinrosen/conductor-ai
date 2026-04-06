@@ -2866,3 +2866,266 @@ fn test_get_workflow_percentiles_excludes_other_workflows() {
     assert_eq!(p.run_count, 1);
     assert!((p.p50_duration_ms.unwrap() - 5000.0).abs() < 1.0);
 }
+
+// ── get_workflow_regression_signals ──────────────────────────────────────────
+
+/// Backdate a run's `started_at` to N days ago (required for time-window filtering).
+fn backdate_run(conn: &rusqlite::Connection, run_id: &str, days_ago: i64) {
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = datetime('now', '-' || ?1 || ' days') WHERE id = ?2",
+        rusqlite::params![days_ago, run_id],
+    )
+    .unwrap();
+}
+
+/// Complete a run with specific `duration_ms` and `cost_usd`.
+fn complete_with_duration_cost(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    duration_ms: i64,
+    cost_usd: f64,
+) {
+    let mgr = WorkflowManager::new(conn);
+    mgr.update_workflow_status(run_id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(run_id, 0, 0, 0, 0, 1, cost_usd, duration_ms, None)
+        .unwrap();
+}
+
+#[test]
+fn test_regression_signals_empty_when_no_runs() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_regression_signals(1, 7, 30)
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_regression_signals_excluded_below_min_recent_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // 2 recent runs — below min_recent_runs=3, so HAVING clause excludes the workflow.
+    for _ in 0..2 {
+        let run = create_named_worktree_run(&conn, "w1", "sparse-wf");
+        complete_with_duration_cost(&conn, &run.id, 1000, 0.01);
+        // stays at "now" — inside the recent window
+    }
+    // Baseline runs present so INNER JOIN would succeed if HAVING didn't block it.
+    for _ in 0..5 {
+        let run = create_named_worktree_run(&conn, "w1", "sparse-wf");
+        complete_with_duration_cost(&conn, &run.id, 1000, 0.01);
+        backdate_run(&conn, &run.id, 14);
+    }
+
+    let result = mgr.get_workflow_regression_signals(3, 7, 30).unwrap();
+    assert!(
+        result.is_empty(),
+        "workflow with only 2 recent runs should be excluded by HAVING min_recent_runs=3"
+    );
+}
+
+#[test]
+fn test_regression_signals_excluded_when_no_baseline() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // One recent run but zero baseline runs → INNER JOIN produces no match.
+    let run = create_named_worktree_run(&conn, "w1", "no-baseline-wf");
+    complete_with_duration_cost(&conn, &run.id, 1000, 0.01);
+
+    let result = mgr.get_workflow_regression_signals(1, 7, 30).unwrap();
+    assert!(
+        result.is_empty(),
+        "workflow with no baseline runs should be excluded by INNER JOIN"
+    );
+}
+
+#[test]
+fn test_regression_signals_no_regression_when_stable() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // 5 baseline runs: durations [1000..5000] → P75 row 4 (1-indexed) = 4000 ms.
+    // (cnt=5: (5*75+99)/100 = 4 in integer division)
+    let durations = [1000i64, 2000, 3000, 4000, 5000];
+    let costs = [0.01f64, 0.02, 0.03, 0.04, 0.05];
+
+    for (&d, &c) in durations.iter().zip(costs.iter()) {
+        let run = create_named_worktree_run(&conn, "w1", "stable-wf");
+        complete_with_duration_cost(&conn, &run.id, d, c);
+        backdate_run(&conn, &run.id, 14);
+    }
+    // 5 recent runs with identical metrics → 0% change on all signals.
+    for (&d, &c) in durations.iter().zip(costs.iter()) {
+        let run = create_named_worktree_run(&conn, "w1", "stable-wf");
+        complete_with_duration_cost(&conn, &run.id, d, c);
+    }
+
+    let result = mgr.get_workflow_regression_signals(1, 7, 30).unwrap();
+    assert_eq!(result.len(), 1);
+    let s = &result[0];
+    assert_eq!(s.workflow_name, "stable-wf");
+    assert!(
+        !s.duration_regressed,
+        "identical durations should not flag duration regression"
+    );
+    assert!(
+        !s.cost_regressed,
+        "identical costs should not flag cost regression"
+    );
+    assert!(
+        !s.failure_rate_regressed,
+        "0% failure rate should not flag failure-rate regression"
+    );
+}
+
+#[test]
+fn test_regression_signals_duration_regressed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Baseline P75 duration = 4000 ms: sorted [1000, 2000, 3000, 4000, 5000], row 4 = 4000.
+    for &d in &[1000i64, 2000, 3000, 4000, 5000] {
+        let run = create_named_worktree_run(&conn, "w1", "slow-wf");
+        complete_with_duration_cost(&conn, &run.id, d, 0.01);
+        backdate_run(&conn, &run.id, 14);
+    }
+    // Recent P75 duration = 6000 ms: sorted [1000, 2000, 3000, 6000, 7000], row 4 = 6000.
+    // pct_change = (6000 - 4000) / 4000 * 100 = 50% > REGRESSION_DURATION_THRESHOLD_PCT (25%).
+    for &d in &[1000i64, 2000, 3000, 6000, 7000] {
+        let run = create_named_worktree_run(&conn, "w1", "slow-wf");
+        complete_with_duration_cost(&conn, &run.id, d, 0.01);
+    }
+
+    let result = mgr.get_workflow_regression_signals(1, 7, 30).unwrap();
+    assert_eq!(result.len(), 1);
+    let s = &result[0];
+    assert!(
+        s.duration_regressed,
+        "50% P75 duration increase should exceed the 25% threshold"
+    );
+    assert!(!s.cost_regressed);
+    assert!(!s.failure_rate_regressed);
+}
+
+#[test]
+fn test_regression_signals_cost_regressed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Baseline P75 cost = $0.04: sorted [0.01, 0.02, 0.03, 0.04, 0.05], row 4 = 0.04.
+    for &c in &[0.01f64, 0.02, 0.03, 0.04, 0.05] {
+        let run = create_named_worktree_run(&conn, "w1", "costly-wf");
+        complete_with_duration_cost(&conn, &run.id, 1000, c);
+        backdate_run(&conn, &run.id, 14);
+    }
+    // Recent P75 cost = $0.06: sorted [0.01, 0.02, 0.03, 0.06, 0.07], row 4 = 0.06.
+    // pct_change = (0.06 - 0.04) / 0.04 * 100 = 50% > REGRESSION_COST_THRESHOLD_PCT (20%).
+    for &c in &[0.01f64, 0.02, 0.03, 0.06, 0.07] {
+        let run = create_named_worktree_run(&conn, "w1", "costly-wf");
+        complete_with_duration_cost(&conn, &run.id, 1000, c);
+    }
+
+    let result = mgr.get_workflow_regression_signals(1, 7, 30).unwrap();
+    assert_eq!(result.len(), 1);
+    let s = &result[0];
+    assert!(!s.duration_regressed);
+    assert!(
+        s.cost_regressed,
+        "50% P75 cost increase should exceed the 20% threshold"
+    );
+    assert!(!s.failure_rate_regressed);
+}
+
+#[test]
+fn test_regression_signals_failure_rate_regressed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Baseline: 5 completed runs → failure rate = 0%.
+    for _ in 0..5 {
+        let run = create_named_worktree_run(&conn, "w1", "flaky-wf");
+        complete_with_duration_cost(&conn, &run.id, 1000, 0.01);
+        backdate_run(&conn, &run.id, 14);
+    }
+    // Recent: 5 failed runs → failure rate = 100%.
+    // change_pp = 100 - 0 = 100 > REGRESSION_FAILURE_RATE_THRESHOLD_PP (5.0).
+    for _ in 0..5 {
+        let run = create_named_worktree_run(&conn, "w1", "flaky-wf");
+        WorkflowManager::new(&conn)
+            .update_workflow_status(&run.id, WorkflowRunStatus::Failed, None)
+            .unwrap();
+    }
+
+    let result = mgr.get_workflow_regression_signals(1, 7, 30).unwrap();
+    assert_eq!(result.len(), 1);
+    let s = &result[0];
+    assert!(!s.duration_regressed);
+    assert!(!s.cost_regressed);
+    assert!(
+        s.failure_rate_regressed,
+        "100pp failure-rate increase should exceed the 5pp threshold"
+    );
+    assert!((s.recent_failure_rate - 100.0).abs() < 0.01);
+    assert!((s.baseline_failure_rate - 0.0).abs() < 0.01);
+}
+
+#[test]
+fn test_regression_signals_excludes_runs_outside_both_windows() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Runs backdated 40 days → outside both recent (7 days) and baseline (7–37 days) windows.
+    for _ in 0..5 {
+        let run = create_named_worktree_run(&conn, "w1", "old-wf");
+        complete_with_duration_cost(&conn, &run.id, 1000, 0.01);
+        backdate_run(&conn, &run.id, 40);
+    }
+
+    let result = mgr.get_workflow_regression_signals(1, 7, 30).unwrap();
+    assert!(
+        result.is_empty(),
+        "runs older than both windows (40 days > 7+30=37 days) should be excluded"
+    );
+}
+
+#[test]
+fn test_regression_signals_multiple_workflows_independent() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Workflow "wf-alpha": stable — no regression expected.
+    for &d in &[1000i64, 2000, 3000, 4000, 5000] {
+        let run = create_named_worktree_run(&conn, "w1", "wf-alpha");
+        complete_with_duration_cost(&conn, &run.id, d, 0.01);
+        backdate_run(&conn, &run.id, 14);
+    }
+    for &d in &[1000i64, 2000, 3000, 4000, 5000] {
+        let run = create_named_worktree_run(&conn, "w1", "wf-alpha");
+        complete_with_duration_cost(&conn, &run.id, d, 0.01);
+    }
+
+    // Workflow "wf-beta": duration regressed (baseline P75=4000, recent P75=6000 → +50%).
+    for &d in &[1000i64, 2000, 3000, 4000, 5000] {
+        let run = create_named_worktree_run(&conn, "w1", "wf-beta");
+        complete_with_duration_cost(&conn, &run.id, d, 0.01);
+        backdate_run(&conn, &run.id, 14);
+    }
+    for &d in &[1000i64, 2000, 3000, 6000, 7000] {
+        let run = create_named_worktree_run(&conn, "w1", "wf-beta");
+        complete_with_duration_cost(&conn, &run.id, d, 0.01);
+    }
+
+    let result = mgr.get_workflow_regression_signals(1, 7, 30).unwrap();
+    assert_eq!(result.len(), 2, "both workflows should appear");
+    // ORDER BY workflow_name → "wf-alpha" before "wf-beta".
+    assert_eq!(result[0].workflow_name, "wf-alpha");
+    assert_eq!(result[1].workflow_name, "wf-beta");
+    assert!(!result[0].duration_regressed, "wf-alpha should be stable");
+    assert!(
+        result[1].duration_regressed,
+        "wf-beta should have duration regression"
+    );
+}
