@@ -103,13 +103,21 @@ fn dfs_tree_order<'a>(
     }
     roots.sort_by(|a, b| {
         let ord = get_branch(*a).cmp(get_branch(*b));
-        if reverse { ord.reverse() } else { ord }
+        if reverse {
+            ord.reverse()
+        } else {
+            ord
+        }
     });
 
     for children in children_of.values_mut() {
         children.sort_by(|a, b| {
             let ord = get_branch(*a).cmp(get_branch(*b));
-            if reverse { ord.reverse() } else { ord }
+            if reverse {
+                ord.reverse()
+            } else {
+                ord
+            }
         });
     }
 
@@ -186,7 +194,13 @@ pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
             .as_deref()
             .unwrap_or(default_branch)
     };
-    dfs_tree_order(worktrees.len(), get_branch, get_parent, default_branch, false)
+    dfs_tree_order(
+        worktrees.len(),
+        get_branch,
+        get_parent,
+        default_branch,
+        false,
+    )
 }
 
 /// Reorder worktrees into tree order based on `base_branch` parent-child relationships.
@@ -258,7 +272,8 @@ pub fn build_branch_picker_tree(
 
     let get_branch = |i: usize| rest[i].branch.as_deref().unwrap_or("");
     let get_parent = |i: usize| rest[i].base_branch.as_deref().unwrap_or("");
-    let (rest_indices, rest_positions) = dfs_tree_order(rest.len(), get_branch, get_parent, "", false);
+    let (rest_indices, rest_positions) =
+        dfs_tree_order(rest.len(), get_branch, get_parent, "", false);
 
     for (idx, pos) in rest_indices.into_iter().zip(rest_positions.into_iter()) {
         result.push(rest[idx].clone());
