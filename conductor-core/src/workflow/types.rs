@@ -521,3 +521,74 @@ pub struct WorkflowRunMetricsRow {
     pub worktree_id: Option<String>,
     pub repo_id: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_run(workflow_name: &str, definition_snapshot: Option<&str>) -> WorkflowRun {
+        WorkflowRun {
+            id: "test-id".into(),
+            workflow_name: workflow_name.into(),
+            worktree_id: None,
+            parent_run_id: String::new(),
+            status: WorkflowRunStatus::Completed,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: String::new(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: definition_snapshot.map(String::from),
+            inputs: HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            feature_id: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn display_name_falls_back_to_workflow_name_when_no_snapshot() {
+        let run = make_run("my-workflow", None);
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_returns_title_from_snapshot() {
+        let snapshot = r#"{"title": "My Nice Workflow", "steps": []}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "My Nice Workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_snapshot_has_no_title() {
+        let snapshot = r#"{"steps": [], "description": "no title here"}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_snapshot_is_malformed_json() {
+        let run = make_run("my-workflow", Some("{not valid json"));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_title_is_non_string() {
+        let snapshot = r#"{"title": 42}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+}
