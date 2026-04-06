@@ -2362,6 +2362,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "test-wf".to_string(),
+            title: None,
             description: "A test workflow".to_string(),
             trigger: WorkflowTrigger::Manual,
             targets: vec!["repo".to_string(), "worktree".to_string()],
@@ -2385,6 +2386,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "all-contexts-wf".to_string(),
+            title: None,
             description: "Applies to all contexts".to_string(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
