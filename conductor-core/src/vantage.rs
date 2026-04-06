@@ -484,7 +484,7 @@ fn parse_vantage_deliverable(d: &serde_json::Value) -> TicketInput {
         assignee,
         priority,
         url,
-        raw_json: serde_json::to_string(d).unwrap_or_else(|_| "{}".to_string()),
+        raw_json: serde_json::to_string(d).ok(),
         label_details: vec![],
         blocked_by,
         children,
@@ -987,7 +987,7 @@ mod tests {
         });
 
         let ticket = parse_vantage_deliverable(&json);
-        let raw: serde_json::Value = serde_json::from_str(&ticket.raw_json).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(ticket.raw_json.as_deref().unwrap()).unwrap();
         assert_eq!(raw["custom_field"], "preserved");
     }
 
