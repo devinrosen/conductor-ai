@@ -562,7 +562,6 @@ pub fn spawn_ticket_sync_once(tx: BackgroundSender) {
     });
 }
 
-
 fn sync_all_tickets(tx: &BackgroundSender) {
     let db = db_path();
     let Ok(conn) = open_database(&db) else { return };

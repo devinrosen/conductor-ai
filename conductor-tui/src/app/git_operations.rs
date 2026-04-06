@@ -103,9 +103,22 @@ impl App {
         // In RepoDetail view, scope sync to the currently focused repo.
         if self.state.view == View::RepoDetail {
             if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
-                if let Some(repo) = self.state.data.repos.iter().find(|r| &r.id == repo_id).cloned() {
-                    self.state.status_message = Some(format!("Syncing tickets for {}...", repo.slug));
-                    background::spawn_ticket_sync_for_repo(tx.clone(), repo.id, repo.slug, repo.remote_url);
+                if let Some(repo) = self
+                    .state
+                    .data
+                    .repos
+                    .iter()
+                    .find(|r| &r.id == repo_id)
+                    .cloned()
+                {
+                    self.state.status_message =
+                        Some(format!("Syncing tickets for {}...", repo.slug));
+                    background::spawn_ticket_sync_for_repo(
+                        tx.clone(),
+                        repo.id,
+                        repo.slug,
+                        repo.remote_url,
+                    );
                     return;
                 }
             }
