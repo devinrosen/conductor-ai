@@ -2967,9 +2967,18 @@ fn test_regression_signals_no_regression_when_stable() {
     assert_eq!(result.len(), 1);
     let s = &result[0];
     assert_eq!(s.workflow_name, "stable-wf");
-    assert!(!s.duration_regressed, "identical durations should not flag duration regression");
-    assert!(!s.cost_regressed, "identical costs should not flag cost regression");
-    assert!(!s.failure_rate_regressed, "0% failure rate should not flag failure-rate regression");
+    assert!(
+        !s.duration_regressed,
+        "identical durations should not flag duration regression"
+    );
+    assert!(
+        !s.cost_regressed,
+        "identical costs should not flag cost regression"
+    );
+    assert!(
+        !s.failure_rate_regressed,
+        "0% failure rate should not flag failure-rate regression"
+    );
 }
 
 #[test]
@@ -3115,5 +3124,8 @@ fn test_regression_signals_multiple_workflows_independent() {
     assert_eq!(result[0].workflow_name, "wf-alpha");
     assert_eq!(result[1].workflow_name, "wf-beta");
     assert!(!result[0].duration_regressed, "wf-alpha should be stable");
-    assert!(result[1].duration_regressed, "wf-beta should have duration regression");
+    assert!(
+        result[1].duration_regressed,
+        "wf-beta should have duration regression"
+    );
 }
