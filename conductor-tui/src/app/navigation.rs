@@ -95,9 +95,7 @@ impl App {
                 .ticket_dependencies
                 .get(&ticket.id)
                 .map(|d| {
-                    d.blocked_by
-                        .iter()
-                        .filter(|b| b.state != "closed")
+                    d.active_blockers()
                         .map(|b| format!("#{}", b.source_id))
                         .collect()
                 })

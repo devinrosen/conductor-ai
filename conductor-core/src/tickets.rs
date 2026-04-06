@@ -101,6 +101,18 @@ pub struct TicketDependencies {
     pub children: Vec<Ticket>,
 }
 
+impl TicketDependencies {
+    /// Returns `true` if this ticket has at least one unresolved (non-closed) blocker.
+    pub fn is_actively_blocked(&self) -> bool {
+        self.blocked_by.iter().any(|b| b.state != "closed")
+    }
+
+    /// Returns an iterator over unresolved (non-closed) blockers.
+    pub fn active_blockers(&self) -> impl Iterator<Item = &Ticket> {
+        self.blocked_by.iter().filter(|b| b.state != "closed")
+    }
+}
+
 /// A ticket that is ready to be worked on: not closed, has no unresolved blockers,
 /// and is not already linked to an active workflow run.
 #[derive(Debug, Clone, Serialize, Deserialize)]

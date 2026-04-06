@@ -255,7 +255,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 .data
                 .ticket_dependencies
                 .get(&t.id)
-                .is_some_and(|d| d.blocked_by.iter().any(|b| b.state != "closed"));
+                .is_some_and(|d| d.is_actively_blocked());
 
             let tree_prefix = pos.to_prefix();
             let toggle_glyph = if is_parent {
