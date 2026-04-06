@@ -99,7 +99,7 @@ fn make_tickets(repos: &[Repo]) -> Vec<Ticket> {
             body: "Implement OAuth login using GitHub provider.".into(),
             state: "open".into(),
             labels: "".into(),
-            assignee: None,
+            assignee: Some("devinrosen".into()),
             priority: None,
             url: "https://github.com/user/my-app/issues/123".into(),
             synced_at: "2024-01-10T00:00:00Z".into(),

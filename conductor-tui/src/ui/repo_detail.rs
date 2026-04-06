@@ -237,6 +237,25 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(state.theme.border_inactive)
     };
     let detail_filter = state.detail_ticket_filter.as_query();
+
+    // Compute column widths from the full (unfiltered) ticket list so widths
+    // stay stable while the user types a filter query.
+    const MAX_COL_WIDTH: usize = 20;
+    let id_width = state
+        .detail_tickets
+        .iter()
+        .map(|t| t.source_id.len())
+        .max()
+        .unwrap_or(4)
+        .min(MAX_COL_WIDTH);
+    let assignee_width = state
+        .detail_tickets
+        .iter()
+        .map(|t| t.assignee.as_deref().unwrap_or("unclaimed").len())
+        .max()
+        .unwrap_or("unclaimed".len())
+        .min(MAX_COL_WIDTH);
+
     let ticket_items: Vec<ListItem> = state
         .filtered_detail_tickets
         .iter()
@@ -287,16 +306,26 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
             }
 
             spans.push(super::common::ticket_worktree_dot_span(state, &t.id));
+            let id_str = super::common::truncate(&t.source_id, id_width);
             spans.push(Span::styled(
-                format!("#{} ", t.source_id),
+                format!("#{:<width$} ", id_str, width = id_width),
                 Style::default().fg(state.theme.group_header),
             ));
 
-            if let Some(login) = &t.assignee {
-                spans.push(Span::styled(
-                    format!("@{login} "),
-                    Style::default().fg(state.theme.label_secondary),
-                ));
+            match &t.assignee {
+                Some(login) => {
+                    let login_str = super::common::truncate(login, assignee_width - 1);
+                    spans.push(Span::styled(
+                        format!("@{:<width$} ", login_str, width = assignee_width - 1),
+                        Style::default().fg(state.theme.label_secondary),
+                    ));
+                }
+                None => {
+                    spans.push(Span::styled(
+                        format!("{:<width$} ", "unclaimed", width = assignee_width),
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
             }
             spans.push(Span::raw(&t.title));
             let labels = state
