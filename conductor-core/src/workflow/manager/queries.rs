@@ -23,6 +23,14 @@ use crate::workflow::types::{
     WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
+/// Returns `(recent - baseline) / baseline * 100` when both values are present and baseline > 0.
+fn pct_change(recent: Option<f64>, baseline: Option<f64>) -> Option<f64> {
+    match (recent, baseline) {
+        (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
+        _ => None,
+    }
+}
+
 impl<'a> WorkflowManager<'a> {
     /// Returns counts of active workflow runs (pending / running / waiting) per repo_id.
     /// Repos with no active runs are absent from the map. Rows where repo_id IS NULL are skipped.
@@ -1296,14 +1304,9 @@ impl<'a> WorkflowManager<'a> {
                 let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
 
                 // Compute percentage change for duration and cost.
-                let duration_change_pct = match (recent_p75_duration_ms, baseline_p75_duration_ms) {
-                    (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
-                    _ => None,
-                };
-                let cost_change_pct = match (recent_p75_cost_usd, baseline_p75_cost_usd) {
-                    (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
-                    _ => None,
-                };
+                let duration_change_pct =
+                    pct_change(recent_p75_duration_ms, baseline_p75_duration_ms);
+                let cost_change_pct = pct_change(recent_p75_cost_usd, baseline_p75_cost_usd);
                 let failure_rate_change_pp = recent_failure_rate - baseline_failure_rate;
 
                 Ok(WorkflowRegressionSignal {

@@ -64,6 +64,7 @@ export function WorkflowAnalyticsPage() {
   const [percentilesLoading, setPercentilesLoading] = useState(false);
 
   const [regressions, setRegressions] = useState<WorkflowRegressionSignal[]>([]);
+  const [regressionsError, setRegressionsError] = useState<string | null>(null);
   const [regressionsOpen, setRegressionsOpen] = useState(true);
 
   useEffect(() => {
@@ -72,7 +73,9 @@ export function WorkflowAnalyticsPage() {
       .then(setAggregates)
       .catch((e) => setAggError(e instanceof Error ? e.message : "Failed to load aggregates"))
       .finally(() => setAggLoading(false));
-    api.getWorkflowRegressions().then(setRegressions).catch(() => {});
+    api.getWorkflowRegressions()
+      .then(setRegressions)
+      .catch((e) => setRegressionsError(e instanceof Error ? e.message : "Failed to load regressions"));
   }, []);
 
   useEffect(() => {
@@ -264,6 +267,11 @@ export function WorkflowAnalyticsPage() {
         <h2 className="text-xl font-bold text-gray-900">Workflow Token Analytics</h2>
         <p className="text-sm text-gray-500 mt-1">Token usage aggregated across completed workflow runs.</p>
       </div>
+
+      {/* Regressions error */}
+      {regressionsError && (
+        <p className="text-sm text-red-500">{regressionsError}</p>
+      )}
 
       {/* Regressions summary panel — shown only when at least one regression is detected */}
       {activeRegressions.length > 0 && (
