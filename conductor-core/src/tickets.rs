@@ -1111,6 +1111,80 @@ mod tests {
         .unwrap()
     }
 
+    fn make_ticket_stub(state: &str) -> Ticket {
+        Ticket {
+            id: "stub".to_string(),
+            repo_id: "repo".to_string(),
+            source_type: "github".to_string(),
+            source_id: "1".to_string(),
+            title: "stub".to_string(),
+            body: String::new(),
+            state: state.to_string(),
+            labels: String::new(),
+            assignee: None,
+            priority: None,
+            url: String::new(),
+            synced_at: String::new(),
+            raw_json: "{}".to_string(),
+            workflow: None,
+            agent_map: None,
+        }
+    }
+
+    #[test]
+    fn test_is_actively_blocked_empty() {
+        let deps = TicketDependencies::default();
+        assert!(!deps.is_actively_blocked());
+    }
+
+    #[test]
+    fn test_is_actively_blocked_all_closed() {
+        let deps = TicketDependencies {
+            blocked_by: vec![make_ticket_stub("closed"), make_ticket_stub("closed")],
+            ..Default::default()
+        };
+        assert!(!deps.is_actively_blocked());
+    }
+
+    #[test]
+    fn test_is_actively_blocked_one_open() {
+        let deps = TicketDependencies {
+            blocked_by: vec![make_ticket_stub("closed"), make_ticket_stub("open")],
+            ..Default::default()
+        };
+        assert!(deps.is_actively_blocked());
+    }
+
+    #[test]
+    fn test_active_blockers_empty() {
+        let deps = TicketDependencies::default();
+        assert_eq!(deps.active_blockers().count(), 0);
+    }
+
+    #[test]
+    fn test_active_blockers_filters_closed() {
+        let deps = TicketDependencies {
+            blocked_by: vec![
+                make_ticket_stub("closed"),
+                make_ticket_stub("open"),
+                make_ticket_stub("open"),
+            ],
+            ..Default::default()
+        };
+        let active: Vec<_> = deps.active_blockers().collect();
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|b| b.state == "open"));
+    }
+
+    #[test]
+    fn test_active_blockers_all_closed() {
+        let deps = TicketDependencies {
+            blocked_by: vec![make_ticket_stub("closed")],
+            ..Default::default()
+        };
+        assert_eq!(deps.active_blockers().count(), 0);
+    }
+
     #[test]
     fn test_latest_synced_at_no_tickets() {
         let conn = setup_db();
