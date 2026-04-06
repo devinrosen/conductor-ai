@@ -43,7 +43,7 @@ pub struct TicketInput {
     pub assignee: Option<String>,
     pub priority: Option<String>,
     pub url: String,
-    pub raw_json: String,
+    pub raw_json: Option<String>,
     /// Label details (name + color) for populating the ticket_labels join table.
     /// Pass `vec![]` for sources that do not supply color data.
     pub label_details: Vec<TicketLabelInput>,
@@ -224,6 +224,19 @@ impl<'a> TicketSyncer<'a> {
         for ticket in tickets {
             let id = crate::new_id();
             let labels_json = ticket.labels_json();
+            // When the caller supplies no raw_json (None), preserve whatever is
+            // already stored rather than overwriting with an empty placeholder.
+            // This is resolved in Rust so the SQL layer carries no sentinel knowledge.
+            let raw_json: String = match &ticket.raw_json {
+                Some(v) => v.clone(),
+                None => tx
+                    .query_row(
+                        "SELECT raw_json FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+                        params![repo_id, ticket.source_type, ticket.source_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap_or_else(|_| "{}".to_string()),
+            };
             tx.execute(
                 "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
@@ -250,7 +263,7 @@ impl<'a> TicketSyncer<'a> {
                     ticket.priority,
                     ticket.url,
                     now,
-                    ticket.raw_json,
+                    raw_json,
                 ],
             )?;
 
@@ -1126,7 +1139,7 @@ mod tests {
             assignee: None,
             priority: None,
             url: String::new(),
-            raw_json: "{}".to_string(),
+            raw_json: None,
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
@@ -2146,7 +2159,7 @@ mod tests {
             assignee: None,
             priority: None,
             url: String::new(),
-            raw_json: "{}".to_string(),
+            raw_json: None,
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
@@ -3255,5 +3268,54 @@ mod tests {
             }
             e => panic!("expected TicketNotFound, got {e:?}"),
         }
+    }
+
+    #[test]
+    fn test_upsert_preserves_raw_json_on_cli_re_upsert() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Simulate a sync with real raw_json from a source (e.g. GitHub).
+        let mut synced = make_ticket("42", "Real Issue");
+        synced.raw_json = Some(r#"{"id":42,"number":42,"title":"Real Issue"}"#.to_string());
+        syncer.upsert_tickets("r1", &[synced]).unwrap();
+
+        // Verify the raw_json was stored correctly.
+        let stored: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, r#"{"id":42,"number":42,"title":"Real Issue"}"#);
+
+        // Simulate a CLI re-upsert (passes None — no raw_json available).
+        let mut cli_upsert = make_ticket("42", "Real Issue Updated");
+        cli_upsert.raw_json = None;
+        syncer.upsert_tickets("r1", &[cli_upsert]).unwrap();
+
+        // raw_json must be unchanged — None must not clobber synced data.
+        let after: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after, r#"{"id":42,"number":42,"title":"Real Issue"}"#,
+            "CLI re-upsert with None must not overwrite existing raw_json"
+        );
+
+        // Title update from CLI upsert should still be applied.
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "Real Issue Updated");
     }
 }

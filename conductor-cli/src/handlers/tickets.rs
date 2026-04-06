@@ -203,7 +203,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                 assignee,
                 priority,
                 url,
-                raw_json: "{}".to_string(),
+                raw_json: None,
                 blocked_by: vec![],
                 children: vec![],
                 parent,
