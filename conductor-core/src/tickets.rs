@@ -265,17 +265,21 @@ impl<'a> TicketSyncer<'a> {
         // Second pass: write ticket_dependencies. All tickets are already upserted above,
         // so forward references within the same batch resolve correctly.
         for (ticket, ticket_id) in &ticket_ids {
-            // Clear stale dependency rows owned by this ticket before re-inserting.
-            // Scope the blocks delete to dep_type='blocks' to avoid removing parent_of rows
-            // written by other tickets during incremental syncs.
-            tx.execute(
-                "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'blocks'",
-                params![ticket_id],
-            )?;
-            tx.execute(
-                "DELETE FROM ticket_dependencies WHERE from_ticket_id = ?1 AND dep_type = 'parent_of'",
-                params![ticket_id],
-            )?;
+            // Clear stale dependency rows owned by this ticket before re-inserting,
+            // but only when the TicketInput actually declares dependencies. An empty
+            // blocked_by + children (e.g. from a GitHub sync that doesn't parse body
+            // text) is treated as "no opinion" so it does not overwrite dependencies
+            // set via MCP or other sources.
+            if !ticket.blocked_by.is_empty() || !ticket.children.is_empty() {
+                tx.execute(
+                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'blocks'",
+                    params![ticket_id],
+                )?;
+                tx.execute(
+                    "DELETE FROM ticket_dependencies WHERE from_ticket_id = ?1 AND dep_type = 'parent_of'",
+                    params![ticket_id],
+                )?;
+            }
 
             // blocked_by: another ticket blocks this one → (blocker_id, ticket_id, 'blocks')
             for src in &ticket.blocked_by {
@@ -2482,7 +2486,9 @@ mod tests {
     }
 
     #[test]
-    fn test_upsert_clears_stale_dependencies() {
+    fn test_upsert_empty_blocked_by_preserves_existing_deps() {
+        // Empty blocked_by is treated as "no opinion" — it must NOT clear deps
+        // written by a previous upsert or by another source (e.g. MCP).
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
 
@@ -2493,13 +2499,14 @@ mod tests {
         syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
         assert_eq!(dep_count(&conn), 1);
 
-        // Re-upsert ticket "1" with empty blocked_by — stale row must be removed
-        let t1_clear = make_ticket("1", "Blocked");
-        syncer.upsert_tickets("r1", &[t1_clear]).unwrap();
+        // Re-upsert ticket "1" with empty blocked_by (e.g. from a GitHub sync
+        // that doesn't parse body text) — existing dep row must be preserved.
+        let t1_no_opinion = make_ticket("1", "Blocked");
+        syncer.upsert_tickets("r1", &[t1_no_opinion]).unwrap();
         assert_eq!(
             dep_count(&conn),
-            0,
-            "stale dependency row should be removed"
+            1,
+            "empty blocked_by should not remove existing dependency rows"
         );
     }
 
@@ -2541,7 +2548,9 @@ mod tests {
     }
 
     #[test]
-    fn test_upsert_clears_stale_children() {
+    fn test_upsert_empty_children_preserves_existing_deps() {
+        // Empty children is treated as "no opinion" — it must NOT clear deps
+        // written by a previous upsert or by another source (e.g. MCP).
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
 
@@ -2552,13 +2561,14 @@ mod tests {
         syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
         assert_eq!(dep_count(&conn), 1);
 
-        // Re-upsert ticket "1" with empty children — stale row must be removed
-        let t1_clear = make_ticket("1", "Parent");
-        syncer.upsert_tickets("r1", &[t1_clear]).unwrap();
+        // Re-upsert ticket "1" with empty children (e.g. from a GitHub sync
+        // that doesn't parse body text) — existing dep row must be preserved.
+        let t1_no_opinion = make_ticket("1", "Parent");
+        syncer.upsert_tickets("r1", &[t1_no_opinion]).unwrap();
         assert_eq!(
             dep_count(&conn),
-            0,
-            "stale children dependency row should be removed"
+            1,
+            "empty children should not remove existing dependency rows"
         );
     }
 
