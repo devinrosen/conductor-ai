@@ -617,6 +617,35 @@ pub struct WorkflowRegressionSignal {
     pub failure_rate_regressed: bool,
 }
 
+/// Per-gate-step aggregate analytics for a workflow (one row per step_name).
+/// Approval is inferred from status: completed = approved, failed = rejected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GateAnalyticsRow {
+    pub step_name: String,
+    pub total_gate_hits: i64,
+    pub approved_count: i64,
+    pub rejected_count: i64,
+    pub approval_rate: f64, // 0–100 %
+    pub avg_wait_ms: Option<f64>,
+    pub p50_wait_ms: Option<f64>,
+    pub p95_wait_ms: Option<f64>,
+    pub avg_feedback_length: Option<f64>, // proxy for feedback quality
+}
+
+/// Cross-workflow snapshot of all currently-waiting gate steps (one row per step).
+/// Distinct from `PendingGateRow` which is TUI-enriched and repo-scoped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingGateAnalyticsRow {
+    pub step_id: String,
+    pub step_name: String,
+    pub gate_type: String,
+    pub gate_prompt: Option<String>,
+    pub workflow_name: String,
+    pub workflow_run_id: String,
+    pub started_at: String,
+    pub wait_ms_so_far: i64,
+}
+
 /// Raw per-run metrics for histogram distribution (one row per completed run).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunMetricsRow {

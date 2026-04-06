@@ -287,6 +287,14 @@ pub fn api_router() -> Router<AppState> {
             "/api/workflows/analytics/regressions",
             get(workflows::get_workflow_regressions),
         )
+        .route(
+            "/api/workflows/analytics/gates",
+            get(workflows::get_gate_analytics),
+        )
+        .route(
+            "/api/workflows/analytics/gates/pending",
+            get(workflows::get_pending_gates),
+        )
         // Workflow Templates
         .route("/api/templates", get(workflows::list_templates))
         .route(

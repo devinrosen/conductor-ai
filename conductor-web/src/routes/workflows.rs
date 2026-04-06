@@ -9,12 +9,12 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
-    RunIdSlot, StepFailureHeatmapRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig,
-    WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles,
-    WorkflowRegressionSignal, WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow,
-    WorkflowRunStatus, WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow,
-    REGRESSION_MIN_RECENT_RUNS,
+    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
+    GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
+    StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
+    WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -985,6 +985,34 @@ pub async fn get_workflow_regressions(
     let min_runs = q.min_runs.unwrap_or(REGRESSION_MIN_RECENT_RUNS);
     let signals = mgr.get_workflow_regression_signals(min_runs, recent_days, baseline_days)?;
     Ok(Json(signals))
+}
+
+/// GET /api/workflows/analytics/gates?workflow_name=&days=30
+#[derive(Deserialize)]
+pub struct GateAnalyticsQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+pub async fn get_gate_analytics(
+    State(state): State<AppState>,
+    Query(q): Query<GateAnalyticsQuery>,
+) -> Result<Json<Vec<GateAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let rows = mgr.get_gate_analytics(&q.workflow_name, days)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/gates/pending
+pub async fn get_pending_gates(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PendingGateAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let rows = mgr.get_all_pending_gates()?;
+    Ok(Json(rows))
 }
 
 /// GET /api/workflows/runs/{id}/steps/{step_name}/log

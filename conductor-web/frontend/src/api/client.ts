@@ -38,6 +38,8 @@ import type {
   StepFailureHeatmapRow,
   WorkflowPercentiles,
   WorkflowRegressionSignal,
+  GateAnalyticsRow,
+  PendingGateAnalyticsRow,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -311,6 +313,12 @@ export const api = {
     ),
   getWorkflowRegressions: () =>
     request<WorkflowRegressionSignal[]>("/workflows/analytics/regressions"),
+  getGateAnalytics: (workflowName: string, days = 30) =>
+    request<GateAnalyticsRow[]>(
+      `/workflows/analytics/gates?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getPendingGates: () =>
+    request<PendingGateAnalyticsRow[]>("/workflows/analytics/gates/pending"),
 
   // Notifications
   listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>
