@@ -66,35 +66,9 @@ pub fn send_slack_sync(config: &NotificationConfig, text: &str) -> crate::error:
         .timeout(std::time::Duration::from_secs(10))
         .build();
     agent.post(url).send_json(&body).map_err(|e| {
-        crate::error::ConductorError::TicketSync(format!("Slack webhook POST to {url} failed: {e}"))
+        crate::error::ConductorError::Notification(format!("Slack webhook POST to {url} failed: {e}"))
     })?;
     Ok(())
-}
-
-/// Format a list of active workflow runs as a Slack mrkdwn message.
-///
-/// Shared between the CLI `workflow active --slack` path and the web Slack
-/// slash command handler so the two formats stay in sync.
-pub fn format_active_runs_for_slack(runs: &[WorkflowRun]) -> String {
-    if runs.is_empty() {
-        return "No active workflow runs.".to_string();
-    }
-    let mut lines = vec![format!("*Active workflow runs ({}):*", runs.len())];
-    for run in runs {
-        let label = run.target_label.as_deref().unwrap_or("-");
-        let since = &run.started_at[..16.min(run.started_at.len())];
-        let status_emoji = match run.status {
-            WorkflowRunStatus::Running => ":arrows_counterclockwise:",
-            WorkflowRunStatus::Waiting => ":hourglass_flowing_sand:",
-            WorkflowRunStatus::Pending => ":clock3:",
-            _ => ":grey_question:",
-        };
-        lines.push(format!(
-            "{status_emoji} *{}* on `{label}` — {} (since {since})",
-            run.workflow_name, run.status,
-        ));
-    }
-    lines.join("\n")
 }
 
 /// Persist an in-app notification record. Logs a warning on failure.
@@ -2080,56 +2054,4 @@ mod tests {
         assert!(result.is_err(), "expected error when webhook_url is empty");
     }
 
-    // --- format_active_runs_for_slack ---
-
-    #[test]
-    fn format_active_runs_empty() {
-        assert_eq!(
-            format_active_runs_for_slack(&[]),
-            "No active workflow runs."
-        );
-    }
-
-    #[test]
-    fn format_active_runs_includes_all_runs() {
-        use crate::workflow::{WorkflowRun, WorkflowRunStatus};
-        use std::collections::HashMap;
-
-        let runs = vec![WorkflowRun {
-            id: "run-1".into(),
-            workflow_name: "deploy".into(),
-            worktree_id: None,
-            parent_run_id: String::new(),
-            status: WorkflowRunStatus::Running,
-            dry_run: false,
-            trigger: "manual".into(),
-            started_at: "2025-01-15T10:30:00Z".into(),
-            ended_at: None,
-            result_summary: None,
-            definition_snapshot: None,
-            inputs: HashMap::new(),
-            ticket_id: None,
-            repo_id: None,
-            parent_workflow_run_id: None,
-            target_label: Some("my-repo/main".into()),
-            default_bot_name: None,
-            iteration: 0,
-            blocked_on: None,
-            feature_id: None,
-            workflow_title: None,
-            total_input_tokens: None,
-            total_output_tokens: None,
-            total_cache_read_input_tokens: None,
-            total_cache_creation_input_tokens: None,
-            total_turns: None,
-            total_cost_usd: None,
-            total_duration_ms: None,
-            model: None,
-        }];
-        let output = format_active_runs_for_slack(&runs);
-        assert!(output.contains("Active workflow runs (1)"));
-        assert!(output.contains("deploy"));
-        assert!(output.contains("my-repo/main"));
-        assert!(output.contains(":arrows_counterclockwise:"));
-    }
 }
