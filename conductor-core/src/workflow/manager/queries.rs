@@ -1281,49 +1281,52 @@ impl<'a> WorkflowManager<'a> {
              ORDER BY r.workflow_name",
         )?;
 
-        let rows = stmt.query_map(params![recent_days, min_recent_runs, baseline_days], |row| {
-            let recent_runs: i64 = row.get(1)?;
-            let baseline_runs: i64 = row.get(2)?;
-            let recent_p75_duration_ms: Option<f64> = row.get(3)?;
-            let baseline_p75_duration_ms: Option<f64> = row.get(4)?;
-            let recent_p75_cost_usd: Option<f64> = row.get(5)?;
-            let baseline_p75_cost_usd: Option<f64> = row.get(6)?;
-            let recent_failure_rate: f64 = row.get(7)?;
-            let baseline_failure_rate: f64 = row.get(8)?;
-            let definition_snapshot: Option<String> = row.get(9)?;
-            let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+        let rows = stmt.query_map(
+            params![recent_days, min_recent_runs, baseline_days],
+            |row| {
+                let recent_runs: i64 = row.get(1)?;
+                let baseline_runs: i64 = row.get(2)?;
+                let recent_p75_duration_ms: Option<f64> = row.get(3)?;
+                let baseline_p75_duration_ms: Option<f64> = row.get(4)?;
+                let recent_p75_cost_usd: Option<f64> = row.get(5)?;
+                let baseline_p75_cost_usd: Option<f64> = row.get(6)?;
+                let recent_failure_rate: f64 = row.get(7)?;
+                let baseline_failure_rate: f64 = row.get(8)?;
+                let definition_snapshot: Option<String> = row.get(9)?;
+                let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
 
-            // Compute percentage change for duration and cost.
-            let duration_change_pct = match (recent_p75_duration_ms, baseline_p75_duration_ms) {
-                (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
-                _ => None,
-            };
-            let cost_change_pct = match (recent_p75_cost_usd, baseline_p75_cost_usd) {
-                (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
-                _ => None,
-            };
-            let failure_rate_change_pp = recent_failure_rate - baseline_failure_rate;
+                // Compute percentage change for duration and cost.
+                let duration_change_pct = match (recent_p75_duration_ms, baseline_p75_duration_ms) {
+                    (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
+                    _ => None,
+                };
+                let cost_change_pct = match (recent_p75_cost_usd, baseline_p75_cost_usd) {
+                    (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
+                    _ => None,
+                };
+                let failure_rate_change_pp = recent_failure_rate - baseline_failure_rate;
 
-            Ok(WorkflowRegressionSignal {
-                workflow_name: row.get(0)?,
-                workflow_title,
-                recent_runs,
-                baseline_runs,
-                recent_p75_duration_ms,
-                baseline_p75_duration_ms,
-                duration_change_pct,
-                recent_p75_cost_usd,
-                baseline_p75_cost_usd,
-                cost_change_pct,
-                recent_failure_rate,
-                baseline_failure_rate,
-                failure_rate_change_pp,
-                // Flags set to false here; applied below using threshold constants.
-                duration_regressed: false,
-                cost_regressed: false,
-                failure_rate_regressed: false,
-            })
-        })?;
+                Ok(WorkflowRegressionSignal {
+                    workflow_name: row.get(0)?,
+                    workflow_title,
+                    recent_runs,
+                    baseline_runs,
+                    recent_p75_duration_ms,
+                    baseline_p75_duration_ms,
+                    duration_change_pct,
+                    recent_p75_cost_usd,
+                    baseline_p75_cost_usd,
+                    cost_change_pct,
+                    recent_failure_rate,
+                    baseline_failure_rate,
+                    failure_rate_change_pp,
+                    // Flags set to false here; applied below using threshold constants.
+                    duration_regressed: false,
+                    cost_regressed: false,
+                    failure_rate_regressed: false,
+                })
+            },
+        )?;
 
         let mut signals: Vec<WorkflowRegressionSignal> = rows.collect::<rusqlite::Result<_>>()?;
 
