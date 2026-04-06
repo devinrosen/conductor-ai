@@ -519,6 +519,9 @@ pub struct WorkflowTokenAggregate {
     pub avg_cache_read: f64,
     pub avg_cache_creation: f64,
     pub run_count: i64,
+    /// Percentage of terminal runs (completed or failed) that completed successfully.
+    /// Range: 0.0–100.0.
+    pub success_rate: f64,
     /// Human-readable title extracted from any definition_snapshot for this workflow.
     pub workflow_title: Option<String>,
 }
@@ -541,6 +544,27 @@ pub struct StepTokenHeatmapRow {
     pub avg_output: f64,
     pub avg_cache_read: f64,
     pub run_count: i64,
+}
+
+/// Failure rate per time period for a specific workflow.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowFailureRateTrendRow {
+    pub period: String,
+    pub total_runs: i64,
+    pub failed_runs: i64,
+    /// Percentage of runs in this period that completed successfully. Range: 0.0–100.0.
+    pub success_rate: f64,
+}
+
+/// Per-step failure statistics across recent terminal runs of a workflow.
+#[derive(Debug, Clone, Serialize)]
+pub struct StepFailureHeatmapRow {
+    pub step_name: String,
+    pub total_executions: i64,
+    pub failed_executions: i64,
+    /// Percentage of executions that failed. Range: 0.0–100.0.
+    pub failure_rate: f64,
+    pub avg_retry_count: f64,
 }
 
 /// Raw per-run metrics for histogram distribution (one row per completed run).

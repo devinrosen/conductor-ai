@@ -10,9 +10,10 @@ use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
-    RunIdSlot, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
-    WorkflowManager, WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow,
-    WorkflowRunStatus, WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    RunIdSlot, StepFailureHeatmapRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig,
+    WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowResumeStandalone,
+    WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus, WorkflowRunStep, WorkflowTokenAggregate,
+    WorkflowTokenTrendRow,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -907,6 +908,42 @@ pub async fn get_run_metrics(
     let mgr = WorkflowManager::new(&db);
     let days = q.days.unwrap_or(30);
     let rows = mgr.get_run_metrics(&q.workflow_name, days)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/failure-trend?workflow_name=&granularity=daily|weekly
+#[derive(Deserialize)]
+pub struct FailureTrendQuery {
+    pub workflow_name: String,
+    pub granularity: Option<String>,
+}
+
+pub async fn get_failure_trend(
+    State(state): State<AppState>,
+    Query(q): Query<FailureTrendQuery>,
+) -> Result<Json<Vec<WorkflowFailureRateTrendRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let granularity = q.granularity.as_deref().unwrap_or("daily");
+    let rows = mgr.get_workflow_failure_rate_trend(&q.workflow_name, granularity)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/failure-heatmap?workflow_name=&runs=20
+#[derive(Deserialize)]
+pub struct FailureHeatmapQuery {
+    pub workflow_name: String,
+    pub runs: Option<usize>,
+}
+
+pub async fn get_failure_heatmap(
+    State(state): State<AppState>,
+    Query(q): Query<FailureHeatmapQuery>,
+) -> Result<Json<Vec<StepFailureHeatmapRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_failure_heatmap(&q.workflow_name, limit)?;
     Ok(Json(rows))
 }
 

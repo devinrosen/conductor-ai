@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { api } from "../api/client";
-import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow } from "../api/types";
+import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow } from "../api/types";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 
 type SortKey = "avg_input" | "avg_output" | "avg_cache_read" | "run_count";
@@ -36,6 +36,14 @@ export function WorkflowAnalyticsPage() {
   const [runMetricsLoading, setRunMetricsLoading] = useState(false);
   const [runMetricsError, setRunMetricsError] = useState<string | null>(null);
   const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null);
+
+  const [failureTrend, setFailureTrend] = useState<WorkflowFailureRateTrendRow[]>([]);
+  const [failureTrendLoading, setFailureTrendLoading] = useState(false);
+  const [failureTrendError, setFailureTrendError] = useState<string | null>(null);
+
+  const [failureHeatmap, setFailureHeatmap] = useState<StepFailureHeatmapRow[]>([]);
+  const [failureHeatmapLoading, setFailureHeatmapLoading] = useState(false);
+  const [failureHeatmapError, setFailureHeatmapError] = useState<string | null>(null);
 
   useEffect(() => {
     setAggLoading(true);
@@ -78,6 +86,26 @@ export function WorkflowAnalyticsPage() {
   useEffect(() => {
     setSelectedBucketIdx(null);
   }, [selectedWorkflow, histMetric, histDays]);
+
+  useEffect(() => {
+    if (!selectedWorkflow) return;
+    setFailureTrendLoading(true);
+    setFailureTrendError(null);
+    api.getWorkflowFailureRateTrend(selectedWorkflow, granularity)
+      .then(setFailureTrend)
+      .catch((e) => setFailureTrendError(e instanceof Error ? e.message : "Failed to load failure trend"))
+      .finally(() => setFailureTrendLoading(false));
+  }, [selectedWorkflow, granularity]);
+
+  useEffect(() => {
+    if (!selectedWorkflow) return;
+    setFailureHeatmapLoading(true);
+    setFailureHeatmapError(null);
+    api.getStepFailureHeatmap(selectedWorkflow, 20)
+      .then(setFailureHeatmap)
+      .catch((e) => setFailureHeatmapError(e instanceof Error ? e.message : "Failed to load failure heatmap"))
+      .finally(() => setFailureHeatmapLoading(false));
+  }, [selectedWorkflow]);
 
   const sorted = [...aggregates].sort((a, b) => {
     const av = a[sortKey], bv = b[sortKey];
@@ -140,6 +168,16 @@ export function WorkflowAnalyticsPage() {
   const SortIcon = ({ k }: { k: SortKey }) =>
     sortKey === k ? <span className="ml-1">{sortAsc ? "↑" : "↓"}</span> : null;
 
+  function successRateBadge(rate: number) {
+    const pct = Math.round(rate);
+    const cls = rate >= 90
+      ? "bg-green-100 text-green-700"
+      : rate >= 70
+      ? "bg-amber-100 text-amber-700"
+      : "bg-red-100 text-red-700";
+    return <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${cls}`}>{pct}%</span>;
+  }
+
   const maxHeatTok = heatmap.length > 0
     ? Math.max(...heatmap.map((r) => r.avg_input + r.avg_output))
     : 1;
@@ -192,6 +230,7 @@ export function WorkflowAnalyticsPage() {
                   >
                     Runs<SortIcon k="run_count" />
                   </th>
+                  <th className="px-4 py-2 font-medium">Success Rate</th>
                   <th className="px-4 py-2 font-medium">Details</th>
                 </tr>
               </thead>
@@ -206,6 +245,7 @@ export function WorkflowAnalyticsPage() {
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtK(row.avg_output)}</td>
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtK(row.avg_cache_read)}</td>
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.run_count}</td>
+                    <td className="px-4 py-2">{successRateBadge(row.success_rate)}</td>
                     <td className="px-4 py-2">
                       <button
                         onClick={() => setSelectedWorkflow(
@@ -392,7 +432,96 @@ export function WorkflowAnalyticsPage() {
             )}
           </section>
 
-          {/* Section 4: Step token heatmap */}
+          {/* Section 4: Failure rate over time */}
+          <section>
+            <div className="flex items-center gap-4 mb-3">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+                Failure Rate Over Time — {selectedWorkflow}
+              </h3>
+            </div>
+            {failureTrendLoading ? (
+              <LoadingSpinner />
+            ) : failureTrendError ? (
+              <p className="text-sm text-red-500">{failureTrendError}</p>
+            ) : failureTrend.length === 0 ? (
+              <p className="text-sm text-gray-500">No failure trend data available.</p>
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 text-left">
+                      <th className="px-4 py-2 font-medium">Period</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Total Runs</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Failed</th>
+                      <th className="px-4 py-2 font-medium">Success Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {failureTrend.map((row) => (
+                      <tr key={row.period} className="hover:bg-gray-50">
+                        <td className="px-4 py-2 font-mono text-gray-700">{row.period}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.total_runs}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.failed_runs}</td>
+                        <td className="px-4 py-2">{successRateBadge(row.success_rate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Section 5: Step failure heatmap */}
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+              Step Failure Heatmap — {selectedWorkflow}
+            </h3>
+            {failureHeatmapLoading ? (
+              <LoadingSpinner />
+            ) : failureHeatmapError ? (
+              <p className="text-sm text-red-500">{failureHeatmapError}</p>
+            ) : failureHeatmap.length === 0 ? (
+              <p className="text-sm text-gray-500">No step failure data available.</p>
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 text-left">
+                      <th className="px-4 py-2 font-medium">Step</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Executions</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Failed</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Failure Rate</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Avg Retries</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {failureHeatmap.map((row) => {
+                      const rateCls = row.failure_rate >= 25
+                        ? "bg-red-100 text-red-700"
+                        : row.failure_rate >= 10
+                        ? "bg-amber-100 text-amber-700"
+                        : "text-gray-700";
+                      return (
+                        <tr key={row.step_name} className="hover:bg-gray-50">
+                          <td className="px-4 py-2 text-gray-800">{row.step_name.replace(/^workflow:/, "")}</td>
+                          <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.total_executions}</td>
+                          <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.failed_executions}</td>
+                          <td className="px-4 py-2">
+                            <span className={`inline-block px-1.5 py-0.5 rounded font-mono ${rateCls}`}>
+                              {row.failure_rate.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.avg_retry_count.toFixed(1)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Section 6: Step token heatmap */}
           <section>
             <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
               Step Token Heatmap — {selectedWorkflow}

@@ -1877,7 +1877,7 @@ fn test_token_aggregates_empty_when_no_completed_runs() {
 }
 
 #[test]
-fn test_token_aggregates_excludes_non_completed_runs() {
+fn test_token_aggregates_excludes_non_terminal_runs() {
     let conn = setup_db();
     let mgr = WorkflowManager::new(&conn);
 
@@ -1889,13 +1889,52 @@ fn test_token_aggregates_excludes_non_completed_runs() {
     mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
         .unwrap();
 
-    // completed but no token data — also excluded
+    let result = mgr.get_workflow_token_aggregates(None).unwrap();
+    // pending and running are not terminal — they are excluded
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_token_aggregates_includes_completed_without_tokens() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // completed run with no token data — terminal, so it appears with 0 token averages
     let completed_no_tokens = create_named_worktree_run(&conn, "w1", "wf-a");
     mgr.update_workflow_status(&completed_no_tokens.id, WorkflowRunStatus::Completed, None)
         .unwrap();
 
     let result = mgr.get_workflow_token_aggregates(None).unwrap();
-    assert!(result.is_empty());
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].workflow_name, "wf-a");
+    assert_eq!(result[0].run_count, 1);
+    assert!((result[0].avg_input - 0.0).abs() < 0.01);
+    assert!((result[0].success_rate - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn test_token_aggregates_includes_failed_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // one completed + one failed — both are terminal
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-a").id,
+        100,
+        200,
+    );
+    let failed = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&failed.id, WorkflowRunStatus::Failed, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_token_aggregates(None).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].run_count, 2);
+    // token averages come from completed runs only
+    assert!((result[0].avg_input - 100.0).abs() < 0.01);
+    // 1 of 2 completed → 50% success rate
+    assert!((result[0].success_rate - 50.0).abs() < 0.01);
 }
 
 #[test]

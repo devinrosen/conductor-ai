@@ -267,6 +267,8 @@ export interface WorkflowTokenAggregate {
   avg_cache_read: number;
   avg_cache_creation: number;
   run_count: number;
+  /** Percentage of terminal runs that completed successfully. Range: 0–100. */
+  success_rate: number;
 }
 
 export interface WorkflowTokenTrendRow {
@@ -293,6 +295,23 @@ export interface WorkflowRunMetricsRow {
   output_tokens: number | null;
   worktree_id: string | null;
   repo_id: string | null;
+}
+
+export interface WorkflowFailureRateTrendRow {
+  period: string;
+  total_runs: number;
+  failed_runs: number;
+  /** Percentage of runs that completed successfully. Range: 0–100. */
+  success_rate: number;
+}
+
+export interface StepFailureHeatmapRow {
+  step_name: string;
+  total_executions: number;
+  failed_executions: number;
+  /** Percentage of executions that failed. Range: 0–100. */
+  failure_rate: number;
+  avg_retry_count: number;
 }
 
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)

@@ -14,9 +14,10 @@ use super::WorkflowManager;
 use crate::workflow::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX};
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
-    extract_workflow_title, ActiveWorkflowCounts, PendingGateRow, StepTokenHeatmapRow, WorkflowRun,
-    WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    extract_workflow_title, ActiveWorkflowCounts, PendingGateRow, StepFailureHeatmapRow,
+    StepTokenHeatmapRow, WorkflowFailureRateTrendRow, WorkflowRun, WorkflowRunContext,
+    WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate,
+    WorkflowTokenTrendRow,
 };
 
 impl<'a> WorkflowManager<'a> {
@@ -894,7 +895,8 @@ impl<'a> WorkflowManager<'a> {
         Ok(status.as_deref() == Some("cancelled"))
     }
 
-    /// Aggregate token usage per workflow name across all completed runs.
+    /// Aggregate token usage per workflow name across all terminal runs (completed + failed).
+    /// Token averages are computed only over completed runs to avoid skewing with failed runs.
     /// When `repo_id` is `Some`, restricts to runs for that repo.
     pub fn get_workflow_token_aggregates(
         &self,
@@ -903,40 +905,42 @@ impl<'a> WorkflowManager<'a> {
         let (sql, param): (String, Vec<rusqlite::types::Value>) = if let Some(rid) = repo_id {
             (
                 "SELECT workflow_name, \
-                        COALESCE(AVG(total_input_tokens), 0.0) as avg_input, \
-                        COALESCE(AVG(total_output_tokens), 0.0) as avg_output, \
-                        COALESCE(AVG(total_cache_read_input_tokens), 0.0) as avg_cache_read, \
-                        COALESCE(AVG(total_cache_creation_input_tokens), 0.0) as avg_cache_creation, \
-                        COUNT(*) as run_count, \
-                        MAX(definition_snapshot) as definition_snapshot \
+                        COALESCE(AVG(CASE WHEN status='completed' THEN total_input_tokens END), 0.0) AS avg_input, \
+                        COALESCE(AVG(CASE WHEN status='completed' THEN total_output_tokens END), 0.0) AS avg_output, \
+                        COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_read_input_tokens END), 0.0) AS avg_cache_read, \
+                        COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_creation_input_tokens END), 0.0) AS avg_cache_creation, \
+                        COUNT(*) AS run_count, \
+                        COALESCE(CAST(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS success_rate, \
+                        MAX(definition_snapshot) AS definition_snapshot \
                  FROM workflow_runs \
-                 WHERE status = 'completed' AND total_input_tokens IS NOT NULL \
+                 WHERE status IN ('completed', 'failed') \
                    AND repo_id = ?1 \
                  GROUP BY workflow_name \
-                 ORDER BY (AVG(total_input_tokens) + AVG(total_output_tokens)) DESC"
+                 ORDER BY avg_input + avg_output DESC, run_count DESC"
                     .to_string(),
                 vec![rusqlite::types::Value::Text(rid.to_owned())],
             )
         } else {
             (
                 "SELECT workflow_name, \
-                        COALESCE(AVG(total_input_tokens), 0.0) as avg_input, \
-                        COALESCE(AVG(total_output_tokens), 0.0) as avg_output, \
-                        COALESCE(AVG(total_cache_read_input_tokens), 0.0) as avg_cache_read, \
-                        COALESCE(AVG(total_cache_creation_input_tokens), 0.0) as avg_cache_creation, \
-                        COUNT(*) as run_count, \
-                        MAX(definition_snapshot) as definition_snapshot \
+                        COALESCE(AVG(CASE WHEN status='completed' THEN total_input_tokens END), 0.0) AS avg_input, \
+                        COALESCE(AVG(CASE WHEN status='completed' THEN total_output_tokens END), 0.0) AS avg_output, \
+                        COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_read_input_tokens END), 0.0) AS avg_cache_read, \
+                        COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_creation_input_tokens END), 0.0) AS avg_cache_creation, \
+                        COUNT(*) AS run_count, \
+                        COALESCE(CAST(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS success_rate, \
+                        MAX(definition_snapshot) AS definition_snapshot \
                  FROM workflow_runs \
-                 WHERE status = 'completed' AND total_input_tokens IS NOT NULL \
+                 WHERE status IN ('completed', 'failed') \
                  GROUP BY workflow_name \
-                 ORDER BY (AVG(total_input_tokens) + AVG(total_output_tokens)) DESC"
+                 ORDER BY avg_input + avg_output DESC, run_count DESC"
                     .to_string(),
                 vec![],
             )
         };
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(param.iter()), |row| {
-            let definition_snapshot: Option<String> = row.get(6)?;
+            let definition_snapshot: Option<String> = row.get(7)?;
             let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
             Ok(WorkflowTokenAggregate {
                 workflow_name: row.get(0)?,
@@ -945,6 +949,7 @@ impl<'a> WorkflowManager<'a> {
                 avg_cache_read: row.get(3)?,
                 avg_cache_creation: row.get(4)?,
                 run_count: row.get(5)?,
+                success_rate: row.get(6)?,
                 workflow_title,
             })
         })?;
@@ -1019,6 +1024,80 @@ impl<'a> WorkflowManager<'a> {
                 avg_output: row.get(2)?,
                 avg_cache_read: row.get(3)?,
                 run_count: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Failure rate grouped by time period (daily or weekly) for a specific workflow.
+    /// Counts all terminal runs (completed + failed) per period and computes success rate.
+    pub fn get_workflow_failure_rate_trend(
+        &self,
+        workflow_name: &str,
+        granularity: &str,
+    ) -> Result<Vec<WorkflowFailureRateTrendRow>> {
+        let fmt = if granularity == "weekly" {
+            "%Y-%W"
+        } else {
+            "%Y-%m-%d"
+        };
+        let sql = format!(
+            "SELECT strftime('{fmt}', started_at) AS period, \
+                    COUNT(*) AS total_runs, \
+                    SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed_runs, \
+                    COALESCE(CAST(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS success_rate \
+             FROM workflow_runs \
+             WHERE workflow_name = ?1 AND status IN ('completed', 'failed') \
+             GROUP BY period \
+             ORDER BY period DESC \
+             LIMIT 30"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(params![workflow_name], |row| {
+            Ok(WorkflowFailureRateTrendRow {
+                period: row.get(0)?,
+                total_runs: row.get(1)?,
+                failed_runs: row.get(2)?,
+                success_rate: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Per-step failure statistics across the N most recent terminal runs of a workflow.
+    /// Only counts steps with status `completed` or `failed` (skipped steps are excluded).
+    pub fn get_step_failure_heatmap(
+        &self,
+        workflow_name: &str,
+        limit_runs: usize,
+    ) -> Result<Vec<StepFailureHeatmapRow>> {
+        let sql = format!(
+            "SELECT wrs.step_name, \
+                    COUNT(*) AS total_executions, \
+                    SUM(CASE WHEN wrs.status='failed' THEN 1 ELSE 0 END) AS failed_executions, \
+                    COALESCE(CAST(SUM(CASE WHEN wrs.status='failed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS failure_rate, \
+                    COALESCE(AVG(wrs.retry_count), 0.0) AS avg_retry_count \
+             FROM workflow_runs wr \
+             JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
+             WHERE wr.workflow_name = ?1 \
+               AND wr.status IN ('completed', 'failed') \
+               AND wrs.status IN ('completed', 'failed') \
+               AND wr.id IN ( \
+                 SELECT id FROM workflow_runs \
+                 WHERE workflow_name = ?1 AND status IN ('completed', 'failed') \
+                 ORDER BY started_at DESC LIMIT {limit_runs} \
+               ) \
+             GROUP BY wrs.step_name \
+             ORDER BY failure_rate DESC, total_executions DESC"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(params![workflow_name], |row| {
+            Ok(StepFailureHeatmapRow {
+                step_name: row.get(0)?,
+                total_executions: row.get(1)?,
+                failed_executions: row.get(2)?,
+                failure_rate: row.get(3)?,
+                avg_retry_count: row.get(4)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
