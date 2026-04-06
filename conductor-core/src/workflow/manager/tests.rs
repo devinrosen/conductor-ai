@@ -2851,16 +2851,9 @@ fn test_step_retry_analytics_mixed() {
         } else {
             WorkflowRunStatus::Failed
         };
-        mgr.update_workflow_status(&run.id, wf_status, None).unwrap();
-        insert_step_with_retries(
-            &conn,
-            &format!("s{idx}"),
-            &run.id,
-            "step-a",
-            0,
-            status,
-            *rc,
-        );
+        mgr.update_workflow_status(&run.id, wf_status, None)
+            .unwrap();
+        insert_step_with_retries(&conn, &format!("s{idx}"), &run.id, "step-a", 0, status, *rc);
     }
 
     let result = mgr.get_step_retry_analytics("retry-wf", 10).unwrap();
