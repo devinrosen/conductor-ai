@@ -1,5 +1,6 @@
 workflow review-pr {
   meta {
+    title       = "Review Pull Request"
     description = "Run review swarm and aggregate findings"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
