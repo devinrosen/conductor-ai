@@ -34,6 +34,8 @@ import type {
   WorkflowTokenTrendRow,
   StepTokenHeatmapRow,
   WorkflowRunMetricsRow,
+  WorkflowFailureRateTrendRow,
+  StepFailureHeatmapRow,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -292,6 +294,14 @@ export const api = {
   getRunMetrics: (workflowName: string, days = 30) =>
     request<WorkflowRunMetricsRow[]>(
       `/workflows/analytics/runs?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getWorkflowFailureRateTrend: (workflowName: string, granularity: "daily" | "weekly" = "daily") =>
+    request<WorkflowFailureRateTrendRow[]>(
+      `/workflows/analytics/failure-trend?workflow_name=${encodeURIComponent(workflowName)}&granularity=${granularity}`,
+    ),
+  getStepFailureHeatmap: (workflowName: string, runs = 20) =>
+    request<StepFailureHeatmapRow[]>(
+      `/workflows/analytics/failure-heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
     ),
 
   // Notifications
