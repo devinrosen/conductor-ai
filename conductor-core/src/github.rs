@@ -302,6 +302,7 @@ pub fn sync_github_issues(
                 label_details,
                 blocked_by: vec![],
                 children: vec![],
+                parent: None,
             }
         })
         .collect();
@@ -371,6 +372,7 @@ pub fn fetch_github_issue(
         label_details,
         blocked_by: vec![],
         children: vec![],
+        parent: None,
     })
 }
 
