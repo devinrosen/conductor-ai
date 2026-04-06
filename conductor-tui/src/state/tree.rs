@@ -80,6 +80,7 @@ fn dfs_tree_order<'a>(
     get_branch: impl Fn(usize) -> &'a str,
     get_parent: impl Fn(usize) -> &'a str,
     default_branch: &str,
+    reverse: bool,
 ) -> (Vec<usize>, Vec<TreePosition>) {
     if n == 0 {
         return (Vec::new(), Vec::new());
@@ -100,10 +101,16 @@ fn dfs_tree_order<'a>(
             roots.push(i);
         }
     }
-    roots.sort_by(|a, b| get_branch(*a).cmp(get_branch(*b)));
+    roots.sort_by(|a, b| {
+        let ord = get_branch(*a).cmp(get_branch(*b));
+        if reverse { ord.reverse() } else { ord }
+    });
 
     for children in children_of.values_mut() {
-        children.sort_by(|a, b| get_branch(*a).cmp(get_branch(*b)));
+        children.sort_by(|a, b| {
+            let ord = get_branch(*a).cmp(get_branch(*b));
+            if reverse { ord.reverse() } else { ord }
+        });
     }
 
     let mut indices: Vec<usize> = Vec::with_capacity(n);
@@ -179,7 +186,7 @@ pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
             .as_deref()
             .unwrap_or(default_branch)
     };
-    dfs_tree_order(worktrees.len(), get_branch, get_parent, default_branch)
+    dfs_tree_order(worktrees.len(), get_branch, get_parent, default_branch, false)
 }
 
 /// Reorder worktrees into tree order based on `base_branch` parent-child relationships.
@@ -220,7 +227,7 @@ pub fn build_ticket_tree_indices<'a>(
             .copied()
             .unwrap_or("")
     };
-    let (indices, positions) = dfs_tree_order(tickets.len(), get_branch, get_parent, "");
+    let (indices, positions) = dfs_tree_order(tickets.len(), get_branch, get_parent, "", true);
     (indices, positions, child_to_parent)
 }
 
@@ -251,7 +258,7 @@ pub fn build_branch_picker_tree(
 
     let get_branch = |i: usize| rest[i].branch.as_deref().unwrap_or("");
     let get_parent = |i: usize| rest[i].base_branch.as_deref().unwrap_or("");
-    let (rest_indices, rest_positions) = dfs_tree_order(rest.len(), get_branch, get_parent, "");
+    let (rest_indices, rest_positions) = dfs_tree_order(rest.len(), get_branch, get_parent, "", false);
 
     for (idx, pos) in rest_indices.into_iter().zip(rest_positions.into_iter()) {
         result.push(rest[idx].clone());
@@ -357,13 +364,13 @@ mod tests {
         let (indices, positions, _) = build_ticket_tree_indices(&tickets, &deps);
 
         let id_order: Vec<&str> = indices.iter().map(|&i| tickets[i].id.as_str()).collect();
-        // DFS: root, a, c, b
-        assert_eq!(id_order, vec!["root", "a", "c", "b"]);
+        // DFS descending: root, b, a, c (children sorted z→a, so b before a)
+        assert_eq!(id_order, vec!["root", "b", "a", "c"]);
 
         let pos_root = &positions[0];
-        let pos_a = &positions[1];
-        let pos_c = &positions[2];
-        let pos_b = &positions[3];
+        let pos_b = &positions[1];
+        let pos_a = &positions[2];
+        let pos_c = &positions[3];
 
         assert!(pos_root.is_parent);
         assert_eq!(pos_root.depth, 0);
