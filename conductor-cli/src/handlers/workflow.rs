@@ -60,25 +60,8 @@ pub fn handle_workflow(
             let runs = wf_mgr.list_active_workflow_runs(&[])?;
 
             if runs.is_empty() {
-                let msg = "No active workflow runs.";
-                println!("{msg}");
-                if slack {
-                    conductor_core::notify::send_slack_sync(&config.notifications, msg)?;
-                    println!("Posted to Slack.");
-                }
+                println!("No active workflow runs.");
             } else {
-                let mut lines = vec![format!("*Active workflow runs ({})* ", runs.len())];
-                for run in &runs {
-                    let label = run.target_label.as_deref().unwrap_or("-");
-                    let since = &run.started_at[..16.min(run.started_at.len())];
-                    lines.push(format!(
-                        "• *{}* on `{}` — {} (since {})",
-                        run.workflow_name, label, run.status, since
-                    ));
-                }
-                let summary = lines.join("\n");
-
-                // Print to terminal
                 for run in &runs {
                     let label = run.target_label.as_deref().unwrap_or("-");
                     let since = &run.started_at[..16.min(run.started_at.len())];
@@ -89,11 +72,12 @@ pub fn handle_workflow(
                         run.status,
                     );
                 }
+            }
 
-                if slack {
-                    conductor_core::notify::send_slack_sync(&config.notifications, &summary)?;
-                    println!("Posted to Slack.");
-                }
+            if slack {
+                let summary = conductor_core::notify::format_active_runs_for_slack(&runs);
+                conductor_core::notify::send_slack_sync(&config.notifications, &summary)?;
+                println!("Posted to Slack.");
             }
         }
         WorkflowCommands::Runs { repo, worktree } => {

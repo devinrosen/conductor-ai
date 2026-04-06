@@ -113,6 +113,9 @@ pub struct NotificationConfig {
 pub struct SlackConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
+    /// Slack app signing secret for verifying slash command request signatures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
