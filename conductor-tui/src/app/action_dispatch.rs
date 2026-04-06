@@ -1141,14 +1141,12 @@ impl App {
             }
 
             // ── Graph view actions ─────────────────────────────────────────
-
             Action::OpenTicketGraphView => {
                 self.open_ticket_graph_view();
             }
 
             Action::OpenWorkflowStepGraphView => {
-                self.state.status_message =
-                    Some("Workflow step graph view coming soon".into());
+                self.state.status_message = Some("Workflow step graph view coming soon".into());
             }
 
             Action::GraphNavLeft => {
@@ -1235,8 +1233,7 @@ impl App {
         let deps = self.state.data.ticket_dependencies.clone();
 
         // Collect all node IDs that appear in at least one edge
-        let mut connected_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut connected_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         let mut edges: Vec<GraphEdge> = Vec::new();
 

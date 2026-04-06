@@ -248,9 +248,7 @@ pub fn compute_layout(data: &GraphData<GraphNodeType>) -> ComputedLayout {
 
     for edge in &data.edges {
         // Only include edges between connected nodes
-        if connected_ids.contains(edge.from.as_str())
-            && connected_ids.contains(edge.to.as_str())
-        {
+        if connected_ids.contains(edge.from.as_str()) && connected_ids.contains(edge.to.as_str()) {
             adj.entry(&edge.from).or_default().push(&edge.to);
             *in_degree.entry(&edge.to).or_insert(0) += 1;
         }
@@ -329,8 +327,16 @@ pub fn compute_layout(data: &GraphData<GraphNodeType>) -> ComputedLayout {
                 })
                 .collect();
             layer_nodes.sort_by(|a, b| {
-                let ba = barycenters.iter().find(|(n, _)| n == a).map(|(_, bc)| *bc).unwrap_or(0.0);
-                let bb = barycenters.iter().find(|(n, _)| n == b).map(|(_, bc)| *bc).unwrap_or(0.0);
+                let ba = barycenters
+                    .iter()
+                    .find(|(n, _)| n == a)
+                    .map(|(_, bc)| *bc)
+                    .unwrap_or(0.0);
+                let bb = barycenters
+                    .iter()
+                    .find(|(n, _)| n == b)
+                    .map(|(_, bc)| *bc)
+                    .unwrap_or(0.0);
                 ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
             });
         }
@@ -413,8 +419,7 @@ pub fn render_graph(
     };
 
     // Build node lookup by id
-    let node_map: HashMap<&str, &GraphNodeType> =
-        data.nodes.iter().map(|n| (n.id(), n)).collect();
+    let node_map: HashMap<&str, &GraphNodeType> = data.nodes.iter().map(|n| (n.id(), n)).collect();
 
     // Identify selected node id
     let selected_id = layout
@@ -536,7 +541,11 @@ pub fn render_graph(
                 )),
                 subtitle_line,
             ])
-            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(border_style),
+            );
 
             frame.render_widget(Clear, rect);
             frame.render_widget(content, rect);
@@ -614,18 +623,32 @@ pub fn render_graph_view(
     // Title bar
     let title_line = Line::from(vec![
         Span::styled(" ", Style::default()),
-        Span::styled(title, Style::default().fg(theme.label_primary).add_modifier(Modifier::BOLD)),
-        Span::styled("  [Esc] close  [h/j/k/l] navigate  [H/J/K/L] pan  [Enter] detail", Style::default().fg(theme.label_secondary)),
+        Span::styled(
+            title,
+            Style::default()
+                .fg(theme.label_primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  [Esc] close  [h/j/k/l] navigate  [H/J/K/L] pan  [Enter] detail",
+            Style::default().fg(theme.label_secondary),
+        ),
     ]);
     frame.render_widget(
-        Paragraph::new(title_line)
-            .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(theme.border_inactive))),
+        Paragraph::new(title_line).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(theme.border_inactive)),
+        ),
         title_area,
     );
 
     // Footer
     let unconnected_msg = if data.unconnected_count > 0 {
-        format!("  {} ticket(s) with no dependencies not shown", data.unconnected_count)
+        format!(
+            "  {} ticket(s) with no dependencies not shown",
+            data.unconnected_count
+        )
     } else {
         String::new()
     };
@@ -641,22 +664,29 @@ pub fn render_graph_view(
 
     let footer_line = Line::from(vec![
         Span::styled(
-            format!("  Layer {}/{}  Node {}/{}",
+            format!(
+                "  Layer {}/{}  Node {}/{}",
                 nav.selected_layer + 1,
                 layout.layers.len().max(1),
                 nav.selected_node_idx + 1,
-                layout.layers.get(nav.selected_layer).map(|l| l.len()).unwrap_or(0).max(1),
+                layout
+                    .layers
+                    .get(nav.selected_layer)
+                    .map(|l| l.len())
+                    .unwrap_or(0)
+                    .max(1),
             ),
             Style::default().fg(theme.label_accent),
         ),
         Span::styled(
-            if selected_label.is_empty() { String::new() } else { format!("  {}", selected_label) },
+            if selected_label.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", selected_label)
+            },
             Style::default().fg(theme.label_primary),
         ),
-        Span::styled(
-            unconnected_msg,
-            Style::default().fg(theme.label_secondary),
-        ),
+        Span::styled(unconnected_msg, Style::default().fg(theme.label_secondary)),
     ]);
     frame.render_widget(
         Paragraph::new(footer_line).block(

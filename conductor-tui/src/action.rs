@@ -431,7 +431,6 @@ pub enum Action {
     None,
 
     // ── Graph view actions ─────────────────────────────────────────────────
-
     /// Open the ticket dependency graph for the current repo's tickets.
     OpenTicketGraphView,
     /// Stub: open workflow step graph (keybinding reserved for future use).

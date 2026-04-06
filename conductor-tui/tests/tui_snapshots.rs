@@ -8,10 +8,10 @@ use conductor_tui::state::{
     AppState, BranchPickerItem, FormAction, FormField, FormFieldType, InputAction, Modal,
     RepoDetailFocus, TreePosition, View, WorktreeDetailFocus,
 };
+use conductor_tui::ui;
 use conductor_tui::ui::graph::{
     EdgeType, GraphData, GraphEdge, GraphNavState, GraphNodeType, TicketGraphNode,
 };
-use conductor_tui::ui;
 use ratatui::{backend::TestBackend, Terminal};
 
 // ─── Fixture helpers ────────────────────────────────────────────────────────
