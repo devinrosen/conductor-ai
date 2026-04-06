@@ -2511,7 +2511,9 @@ fn test_failure_rate_trend_excludes_non_terminal_runs() {
     mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
         .unwrap();
 
-    let result = mgr.get_workflow_failure_rate_trend("trend-wf", "daily").unwrap();
+    let result = mgr
+        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .unwrap();
     assert!(result.is_empty());
 }
 
@@ -2530,7 +2532,9 @@ fn test_failure_rate_trend_completed_only_period() {
     )
     .unwrap();
 
-    let result = mgr.get_workflow_failure_rate_trend("trend-wf", "daily").unwrap();
+    let result = mgr
+        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].period, "2024-03-15");
     assert_eq!(result[0].total_runs, 1);
@@ -2563,7 +2567,9 @@ fn test_failure_rate_trend_mixed_completed_and_failed() {
     )
     .unwrap();
 
-    let result = mgr.get_workflow_failure_rate_trend("trend-wf", "daily").unwrap();
+    let result = mgr
+        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].total_runs, 3);
     assert_eq!(result[0].failed_runs, 1);
@@ -2584,7 +2590,9 @@ fn test_failure_rate_trend_filters_by_workflow_name() {
     mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
         .unwrap();
 
-    let result = mgr.get_workflow_failure_rate_trend("wf-a", "daily").unwrap();
+    let result = mgr
+        .get_workflow_failure_rate_trend("wf-a", "daily")
+        .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].failed_runs, 1);
     assert!((result[0].success_rate - 0.0).abs() < 0.01);
@@ -2607,7 +2615,9 @@ fn test_failure_rate_trend_weekly_granularity() {
         .unwrap();
     }
 
-    let result = mgr.get_workflow_failure_rate_trend("trend-wf", "weekly").unwrap();
+    let result = mgr
+        .get_workflow_failure_rate_trend("trend-wf", "weekly")
+        .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].total_runs, 2);
 }
