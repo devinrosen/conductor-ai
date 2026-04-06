@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDef {
     pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
     pub description: String,
     pub trigger: WorkflowTrigger,
     #[serde(default)]
@@ -24,6 +26,12 @@ pub struct WorkflowDef {
 }
 
 impl WorkflowDef {
+    /// Returns the human-readable display name for this workflow.
+    /// Falls back to `name` if no `title` is set.
+    pub fn display_name(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.name)
+    }
+
     /// Total number of nodes across body and always blocks.
     pub fn total_nodes(&self) -> usize {
         count_nodes(&self.body) + count_nodes(&self.always)

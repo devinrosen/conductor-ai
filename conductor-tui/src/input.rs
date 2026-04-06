@@ -693,6 +693,7 @@ mod tests {
             items.push(WorkflowPickerItem::Workflow(
                 conductor_core::workflow::WorkflowDef {
                     name: format!("workflow-{i}"),
+                    title: None,
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
                     targets: vec![],
@@ -1414,6 +1415,7 @@ mod tests {
             items: vec![crate::state::WorkflowPickerItem::Workflow(
                 conductor_core::workflow::WorkflowDef {
                     name: "deploy".into(),
+                    title: None,
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
                     targets: vec!["repo".into()],
@@ -1488,6 +1490,7 @@ mod tests {
             items: vec![crate::state::WorkflowPickerItem::Workflow(
                 conductor_core::workflow::WorkflowDef {
                     name: "build".into(),
+                    title: None,
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
                     targets: vec!["worktree".into()],

@@ -40,7 +40,7 @@ function WorkflowCard({
   return (
     <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
       <div className="flex items-center justify-between mb-2">
-        <h4 className="font-medium text-gray-200">{def.name}</h4>
+        <h4 className="font-medium text-gray-200">{def.title ?? def.name}</h4>
         <span className="text-xs px-2 py-0.5 bg-gray-700 rounded text-gray-400">
           {def.trigger}
         </span>

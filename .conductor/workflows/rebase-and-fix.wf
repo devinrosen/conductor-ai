@@ -1,5 +1,6 @@
 workflow rebase-and-fix {
   meta {
+    title       = "Rebase & Fix"
     description = "Fetch latest base branch, resolve conflicts, fix lint, and push — leaves the PR CI-green and ready for next steps"
     trigger     = "manual"
     targets     = ["worktree"]

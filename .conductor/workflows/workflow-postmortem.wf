@@ -1,5 +1,6 @@
 workflow workflow-postmortem {
   meta {
+    title       = "Workflow Run Postmortem"
     description = "Analyze a completed workflow run and produce a markdown postmortem report"
     trigger     = "manual"
     targets     = ["workflow_run"]

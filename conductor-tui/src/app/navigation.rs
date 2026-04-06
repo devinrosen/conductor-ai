@@ -1224,6 +1224,7 @@ mod tests {
         app.state.previous_view = Some(View::Dashboard);
         app.state.selected_workflow_def = Some(conductor_core::workflow::WorkflowDef {
             name: "test".into(),
+            title: None,
             description: String::new(),
             trigger: conductor_core::workflow::WorkflowTrigger::Manual,
             targets: vec![],
@@ -1532,6 +1533,7 @@ mod tests {
     fn make_wf_def(name: &str) -> conductor_core::workflow::WorkflowDef {
         conductor_core::workflow::WorkflowDef {
             name: name.into(),
+            title: None,
             description: String::new(),
             trigger: conductor_core::workflow::WorkflowTrigger::Manual,
             targets: vec![],

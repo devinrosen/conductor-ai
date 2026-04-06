@@ -172,6 +172,7 @@ pub(in crate::workflow) fn make_loop_test_state<'a>(
 pub(super) fn make_empty_workflow() -> WorkflowDef {
     WorkflowDef {
         name: "test-wf".into(),
+        title: None,
         description: "test".into(),
         trigger: WorkflowTrigger::Manual,
         targets: vec![],
@@ -314,6 +315,7 @@ pub(super) fn make_workflow_def_with_inputs(
 ) -> crate::workflow_dsl::WorkflowDef {
     crate::workflow_dsl::WorkflowDef {
         name: "test-wf".to_string(),
+        title: None,
         description: String::new(),
         trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
         targets: vec![],

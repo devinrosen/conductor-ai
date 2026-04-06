@@ -415,6 +415,7 @@ fn snap_workflow_def_detail() {
 
     state.selected_workflow_def = Some(WorkflowDef {
         name: "deploy-pipeline".into(),
+        title: None,
         description: "Deploy pipeline workflow".into(),
         trigger: conductor_core::workflow::WorkflowTrigger::Manual,
         targets: vec!["worktree".into()],

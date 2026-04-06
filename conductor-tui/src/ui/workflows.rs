@@ -235,7 +235,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             let mut spans = vec![
                 Span::raw("  \u{2514} "),
                 Span::styled(
-                    format!("{:<20}", def.name),
+                    format!("{:<20}", def.display_name()),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -2060,6 +2060,7 @@ mod tests {
     fn empty_workflow_def(name: &str, body: Vec<WorkflowNode>) -> WorkflowDef {
         WorkflowDef {
             name: name.to_string(),
+            title: None,
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],

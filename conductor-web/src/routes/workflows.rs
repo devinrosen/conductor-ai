@@ -137,6 +137,7 @@ impl From<&InputDecl> for InputDeclSummary {
 #[derive(Serialize)]
 pub struct WorkflowDefSummary {
     pub name: String,
+    pub title: Option<String>,
     pub description: String,
     pub trigger: String,
     pub inputs: Vec<InputDeclSummary>,
@@ -149,6 +150,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
     fn from(def: &WorkflowDef) -> Self {
         Self {
             name: def.name.clone(),
+            title: def.title.clone(),
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
@@ -2360,6 +2362,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "test-wf".to_string(),
+            title: None,
             description: "A test workflow".to_string(),
             trigger: WorkflowTrigger::Manual,
             targets: vec!["repo".to_string(), "worktree".to_string()],
@@ -2383,6 +2386,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "all-contexts-wf".to_string(),
+            title: None,
             description: "Applies to all contexts".to_string(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],

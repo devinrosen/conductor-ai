@@ -202,6 +202,7 @@ export interface DiscoverableRepo {
 
 export interface WorkflowDefSummary {
   name: string;
+  title: string | null;
   description: string;
   trigger: string;
   inputs: { name: string; required: boolean; type: string; defaultValue: string | null; description: string | null }[];
