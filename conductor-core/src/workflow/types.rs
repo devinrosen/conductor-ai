@@ -93,6 +93,16 @@ impl WorkflowRun {
     pub fn is_triggered_by_hook(&self) -> bool {
         self.trigger == "hook"
     }
+
+    /// Returns the human-readable display name for this run.
+    /// Extracts `title` from `definition_snapshot` if present; falls back to `workflow_name`.
+    pub fn display_name(&self) -> String {
+        self.definition_snapshot
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v["title"].as_str().map(String::from))
+            .unwrap_or_else(|| self.workflow_name.clone())
+    }
 }
 
 /// A workflow step execution record from the database.
