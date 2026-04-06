@@ -181,6 +181,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
             priority,
             workflow,
             agent_map,
+            parent,
         } => {
             let repo_obj = RepoManager::new(conn, config).get_by_slug(&repo)?;
 
@@ -205,7 +206,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                 raw_json: "{}".to_string(),
                 blocked_by: vec![],
                 children: vec![],
-                parent: None,
+                parent,
             };
 
             let syncer = TicketSyncer::new(conn);

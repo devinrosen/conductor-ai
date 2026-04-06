@@ -25,6 +25,8 @@ fi
 # ---------------------------------------------------------------------------
 if [ "${DRY_RUN:-false}" = "true" ]; then
   echo "DRY_RUN=true — would submit formal GitHub review for PR #${PR_NUMBER}."
+  echo "TICKET_SOURCE_ID: ${TICKET_SOURCE_ID:-<not set>}"
+  echo "CONDUCTOR_REPO:   ${CONDUCTOR_REPO:-<not set>}"
   echo "reviewed_by:"
   echo "${PRIOR_OUTPUT}" | jq -r '.reviewed_by // ""'
   echo "blocking_findings:"
@@ -126,6 +128,28 @@ ${MESSAGE}"
     echo "Filed off-diff issue: ${ISSUE_URL}"
     FILED_ISSUES="${FILED_ISSUES}- [#${ISSUE_NUMBER} — ${TITLE}](${ISSUE_URL}) — \`${FILE_LINE_REF}\` (${SEVERITY})
 "
+
+    # Upsert as a conductor ticket and link to source ticket (best-effort)
+    if [ -n "${TICKET_SOURCE_ID:-}" ] && [ -n "${CONDUCTOR_REPO:-}" ] \
+        && [[ "${TICKET_SOURCE_ID}" != *"{{"* ]] \
+        && [[ "${CONDUCTOR_REPO}" != *"{{"* ]]; then
+      UPSERT_LABELS="conductor-off-diff"
+      while IFS= read -r label; do
+        [ -z "${label}" ] && continue
+        UPSERT_LABELS="${UPSERT_LABELS},${label}"
+      done < <(echo "${finding}" | jq -r '(.labels // []) | .[]')
+
+      conductor tickets upsert "${CONDUCTOR_REPO}" \
+        --source-type github \
+        --source-id "${ISSUE_NUMBER}" \
+        --title "${TITLE} (${FILE_LINE_REF})" \
+        --state open \
+        --body "${ISSUE_BODY}" \
+        --url "${ISSUE_URL}" \
+        --labels "${UPSERT_LABELS}" \
+        --parent "${TICKET_SOURCE_ID}" \
+        2>/dev/null || echo "Warning: conductor ticket upsert failed for issue #${ISSUE_NUMBER} (non-fatal)"
+    fi
   done < <(echo "${OFF_DIFF_FINDINGS}" | jq -c '.[]')
 fi
 

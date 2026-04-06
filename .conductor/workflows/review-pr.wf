@@ -35,6 +35,12 @@ workflow review-pr {
   script submit-review {
     run = ".conductor/scripts/submit-review.sh"
     as  = "reviewer"
-    env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" DRY_RUN = "{{dry_run}}" }
+    env = {
+      PRIOR_OUTPUT     = "{{prior_output}}"
+      PR_NUMBER        = "{{pr_number}}"
+      DRY_RUN          = "{{dry_run}}"
+      TICKET_SOURCE_ID = "{{ticket_source_id}}"
+      CONDUCTOR_REPO   = "{{repo_name}}"
+    }
   }
 }
