@@ -242,10 +242,10 @@ pub fn worktree_list_item_with_prefix(
                     .data
                     .workflow_step_summaries
                     .get(&wf.id)
-                    .map(|s| format!("{} › {}", wf.workflow_name, s.step_name))
-                    .unwrap_or_else(|| wf.workflow_name.clone())
+                    .map(|s| format!("{} › {}", wf.display_name(), s.step_name))
+                    .unwrap_or_else(|| wf.display_name().to_string())
             } else {
-                wf.workflow_name.clone()
+                wf.display_name().to_string()
             })
         }
     });

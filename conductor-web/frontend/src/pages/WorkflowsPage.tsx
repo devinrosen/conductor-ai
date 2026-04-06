@@ -425,10 +425,10 @@ export function WorkflowsPage() {
                           to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
                           className="text-indigo-600 hover:underline font-medium"
                         >
-                          {run.workflow_name}
+                          {run.workflow_title ?? run.workflow_name}
                         </Link>
                       ) : (
-                        <span className="font-medium">{run.workflow_name}</span>
+                        <span className="font-medium">{run.workflow_title ?? run.workflow_name}</span>
                       )}
                     </td>
                     <td className="px-3 py-1.5 text-gray-500">

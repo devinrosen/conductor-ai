@@ -567,7 +567,7 @@ pub fn detect_workflow_terminal_transitions<'a>(
             if now_terminal && status_changed {
                 transitions.push(WorkflowTerminalTransition {
                     run_id: run.id.clone(),
-                    workflow_name: run.workflow_name.clone(),
+                    workflow_name: run.display_name().to_string(),
                     target_label: run.target_label.clone(),
                     succeeded: matches!(run.status, WorkflowRunStatus::Completed),
                 });
