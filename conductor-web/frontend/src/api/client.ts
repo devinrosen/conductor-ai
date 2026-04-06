@@ -36,6 +36,7 @@ import type {
   WorkflowRunMetricsRow,
   WorkflowFailureRateTrendRow,
   StepFailureHeatmapRow,
+  StepRetryAnalyticsRow,
   WorkflowPercentiles,
   WorkflowRegressionSignal,
   GateAnalyticsRow,
@@ -306,6 +307,10 @@ export const api = {
   getStepFailureHeatmap: (workflowName: string, runs = 20) =>
     request<StepFailureHeatmapRow[]>(
       `/workflows/analytics/failure-heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getStepRetryAnalytics: (workflowName: string, runs = 20) =>
+    request<StepRetryAnalyticsRow[]>(
+      `/workflows/analytics/step-retries?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
     ),
   getWorkflowPercentiles: (workflowName: string, days = 30) =>
     request<WorkflowPercentiles | null>(

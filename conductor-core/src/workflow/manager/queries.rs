@@ -18,10 +18,10 @@ use crate::workflow::constants::{
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
     extract_workflow_title, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
-    PendingGateRow, StepFailureHeatmapRow, StepTokenHeatmapRow, WorkflowFailureRateTrendRow,
-    WorkflowPercentiles, WorkflowRegressionSignal, WorkflowRun, WorkflowRunContext,
-    WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate,
-    WorkflowTokenTrendRow,
+    PendingGateRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow,
+    WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowRun,
+    WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
+    WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 /// Returns `(recent - baseline) / baseline * 100` when both values are present and baseline > 0.
@@ -1086,6 +1086,54 @@ impl<'a> WorkflowManager<'a> {
                 failed_executions: row.get(2)?,
                 failure_rate: row.get(3)?,
                 avg_retry_count: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Per-step retry statistics across the N most recent terminal runs of a workflow.
+    /// Only counts steps with status `completed` or `failed` (skipped steps are excluded).
+    pub fn get_step_retry_analytics(
+        &self,
+        workflow_name: &str,
+        limit_runs: usize,
+    ) -> Result<Vec<StepRetryAnalyticsRow>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT wrs.step_name, \
+                    COUNT(*) AS total_executions, \
+                    SUM(CASE WHEN wrs.retry_count > 0 THEN 1 ELSE 0 END) AS executions_with_retries, \
+                    COALESCE( \
+                        CAST(SUM(CASE WHEN wrs.retry_count > 0 THEN 1 ELSE 0 END) AS REAL) \
+                        / NULLIF(COUNT(*), 0) * 100.0, \
+                        0.0 \
+                    ) AS retry_rate, \
+                    COALESCE(AVG(CASE WHEN wrs.retry_count > 0 THEN CAST(wrs.retry_count AS REAL) END), 0.0) AS avg_retry_count, \
+                    COALESCE( \
+                        CAST(SUM(CASE WHEN wrs.retry_count > 0 AND wrs.status = 'completed' THEN 1 ELSE 0 END) AS REAL) \
+                        / NULLIF(SUM(CASE WHEN wrs.retry_count > 0 THEN 1 ELSE 0 END), 0) * 100.0, \
+                        0.0 \
+                    ) AS retry_success_rate \
+             FROM workflow_runs wr \
+             JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
+             WHERE wr.workflow_name = ?1 \
+               AND wr.status IN ('completed', 'failed') \
+               AND wrs.status IN ('completed', 'failed') \
+               AND wr.id IN ( \
+                 SELECT id FROM workflow_runs \
+                 WHERE workflow_name = ?1 AND status IN ('completed', 'failed') \
+                 ORDER BY started_at DESC LIMIT ?2 \
+               ) \
+             GROUP BY wrs.step_name \
+             ORDER BY retry_rate DESC, total_executions DESC",
+        )?;
+        let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
+            Ok(StepRetryAnalyticsRow {
+                step_name: row.get(0)?,
+                total_executions: row.get(1)?,
+                executions_with_retries: row.get(2)?,
+                retry_rate: row.get(3)?,
+                avg_retry_count: row.get(4)?,
+                retry_success_rate: row.get(5)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

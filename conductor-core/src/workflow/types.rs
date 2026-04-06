@@ -567,6 +567,20 @@ pub struct StepFailureHeatmapRow {
     pub avg_retry_count: f64,
 }
 
+/// Per-step retry statistics across recent terminal runs of a workflow.
+#[derive(Debug, Clone, Serialize)]
+pub struct StepRetryAnalyticsRow {
+    pub step_name: String,
+    pub total_executions: i64,
+    pub executions_with_retries: i64,
+    /// Percentage of executions that needed at least one retry. Range: 0.0–100.0.
+    pub retry_rate: f64,
+    /// Average retry count among executions that had at least one retry.
+    pub avg_retry_count: f64,
+    /// Percentage of retried executions that completed successfully. Range: 0.0–100.0.
+    pub retry_success_rate: f64,
+}
+
 /// P50/P75/P95/P99 percentile distributions for duration, cost, and tokens.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowPercentiles {

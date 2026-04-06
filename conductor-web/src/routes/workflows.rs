@@ -11,7 +11,7 @@ use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
     GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
-    StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
+    StepRetryAnalyticsRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
     WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal,
     WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
     WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
@@ -945,6 +945,18 @@ pub async fn get_failure_heatmap(
     let mgr = WorkflowManager::new(&db);
     let limit = q.runs.unwrap_or(20);
     let rows = mgr.get_step_failure_heatmap(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/step-retries?workflow_name=&runs=20
+pub async fn get_step_retry_analytics(
+    State(state): State<AppState>,
+    Query(q): Query<FailureHeatmapQuery>,
+) -> Result<Json<Vec<StepRetryAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_retry_analytics(&q.workflow_name, limit)?;
     Ok(Json(rows))
 }
 
