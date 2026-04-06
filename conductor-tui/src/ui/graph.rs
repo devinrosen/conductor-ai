@@ -150,22 +150,29 @@ impl<N> GraphData<N> {
             layers[layer_of[id]].push(id);
         }
 
+        // Build reverse adjacency map once for O(1) predecessor lookup during barycenter ordering.
+        let mut pred_adj: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (&src, children) in &adj {
+            for &child in children {
+                pred_adj.entry(child).or_default().push(src);
+            }
+        }
+
         // Barycenter ordering
         let mut layer_pos: HashMap<&str, usize> = HashMap::new();
         for (l, layer_nodes) in layers.iter_mut().enumerate() {
             if l == 0 {
                 layer_nodes.sort();
             } else {
-                let barycenters: Vec<(&str, f64)> = layer_nodes
+                // Build a HashMap of barycenters so the sort comparator is O(1).
+                let barycenters: HashMap<&str, f64> = layer_nodes
                     .iter()
                     .map(|&node| {
-                        let preds: Vec<f64> = connected_ids
+                        let preds: Vec<f64> = pred_adj
+                            .get(node)
+                            .map(|ps| ps.as_slice())
+                            .unwrap_or(&[])
                             .iter()
-                            .filter(|&&src| {
-                                adj.get(src)
-                                    .map(|children| children.contains(&node))
-                                    .unwrap_or(false)
-                            })
                             .filter_map(|&src| layer_pos.get(src).map(|&p| p as f64))
                             .collect();
                         let bc = if preds.is_empty() {
@@ -177,16 +184,8 @@ impl<N> GraphData<N> {
                     })
                     .collect();
                 layer_nodes.sort_by(|a, b| {
-                    let ba = barycenters
-                        .iter()
-                        .find(|(n, _)| n == a)
-                        .map(|(_, bc)| *bc)
-                        .unwrap_or(0.0);
-                    let bb = barycenters
-                        .iter()
-                        .find(|(n, _)| n == b)
-                        .map(|(_, bc)| *bc)
-                        .unwrap_or(0.0);
+                    let ba = barycenters.get(a).copied().unwrap_or(0.0);
+                    let bb = barycenters.get(b).copied().unwrap_or(0.0);
                     ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
