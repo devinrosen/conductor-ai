@@ -2867,7 +2867,6 @@ fn test_get_workflow_percentiles_excludes_other_workflows() {
     assert!((p.p50_duration_ms.unwrap() - 5000.0).abs() < 1.0);
 }
 
-
 // ─── get_gate_analytics ────────────────────────────────────────────────────
 
 /// Helper: insert a terminal gate step with explicit started_at / ended_at so
