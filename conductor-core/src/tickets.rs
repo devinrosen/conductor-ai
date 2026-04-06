@@ -53,6 +53,10 @@ pub struct TicketInput {
     /// Source IDs of child tickets (this ticket is the parent).
     /// Resolved to internal ULIDs and written to ticket_dependencies during upsert.
     pub children: Vec<String>,
+    /// Source ID of the parent ticket (this ticket is a child).
+    /// Resolved and written to ticket_dependencies during upsert.
+    /// Setting this replaces any existing parent relationship for this ticket.
+    pub parent: Option<String>,
 }
 
 const VALID_TICKET_STATES: &[&str] = &["open", "in_progress", "closed"];
@@ -278,15 +282,18 @@ impl<'a> TicketSyncer<'a> {
         // so forward references within the same batch resolve correctly.
         for (ticket, ticket_id) in &ticket_ids {
             // Clear stale dependency rows owned by this ticket before re-inserting,
-            // but only when the TicketInput actually declares dependencies. An empty
-            // blocked_by + children (e.g. from a GitHub sync that doesn't parse body
-            // text) is treated as "no opinion" so it does not overwrite dependencies
-            // set via MCP or other sources.
-            if !ticket.blocked_by.is_empty() || !ticket.children.is_empty() {
+            // but only per-field when the TicketInput actually declares that field.
+            // An empty value (e.g. from a GitHub sync that doesn't parse body text)
+            // is treated as "no opinion" and must not overwrite deps set by another
+            // source. Each dep type is guarded independently so that setting only
+            // `parent` does not accidentally wipe existing `blocked_by` or `children`.
+            if !ticket.blocked_by.is_empty() {
                 tx.execute(
                     "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'blocks'",
                     params![ticket_id],
                 )?;
+            }
+            if !ticket.children.is_empty() {
                 tx.execute(
                     "DELETE FROM ticket_dependencies WHERE from_ticket_id = ?1 AND dep_type = 'parent_of'",
                     params![ticket_id],
@@ -327,6 +334,30 @@ impl<'a> TicketSyncer<'a> {
                     tx.execute(
                         "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
                         params![ticket_id, id],
+                    )?;
+                }
+            }
+
+            // parent: another ticket is parent of this one → (parent_id, ticket_id, 'parent_of')
+            if let Some(src) = &ticket.parent {
+                // Replace any existing parent for this ticket
+                tx.execute(
+                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'parent_of'",
+                    params![ticket_id],
+                )?;
+                let parent_id = resolve_dep_ticket_id(
+                    &id_map,
+                    &tx,
+                    repo_id,
+                    &ticket.source_type,
+                    src,
+                    &ticket.source_id,
+                    "parent",
+                )?;
+                if let Some(id) = parent_id {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+                        params![id, ticket_id],
                     )?;
                 }
             }
@@ -1099,6 +1130,7 @@ mod tests {
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
+            parent: None,
         }
     }
 
@@ -2118,6 +2150,7 @@ mod tests {
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
+            parent: None,
         }
     }
 
@@ -2655,6 +2688,100 @@ mod tests {
             dep_count(&conn),
             1,
             "empty children should not remove existing dependency rows"
+        );
+    }
+
+    #[test]
+    fn test_upsert_only_parent_preserves_blocked_by_and_children() {
+        // Setting only `parent` must not clear existing `blocked_by` or `children`
+        // relationships — the guard must be per-field, not shared.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is blocked by "2" and is parent of "3"
+        let t2 = make_ticket("2", "Blocker");
+        let t3 = make_ticket("3", "Child");
+        let mut t1 = make_ticket("1", "Middle");
+        t1.blocked_by = vec!["2".to_string()];
+        t1.children = vec!["3".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t3, t1]).unwrap();
+        // 1 blocks row + 1 parent_of row
+        assert_eq!(dep_count(&conn), 2);
+
+        // Insert a parent ticket "0"
+        let t0 = make_ticket("0", "GrandParent");
+        syncer.upsert_tickets("r1", &[t0]).unwrap();
+
+        // Second upsert: ticket "1" with only parent set, blocked_by and children are empty
+        let mut t1_parent_only = make_ticket("1", "Middle");
+        t1_parent_only.parent = Some("0".to_string());
+        syncer.upsert_tickets("r1", &[t1_parent_only]).unwrap();
+
+        // Should now have 3 rows: the original blocks + parent_of(1→3) + new parent_of(0→1)
+        assert_eq!(
+            dep_count(&conn),
+            3,
+            "setting only parent must not wipe existing blocked_by or children rows"
+        );
+    }
+
+    #[test]
+    fn test_upsert_only_blocked_by_preserves_parent_of() {
+        // Setting only `blocked_by` must not clear existing `children` (parent_of) rows.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is parent of ticket "2"
+        let t2 = make_ticket("2", "Child");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1, "should have 1 parent_of row");
+
+        // Insert a blocker ticket "3"
+        let t3 = make_ticket("3", "Blocker");
+        syncer.upsert_tickets("r1", &[t3]).unwrap();
+
+        // Re-upsert ticket "1" with only blocked_by set, children empty
+        let mut t1_blocked_only = make_ticket("1", "Parent");
+        t1_blocked_only.blocked_by = vec!["3".to_string()];
+        syncer.upsert_tickets("r1", &[t1_blocked_only]).unwrap();
+
+        // Should now have 2 rows: original parent_of(1→2) + new blocks(1←3)
+        assert_eq!(
+            dep_count(&conn),
+            2,
+            "setting only blocked_by must not wipe existing parent_of (children) rows"
+        );
+    }
+
+    #[test]
+    fn test_upsert_only_children_preserves_blocked_by() {
+        // Setting only `children` must not clear existing `blocked_by` (blocks) rows.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is blocked by ticket "2"
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1, "should have 1 blocks row");
+
+        // Insert a child ticket "3"
+        let t3 = make_ticket("3", "Child");
+        syncer.upsert_tickets("r1", &[t3]).unwrap();
+
+        // Re-upsert ticket "1" with only children set, blocked_by empty
+        let mut t1_children_only = make_ticket("1", "Blocked");
+        t1_children_only.children = vec!["3".to_string()];
+        syncer.upsert_tickets("r1", &[t1_children_only]).unwrap();
+
+        // Should now have 2 rows: original blocks(1←2) + new parent_of(1→3)
+        assert_eq!(
+            dep_count(&conn),
+            2,
+            "setting only children must not wipe existing blocked_by (blocks) rows"
         );
     }
 

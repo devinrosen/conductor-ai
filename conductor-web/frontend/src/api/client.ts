@@ -37,8 +37,11 @@ import type {
   WorkflowRunMetricsRow,
   WorkflowFailureRateTrendRow,
   StepFailureHeatmapRow,
+  StepRetryAnalyticsRow,
   WorkflowPercentiles,
   WorkflowRegressionSignal,
+  GateAnalyticsRow,
+  PendingGateAnalyticsRow,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -309,12 +312,22 @@ export const api = {
     request<StepFailureHeatmapRow[]>(
       `/workflows/analytics/failure-heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
     ),
+  getStepRetryAnalytics: (workflowName: string, runs = 20) =>
+    request<StepRetryAnalyticsRow[]>(
+      `/workflows/analytics/step-retries?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
   getWorkflowPercentiles: (workflowName: string, days = 30) =>
     request<WorkflowPercentiles | null>(
       `/workflows/analytics/percentiles?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
     ),
   getWorkflowRegressions: () =>
     request<WorkflowRegressionSignal[]>("/workflows/analytics/regressions"),
+  getGateAnalytics: (workflowName: string, days = 30) =>
+    request<GateAnalyticsRow[]>(
+      `/workflows/analytics/gates?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getPendingGates: () =>
+    request<PendingGateAnalyticsRow[]>("/workflows/analytics/gates/pending"),
 
   // Notifications
   listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>

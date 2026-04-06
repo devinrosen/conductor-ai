@@ -326,6 +326,18 @@ export interface StepFailureHeatmapRow {
   avg_retry_count: number;
 }
 
+export interface StepRetryAnalyticsRow {
+  step_name: string;
+  total_executions: number;
+  executions_with_retries: number;
+  /** Percentage of executions needing at least one retry. Range: 0–100. */
+  retry_rate: number;
+  /** Average retry count among executions that had at least one retry. */
+  avg_retry_count: number;
+  /** Percentage of retried executions that completed. Range: 0–100. */
+  retry_success_rate: number;
+}
+
 export interface WorkflowPercentiles {
   p50_duration_ms: number | null;
   p75_duration_ms: number | null;
@@ -363,6 +375,29 @@ export interface WorkflowRegressionSignal {
   duration_regressed: boolean;
   cost_regressed: boolean;
   failure_rate_regressed: boolean;
+}
+
+export interface GateAnalyticsRow {
+  step_name: string;
+  total_gate_hits: number;
+  approved_count: number;
+  rejected_count: number;
+  approval_rate: number; // 0–100
+  avg_wait_ms: number | null;
+  p50_wait_ms: number | null;
+  p95_wait_ms: number | null;
+  avg_feedback_length: number | null;
+}
+
+export interface PendingGateAnalyticsRow {
+  step_id: string;
+  step_name: string;
+  gate_type: string;
+  gate_prompt: string | null;
+  workflow_name: string;
+  workflow_run_id: string;
+  started_at: string;
+  wait_ms_so_far: number;
 }
 
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)

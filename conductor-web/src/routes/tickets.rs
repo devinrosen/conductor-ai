@@ -199,6 +199,7 @@ mod tests {
                 label_details: vec![],
                 blocked_by: vec![],
                 children: vec![],
+                parent: None,
             },
             TicketInput {
                 source_type: "github".to_string(),
@@ -214,6 +215,7 @@ mod tests {
                 label_details: vec![],
                 blocked_by: vec![],
                 children: vec![],
+                parent: None,
             },
         ];
         syncer.upsert_tickets("r1", &tickets).unwrap();

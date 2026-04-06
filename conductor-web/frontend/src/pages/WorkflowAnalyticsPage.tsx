@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { api } from "../api/client";
-import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow, WorkflowPercentiles, WorkflowRegressionSignal } from "../api/types";
+import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, WorkflowPercentiles, WorkflowRegressionSignal, GateAnalyticsRow, PendingGateAnalyticsRow } from "../api/types";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 
 type SortKey = "avg_input" | "avg_output" | "avg_cache_read" | "run_count";
@@ -60,12 +60,22 @@ export function WorkflowAnalyticsPage() {
   const [failureHeatmapLoading, setFailureHeatmapLoading] = useState(false);
   const [failureHeatmapError, setFailureHeatmapError] = useState<string | null>(null);
 
+  const [retryData, setRetryData] = useState<StepRetryAnalyticsRow[]>([]);
+  const [retryLoading, setRetryLoading] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
   const [percentiles, setPercentiles] = useState<WorkflowPercentiles | null>(null);
   const [percentilesLoading, setPercentilesLoading] = useState(false);
 
   const [regressions, setRegressions] = useState<WorkflowRegressionSignal[]>([]);
   const [regressionsError, setRegressionsError] = useState<string | null>(null);
   const [regressionsOpen, setRegressionsOpen] = useState(true);
+
+  const [gateAnalytics, setGateAnalytics] = useState<GateAnalyticsRow[]>([]);
+  const [gateAnalyticsLoading, setGateAnalyticsLoading] = useState(false);
+  const [gateAnalyticsError, setGateAnalyticsError] = useState<string | null>(null);
+  const [pendingGates, setPendingGates] = useState<PendingGateAnalyticsRow[]>([]);
+  const [pendingGatesLoading, setPendingGatesLoading] = useState(false);
 
   useEffect(() => {
     setAggLoading(true);
@@ -133,6 +143,16 @@ export function WorkflowAnalyticsPage() {
   }, [selectedWorkflow]);
 
   useEffect(() => {
+    if (!selectedWorkflow) return;
+    setRetryLoading(true);
+    setRetryError(null);
+    api.getStepRetryAnalytics(selectedWorkflow, 20)
+      .then(setRetryData)
+      .catch((e) => setRetryError(e instanceof Error ? e.message : "Failed to load retry analytics"))
+      .finally(() => setRetryLoading(false));
+  }, [selectedWorkflow]);
+
+  useEffect(() => {
     if (!selectedWorkflow) {
       setPercentiles(null);
       return;
@@ -143,6 +163,27 @@ export function WorkflowAnalyticsPage() {
       .catch(() => setPercentiles(null))
       .finally(() => setPercentilesLoading(false));
   }, [selectedWorkflow, histDays]);
+
+  useEffect(() => {
+    if (!selectedWorkflow) {
+      setGateAnalytics([]);
+      return;
+    }
+    setGateAnalyticsLoading(true);
+    setGateAnalyticsError(null);
+    api.getGateAnalytics(selectedWorkflow, 30)
+      .then(setGateAnalytics)
+      .catch((e) => setGateAnalyticsError(e instanceof Error ? e.message : "Failed to load gate analytics"))
+      .finally(() => setGateAnalyticsLoading(false));
+  }, [selectedWorkflow]);
+
+  useEffect(() => {
+    setPendingGatesLoading(true);
+    api.getPendingGates()
+      .then(setPendingGates)
+      .catch(() => setPendingGates([]))
+      .finally(() => setPendingGatesLoading(false));
+  }, []);
 
   const sorted = [...aggregates].sort((a, b) => {
     const av = a[sortKey], bv = b[sortKey];
@@ -704,6 +745,149 @@ export function WorkflowAnalyticsPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+          </section>
+
+          {/* Section 6: Step Reliability — Retry Analytics */}
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+              Step Reliability — Retry Analytics — {selectedWorkflow}
+            </h3>
+            {retryLoading ? (
+              <LoadingSpinner />
+            ) : retryError ? (
+              <p className="text-sm text-red-500">{retryError}</p>
+            ) : retryData.length === 0 ? (
+              <p className="text-sm text-gray-500">No retry data available.</p>
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 text-left">
+                      <th className="px-4 py-2 font-medium">Step</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Executions</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Retry Rate</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Avg Retries</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Retry Success Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {retryData.map((row) => {
+                      const rowCls = row.retry_rate >= 15 ? "bg-amber-50" : "";
+                      const retryRateCls = row.retry_rate >= 15
+                        ? "bg-amber-100 text-amber-700"
+                        : "text-gray-700";
+                      const successCls = row.executions_with_retries === 0
+                        ? "text-gray-400"
+                        : row.retry_success_rate >= 80
+                        ? "bg-green-100 text-green-700"
+                        : row.retry_success_rate >= 50
+                        ? "bg-yellow-100 text-yellow-700"
+                        : "bg-red-100 text-red-700";
+                      return (
+                        <tr key={row.step_name} className={`hover:bg-gray-50 ${rowCls}`}>
+                          <td className="px-4 py-2 text-gray-800">{row.step_name.replace(/^workflow:/, "")}</td>
+                          <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.total_executions}</td>
+                          <td className="px-4 py-2">
+                            <span className={`inline-block px-1.5 py-0.5 rounded font-mono ${retryRateCls}`}>
+                              {row.retry_rate.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 font-mono tabular-nums text-gray-700">
+                            {row.executions_with_retries > 0 ? row.avg_retry_count.toFixed(1) : "—"}
+                          </td>
+                          <td className="px-4 py-2">
+                            {row.executions_with_retries === 0 ? (
+                              <span className="text-gray-400">—</span>
+                            ) : (
+                              <span className={`inline-block px-1.5 py-0.5 rounded font-mono ${successCls}`}>
+                                {row.retry_success_rate.toFixed(1)}%
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Section 7: Gate analytics */}
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+              Gate Analytics — {selectedWorkflow}
+            </h3>
+            {gateAnalyticsLoading ? (
+              <LoadingSpinner />
+            ) : gateAnalyticsError ? (
+              <p className="text-sm text-red-500">{gateAnalyticsError}</p>
+            ) : gateAnalytics.length === 0 ? (
+              <p className="text-sm text-gray-500">No gate steps in this workflow.</p>
+            ) : (
+              <>
+                {/* Longest-pending gate callout */}
+                {(() => {
+                  const longest = pendingGatesLoading
+                    ? null
+                    : pendingGates.find((g) => g.workflow_name === selectedWorkflow) ?? null;
+                  if (!longest) return null;
+                  return (
+                    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                      <span className="font-semibold">Longest pending gate:</span>{" "}
+                      <span className="font-mono">{longest.step_name}</span>
+                      {" — waiting "}
+                      <span className="font-semibold">{fmtDuration(longest.wait_ms_so_far)}</span>
+                      {longest.gate_prompt && (
+                        <span className="ml-2 text-amber-600 italic">"{longest.gate_prompt}"</span>
+                      )}
+                    </div>
+                  );
+                })()}
+                <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 text-left">
+                        <th className="px-4 py-2 font-medium">Step</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">Hits</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">Approved</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">Rejected</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">Approval Rate</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">Avg Wait</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">P50 Wait</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">P95 Wait</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {gateAnalytics.map((row) => {
+                        const rateCls = row.approval_rate < 80
+                          ? "bg-amber-100 text-amber-700"
+                          : "text-gray-700";
+                        const avgWaitHighlight = row.avg_wait_ms !== null && row.avg_wait_ms > 1_800_000;
+                        return (
+                          <tr key={row.step_name} className="hover:bg-gray-50">
+                            <td className="px-4 py-2 text-gray-800">{row.step_name.replace(/^workflow:/, "")}</td>
+                            <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.total_gate_hits}</td>
+                            <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.approved_count}</td>
+                            <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.rejected_count}</td>
+                            <td className="px-4 py-2">
+                              <span className={`inline-block px-1.5 py-0.5 rounded font-mono ${rateCls}`}>
+                                {row.approval_rate.toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className={`px-4 py-2 font-mono tabular-nums ${avgWaitHighlight ? "text-red-600 font-semibold" : "text-gray-700"}`}>
+                              {fmtDuration(row.avg_wait_ms)}
+                            </td>
+                            <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtDuration(row.p50_wait_ms)}</td>
+                            <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtDuration(row.p95_wait_ms)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </section>
 

@@ -134,6 +134,7 @@ fn parse_jira_issues(json_str: &str, base_url: &str) -> Result<Vec<TicketInput>>
                 label_details: vec![],
                 blocked_by: vec![],
                 children: vec![],
+                parent: None,
             }
         })
         .collect();
