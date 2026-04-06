@@ -1,3 +1,12 @@
+/// Minimum number of recent runs required to emit a regression signal.
+pub const REGRESSION_MIN_RECENT_RUNS: i64 = 5;
+/// Flag duration regression if P75 increased by more than this percentage.
+pub const REGRESSION_DURATION_THRESHOLD_PCT: f64 = 25.0;
+/// Flag cost regression if P75 increased by more than this percentage.
+pub const REGRESSION_COST_THRESHOLD_PCT: f64 = 20.0;
+/// Flag failure-rate regression if failure rate increased by more than this many percentage points.
+pub const REGRESSION_FAILURE_RATE_THRESHOLD_PP: f64 = 5.0;
+
 /// Column list for `workflow_run_steps` SELECT queries (used by `row_to_workflow_step`).
 pub(super) const STEP_COLUMNS: &str =
     "id, workflow_run_id, step_name, role, can_commit, condition_expr, status, \

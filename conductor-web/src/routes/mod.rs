@@ -283,6 +283,10 @@ pub fn api_router() -> Router<AppState> {
             "/api/workflows/analytics/percentiles",
             get(workflows::get_workflow_percentiles),
         )
+        .route(
+            "/api/workflows/analytics/regressions",
+            get(workflows::get_workflow_regressions),
+        )
         // Workflow Templates
         .route("/api/templates", get(workflows::list_templates))
         .route(

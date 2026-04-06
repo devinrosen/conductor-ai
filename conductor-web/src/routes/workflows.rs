@@ -12,8 +12,9 @@ use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
     RunIdSlot, StepFailureHeatmapRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig,
     WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
-    WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    WorkflowRegressionSignal, WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow,
+    WorkflowRunStatus, WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -963,6 +964,27 @@ pub async fn get_workflow_percentiles(
     let days = q.days.unwrap_or(30);
     let result = mgr.get_workflow_percentiles(&q.workflow_name, days)?;
     Ok(Json(result))
+}
+
+/// GET /api/workflows/analytics/regressions?recent_days=7&baseline_days=30&min_runs=5
+#[derive(Deserialize)]
+pub struct RegressionsQuery {
+    pub recent_days: Option<i64>,
+    pub baseline_days: Option<i64>,
+    pub min_runs: Option<i64>,
+}
+
+pub async fn get_workflow_regressions(
+    State(state): State<AppState>,
+    Query(q): Query<RegressionsQuery>,
+) -> Result<Json<Vec<WorkflowRegressionSignal>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let recent_days = q.recent_days.unwrap_or(7);
+    let baseline_days = q.baseline_days.unwrap_or(30);
+    let min_runs = q.min_runs.unwrap_or(REGRESSION_MIN_RECENT_RUNS);
+    let signals = mgr.get_workflow_regression_signals(min_runs, recent_days, baseline_days)?;
+    Ok(Json(signals))
 }
 
 /// GET /api/workflows/runs/{id}/steps/{step_name}/log

@@ -330,6 +330,29 @@ export interface WorkflowPercentiles {
   run_count: number;
 }
 
+export interface WorkflowRegressionSignal {
+  workflow_name: string;
+  workflow_title: string | null;
+  recent_runs: number;
+  baseline_runs: number;
+  // Duration (ms) — P75
+  recent_p75_duration_ms: number | null;
+  baseline_p75_duration_ms: number | null;
+  duration_change_pct: number | null;
+  // Cost (USD) — P75
+  recent_p75_cost_usd: number | null;
+  baseline_p75_cost_usd: number | null;
+  cost_change_pct: number | null;
+  // Failure rate (0–100 %)
+  recent_failure_rate: number;
+  baseline_failure_rate: number;
+  failure_rate_change_pp: number;
+  // Regression flags
+  duration_regressed: boolean;
+  cost_regressed: boolean;
+  failure_rate_regressed: boolean;
+}
+
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)
 
 export interface WorkflowInputDecl {

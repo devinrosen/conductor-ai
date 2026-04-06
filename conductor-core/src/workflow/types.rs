@@ -588,6 +588,35 @@ pub struct WorkflowPercentiles {
     pub run_count: i64,
 }
 
+/// Passive regression signal for a single workflow.
+///
+/// Compares a recent window (last N days) against a baseline window (prior M days)
+/// across three signals: P75 duration, P75 cost, and failure rate.
+/// Boolean regression flags are set in Rust after the query, using threshold constants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowRegressionSignal {
+    pub workflow_name: String,
+    pub workflow_title: Option<String>,
+    pub recent_runs: i64,
+    pub baseline_runs: i64,
+    // Duration (ms) — P75
+    pub recent_p75_duration_ms: Option<f64>,
+    pub baseline_p75_duration_ms: Option<f64>,
+    pub duration_change_pct: Option<f64>,
+    // Cost (USD) — P75
+    pub recent_p75_cost_usd: Option<f64>,
+    pub baseline_p75_cost_usd: Option<f64>,
+    pub cost_change_pct: Option<f64>,
+    // Failure rate (0–100 %)
+    pub recent_failure_rate: f64,
+    pub baseline_failure_rate: f64,
+    pub failure_rate_change_pp: f64,
+    // Regression flags
+    pub duration_regressed: bool,
+    pub cost_regressed: bool,
+    pub failure_rate_regressed: bool,
+}
+
 /// Raw per-run metrics for histogram distribution (one row per completed run).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunMetricsRow {

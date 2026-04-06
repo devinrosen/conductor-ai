@@ -32,7 +32,10 @@ pub use batch_validate::{
 };
 
 // Re-export all public types and functions to preserve existing import paths.
-pub use constants::CONDUCTOR_OUTPUT_INSTRUCTION;
+pub use constants::{
+    CONDUCTOR_OUTPUT_INSTRUCTION, REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
+    REGRESSION_FAILURE_RATE_THRESHOLD_PP, REGRESSION_MIN_RECENT_RUNS,
+};
 pub use engine::ENGINE_INJECTED_KEYS;
 pub use engine::{
     apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
@@ -45,9 +48,9 @@ pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, MetadataEntry,
     PendingGateRow, RunIdSlot, StepFailureHeatmapRow, StepResult, StepTokenHeatmapRow,
     WorkflowExecConfig, WorkflowExecInput, WorkflowExecStandalone, WorkflowFailureRateTrendRow,
-    WorkflowPercentiles, WorkflowResult, WorkflowResumeInput, WorkflowResumeStandalone,
-    WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResult, WorkflowResumeInput,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow,
+    WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 use crate::agent_config::AgentSpec;
