@@ -2725,6 +2725,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_upsert_only_blocked_by_preserves_parent_of() {
+        // Setting only `blocked_by` must not clear existing `children` (parent_of) rows.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is parent of ticket "2"
+        let t2 = make_ticket("2", "Child");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1, "should have 1 parent_of row");
+
+        // Insert a blocker ticket "3"
+        let t3 = make_ticket("3", "Blocker");
+        syncer.upsert_tickets("r1", &[t3]).unwrap();
+
+        // Re-upsert ticket "1" with only blocked_by set, children empty
+        let mut t1_blocked_only = make_ticket("1", "Parent");
+        t1_blocked_only.blocked_by = vec!["3".to_string()];
+        syncer.upsert_tickets("r1", &[t1_blocked_only]).unwrap();
+
+        // Should now have 2 rows: original parent_of(1→2) + new blocks(1←3)
+        assert_eq!(
+            dep_count(&conn),
+            2,
+            "setting only blocked_by must not wipe existing parent_of (children) rows"
+        );
+    }
+
+    #[test]
+    fn test_upsert_only_children_preserves_blocked_by() {
+        // Setting only `children` must not clear existing `blocked_by` (blocks) rows.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is blocked by ticket "2"
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1, "should have 1 blocks row");
+
+        // Insert a child ticket "3"
+        let t3 = make_ticket("3", "Child");
+        syncer.upsert_tickets("r1", &[t3]).unwrap();
+
+        // Re-upsert ticket "1" with only children set, blocked_by empty
+        let mut t1_children_only = make_ticket("1", "Blocked");
+        t1_children_only.children = vec!["3".to_string()];
+        syncer.upsert_tickets("r1", &[t1_children_only]).unwrap();
+
+        // Should now have 2 rows: original blocks(1←2) + new parent_of(1→3)
+        assert_eq!(
+            dep_count(&conn),
+            2,
+            "setting only children must not wipe existing blocked_by (blocks) rows"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // get_ready_tickets tests
     // -----------------------------------------------------------------------
