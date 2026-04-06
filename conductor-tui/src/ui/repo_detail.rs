@@ -238,18 +238,19 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     let detail_filter = state.detail_ticket_filter.as_query();
 
-    // Compute column widths from the full (unfiltered) ticket list so widths
-    // stay stable while the user types a filter query.
+    // Compute column widths from the same closed-ticket-filtered set that is
+    // shown, but ignoring the text query so widths stay stable while typing.
     const MAX_ASSIGNEE_DISPLAY: usize = 20;
-    let id_width = state
+    let width_tickets = state
         .detail_tickets
         .iter()
+        .filter(|t| state.show_closed_tickets || t.state != "closed");
+    let id_width = width_tickets
+        .clone()
         .map(|t| t.source_id.len())
         .max()
         .unwrap_or(4);
-    let assignee_width = state
-        .detail_tickets
-        .iter()
+    let assignee_width = width_tickets
         .map(|t| match t.assignee.as_deref() {
             Some(login) => (login.len() + 1).min(MAX_ASSIGNEE_DISPLAY), // +1 for @
             None => "unclaimed".len(),
