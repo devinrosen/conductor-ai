@@ -236,7 +236,7 @@ impl<'a> TicketSyncer<'a> {
                      priority = excluded.priority,
                      url = excluded.url,
                      synced_at = excluded.synced_at,
-                     raw_json = excluded.raw_json",
+                     raw_json = CASE WHEN excluded.raw_json = '{}' THEN raw_json ELSE excluded.raw_json END",
                 params![
                     id,
                     repo_id,
@@ -3255,5 +3255,54 @@ mod tests {
             }
             e => panic!("expected TicketNotFound, got {e:?}"),
         }
+    }
+
+    #[test]
+    fn test_upsert_preserves_raw_json_on_cli_re_upsert() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Simulate a sync with real raw_json from a source (e.g. GitHub).
+        let mut synced = make_ticket("42", "Real Issue");
+        synced.raw_json = r#"{"id":42,"number":42,"title":"Real Issue"}"#.to_string();
+        syncer.upsert_tickets("r1", &[synced]).unwrap();
+
+        // Verify the raw_json was stored correctly.
+        let stored: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, r#"{"id":42,"number":42,"title":"Real Issue"}"#);
+
+        // Simulate a CLI re-upsert (passes '{}' as the raw_json sentinel).
+        let mut cli_upsert = make_ticket("42", "Real Issue Updated");
+        cli_upsert.raw_json = "{}".to_string();
+        syncer.upsert_tickets("r1", &[cli_upsert]).unwrap();
+
+        // raw_json must be unchanged — CLI sentinel must not clobber synced data.
+        let after: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after, r#"{"id":42,"number":42,"title":"Real Issue"}"#,
+            "CLI re-upsert with '{{}}' sentinel must not overwrite existing raw_json"
+        );
+
+        // Title update from CLI upsert should still be applied.
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "Real Issue Updated");
     }
 }
