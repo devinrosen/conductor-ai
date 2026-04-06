@@ -205,6 +205,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                 raw_json: "{}".to_string(),
                 blocked_by: vec![],
                 children: vec![],
+                parent: None,
             };
 
             let syncer = TicketSyncer::new(conn);

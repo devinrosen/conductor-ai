@@ -53,6 +53,10 @@ pub struct TicketInput {
     /// Source IDs of child tickets (this ticket is the parent).
     /// Resolved to internal ULIDs and written to ticket_dependencies during upsert.
     pub children: Vec<String>,
+    /// Source ID of the parent ticket (this ticket is a child).
+    /// Resolved and written to ticket_dependencies during upsert.
+    /// Setting this replaces any existing parent relationship for this ticket.
+    pub parent: Option<String>,
 }
 
 const VALID_TICKET_STATES: &[&str] = &["open", "in_progress", "closed"];
@@ -282,7 +286,7 @@ impl<'a> TicketSyncer<'a> {
             // blocked_by + children (e.g. from a GitHub sync that doesn't parse body
             // text) is treated as "no opinion" so it does not overwrite dependencies
             // set via MCP or other sources.
-            if !ticket.blocked_by.is_empty() || !ticket.children.is_empty() {
+            if !ticket.blocked_by.is_empty() || !ticket.children.is_empty() || ticket.parent.is_some() {
                 tx.execute(
                     "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'blocks'",
                     params![ticket_id],
@@ -327,6 +331,30 @@ impl<'a> TicketSyncer<'a> {
                     tx.execute(
                         "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
                         params![ticket_id, id],
+                    )?;
+                }
+            }
+
+            // parent: another ticket is parent of this one → (parent_id, ticket_id, 'parent_of')
+            if let Some(src) = &ticket.parent {
+                // Replace any existing parent for this ticket
+                tx.execute(
+                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'parent_of'",
+                    params![ticket_id],
+                )?;
+                let parent_id = resolve_dep_ticket_id(
+                    &id_map,
+                    &tx,
+                    repo_id,
+                    &ticket.source_type,
+                    src,
+                    &ticket.source_id,
+                    "parent",
+                )?;
+                if let Some(id) = parent_id {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+                        params![id, ticket_id],
                     )?;
                 }
             }
@@ -1099,6 +1127,7 @@ mod tests {
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
+            parent: None,
         }
     }
 
@@ -2118,6 +2147,7 @@ mod tests {
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
+            parent: None,
         }
     }
 

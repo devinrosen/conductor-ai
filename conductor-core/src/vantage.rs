@@ -384,6 +384,7 @@ fn parse_vantage_deliverable(d: &serde_json::Value) -> TicketInput {
         label_details: vec![],
         blocked_by,
         children,
+        parent: None,
     }
 }
 

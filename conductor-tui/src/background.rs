@@ -1176,6 +1176,7 @@ mod tests {
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
+            parent: None,
         };
 
         let action = sync_repo(&syncer, "r1", "test-repo", "github", || Ok(vec![ticket]));
@@ -1225,6 +1226,7 @@ mod tests {
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
+            parent: None,
         };
 
         let action = sync_repo(&syncer, "nonexistent-repo", "test-repo", "github", || {
