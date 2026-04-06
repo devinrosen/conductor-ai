@@ -90,6 +90,21 @@ pub struct WorkflowRun {
     pub model: Option<String>,
 }
 
+/// Extract the human-readable title from a workflow definition snapshot JSON string.
+///
+/// Returns `None` if the snapshot is absent, malformed, or has no `title` field.
+/// Logs a warning when JSON is present but cannot be parsed.
+pub(in crate::workflow) fn extract_workflow_title(snapshot: Option<&str>) -> Option<String> {
+    let s = snapshot?;
+    match serde_json::from_str::<serde_json::Value>(s) {
+        Ok(v) => v["title"].as_str().map(String::from),
+        Err(e) => {
+            tracing::warn!("Malformed definition_snapshot JSON — could not extract workflow title: {e}");
+            None
+        }
+    }
+}
+
 impl WorkflowRun {
     /// Whether this run was triggered by a workflow hook (prevents infinite chains).
     /// Derived from `trigger == "hook"` rather than stored separately.
@@ -529,9 +544,7 @@ mod tests {
     use super::*;
 
     fn make_run(workflow_name: &str, definition_snapshot: Option<&str>) -> WorkflowRun {
-        let workflow_title = definition_snapshot
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v["title"].as_str().map(String::from));
+        let workflow_title = super::extract_workflow_title(definition_snapshot);
         WorkflowRun {
             id: "test-id".into(),
             workflow_name: workflow_name.into(),

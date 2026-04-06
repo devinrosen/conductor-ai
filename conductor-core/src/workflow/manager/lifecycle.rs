@@ -9,7 +9,7 @@ use crate::error::{ConductorError, Result};
 
 use super::WorkflowManager;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::WorkflowRun;
+use crate::workflow::types::{extract_workflow_title, WorkflowRun};
 
 impl<'a> WorkflowManager<'a> {
     pub fn create_workflow_run(
@@ -78,9 +78,7 @@ impl<'a> WorkflowManager<'a> {
             ],
         )?;
 
-        let workflow_title = definition_snapshot
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v["title"].as_str().map(String::from));
+        let workflow_title = extract_workflow_title(definition_snapshot);
         Ok(WorkflowRun {
             id,
             workflow_name: workflow_name.to_string(),
