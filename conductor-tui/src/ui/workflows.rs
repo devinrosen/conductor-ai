@@ -1143,7 +1143,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{:<20}", truncate(&run.workflow_name, 20)),
+                            format!("{:<20}", truncate(run.display_name(), 20)),
                             Style::default().add_modifier(Modifier::BOLD),
                         ),
                     ];
@@ -1217,7 +1217,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{:<20}", truncate(&run.workflow_name, 20)),
+                            format!("{:<20}", truncate(run.display_name(), 20)),
                             Style::default()
                                 .fg(state.theme.label_secondary)
                                 .add_modifier(Modifier::BOLD),
@@ -1425,7 +1425,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             Line::from(vec![
                 Span::styled(" Workflow: ", label_style),
                 Span::styled(
-                    run.workflow_name.clone(),
+                    run.display_name(),
                     Style::default()
                         .fg(state.theme.label_accent)
                         .add_modifier(Modifier::BOLD),
@@ -1630,7 +1630,7 @@ fn render_step_list(
             Span::styled(root_symbol, Style::default().fg(root_color)),
             Span::raw("  "),
             Span::styled(
-                format!("{:<20}", root.workflow_name),
+                format!("{:<20}", root.display_name()),
                 Style::default()
                     .fg(state.theme.label_primary)
                     .add_modifier(Modifier::BOLD),

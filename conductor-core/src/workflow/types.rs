@@ -76,6 +76,9 @@ pub struct WorkflowRun {
     pub blocked_on: Option<BlockedOn>,
     /// Optional feature ID linking this run to a feature branch.
     pub feature_id: Option<String>,
+    /// Human-readable title extracted from `definition_snapshot` at load time.
+    /// `None` when no title is present in the snapshot. Use `display_name()` for rendering.
+    pub workflow_title: Option<String>,
     // Aggregated metrics (populated at run completion)
     pub total_input_tokens: Option<i64>,
     pub total_output_tokens: Option<i64>,
@@ -87,11 +90,37 @@ pub struct WorkflowRun {
     pub model: Option<String>,
 }
 
+/// Extract the human-readable title from a workflow definition snapshot JSON string.
+///
+/// Returns `None` if the snapshot is absent, malformed, or has no `title` field.
+/// Logs a warning when JSON is present but cannot be parsed.
+pub(in crate::workflow) fn extract_workflow_title(snapshot: Option<&str>) -> Option<String> {
+    let s = snapshot?;
+    match serde_json::from_str::<serde_json::Value>(s) {
+        Ok(v) => v["title"].as_str().map(String::from),
+        Err(e) => {
+            tracing::warn!(
+                "Malformed definition_snapshot JSON — could not extract workflow title: {e}"
+            );
+            None
+        }
+    }
+}
+
 impl WorkflowRun {
     /// Whether this run was triggered by a workflow hook (prevents infinite chains).
     /// Derived from `trigger == "hook"` rather than stored separately.
     pub fn is_triggered_by_hook(&self) -> bool {
         self.trigger == "hook"
+    }
+
+    /// Returns the human-readable display name for this run.
+    /// Uses `workflow_title` (extracted from `definition_snapshot` at load time) if present;
+    /// falls back to `workflow_name`.
+    pub fn display_name(&self) -> &str {
+        self.workflow_title
+            .as_deref()
+            .unwrap_or(&self.workflow_name)
     }
 }
 
@@ -510,4 +539,77 @@ pub struct WorkflowRunMetricsRow {
     pub output_tokens: Option<i64>,
     pub worktree_id: Option<String>,
     pub repo_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_run(workflow_name: &str, definition_snapshot: Option<&str>) -> WorkflowRun {
+        let workflow_title = super::extract_workflow_title(definition_snapshot);
+        WorkflowRun {
+            id: "test-id".into(),
+            workflow_name: workflow_name.into(),
+            worktree_id: None,
+            parent_run_id: String::new(),
+            status: WorkflowRunStatus::Completed,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: String::new(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: definition_snapshot.map(String::from),
+            inputs: HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            feature_id: None,
+            workflow_title,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn display_name_falls_back_to_workflow_name_when_no_snapshot() {
+        let run = make_run("my-workflow", None);
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_returns_title_from_snapshot() {
+        let snapshot = r#"{"title": "My Nice Workflow", "steps": []}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "My Nice Workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_snapshot_has_no_title() {
+        let snapshot = r#"{"steps": [], "description": "no title here"}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_snapshot_is_malformed_json() {
+        let run = make_run("my-workflow", Some("{not valid json"));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_title_is_non_string() {
+        let snapshot = r#"{"title": 42}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
 }
