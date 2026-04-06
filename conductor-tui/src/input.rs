@@ -315,6 +315,21 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::GraphView { .. } => {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
+                KeyCode::Char('h') | KeyCode::Left => Action::GraphNavLeft,
+                KeyCode::Char('l') | KeyCode::Right => Action::GraphNavRight,
+                KeyCode::Char('k') | KeyCode::Up => Action::GraphNavUp,
+                KeyCode::Char('j') | KeyCode::Down => Action::GraphNavDown,
+                KeyCode::Char('H') => Action::GraphPanLeft,
+                KeyCode::Char('L') => Action::GraphPanRight,
+                KeyCode::Char('K') => Action::GraphPanUp,
+                KeyCode::Char('J') => Action::GraphPanDown,
+                KeyCode::Enter => Action::Select,
+                _ => Action::None,
+            };
+        }
         Modal::None => {}
     }
 
@@ -391,6 +406,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('y') => return Action::CopyTicketUrl,
             KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Char('L') => return Action::EnterLabelFilter,
+            KeyCode::Char('g') => return Action::OpenTicketGraphView,
             KeyCode::Char(' ') if state.column_focus == crate::state::ColumnFocus::Content => {
                 return Action::ToggleTicketCollapse;
             }
@@ -515,6 +531,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,
             KeyCode::Char('w') => return Action::PickWorkflow,
+            KeyCode::Char('g') => return Action::OpenWorkflowStepGraphView,
             KeyCode::Enter => {
                 // Approve a waiting gate step if one exists
                 let has_gate = state

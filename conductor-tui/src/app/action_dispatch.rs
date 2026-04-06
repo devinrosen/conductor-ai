@@ -1139,8 +1139,185 @@ impl App {
                 }
                 self.refresh_data();
             }
+
+            // ── Graph view actions ─────────────────────────────────────────
+
+            Action::OpenTicketGraphView => {
+                self.open_ticket_graph_view();
+            }
+
+            Action::OpenWorkflowStepGraphView => {
+                self.state.status_message =
+                    Some("Workflow step graph view coming soon".into());
+            }
+
+            Action::GraphNavLeft => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.selected_layer = nav.selected_layer.saturating_sub(1);
+                    nav.selected_node_idx = 0;
+                }
+            }
+            Action::GraphNavRight => {
+                if let Modal::GraphView {
+                    ref mut nav,
+                    ref data,
+                    ..
+                } = self.state.modal
+                {
+                    let layout = crate::ui::graph::compute_layout(data);
+                    let max_layer = layout.layers.len().saturating_sub(1);
+                    if nav.selected_layer < max_layer {
+                        nav.selected_layer += 1;
+                        nav.selected_node_idx = 0;
+                    }
+                }
+            }
+            Action::GraphNavUp => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.selected_node_idx = nav.selected_node_idx.saturating_sub(1);
+                }
+            }
+            Action::GraphNavDown => {
+                if let Modal::GraphView {
+                    ref mut nav,
+                    ref data,
+                    ..
+                } = self.state.modal
+                {
+                    let layout = crate::ui::graph::compute_layout(data);
+                    let layer_len = layout
+                        .layers
+                        .get(nav.selected_layer)
+                        .map(|l| l.len())
+                        .unwrap_or(0);
+                    if nav.selected_node_idx + 1 < layer_len {
+                        nav.selected_node_idx += 1;
+                    }
+                }
+            }
+            Action::GraphPanLeft => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.pan_x = nav.pan_x.saturating_sub(4);
+                    if nav.pan_x < 0 {
+                        nav.pan_x = 0;
+                    }
+                }
+            }
+            Action::GraphPanRight => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.pan_x = nav.pan_x.saturating_add(4);
+                }
+            }
+            Action::GraphPanUp => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.pan_y = nav.pan_y.saturating_sub(4);
+                    if nav.pan_y < 0 {
+                        nav.pan_y = 0;
+                    }
+                }
+            }
+            Action::GraphPanDown => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.pan_y = nav.pan_y.saturating_add(4);
+                }
+            }
         }
         true
+    }
+
+    /// Build and open the ticket dependency graph for the current repo.
+    fn open_ticket_graph_view(&mut self) {
+        use crate::ui::graph::{
+            EdgeType, GraphData, GraphEdge, GraphNavState, GraphNodeType, TicketGraphNode,
+        };
+
+        let tickets = self.state.detail_tickets.clone();
+        let deps = self.state.data.ticket_dependencies.clone();
+
+        // Collect all node IDs that appear in at least one edge
+        let mut connected_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        let mut edges: Vec<GraphEdge> = Vec::new();
+
+        for ticket in &tickets {
+            if let Some(d) = deps.get(&ticket.id) {
+                for blocker in &d.blocked_by {
+                    connected_ids.insert(ticket.id.clone());
+                    connected_ids.insert(blocker.id.clone());
+                    edges.push(GraphEdge {
+                        from: blocker.id.clone(),
+                        to: ticket.id.clone(),
+                        edge_type: EdgeType::BlockedBy,
+                    });
+                }
+                if let Some(parent) = &d.parent {
+                    connected_ids.insert(ticket.id.clone());
+                    connected_ids.insert(parent.id.clone());
+                    edges.push(GraphEdge {
+                        from: parent.id.clone(),
+                        to: ticket.id.clone(),
+                        edge_type: EdgeType::ParentChild,
+                    });
+                }
+            }
+        }
+
+        // Deduplicate edges
+        edges.sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
+        edges.dedup_by(|a, b| a.from == b.from && a.to == b.to);
+
+        // Collect all unique ticket IDs we need nodes for (from tickets list + deps)
+        let mut ticket_map: std::collections::HashMap<String, TicketGraphNode> =
+            std::collections::HashMap::new();
+        for t in &tickets {
+            ticket_map.insert(t.id.clone(), TicketGraphNode::from_ticket(t));
+        }
+        // Also add tickets referenced in deps that may not be in detail_tickets
+        for ticket in &tickets {
+            if let Some(d) = deps.get(&ticket.id) {
+                for blocker in &d.blocked_by {
+                    ticket_map
+                        .entry(blocker.id.clone())
+                        .or_insert_with(|| TicketGraphNode::from_ticket(blocker));
+                }
+                if let Some(parent) = &d.parent {
+                    ticket_map
+                        .entry(parent.id.clone())
+                        .or_insert_with(|| TicketGraphNode::from_ticket(parent));
+                }
+            }
+        }
+
+        let unconnected_count = tickets
+            .iter()
+            .filter(|t| !connected_ids.contains(&t.id))
+            .count();
+
+        let nodes: Vec<GraphNodeType> = ticket_map
+            .into_values()
+            .map(GraphNodeType::Ticket)
+            .collect();
+
+        let repo_slug = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+            .map(|r| r.slug.clone())
+            .unwrap_or_else(|| "repo".into());
+
+        let title = format!("Dependency Graph — {repo_slug} tickets");
+
+        self.state.modal = Modal::GraphView {
+            data: GraphData {
+                nodes,
+                edges,
+                unconnected_count,
+            },
+            nav: GraphNavState::default(),
+            title,
+        };
     }
 
     /// Handle the result of a repo-scoped agent launch or stop operation.
