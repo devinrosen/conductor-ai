@@ -103,7 +103,11 @@ fn dfs_tree_order<'a>(
     }
     let sort_fn = |a: &usize, b: &usize| {
         let ord = get_branch(*a).cmp(get_branch(*b));
-        if reverse { ord.reverse() } else { ord }
+        if reverse {
+            ord.reverse()
+        } else {
+            ord
+        }
     };
 
     roots.sort_by(|a, b| sort_fn(a, b));
