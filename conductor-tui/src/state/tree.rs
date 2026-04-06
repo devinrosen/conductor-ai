@@ -101,24 +101,19 @@ fn dfs_tree_order<'a>(
             roots.push(i);
         }
     }
-    roots.sort_by(|a, b| {
+    let sort_fn = |a: &usize, b: &usize| {
         let ord = get_branch(*a).cmp(get_branch(*b));
         if reverse {
             ord.reverse()
         } else {
             ord
         }
-    });
+    };
+
+    roots.sort_by(|a, b| sort_fn(a, b));
 
     for children in children_of.values_mut() {
-        children.sort_by(|a, b| {
-            let ord = get_branch(*a).cmp(get_branch(*b));
-            if reverse {
-                ord.reverse()
-            } else {
-                ord
-            }
-        });
+        children.sort_by(|a, b| sort_fn(a, b));
     }
 
     let mut indices: Vec<usize> = Vec::with_capacity(n);
