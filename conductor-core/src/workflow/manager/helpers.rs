@@ -1,5 +1,7 @@
 use crate::db::sql_placeholders;
-use crate::workflow::types::{extract_workflow_title, BlockedOn, PendingGateRow, WorkflowRun, WorkflowRunStep};
+use crate::workflow::types::{
+    extract_workflow_title, BlockedOn, PendingGateRow, WorkflowRun, WorkflowRunStep,
+};
 
 /// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
 /// elements bind to the positional placeholders in the clause.

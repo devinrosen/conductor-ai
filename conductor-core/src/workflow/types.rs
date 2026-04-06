@@ -99,7 +99,9 @@ pub(in crate::workflow) fn extract_workflow_title(snapshot: Option<&str>) -> Opt
     match serde_json::from_str::<serde_json::Value>(s) {
         Ok(v) => v["title"].as_str().map(String::from),
         Err(e) => {
-            tracing::warn!("Malformed definition_snapshot JSON — could not extract workflow title: {e}");
+            tracing::warn!(
+                "Malformed definition_snapshot JSON — could not extract workflow title: {e}"
+            );
             None
         }
     }
