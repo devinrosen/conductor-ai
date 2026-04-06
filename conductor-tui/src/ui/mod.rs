@@ -1,5 +1,6 @@
 mod common;
 mod dashboard;
+pub mod graph;
 mod help;
 pub(crate) mod helpers;
 mod modal;
@@ -82,22 +83,18 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         } => modal::render_form(frame, area, title, fields, *active_field, &state.theme),
         Modal::Error { message } => modal::render_error(frame, area, message, &state.theme),
         Modal::TicketInfo { ticket } => {
-            let agent_totals = state.data.ticket_agent_totals.get(&ticket.id);
-            let worktrees = state.data.ticket_worktrees.get(&ticket.id);
-            let labels = state
-                .data
-                .ticket_labels
-                .get(&ticket.id)
-                .map(|v| v.as_slice());
-            modal::render_ticket_info(
-                frame,
-                area,
+            let data = modal::TicketInfoData {
                 ticket,
-                agent_totals,
-                worktrees,
-                labels,
-                &state.theme,
-            );
+                agent_totals: state.data.ticket_agent_totals.get(&ticket.id),
+                worktrees: state.data.ticket_worktrees.get(&ticket.id),
+                labels: state
+                    .data
+                    .ticket_labels
+                    .get(&ticket.id)
+                    .map(|v| v.as_slice()),
+                dependencies: state.data.ticket_dependencies.get(&ticket.id),
+            };
+            modal::render_ticket_info(frame, area, &data, &state.theme);
         }
         Modal::BranchPicker {
             items,
@@ -264,5 +261,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             notifications,
             selected,
         } => modal::render_notifications(frame, area, notifications, *selected, &state.theme),
+        Modal::GraphView { data, nav, title } => {
+            frame.render_widget(ratatui::widgets::Clear, area);
+            graph::render_graph_view(frame, area, data, nav, title, &state.theme);
+        }
     }
 }

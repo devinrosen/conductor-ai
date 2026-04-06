@@ -1128,6 +1128,7 @@ fn test_set_workflow_run_iteration() {
 fn minimal_workflow(name: &str) -> crate::workflow_dsl::WorkflowDef {
     crate::workflow_dsl::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: "test workflow".to_string(),
         trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
         targets: vec![],
@@ -1574,6 +1575,7 @@ fn test_cancel_run_marks_active_steps_failed() {
 fn make_repo_workflow(name: &str) -> crate::workflow::WorkflowDef {
     crate::workflow::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: "repo-scoped workflow".to_string(),
         trigger: crate::workflow::WorkflowTrigger::Manual,
         targets: vec!["repo".to_string()],
@@ -1588,6 +1590,7 @@ fn make_repo_workflow(name: &str) -> crate::workflow::WorkflowDef {
 fn make_worktree_workflow(name: &str) -> crate::workflow::WorkflowDef {
     crate::workflow::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: "worktree-scoped workflow".to_string(),
         trigger: crate::workflow::WorkflowTrigger::Manual,
         targets: vec!["worktree".to_string()],
@@ -1820,4 +1823,1046 @@ fn test_list_active_workflow_runs_for_repo_distinct_no_duplicates() {
         1,
         "run matching both join paths must appear exactly once"
     );
+}
+
+// ── helpers shared by analytics query tests ──────────────────────────────────
+
+fn create_named_worktree_run(
+    conn: &rusqlite::Connection,
+    wt_id: &str,
+    wf_name: &str,
+) -> WorkflowRun {
+    let parent_id = make_parent_id(conn, wt_id);
+    WorkflowManager::new(conn)
+        .create_workflow_run(wf_name, Some(wt_id), &parent_id, false, "manual", None)
+        .unwrap()
+}
+
+fn create_named_repo_run(conn: &rusqlite::Connection, repo_id: &str, wf_name: &str) -> WorkflowRun {
+    let parent_id = make_parent_id(conn, "w1");
+    WorkflowManager::new(conn)
+        .create_workflow_run_with_targets(
+            wf_name,
+            None,
+            None,
+            Some(repo_id),
+            &parent_id,
+            false,
+            "manual",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+}
+
+fn complete_with_metrics(conn: &rusqlite::Connection, run_id: &str, input: i64, output: i64) {
+    let mgr = WorkflowManager::new(conn);
+    mgr.update_workflow_status(run_id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(run_id, input, output, 0, 0, 1, 0.0, 1000, None)
+        .unwrap();
+}
+
+// ── get_workflow_token_aggregates ─────────────────────────────────────────────
+
+#[test]
+fn test_token_aggregates_empty_when_no_completed_runs() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_aggregates(None)
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_token_aggregates_excludes_non_terminal_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // pending run — should never appear
+    create_named_worktree_run(&conn, "w1", "wf-a");
+
+    // running run — should never appear
+    let running = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_token_aggregates(None).unwrap();
+    // pending and running are not terminal — they are excluded
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_token_aggregates_includes_completed_without_tokens() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // completed run with no token data — terminal, so it appears with 0 token averages
+    let completed_no_tokens = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&completed_no_tokens.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_token_aggregates(None).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].workflow_name, "wf-a");
+    assert_eq!(result[0].run_count, 1);
+    assert!((result[0].avg_input - 0.0).abs() < 0.01);
+    assert!((result[0].success_rate - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn test_token_aggregates_includes_failed_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // one completed + one failed — both are terminal
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-a").id,
+        100,
+        200,
+    );
+    let failed = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&failed.id, WorkflowRunStatus::Failed, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_token_aggregates(None).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].run_count, 2);
+    // token averages come from completed runs only
+    assert!((result[0].avg_input - 100.0).abs() < 0.01);
+    // 1 of 2 completed → 50% success rate
+    assert!((result[0].success_rate - 50.0).abs() < 0.01);
+}
+
+#[test]
+fn test_token_aggregates_groups_and_averages() {
+    let conn = setup_db();
+
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-a").id,
+        100,
+        200,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-a").id,
+        300,
+        400,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-b").id,
+        50,
+        50,
+    );
+
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_aggregates(None)
+        .unwrap();
+
+    assert_eq!(result.len(), 2);
+    // wf-a has higher avg total (200+300=500 avg), wf-b has 100 avg — ordered desc
+    assert_eq!(result[0].workflow_name, "wf-a");
+    assert_eq!(result[0].run_count, 2);
+    assert!((result[0].avg_input - 200.0).abs() < 0.01);
+    assert!((result[0].avg_output - 300.0).abs() < 0.01);
+
+    assert_eq!(result[1].workflow_name, "wf-b");
+    assert_eq!(result[1].run_count, 1);
+    assert!((result[1].avg_input - 50.0).abs() < 0.01);
+}
+
+#[test]
+fn test_token_aggregates_repo_filter_some() {
+    let conn = setup_db();
+
+    // r1 run — use create_named_repo_run so repo_id is set directly (worktree runs have repo_id NULL)
+    complete_with_metrics(
+        &conn,
+        &create_named_repo_run(&conn, "r1", "wf-a").id,
+        100,
+        200,
+    );
+    // r2 run
+    complete_with_metrics(
+        &conn,
+        &create_named_repo_run(&conn, "r2", "wf-a").id,
+        999,
+        999,
+    );
+
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_aggregates(Some("r1"))
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].workflow_name, "wf-a");
+    assert!((result[0].avg_input - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn test_token_aggregates_repo_filter_none_includes_all() {
+    let conn = setup_db();
+
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "wf-a").id,
+        100,
+        200,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_repo_run(&conn, "r2", "wf-b").id,
+        50,
+        50,
+    );
+
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_aggregates(None)
+        .unwrap();
+
+    assert_eq!(result.len(), 2);
+}
+
+#[test]
+fn test_token_aggregates_ordered_by_total_desc() {
+    let conn = setup_db();
+
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "low-wf").id,
+        10,
+        10,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "high-wf").id,
+        500,
+        500,
+    );
+    complete_with_metrics(
+        &conn,
+        &create_named_worktree_run(&conn, "w1", "mid-wf").id,
+        100,
+        100,
+    );
+
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_aggregates(None)
+        .unwrap();
+
+    assert_eq!(result[0].workflow_name, "high-wf");
+    assert_eq!(result[1].workflow_name, "mid-wf");
+    assert_eq!(result[2].workflow_name, "low-wf");
+}
+
+// ── get_workflow_token_trend ──────────────────────────────────────────────────
+
+#[test]
+fn test_token_trend_empty_for_unknown_workflow() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_trend("no-such-wf", "daily")
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_token_trend_excludes_non_completed_and_null_token_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // pending — excluded
+    create_named_worktree_run(&conn, "w1", "trend-wf");
+
+    // completed but no tokens — excluded
+    let no_tokens = create_named_worktree_run(&conn, "w1", "trend-wf");
+    mgr.update_workflow_status(&no_tokens.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_token_trend("trend-wf", "daily").unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_token_trend_daily_granularity() {
+    let conn = setup_db();
+
+    let run1 = create_named_worktree_run(&conn, "w1", "trend-wf");
+    let run2 = create_named_worktree_run(&conn, "w1", "trend-wf");
+    complete_with_metrics(&conn, &run1.id, 100, 200);
+    complete_with_metrics(&conn, &run2.id, 50, 80);
+
+    // Force both runs onto the same specific day
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
+        rusqlite::params![run1.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-03-15T18:00:00Z' WHERE id = ?1",
+        rusqlite::params![run2.id],
+    )
+    .unwrap();
+
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_trend("trend-wf", "daily")
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].period, "2024-03-15");
+    assert_eq!(result[0].total_input, 150);
+    assert_eq!(result[0].total_output, 280);
+}
+
+#[test]
+fn test_token_trend_daily_multiple_periods_ordered_desc() {
+    let conn = setup_db();
+
+    let run1 = create_named_worktree_run(&conn, "w1", "trend-wf");
+    let run2 = create_named_worktree_run(&conn, "w1", "trend-wf");
+    complete_with_metrics(&conn, &run1.id, 100, 200);
+    complete_with_metrics(&conn, &run2.id, 50, 80);
+
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-03-14T10:00:00Z' WHERE id = ?1",
+        rusqlite::params![run1.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
+        rusqlite::params![run2.id],
+    )
+    .unwrap();
+
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_trend("trend-wf", "daily")
+        .unwrap();
+
+    assert_eq!(result.len(), 2);
+    // ordered DESC — newer period first
+    assert_eq!(result[0].period, "2024-03-15");
+    assert_eq!(result[1].period, "2024-03-14");
+}
+
+#[test]
+fn test_token_trend_weekly_granularity() {
+    let conn = setup_db();
+
+    let run1 = create_named_worktree_run(&conn, "w1", "trend-wf");
+    let run2 = create_named_worktree_run(&conn, "w1", "trend-wf");
+    complete_with_metrics(&conn, &run1.id, 100, 200);
+    complete_with_metrics(&conn, &run2.id, 50, 80);
+
+    // Both in same ISO week (2024-W11)
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-03-11T10:00:00Z' WHERE id = ?1",
+        rusqlite::params![run1.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-03-13T10:00:00Z' WHERE id = ?1",
+        rusqlite::params![run2.id],
+    )
+    .unwrap();
+
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_token_trend("trend-wf", "weekly")
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].period, "2024-11");
+    assert_eq!(result[0].total_input, 150);
+    assert_eq!(result[0].total_output, 280);
+}
+
+// ── get_step_token_heatmap ────────────────────────────────────────────────────
+
+#[test]
+fn test_step_heatmap_empty_for_unknown_workflow() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_step_token_heatmap("no-such-wf", 10)
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+// Insert a stub agent_run with token data and return its id.
+fn insert_agent_run_with_tokens(
+    conn: &rusqlite::Connection,
+    id: &str,
+    input: i64,
+    output: i64,
+    cache_read: i64,
+) {
+    conn.execute(
+        "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, \
+         input_tokens, output_tokens, cache_read_input_tokens) \
+         VALUES (?1, 'w1', 'test', 'completed', '2024-01-01T00:00:00Z', ?2, ?3, ?4)",
+        rusqlite::params![id, input, output, cache_read],
+    )
+    .unwrap();
+}
+
+// Insert a workflow_run_step linking a workflow run to an agent run.
+fn insert_workflow_step(
+    conn: &rusqlite::Connection,
+    step_id: &str,
+    run_id: &str,
+    step_name: &str,
+    position: i64,
+    child_run_id: &str,
+) {
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, child_run_id) \
+         VALUES (?1, ?2, ?3, 'actor', ?4, ?5)",
+        rusqlite::params![step_id, run_id, step_name, position, child_run_id],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_step_heatmap_basic_per_step_averages() {
+    let conn = setup_db();
+
+    // Two completed runs of "heat-wf", each with a step "step-a"
+    let run1 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    let run2 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    WorkflowManager::new(&conn)
+        .update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    WorkflowManager::new(&conn)
+        .update_workflow_status(&run2.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    insert_agent_run_with_tokens(&conn, "ar-r1-a", 100, 200, 10);
+    insert_agent_run_with_tokens(&conn, "ar-r2-a", 200, 400, 20);
+
+    insert_workflow_step(&conn, "s1", &run1.id, "step-a", 0, "ar-r1-a");
+    insert_workflow_step(&conn, "s2", &run2.id, "step-a", 0, "ar-r2-a");
+
+    let result = WorkflowManager::new(&conn)
+        .get_step_token_heatmap("heat-wf", 10)
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].step_name, "step-a");
+    assert_eq!(result[0].run_count, 2);
+    assert!((result[0].avg_input - 150.0).abs() < 0.01);
+    assert!((result[0].avg_output - 300.0).abs() < 0.01);
+    assert!((result[0].avg_cache_read - 15.0).abs() < 0.01);
+}
+
+#[test]
+fn test_step_heatmap_limit_runs_respected() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Create 3 completed runs; limit_runs=2 should only count the 2 most recent.
+    let run1 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    let run2 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    let run3 = create_named_worktree_run(&conn, "w1", "heat-wf");
+
+    for r in [&run1, &run2, &run3] {
+        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+    }
+
+    // Force started_at so ordering is deterministic: run1 oldest, run3 newest
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run1.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run2.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run3.id],
+    )
+    .unwrap();
+
+    // run1 (oldest, excluded by limit): 999 tokens — should NOT affect avg
+    insert_agent_run_with_tokens(&conn, "ar-old", 999, 999, 0);
+    insert_workflow_step(&conn, "s-old", &run1.id, "step-a", 0, "ar-old");
+
+    // run2 and run3 (the 2 most recent): 100 and 200 tokens
+    insert_agent_run_with_tokens(&conn, "ar-r2", 100, 100, 0);
+    insert_agent_run_with_tokens(&conn, "ar-r3", 200, 200, 0);
+    insert_workflow_step(&conn, "s-r2", &run2.id, "step-a", 0, "ar-r2");
+    insert_workflow_step(&conn, "s-r3", &run3.id, "step-a", 0, "ar-r3");
+
+    let result = WorkflowManager::new(&conn)
+        .get_step_token_heatmap("heat-wf", 2)
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].step_name, "step-a");
+    assert_eq!(result[0].run_count, 2);
+    // avg of 100 and 200 = 150, NOT 433 (which would include run1's 999)
+    assert!((result[0].avg_input - 150.0).abs() < 0.01);
+}
+
+#[test]
+fn test_step_heatmap_ordered_by_avg_total_tokens_desc() {
+    let conn = setup_db();
+
+    let run = create_named_worktree_run(&conn, "w1", "heat-wf");
+    WorkflowManager::new(&conn)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    // step-high: 500+500 = 1000 total; step-low: 10+10 = 20 total
+    insert_agent_run_with_tokens(&conn, "ar-high", 500, 500, 0);
+    insert_agent_run_with_tokens(&conn, "ar-low", 10, 10, 0);
+    insert_workflow_step(&conn, "s-high", &run.id, "step-high", 0, "ar-high");
+    insert_workflow_step(&conn, "s-low", &run.id, "step-low", 1, "ar-low");
+
+    let result = WorkflowManager::new(&conn)
+        .get_step_token_heatmap("heat-wf", 10)
+        .unwrap();
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].step_name, "step-high");
+    assert_eq!(result[1].step_name, "step-low");
+}
+
+// ── get_run_metrics ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_run_metrics_empty_when_no_runs() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_run_metrics("no-such-wf", 30)
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_run_metrics_excludes_non_completed_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // pending — should not appear
+    create_named_worktree_run(&conn, "w1", "metrics-wf");
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_run_metrics_returns_completed_run_data() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.0, 5000, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].input_tokens, Some(100));
+    assert_eq!(result[0].output_tokens, Some(200));
+    assert_eq!(result[0].duration_ms, Some(5000));
+    assert!(!result[0].run_id.is_empty());
+    assert!(!result[0].started_at.is_empty());
+}
+
+#[test]
+fn test_run_metrics_filters_by_workflow_name() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run_a.id, 100, 200, 0, 0, 1, 0.0, 1000, None)
+        .unwrap();
+
+    let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
+    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run_b.id, 999, 999, 0, 0, 1, 0.0, 9999, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("wf-a", 30).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].input_tokens, Some(100));
+    assert!(!result[0].run_id.is_empty());
+    assert!(!result[0].started_at.is_empty());
+}
+
+#[test]
+fn test_run_metrics_excludes_null_metric_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // All-null run: completed but no metrics persisted — should be excluded
+    let null_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&null_run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    // Duration-only run: set total_duration_ms but leave tokens null — should be included
+    let dur_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&dur_run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET total_duration_ms = 3000 WHERE id = ?1",
+        rusqlite::params![dur_run.id],
+    )
+    .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert_eq!(result.len(), 1, "all-null run should be excluded");
+    assert_eq!(result[0].run_id, dur_run.id);
+    assert_eq!(result[0].duration_ms, Some(3000));
+    assert_eq!(result[0].input_tokens, None);
+    assert_eq!(result[0].output_tokens, None);
+}
+
+#[test]
+fn test_run_metrics_excludes_zero_metric_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // All-zero run: completed with metrics all set to 0 — should be excluded
+    let zero_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&zero_run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&zero_run.id, 0, 0, 0, 0, 0, 0.0, 0, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert!(result.is_empty(), "all-zero metric run should be excluded");
+}
+
+#[test]
+fn test_run_metrics_includes_partial_nonzero_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Zero tokens but nonzero duration — should be included
+    let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run.id, 0, 0, 0, 0, 1, 0.0, 2500, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "run with nonzero duration should be included"
+    );
+    assert_eq!(result[0].duration_ms, Some(2500));
+    assert_eq!(result[0].input_tokens, Some(0));
+    assert_eq!(result[0].output_tokens, Some(0));
+}
+
+#[test]
+fn test_run_metrics_includes_worktree_and_repo_id() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.0, 5000, None)
+        .unwrap();
+
+    let result = mgr.get_run_metrics("metrics-wf", 30).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].worktree_id.as_deref(), Some("w1"));
+    // repo_id is null when created via create_named_worktree_run (worktree context)
+    assert_eq!(result[0].repo_id, None);
+}
+
+// ── get_workflow_failure_rate_trend ────────────────────────────────────────────
+
+#[test]
+fn test_failure_rate_trend_empty_when_no_terminal_runs() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_workflow_failure_rate_trend("no-such-wf", "daily")
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_failure_rate_trend_excludes_non_terminal_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // pending run — should not appear
+    create_named_worktree_run(&conn, "w1", "trend-wf");
+
+    // running run — should not appear
+    let running = create_named_worktree_run(&conn, "w1", "trend-wf");
+    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let result = mgr
+        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_failure_rate_trend_completed_only_period() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "trend-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    // Pin started_at to a known date so period is deterministic
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
+        rusqlite::params![run.id],
+    )
+    .unwrap();
+
+    let result = mgr
+        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].period, "2024-03-15");
+    assert_eq!(result[0].total_runs, 1);
+    assert_eq!(result[0].failed_runs, 0);
+    assert!((result[0].success_rate - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn test_failure_rate_trend_mixed_completed_and_failed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // 2 completed + 1 failed all on the same day → success_rate = 66.67%
+    for _ in 0..2 {
+        let run = create_named_worktree_run(&conn, "w1", "trend-wf");
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
+            rusqlite::params![run.id],
+        )
+        .unwrap();
+    }
+    let failed = create_named_worktree_run(&conn, "w1", "trend-wf");
+    mgr.update_workflow_status(&failed.id, WorkflowRunStatus::Failed, None)
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-03-15T12:00:00Z' WHERE id = ?1",
+        rusqlite::params![failed.id],
+    )
+    .unwrap();
+
+    let result = mgr
+        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].total_runs, 3);
+    assert_eq!(result[0].failed_runs, 1);
+    // 2 completed / 3 total × 100 = 66.67
+    assert!((result[0].success_rate - 66.666_666).abs() < 0.01);
+}
+
+#[test]
+fn test_failure_rate_trend_filters_by_workflow_name() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Failed, None)
+        .unwrap();
+
+    let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
+    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    let result = mgr
+        .get_workflow_failure_rate_trend("wf-a", "daily")
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].failed_runs, 1);
+    assert!((result[0].success_rate - 0.0).abs() < 0.01);
+}
+
+#[test]
+fn test_failure_rate_trend_weekly_granularity() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Two runs on the same ISO week but different days → single period row
+    for ts in ["2024-03-11T00:00:00Z", "2024-03-13T00:00:00Z"] {
+        let run = create_named_worktree_run(&conn, "w1", "trend-wf");
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET started_at = ?1 WHERE id = ?2",
+            rusqlite::params![ts, run.id],
+        )
+        .unwrap();
+    }
+
+    let result = mgr
+        .get_workflow_failure_rate_trend("trend-wf", "weekly")
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].total_runs, 2);
+}
+
+// ── get_step_failure_heatmap ───────────────────────────────────────────────────
+
+// Helper: insert a workflow_run_step with an explicit status (no child_run_id required).
+fn insert_step_with_status(
+    conn: &rusqlite::Connection,
+    step_id: &str,
+    run_id: &str,
+    step_name: &str,
+    position: i64,
+    status: &str,
+) {
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status) \
+         VALUES (?1, ?2, ?3, 'actor', ?4, ?5)",
+        rusqlite::params![step_id, run_id, step_name, position, status],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_step_failure_heatmap_empty_when_no_runs() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_step_failure_heatmap("no-such-wf", 10)
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_step_failure_heatmap_basic_failure_rate() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Two terminal runs of "heat-wf"
+    let run1 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    let run2 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Failed, None)
+        .unwrap();
+
+    // step-a completed in run1, failed in run2 → failure_rate = 50%
+    insert_step_with_status(&conn, "s1", &run1.id, "step-a", 0, "completed");
+    insert_step_with_status(&conn, "s2", &run2.id, "step-a", 0, "failed");
+
+    let result = mgr.get_step_failure_heatmap("heat-wf", 10).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].step_name, "step-a");
+    assert_eq!(result[0].total_executions, 2);
+    assert_eq!(result[0].failed_executions, 1);
+    assert!((result[0].failure_rate - 50.0).abs() < 0.01);
+}
+
+#[test]
+fn test_step_failure_heatmap_excludes_pending_and_skipped_steps() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "heat-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    // pending and skipped steps must not appear in results
+    insert_step_with_status(&conn, "s-pending", &run.id, "step-a", 0, "pending");
+    insert_step_with_status(&conn, "s-skipped", &run.id, "step-b", 1, "skipped");
+    // only this completed step should show up
+    insert_step_with_status(&conn, "s-done", &run.id, "step-c", 2, "completed");
+
+    let result = mgr.get_step_failure_heatmap("heat-wf", 10).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].step_name, "step-c");
+}
+
+#[test]
+fn test_step_failure_heatmap_limit_runs_respected() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // 3 completed runs; oldest should be excluded by limit_runs=2
+    let run1 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    let run2 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    let run3 = create_named_worktree_run(&conn, "w1", "heat-wf");
+    for r in [&run1, &run2, &run3] {
+        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+    }
+
+    // Force deterministic ordering: run1 oldest, run3 newest
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run1.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run2.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run3.id],
+    )
+    .unwrap();
+
+    // run1 (oldest, excluded): step-a failed — should NOT inflate failure rate
+    insert_step_with_status(&conn, "s-old", &run1.id, "step-a", 0, "failed");
+    // run2 and run3 (the 2 most recent): step-a completed
+    insert_step_with_status(&conn, "s-r2", &run2.id, "step-a", 0, "completed");
+    insert_step_with_status(&conn, "s-r3", &run3.id, "step-a", 0, "completed");
+
+    let result = mgr.get_step_failure_heatmap("heat-wf", 2).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].total_executions, 2);
+    assert_eq!(result[0].failed_executions, 0);
+    assert!((result[0].failure_rate - 0.0).abs() < 0.01);
+}
+
+#[test]
+fn test_step_failure_heatmap_ordered_by_failure_rate_desc() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "heat-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    // step-never-fails: completed; step-always-fails: failed → second row first
+    insert_step_with_status(&conn, "s-ok", &run.id, "step-never-fails", 0, "completed");
+    insert_step_with_status(&conn, "s-bad", &run.id, "step-always-fails", 1, "failed");
+
+    let result = mgr.get_step_failure_heatmap("heat-wf", 10).unwrap();
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].step_name, "step-always-fails");
+    assert_eq!(result[1].step_name, "step-never-fails");
+}
+
+#[test]
+fn test_get_workflow_percentiles_empty() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let result = mgr.get_workflow_percentiles("nonexistent-wf", 30).unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_get_workflow_percentiles_no_duration() {
+    // A completed run with no duration_ms should be excluded.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "pct-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    // persist_workflow_metrics with duration 0 — but do NOT set total_duration_ms directly
+    // because persist_workflow_metrics sets it. Instead insert a run with NULL duration_ms
+    // by completing without calling persist_workflow_metrics.
+    let result = mgr.get_workflow_percentiles("pct-wf", 30).unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_get_workflow_percentiles_single_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "pct-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.05, 5000, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_percentiles("pct-wf", 30).unwrap();
+    assert!(result.is_some());
+    let p = result.unwrap();
+    assert_eq!(p.run_count, 1);
+    // With a single run, all percentiles collapse to that run's value.
+    assert!(p.p50_duration_ms.is_some());
+    assert!((p.p50_duration_ms.unwrap() - 5000.0).abs() < 1.0);
+    assert!(p.p95_duration_ms.is_some());
+}
+
+#[test]
+fn test_get_workflow_percentiles_multi_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Insert 10 runs with durations 1000, 2000, …, 10000 ms
+    for i in 1..=10u64 {
+        let run = create_named_worktree_run(&conn, "w1", "pct-wf");
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        mgr.persist_workflow_metrics(
+            &run.id,
+            (i * 100) as i64,
+            (i * 50) as i64,
+            0,
+            0,
+            1,
+            (i as f64) * 0.01,
+            (i * 1000) as i64,
+            None,
+        )
+        .unwrap();
+    }
+
+    let result = mgr.get_workflow_percentiles("pct-wf", 30).unwrap();
+    assert!(result.is_some());
+    let p = result.unwrap();
+    assert_eq!(p.run_count, 10);
+    // P50 should be around the median (5000–6000 ms range)
+    assert!(p.p50_duration_ms.is_some());
+    let p50 = p.p50_duration_ms.unwrap();
+    assert!((4000.0..=7000.0).contains(&p50), "p50={p50}");
+    // P99 should be near the top
+    assert!(p.p99_duration_ms.is_some());
+    let p99 = p.p99_duration_ms.unwrap();
+    assert!(p99 >= 8000.0, "p99={p99}");
+    // Cost and token percentiles should also be present
+    assert!(p.p50_cost_usd.is_some());
+    assert!(p.p50_total_tokens.is_some());
+}
+
+#[test]
+fn test_get_workflow_percentiles_excludes_other_workflows() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
+    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run_a.id, 100, 200, 0, 0, 1, 0.10, 5000, None)
+        .unwrap();
+
+    let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
+    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    mgr.persist_workflow_metrics(&run_b.id, 999, 999, 0, 0, 1, 9.99, 99000, None)
+        .unwrap();
+
+    let result = mgr.get_workflow_percentiles("wf-a", 30).unwrap();
+    assert!(result.is_some());
+    let p = result.unwrap();
+    assert_eq!(p.run_count, 1);
+    assert!((p.p50_duration_ms.unwrap() - 5000.0).abs() < 1.0);
 }

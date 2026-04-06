@@ -152,7 +152,7 @@ pub(super) fn tool_create_worktree(
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
-    use conductor_core::worktree::WorktreeManager;
+    use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
     let repo_slug = require_arg!(args, "repo");
     let name = require_arg!(args, "name");
@@ -185,7 +185,14 @@ pub(super) fn tool_create_worktree(
     };
 
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    match wt_mgr.create(repo_slug, name, None, resolved_ticket_id.as_deref(), None) {
+    match wt_mgr.create(
+        repo_slug,
+        name,
+        WorktreeCreateOptions {
+            ticket_id: resolved_ticket_id,
+            ..Default::default()
+        },
+    ) {
         Ok((wt, warnings)) => {
             let mut msg = format!(
                 "Worktree created.\nslug: {}\nbranch: {}\npath: {}\n",

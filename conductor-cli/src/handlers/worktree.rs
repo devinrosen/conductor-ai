@@ -6,7 +6,7 @@ use conductor_core::config::Config;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::worktree::WorktreeManager;
+use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
 use crate::commands::WorktreeCommands;
 use crate::handlers::agent::run_agent;
@@ -32,6 +32,7 @@ pub fn handle_worktree(
             feature,
             ticket,
             auto_agent,
+            force,
         } => {
             // --feature resolves to --from <feature-branch>
             let effective_from = if let Some(ref feat_name) = feature {
@@ -43,12 +44,50 @@ pub fn handle_worktree(
             };
 
             let mgr = WorktreeManager::new(conn, config);
+
+            // Run health check before creation (skip for --from-pr paths since
+            // staleness is irrelevant; dirty check still applies).
+            let (force_dirty, pre_health) = if force {
+                (true, None)
+            } else if from_pr.is_none() {
+                let health = mgr.check_main_health(&repo, effective_from.as_deref())?;
+                if health.is_dirty {
+                    eprintln!("Warning: base branch has uncommitted changes:");
+                    for f in &health.dirty_files {
+                        eprintln!("  {f}");
+                    }
+                    eprint!("Proceed anyway? [y/N] ");
+                    use std::io::BufRead;
+                    let mut input = String::new();
+                    std::io::stdin().lock().read_line(&mut input)?;
+                    if !input.trim().eq_ignore_ascii_case("y") {
+                        eprintln!("Aborted.");
+                        return Ok(());
+                    }
+                    (true, None)
+                } else {
+                    if health.commits_behind > 0 {
+                        eprintln!(
+                            "Info: base branch is {} commit(s) behind origin (will fast-forward)",
+                            health.commits_behind
+                        );
+                    }
+                    (false, Some(health))
+                }
+            } else {
+                (false, None)
+            };
+
             let (wt, warnings) = mgr.create(
                 &repo,
                 &name,
-                effective_from.as_deref(),
-                ticket.as_deref(),
-                from_pr,
+                WorktreeCreateOptions {
+                    from_branch: effective_from,
+                    ticket_id: ticket.clone(),
+                    from_pr,
+                    force_dirty,
+                    pre_health,
+                },
             )?;
 
             for warning in &warnings {

@@ -4,7 +4,7 @@ use conductor_core::agent::{AgentRun, AgentRunEvent, FeedbackRequest, TicketAgen
 use conductor_core::feature::FeatureRow;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
-use conductor_core::tickets::{Ticket, TicketLabel};
+use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
     WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary, WorkflowWarning,
 };
@@ -47,6 +47,7 @@ pub struct DataRefreshedPayload {
     pub worktrees: Vec<Worktree>,
     pub tickets: Vec<Ticket>,
     pub ticket_labels: HashMap<String, Vec<TicketLabel>>,
+    pub ticket_dependencies: HashMap<String, TicketDependencies>,
     pub latest_agent_runs: HashMap<String, AgentRun>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// Most recent workflow run per worktree (for inline indicators in the Worktrees panel).
@@ -259,6 +260,16 @@ pub enum Action {
         message: String,
     },
 
+    // Background result for pre-creation main branch health check
+    MainHealthCheckComplete {
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        from_pr: Option<u32>,
+        from_branch: Option<String>,
+        status: Result<conductor_core::worktree::MainHealthStatus, String>,
+    },
+
     // Background results for worktree creation
     WorktreeCreated {
         wt_id: String,
@@ -359,6 +370,8 @@ pub enum Action {
     },
 
     // Workflow actions
+    /// Toggle collapse/expand for the selected parent ticket row.
+    ToggleTicketCollapse,
     /// Toggle expand/collapse for the hovered parent run row.
     ToggleWorkflowRunCollapse,
     /// Toggle collapse/expand for the workflow definitions pane (Space key on Defs focus).
@@ -416,4 +429,26 @@ pub enum Action {
 
     // No-op (unhandled key)
     None,
+
+    // ── Graph view actions ─────────────────────────────────────────────────
+    /// Open the ticket dependency graph for the current repo's tickets.
+    OpenTicketGraphView,
+    /// Stub: open workflow step graph (keybinding reserved for future use).
+    OpenWorkflowStepGraphView,
+    /// Move graph selection left (to previous layer).
+    GraphNavLeft,
+    /// Move graph selection right (to next layer).
+    GraphNavRight,
+    /// Move graph selection up (to previous node in layer).
+    GraphNavUp,
+    /// Move graph selection down (to next node in layer).
+    GraphNavDown,
+    /// Pan the graph viewport left.
+    GraphPanLeft,
+    /// Pan the graph viewport right.
+    GraphPanRight,
+    /// Pan the graph viewport up.
+    GraphPanUp,
+    /// Pan the graph viewport down.
+    GraphPanDown,
 }

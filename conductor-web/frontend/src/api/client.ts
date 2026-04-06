@@ -31,6 +31,14 @@ import type {
   PushSubscribeRequest,
   VapidPublicKeyResponse,
   PushSubscribeResponse,
+  WorkflowTokenAggregate,
+  WorkflowTokenTrendRow,
+  StepTokenHeatmapRow,
+  WorkflowRunMetricsRow,
+  WorkflowFailureRateTrendRow,
+  StepFailureHeatmapRow,
+  WorkflowPercentiles,
+  WorkflowRegressionSignal,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -81,10 +89,10 @@ export const api = {
       body: JSON.stringify(data),
     }),
   deleteWorktree: (id: string) =>
-    request<Worktree>(`/worktrees/${id}`, { method: "DELETE" }),
+    request<void>(`/worktrees/${id}`, { method: "DELETE" }),
   linkTicket: (id: string, ticketId: string) =>
-    request<Worktree>(`/worktrees/${id}/link-ticket`, {
-      method: "POST",
+    request<Worktree>(`/worktrees/${id}/ticket`, {
+      method: "PUT",
       body: JSON.stringify({ ticket_id: ticketId }),
     }),
   setWorktreeModel: (id: string, model: string | null) =>
@@ -106,7 +114,7 @@ export const api = {
   syncTickets: (repoId: string) =>
     request<SyncResult>(`/repos/${repoId}/tickets/sync`, { method: "POST" }),
   getTicketDetail: (ticketId: string) =>
-    request<TicketDetail>(`/tickets/${ticketId}/detail`),
+    request<TicketDetail>(`/tickets/${ticketId}`),
 
   // Agent stats (aggregates)
   latestRunsByWorktree: () =>
@@ -276,6 +284,38 @@ export const api = {
   rejectGate: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/gate/reject`, { method: "POST" }),
 
+  // Workflow token analytics
+  getWorkflowTokenAggregates: (repoId?: string) =>
+    request<WorkflowTokenAggregate[]>(
+      repoId ? `/workflows/analytics/aggregates?repo_id=${encodeURIComponent(repoId)}` : `/workflows/analytics/aggregates`,
+    ),
+  getWorkflowTokenTrend: (workflowName: string, granularity: "daily" | "weekly" = "daily") =>
+    request<WorkflowTokenTrendRow[]>(
+      `/workflows/analytics/trend?workflow_name=${encodeURIComponent(workflowName)}&granularity=${granularity}`,
+    ),
+  getStepTokenHeatmap: (workflowName: string, runs = 20) =>
+    request<StepTokenHeatmapRow[]>(
+      `/workflows/analytics/heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getRunMetrics: (workflowName: string, days = 30) =>
+    request<WorkflowRunMetricsRow[]>(
+      `/workflows/analytics/runs?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getWorkflowFailureRateTrend: (workflowName: string, granularity: "daily" | "weekly" = "daily") =>
+    request<WorkflowFailureRateTrendRow[]>(
+      `/workflows/analytics/failure-trend?workflow_name=${encodeURIComponent(workflowName)}&granularity=${granularity}`,
+    ),
+  getStepFailureHeatmap: (workflowName: string, runs = 20) =>
+    request<StepFailureHeatmapRow[]>(
+      `/workflows/analytics/failure-heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getWorkflowPercentiles: (workflowName: string, days = 30) =>
+    request<WorkflowPercentiles | null>(
+      `/workflows/analytics/percentiles?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getWorkflowRegressions: () =>
+    request<WorkflowRegressionSignal[]>("/workflows/analytics/regressions"),
+
   // Notifications
   listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>
     request<Notification[]>(
@@ -286,7 +326,7 @@ export const api = {
   markNotificationRead: (id: string) =>
     request<void>(`/notifications/${id}/read`, { method: "POST" }),
   markAllNotificationsRead: () =>
-    request<void>("/notifications/read-all", { method: "POST" }),
+    request<void>("/notifications/read", { method: "POST" }),
 
   // Stats
   getThemeUnlockStats: () =>
@@ -301,7 +341,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
   unsubscribePush: (data: PushSubscribeRequest) =>
-    request<PushSubscribeResponse>("/push/subscribe", {
+    request<void>("/push/subscribe", {
       method: "DELETE",
       body: JSON.stringify(data),
     }),

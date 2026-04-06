@@ -339,6 +339,13 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed: {e}"),
             }
+            match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+                Ok(n) if n > 0 => {
+                    tracing::info!("Reaper finalized {n} stuck workflow run(s)")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
+            }
             match wf_mgr.detect_stuck_workflow_run_ids(60) {
                 Ok(ids) if !ids.is_empty() => {
                     let n = ids.len();
@@ -378,6 +385,7 @@ pub fn poll_data() -> Option<PollResult> {
     let worktrees = wt_mgr.list(None, true).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
     let ticket_labels = ticket_syncer.get_all_labels().unwrap_or_default();
+    let ticket_dependencies = ticket_syncer.get_all_dependencies().unwrap_or_default();
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
@@ -512,6 +520,7 @@ pub fn poll_data() -> Option<PollResult> {
         worktrees,
         tickets,
         ticket_labels,
+        ticket_dependencies,
         latest_agent_runs,
         ticket_agent_totals,
         latest_workflow_runs_by_worktree,
@@ -651,10 +660,9 @@ fn sync_sources_for_repo(
         for source in sources {
             let action = match TicketSource::from_issue_source(&source) {
                 Ok(ts) => {
+                    let ts = ts.with_repo_slug(repo_slug);
                     let source_type = ts.source_type_str();
-                    sync_repo(syncer, repo_id, repo_slug, source_type, || {
-                        ts.sync(token, Some(repo_slug))
-                    })
+                    sync_repo(syncer, repo_id, repo_slug, source_type, || ts.sync(token))
                 }
                 Err(e) => Action::TicketSyncFailed {
                     repo_slug: repo_slug.to_string(),
@@ -1149,6 +1157,8 @@ mod tests {
             url: "https://example.com".into(),
             raw_json: "{}".into(),
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
         };
 
         let action = sync_repo(&syncer, "r1", "test-repo", "github", || Ok(vec![ticket]));
@@ -1196,6 +1206,8 @@ mod tests {
             url: "https://example.com".into(),
             raw_json: "{}".into(),
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
         };
 
         let action = sync_repo(&syncer, "nonexistent-repo", "test-repo", "github", || {

@@ -259,6 +259,92 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    /// Verify that `run_id` belongs to `conversation_id` and return the run.
+    ///
+    /// Returns `AgentRunNotFound` if the run does not exist, or
+    /// `AgentRunNotInConversation` if it belongs to a different conversation.
+    fn check_run_in_conversation(
+        &self,
+        run_id: &str,
+        conversation_id: &str,
+    ) -> Result<super::super::types::AgentRun> {
+        let run = self
+            .get_run(run_id)?
+            .ok_or_else(|| ConductorError::AgentRunNotFound {
+                id: run_id.to_string(),
+            })?;
+        if run.conversation_id.as_deref() != Some(conversation_id) {
+            return Err(ConductorError::AgentRunNotInConversation {
+                run_id: run_id.to_string(),
+                conversation_id: conversation_id.to_string(),
+            });
+        }
+        Ok(run)
+    }
+
+    /// Submit a response to a feedback request, validating ownership.
+    ///
+    /// Verifies that `run_id` belongs to `conversation_id` and that `feedback_id`
+    /// belongs to `run_id` before delegating to [`submit_feedback`].  Returns the
+    /// refreshed `AgentRun` so callers have a consistent response surface.  Returns
+    /// structured errors (`AgentRunNotFound`, `AgentRunNotInConversation`,
+    /// `FeedbackNotFound`, `FeedbackRunMismatch`) so callers can map them to
+    /// appropriate HTTP status codes without duplicating validation logic.
+    pub fn submit_feedback_for_conversation(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        feedback_id: &str,
+        response: &str,
+    ) -> Result<super::super::types::AgentRun> {
+        self.check_run_in_conversation(run_id, conversation_id)?;
+        let feedback =
+            self.get_feedback(feedback_id)?
+                .ok_or_else(|| ConductorError::FeedbackNotFound {
+                    id: feedback_id.to_string(),
+                })?;
+        if feedback.run_id != run_id {
+            return Err(ConductorError::FeedbackRunMismatch {
+                feedback_id: feedback_id.to_string(),
+                run_id: run_id.to_string(),
+            });
+        }
+        self.submit_feedback(feedback_id, response)?;
+        let updated = self
+            .get_run(run_id)?
+            .ok_or_else(|| ConductorError::AgentRunNotFound {
+                id: run_id.to_string(),
+            })?;
+        Ok(updated)
+    }
+
+    /// Submit the pending feedback response for a run, validating conversation ownership.
+    ///
+    /// Verifies that `run_id` belongs to `conversation_id`, finds the single
+    /// pending feedback request, submits `response`, and returns the refreshed
+    /// `AgentRun`.  Returns structured errors so the web layer can map them to
+    /// 404/422 without duplicating validation.
+    pub fn submit_pending_run_feedback_for_conversation(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        response: &str,
+    ) -> Result<super::super::types::AgentRun> {
+        self.check_run_in_conversation(run_id, conversation_id)?;
+        let feedback = self.pending_feedback_for_run(run_id)?.ok_or_else(|| {
+            ConductorError::NoPendingFeedbackForRun {
+                run_id: run_id.to_string(),
+            }
+        })?;
+        self.submit_feedback(&feedback.id, response)?;
+        let updated = self
+            .get_run(run_id)?
+            .ok_or_else(|| ConductorError::AgentRunNotFound {
+                id: run_id.to_string(),
+            })?;
+        Ok(updated)
+    }
+
     /// Get a feedback request by ID.
     pub fn get_feedback(&self, feedback_id: &str) -> Result<Option<FeedbackRequest>> {
         let result = self.conn.query_row(
@@ -352,6 +438,15 @@ mod tests {
     use super::super::AgentManager;
     use crate::agent::status::{AgentRunStatus, FeedbackStatus, FeedbackType};
     use crate::agent::types::{FeedbackOption, FeedbackRequestParams};
+
+    fn insert_conversation(conn: &rusqlite::Connection, id: &str, scope_id: &str) {
+        conn.execute(
+            "INSERT INTO conversations (id, scope, scope_id, created_at, last_active_at) \
+             VALUES (?1, 'worktree', ?2, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+            rusqlite::params![id, scope_id],
+        )
+        .unwrap();
+    }
 
     #[test]
     fn test_request_feedback() {
@@ -692,5 +787,170 @@ mod tests {
         // Run resumed after timeout dismiss
         let fetched_run = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched_run.status, AgentRunStatus::Running);
+    }
+
+    // ── submit_feedback_for_conversation ─────────────────────────────────────
+
+    #[test]
+    fn test_submit_feedback_for_conversation_success() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "w1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .unwrap();
+        let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
+
+        let updated_run = mgr
+            .submit_feedback_for_conversation("conv1", &run.id, &fb.id, "yes")
+            .unwrap();
+
+        assert_eq!(updated_run.id, run.id);
+        let fetched = mgr.get_feedback(&fb.id).unwrap().unwrap();
+        assert_eq!(fetched.status, FeedbackStatus::Responded);
+        assert_eq!(fetched.response.as_deref(), Some("yes"));
+    }
+
+    #[test]
+    fn test_submit_feedback_for_conversation_run_not_found() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let err = mgr
+            .submit_feedback_for_conversation("conv1", "nonexistent-run", "fb1", "yes")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent-run"),
+            "expected run not found error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_submit_feedback_for_conversation_run_not_in_conversation() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "w1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .unwrap();
+        let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
+
+        let err = mgr
+            .submit_feedback_for_conversation("wrong-conv", &run.id, &fb.id, "yes")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(&run.id) || err.to_string().contains("wrong-conv"),
+            "expected not-in-conversation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_submit_feedback_for_conversation_feedback_not_found() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "w1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .unwrap();
+
+        let err = mgr
+            .submit_feedback_for_conversation("conv1", &run.id, "nonexistent-fb", "yes")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent-fb"),
+            "expected feedback not found error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_submit_feedback_for_conversation_feedback_run_mismatch() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "w1");
+        let mgr = AgentManager::new(&conn);
+        let run1 = mgr
+            .create_run_for_conversation("w1", "task1", None, None, "conv1")
+            .unwrap();
+        let run2 = mgr
+            .create_run_for_conversation("w2", "task2", None, None, "conv1")
+            .unwrap();
+        let fb2 = mgr.request_feedback(&run2.id, "Approve?", None).unwrap();
+
+        // fb2 belongs to run2, but we pass run1's id
+        let err = mgr
+            .submit_feedback_for_conversation("conv1", &run1.id, &fb2.id, "yes")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(&fb2.id) || err.to_string().contains(&run1.id),
+            "expected feedback run mismatch error, got: {err}"
+        );
+    }
+
+    // ── submit_pending_run_feedback_for_conversation ─────────────────────────
+
+    #[test]
+    fn test_submit_pending_run_feedback_for_conversation_success() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "w1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .unwrap();
+        mgr.request_feedback(&run.id, "Approve?", None).unwrap();
+
+        let updated = mgr
+            .submit_pending_run_feedback_for_conversation("conv1", &run.id, "yes")
+            .unwrap();
+        assert_eq!(updated.id, run.id);
+        assert_eq!(updated.status, AgentRunStatus::Running);
+    }
+
+    #[test]
+    fn test_submit_pending_run_feedback_run_not_found() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let err = mgr
+            .submit_pending_run_feedback_for_conversation("conv1", "nonexistent", "yes")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent"),
+            "expected run not found error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_submit_pending_run_feedback_run_not_in_conversation() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "w1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .unwrap();
+
+        let err = mgr
+            .submit_pending_run_feedback_for_conversation("wrong-conv", &run.id, "yes")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(&run.id) || err.to_string().contains("wrong-conv"),
+            "expected not-in-conversation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_submit_pending_run_feedback_no_pending_feedback() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "w1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .unwrap();
+
+        let err = mgr
+            .submit_pending_run_feedback_for_conversation("conv1", &run.id, "yes")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(&run.id),
+            "expected no-pending-feedback error, got: {err}"
+        );
     }
 }

@@ -449,7 +449,7 @@ async fn test_ticket_detail_empty() {
 
     // Call detail for a ticket with no agent runs or linked worktrees
     let resp = client
-        .get(format!("{base}/api/tickets/nonexistent-id/detail"))
+        .get(format!("{base}/api/tickets/nonexistent-id"))
         .send()
         .await
         .unwrap();
@@ -1113,7 +1113,7 @@ async fn test_submit_feedback_nonexistent() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
@@ -1127,7 +1127,7 @@ async fn test_dismiss_feedback_nonexistent() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
@@ -1341,7 +1341,7 @@ async fn test_mark_all_read() {
     .await;
     let client = reqwest::Client::new();
     let resp = client
-        .post(format!("{base}/api/notifications/read-all"))
+        .post(format!("{base}/api/notifications/read"))
         .send()
         .await
         .unwrap();
@@ -1430,7 +1430,7 @@ async fn test_patch_global_model_set_and_clear() {
 #[tokio::test]
 async fn test_list_features_empty() {
     let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
-    let resp = reqwest::get(format!("{base}/api/repos/test-repo/features"))
+    let resp = reqwest::get(format!("{base}/api/repos/r1/features"))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -1584,4 +1584,87 @@ async fn test_stop_repo_agent_already_stopped() {
         resp.status().is_client_error() || resp.status().is_server_error(),
         "stopping an already-cancelled run should error"
     );
+}
+
+// ── DELETE /api/conversations/{id} ───────────────────────────────────────────
+
+#[tokio::test]
+async fn test_delete_conversation_returns_204() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let client = reqwest::Client::new();
+
+    // Create a conversation
+    let resp = client
+        .post(format!("{base}/api/conversations"))
+        .json(&serde_json::json!({ "scope": "repo", "scope_id": "r1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let conv: serde_json::Value = resp.json().await.unwrap();
+    let conv_id = conv["id"].as_str().unwrap();
+
+    // Delete it
+    let resp = client
+        .delete(format!("{base}/api/conversations/{conv_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+
+    // Subsequent GET must return 404
+    let resp = client
+        .get(format!("{base}/api/conversations/{conv_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_delete_conversation_returns_404_for_unknown_id() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .delete(format!("{base}/api/conversations/nonexistent-id"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_delete_conversation_returns_409_when_active_run_exists() {
+    let base = spawn_test_server_with_setup(|conn| {
+        seed_repo_and_worktree(conn);
+        // Insert a conversation with an active agent run so we can test the guard.
+        conn.execute(
+            "INSERT INTO conversations (id, scope, scope_id, created_at, last_active_at) \
+             VALUES ('conv-active', 'repo', 'r1', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs (id, worktree_id, repo_id, prompt, status, started_at, conversation_id) \
+             VALUES ('run-active', NULL, 'r1', 'test', 'running', '2024-01-01T00:00:00Z', 'conv-active')",
+            [],
+        ).unwrap();
+    }).await;
+
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .delete(format!("{base}/api/conversations/conv-active"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409);
+
+    // The conversation must still exist.
+    let resp = client
+        .get(format!("{base}/api/conversations/conv-active"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
 }

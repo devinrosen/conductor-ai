@@ -84,6 +84,24 @@ pub enum ConductorError {
     #[error("agent error: {0}")]
     Agent(String),
 
+    #[error("agent run not found: {id}")]
+    AgentRunNotFound { id: String },
+
+    #[error("agent run {run_id} does not belong to conversation {conversation_id}")]
+    AgentRunNotInConversation {
+        run_id: String,
+        conversation_id: String,
+    },
+
+    #[error("feedback request not found: {id}")]
+    FeedbackNotFound { id: String },
+
+    #[error("feedback {feedback_id} does not belong to run {run_id}")]
+    FeedbackRunMismatch { feedback_id: String, run_id: String },
+
+    #[error("no pending feedback request for run {run_id}")]
+    NoPendingFeedbackForRun { run_id: String },
+
     #[error("feedback request {id} is not pending (current status: {status})")]
     FeedbackNotPending { id: String, status: String },
 
@@ -119,6 +137,12 @@ pub enum ConductorError {
 
     #[error("unknown ticket source type: {0}")]
     UnknownSourceType(String),
+
+    #[error("conversation not found: {id}")]
+    ConversationNotFound { id: String },
+
+    #[error("cannot delete conversation {id}: it has an active or waiting agent run")]
+    ConversationHasActiveRun { id: String },
 }
 
 impl ConductorError {
@@ -158,10 +182,17 @@ impl ConductorError {
             Self::Schema(_) => 42,
             Self::Agent(_) => 50,
             Self::FeedbackNotPending { .. } => 51,
+            Self::AgentRunNotFound { .. } => 52,
+            Self::AgentRunNotInConversation { .. } => 53,
+            Self::FeedbackNotFound { .. } => 54,
+            Self::FeedbackRunMismatch { .. } => 55,
+            Self::NoPendingFeedbackForRun { .. } => 56,
             Self::Workflow(_) => 60,
             Self::WorkflowRunAlreadyActive { .. } => 61,
             Self::WorkflowRunNotFound { .. } => 62,
             Self::UnknownSourceType(_) => 43,
+            Self::ConversationNotFound { .. } => 57,
+            Self::ConversationHasActiveRun { .. } => 58,
         }
     }
 }
@@ -201,6 +232,17 @@ mod tests {
             ConductorError::AgentConfig("acfg".into()),
             ConductorError::Schema("schema".into()),
             ConductorError::Agent("agent".into()),
+            ConductorError::AgentRunNotFound { id: "id".into() },
+            ConductorError::AgentRunNotInConversation {
+                run_id: "r".into(),
+                conversation_id: "c".into(),
+            },
+            ConductorError::FeedbackNotFound { id: "id".into() },
+            ConductorError::FeedbackRunMismatch {
+                feedback_id: "f".into(),
+                run_id: "r".into(),
+            },
+            ConductorError::NoPendingFeedbackForRun { run_id: "r".into() },
             ConductorError::FeedbackNotPending {
                 id: "id".into(),
                 status: "done".into(),
@@ -209,6 +251,8 @@ mod tests {
             ConductorError::WorkflowRunAlreadyActive { name: "wf".into() },
             ConductorError::WorkflowRunNotFound { id: "id".into() },
             ConductorError::UnknownSourceType("jira".into()),
+            ConductorError::ConversationNotFound { id: "id".into() },
+            ConductorError::ConversationHasActiveRun { id: "id".into() },
         ]
     }
 

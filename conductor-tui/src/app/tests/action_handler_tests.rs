@@ -108,6 +108,7 @@ fn data_refreshed_updates_repos() {
             worktrees: vec![],
             tickets: vec![],
             ticket_labels: std::collections::HashMap::new(),
+            ticket_dependencies: std::collections::HashMap::new(),
             latest_agent_runs: std::collections::HashMap::new(),
             ticket_agent_totals: std::collections::HashMap::new(),
             latest_workflow_runs_by_worktree: std::collections::HashMap::new(),
@@ -465,6 +466,7 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
             bot_name: None,
+            conversation_id: None,
         },
     );
     app.show_confirm_quit();
@@ -1251,6 +1253,7 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
 fn make_workflow_def(name: &str, target: &str) -> conductor_core::workflow::WorkflowDef {
     conductor_core::workflow::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: String::new(),
         trigger: conductor_core::workflow::WorkflowTrigger::Manual,
         targets: vec![target.to_string()],

@@ -108,7 +108,7 @@ pub enum AgentCommands {
         /// Named GitHub App bot identity to use (matches [github.apps.<name>] in config).
         #[arg(long)]
         bot_name: Option<String>,
-        /// Override the permission mode for this run (e.g. "plan" for read-only repo agents).
+        /// Override the permission mode for this run. Valid values: "plan", "repo-safe" (read-only repo agents using --allowedTools restriction).
         #[arg(long)]
         permission_mode: Option<String>,
         /// Additional plugin directories to pass to the Claude CLI
@@ -452,6 +452,9 @@ pub enum WorktreeCommands {
         /// Auto-start an agent after creation (requires --ticket)
         #[arg(long)]
         auto_agent: bool,
+        /// Proceed even if the base branch has uncommitted changes
+        #[arg(long)]
+        force: bool,
     },
     /// List worktrees
     List {

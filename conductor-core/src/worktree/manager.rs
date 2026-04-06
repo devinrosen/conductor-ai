@@ -112,6 +112,29 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
     None
 }
 
+/// Options for creating a new worktree.
+///
+/// Passed to [`WorktreeManager::create`] to avoid a long positional argument list.
+/// All fields are optional and default to `None` / `false`.
+#[derive(Debug, Default)]
+pub struct WorktreeCreateOptions {
+    /// When `Some(n)`, the worktree is backed by the branch of PR #n instead
+    /// of a newly-created branch. `from_branch` is ignored in that case.
+    pub from_pr: Option<u32>,
+    /// Start the worktree from an existing branch name instead of creating a
+    /// new one.  Ignored when `from_pr` is set.
+    pub from_branch: Option<String>,
+    /// Associate the new worktree with this ticket ID.
+    pub ticket_id: Option<String>,
+    /// When `true`, skip the dirty-state check. Use only after the caller has
+    /// explicitly confirmed the user wants to proceed with uncommitted changes.
+    pub force_dirty: bool,
+    /// Pre-computed health status from a prior `check_main_health()` call.
+    /// When `Some` and the working tree is clean, the redundant `git status`
+    /// inside `ensure_base_up_to_date()` is skipped.
+    pub pre_health: Option<super::git_helpers::MainHealthStatus>,
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -122,6 +145,23 @@ impl<'a> WorktreeManager<'a> {
         Self { conn, config }
     }
 
+    /// Run a read-only health check on the base branch of `repo_slug`.
+    ///
+    /// Resolves the base branch in the same priority order as `create()`.
+    /// Returns a `MainHealthStatus` describing dirty state and staleness.
+    pub fn check_main_health(
+        &self,
+        repo_slug: &str,
+        base_branch: Option<&str>,
+    ) -> Result<super::git_helpers::MainHealthStatus> {
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_slug(repo_slug)?;
+        let base = base_branch
+            .map(|b| b.to_string())
+            .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
+        Ok(check_main_health(&repo.local_path, &base))
+    }
+
     /// Create a new worktree, ensuring the base branch is up to date first.
     ///
     /// Returns the created worktree and a list of non-fatal warnings
@@ -129,14 +169,27 @@ impl<'a> WorktreeManager<'a> {
     ///
     /// When `from_pr` is `Some(n)`, the worktree is backed by the branch of PR #n
     /// instead of a newly-created branch.  `from_branch` is ignored in that case.
+    ///
+    /// When `force_dirty` is `true`, the dirty-state check inside
+    /// `ensure_base_up_to_date()` is skipped. Use this only after the caller has
+    /// explicitly confirmed the user wants to proceed with uncommitted changes.
+    ///
+    /// When `opts.pre_health` is `Some` and the health status shows a clean working tree,
+    /// the redundant `git status --porcelain` call inside `ensure_base_up_to_date()` is
+    /// skipped. Callers that already ran `check_main_health()` should pass the result here.
     pub fn create(
         &self,
         repo_slug: &str,
         name: &str,
-        from_branch: Option<&str>,
-        ticket_id: Option<&str>,
-        from_pr: Option<u32>,
+        opts: WorktreeCreateOptions,
     ) -> Result<(Worktree, Vec<String>)> {
+        let WorktreeCreateOptions {
+            from_pr,
+            from_branch,
+            ticket_id,
+            force_dirty,
+            pre_health,
+        } = opts;
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
@@ -195,8 +248,9 @@ impl<'a> WorktreeManager<'a> {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
             let base = if let Some(b) = from_branch {
                 b.to_string()
-            } else if let Some(parent_branch) =
-                ticket_id.and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
+            } else if let Some(parent_branch) = ticket_id
+                .as_deref()
+                .and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
             {
                 parent_branch
             } else {
@@ -227,7 +281,11 @@ impl<'a> WorktreeManager<'a> {
                     }
                 }
             }
-            let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
+            let pre_verified_clean = pre_health
+                .map(|h| !h.is_dirty && !h.status_check_failed)
+                .unwrap_or(false);
+            let warnings =
+                ensure_base_up_to_date(&repo.local_path, &base, force_dirty, pre_verified_clean)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",
@@ -262,7 +320,7 @@ impl<'a> WorktreeManager<'a> {
             slug: wt_slug,
             branch,
             path: wt_path.to_string_lossy().to_string(),
-            ticket_id: ticket_id.map(|s| s.to_string()),
+            ticket_id,
             status: WorktreeStatus::Active,
             created_at: now,
             completed_at: None,

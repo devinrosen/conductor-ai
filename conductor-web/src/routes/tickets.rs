@@ -10,7 +10,7 @@ use conductor_core::github_app;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::ticket_source::TicketSource;
-use conductor_core::tickets::{Ticket, TicketInput, TicketLabel, TicketSyncer};
+use conductor_core::tickets::{Ticket, TicketDependencies, TicketInput, TicketLabel, TicketSyncer};
 use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
@@ -27,6 +27,7 @@ pub struct SyncResult {
 pub struct TicketDetail {
     pub agent_totals: Option<TicketAgentTotals>,
     pub worktrees: Vec<Worktree>,
+    pub dependencies: TicketDependencies,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,21 +142,25 @@ pub async fn list_ticket_labels(
 
 pub async fn ticket_detail(
     State(state): State<AppState>,
-    Path(ticket_id): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<Json<TicketDetail>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
 
     let agent_mgr = AgentManager::new(&db);
     let all_totals = agent_mgr.totals_by_ticket_all()?;
-    let agent_totals = all_totals.get(&ticket_id).cloned();
+    let agent_totals = all_totals.get(&id).cloned();
 
     let wt_mgr = WorktreeManager::new(&db, &config);
-    let worktrees = wt_mgr.list_by_ticket(&ticket_id)?;
+    let worktrees = wt_mgr.list_by_ticket(&id)?;
+
+    let syncer = TicketSyncer::new(&db);
+    let dependencies = syncer.get_dependencies(&id)?;
 
     Ok(Json(TicketDetail {
         agent_totals,
         worktrees,
+        dependencies,
     }))
 }
 
@@ -192,6 +197,8 @@ mod tests {
                 url: String::new(),
                 raw_json: "{}".to_string(),
                 label_details: vec![],
+                blocked_by: vec![],
+                children: vec![],
             },
             TicketInput {
                 source_type: "github".to_string(),
@@ -205,6 +212,8 @@ mod tests {
                 url: String::new(),
                 raw_json: "{}".to_string(),
                 label_details: vec![],
+                blocked_by: vec![],
+                children: vec![],
             },
         ];
         syncer.upsert_tickets("r1", &tickets).unwrap();

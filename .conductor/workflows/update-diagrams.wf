@@ -1,5 +1,6 @@
 workflow update-diagrams {
   meta {
+    title       = "Update Diagrams"
     description = "Update Mermaid diagrams based on a ticket; gates on ticket readiness before touching files"
     trigger     = "manual"
     targets     = ["worktree"]

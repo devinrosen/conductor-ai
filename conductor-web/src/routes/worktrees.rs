@@ -1,13 +1,15 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use conductor_core::config::Config;
 use conductor_core::db::open_database;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
-use conductor_core::worktree::{Worktree, WorktreeManager, WorktreeWithStatus};
+use conductor_core::worktree::{
+    Worktree, WorktreeCreateOptions, WorktreeManager, WorktreeWithStatus,
+};
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -28,6 +30,34 @@ pub struct CreateWorktreeRequest {
     pub name: String,
     pub from_branch: Option<String>,
     pub ticket_id: Option<String>,
+    /// When `true`, proceed even if the base branch has uncommitted changes.
+    pub force: Option<bool>,
+}
+
+/// Structured body returned as HTTP 409 when the base branch is dirty or stale
+/// and `force` is not set.
+#[derive(Serialize)]
+pub struct MainDirtyConflict {
+    pub code: &'static str,
+    pub message: &'static str,
+    pub dirty_files: Vec<String>,
+    pub commits_behind: u32,
+}
+
+/// Typed success body returned as HTTP 201 when a worktree is created.
+/// Extends the core `Worktree` fields with optional runtime metadata.
+#[derive(Serialize)]
+pub struct CreateWorktreeResponse {
+    #[serde(flatten)]
+    pub worktree: Worktree,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub commits_behind: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Deserialize)]
@@ -73,7 +103,7 @@ pub async fn create_worktree(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
     Json(body): Json<CreateWorktreeRequest>,
-) -> Result<(StatusCode, Json<Worktree>), ApiError> {
+) -> Result<(StatusCode, Json<CreateWorktreeResponse>), ApiError> {
     // Look up repo slug quickly before spawning the blocking work.
     let repo_slug = {
         let db = state.db.lock().await;
@@ -85,23 +115,64 @@ pub async fn create_worktree(
     let name = body.name.clone();
     let from_branch = body.from_branch.clone();
     let ticket_id = body.ticket_id.clone();
-    let wt = tokio::task::spawn_blocking(move || {
+    let force = body.force.unwrap_or(false);
+
+    // Run health check off-thread before creating the worktree.
+    let health_result = {
+        let db_path2 = db_path.clone();
+        let config2 = config.clone();
+        let repo_slug2 = repo_slug.clone();
+        let from_branch2 = from_branch.clone();
+        tokio::task::spawn_blocking(move || {
+            let (conn, config) = open_db_and_config(&db_path2, config2)?;
+            WorktreeManager::new(&conn, &config)
+                .check_main_health(&repo_slug2, from_branch2.as_deref())
+        })
+        .await??
+    };
+
+    // If dirty and not force: return 409 with structured body.
+    if health_result.is_dirty && !force {
+        let conflict_body = serde_json::to_value(MainDirtyConflict {
+            code: "main_dirty",
+            message: "base branch has uncommitted changes; pass force=true to proceed anyway",
+            dirty_files: health_result.dirty_files,
+            commits_behind: health_result.commits_behind,
+        })
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        return Err(ApiError::Conflict(conflict_body));
+    }
+
+    let commits_behind = health_result.commits_behind;
+    let (wt, warnings) = tokio::task::spawn_blocking(move || {
         let (conn, config) = open_db_and_config(&db_path, config)?;
-        let (wt, _warnings) = WorktreeManager::new(&conn, &config).create(
+        WorktreeManager::new(&conn, &config).create(
             &repo_slug,
             &name,
-            from_branch.as_deref(),
-            ticket_id.as_deref(),
-            None,
-        )?;
-        Ok::<_, conductor_core::error::ConductorError>(wt)
+            WorktreeCreateOptions {
+                from_branch,
+                ticket_id,
+                force_dirty: force,
+                pre_health: Some(health_result),
+                ..Default::default()
+            },
+        )
     })
     .await??;
+
     state.events.emit(ConductorEvent::WorktreeCreated {
         id: wt.id.clone(),
         repo_id: wt.repo_id.clone(),
     });
-    Ok((StatusCode::CREATED, Json(wt)))
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateWorktreeResponse {
+            worktree: wt,
+            warnings,
+            commits_behind,
+        }),
+    ))
 }
 
 pub async fn get_worktree(
@@ -118,7 +189,7 @@ pub async fn get_worktree(
 pub async fn delete_worktree(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Worktree>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let db_path = state.db_path.clone();
     let config = state.config.read().await.clone();
     let wt = tokio::task::spawn_blocking(move || {
@@ -130,7 +201,7 @@ pub async fn delete_worktree(
         id: wt.id.clone(),
         repo_id: wt.repo_id.clone(),
     });
-    Ok(Json(wt))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_worktree_for_repo(
@@ -147,7 +218,7 @@ pub async fn get_worktree_for_repo(
 pub async fn delete_worktree_for_repo(
     State(state): State<AppState>,
     Path((repo_id, id)): Path<(String, String)>,
-) -> Result<Json<Worktree>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let db_path = state.db_path.clone();
     let config = state.config.read().await.clone();
     let wt = tokio::task::spawn_blocking(move || {
@@ -159,7 +230,7 @@ pub async fn delete_worktree_for_repo(
         id: wt.id.clone(),
         repo_id: wt.repo_id.clone(),
     });
-    Ok(Json(wt))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -214,7 +285,7 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::routes::api_router;
-    use crate::test_helpers::seeded_state;
+    use crate::test_helpers::{seeded_state, seeded_state_with_dirty_repo};
 
     async fn send_get(uri: &str, state: AppState) -> (StatusCode, Vec<u8>) {
         let app = api_router().with_state(state);
@@ -299,12 +370,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_worktree_for_repo_returns_200_with_matching_repo() {
+    async fn delete_worktree_for_repo_returns_204_with_matching_repo() {
         let (state, _tmp) = seeded_state();
-        let (status, body) = send_delete("/api/repos/r1/worktrees/w1", state).await;
-        assert_eq!(status, StatusCode::OK);
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["id"], "w1");
+        let (status, _) = send_delete("/api/repos/r1/worktrees/w1", state).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
@@ -327,12 +396,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_worktree_returns_200() {
+    async fn delete_worktree_returns_204() {
         let (state, _tmp) = seeded_state();
-        let (status, body) = send_delete("/api/worktrees/w1", state).await;
-        assert_eq!(status, StatusCode::OK);
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["id"], "w1");
+        let (status, _) = send_delete("/api/worktrees/w1", state).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
@@ -389,5 +456,39 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_worktree_returns_409_when_base_branch_is_dirty() {
+        let (state, _tmp, _git_dir) = seeded_state_with_dirty_repo();
+        let (status, body) = send_post(
+            "/api/repos/r1/worktrees",
+            r#"{"name":"new-feature"}"#,
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "main_dirty");
+        assert!(
+            json["dirty_files"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()),
+            "expected non-empty dirty_files, got: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_worktree_bypasses_dirty_409_when_force_is_true() {
+        let (state, _tmp, _git_dir) = seeded_state_with_dirty_repo();
+        let (status, _) = send_post(
+            "/api/repos/r1/worktrees",
+            r#"{"name":"new-feature","force":true}"#,
+            state,
+        )
+        .await;
+        // The 409 gate must be bypassed; the exact status (likely 500 from git
+        // failing to create the worktree in a temp dir) doesn't matter here.
+        assert_ne!(status, StatusCode::CONFLICT);
     }
 }

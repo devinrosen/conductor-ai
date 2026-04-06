@@ -95,7 +95,7 @@ impl TicketSource {
         }
     }
 
-    /// Returns the canonical source-type string (`"github"` / `"jira"`).
+    /// Returns the canonical source-type string (`"github"` / `"jira"` / `"vantage"`).
     ///
     /// Used when passing `source_type` to `sync_and_close_tickets`.
     pub fn source_type_str(&self) -> &'static str {
@@ -112,6 +112,8 @@ impl TicketSource {
     /// - `"github"` with `Some(json)`: validates it parses as JSON and returns it.
     /// - `"jira"` with `None`: returns an error (config is required).
     /// - `"jira"` with `Some(json)`: validates and returns it.
+    /// - `"vantage"` with `None`: returns an error (config is required).
+    /// - `"vantage"` with `Some(json)`: validates and returns it.
     /// - Any other type: returns `UnknownSourceType`.
     pub fn default_config(
         source_type: &str,
@@ -428,5 +430,38 @@ mod tests {
             ConductorError::UnknownSourceType(t) => assert_eq!(t, "linear"),
             _ => panic!("expected UnknownSourceType error, got {err:?}"),
         }
+    }
+
+    // --- Vantage variant (from main, deduplicated) ---
+
+    #[test]
+    fn source_type_str_vantage() {
+        let src = make_issue_source(
+            "vantage",
+            r#"{"project_id":"PROJ-001","sdlc_root":"/path"}"#,
+        );
+        let ts = TicketSource::from_issue_source(&src).unwrap();
+        assert_eq!(ts.source_type_str(), "vantage");
+    }
+
+    #[test]
+    fn get_dependency_ids_delegates_to_vantage() {
+        let json = serde_json::json!({ "id": "D-001", "dependencies": ["D-002", "D-003"] });
+        let ids = super::get_dependency_ids(&serde_json::to_string(&json).unwrap(), "vantage");
+        assert_eq!(ids, vec!["D-002", "D-003"]);
+    }
+
+    #[test]
+    fn get_dependency_ids_empty_for_missing_field() {
+        let json = serde_json::json!({ "id": "D-001" });
+        let ids = super::get_dependency_ids(&serde_json::to_string(&json).unwrap(), "vantage");
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn get_dependency_ids_empty_for_non_vantage() {
+        let json = serde_json::json!({ "id": "D-001", "dependencies": ["D-002"] });
+        let ids = super::get_dependency_ids(&serde_json::to_string(&json).unwrap(), "github");
+        assert!(ids.is_empty());
     }
 }

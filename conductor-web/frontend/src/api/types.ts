@@ -162,9 +162,17 @@ export interface AgentCreatedIssue {
   created_at: string;
 }
 
+export interface TicketDependencies {
+  blocked_by: Ticket[];
+  blocks: Ticket[];
+  parent: Ticket | null;
+  children: Ticket[];
+}
+
 export interface TicketDetail {
   agent_totals: TicketAgentTotals | null;
   worktrees: Worktree[];
+  dependencies: TicketDependencies;
 }
 
 export interface IssueSource {
@@ -206,6 +214,7 @@ export interface DiscoverableRepo {
 
 export interface WorkflowDefSummary {
   name: string;
+  title: string | null;
   description: string;
   trigger: string;
   inputs: { name: string; required: boolean; type: string; defaultValue: string | null; description: string | null }[];
@@ -217,6 +226,7 @@ export interface WorkflowDefSummary {
 export interface WorkflowRun {
   id: string;
   workflow_name: string;
+  workflow_title?: string | null;
   worktree_id: string | null;
   parent_run_id: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "waiting";
@@ -255,6 +265,104 @@ export interface WorkflowRunStep {
   context_out: string | null;
   gate_options: string | null;
   gate_selections: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+}
+
+export interface WorkflowTokenAggregate {
+  workflow_name: string;
+  workflow_title?: string | null;
+  avg_input: number;
+  avg_output: number;
+  avg_cache_read: number;
+  avg_cache_creation: number;
+  run_count: number;
+  /** Percentage of terminal runs that completed successfully. Range: 0–100. */
+  success_rate: number;
+}
+
+export interface WorkflowTokenTrendRow {
+  period: string;
+  total_input: number;
+  total_output: number;
+  total_cache_read: number;
+  total_cache_creation: number;
+}
+
+export interface StepTokenHeatmapRow {
+  step_name: string;
+  avg_input: number;
+  avg_output: number;
+  avg_cache_read: number;
+  run_count: number;
+}
+
+export interface WorkflowRunMetricsRow {
+  run_id: string;
+  started_at: string;
+  duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  worktree_id: string | null;
+  repo_id: string | null;
+}
+
+export interface WorkflowFailureRateTrendRow {
+  period: string;
+  total_runs: number;
+  failed_runs: number;
+  /** Percentage of runs that completed successfully. Range: 0–100. */
+  success_rate: number;
+}
+
+export interface StepFailureHeatmapRow {
+  step_name: string;
+  total_executions: number;
+  failed_executions: number;
+  /** Percentage of executions that failed. Range: 0–100. */
+  failure_rate: number;
+  avg_retry_count: number;
+}
+
+export interface WorkflowPercentiles {
+  p50_duration_ms: number | null;
+  p75_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  p99_duration_ms: number | null;
+  p50_cost_usd: number | null;
+  p75_cost_usd: number | null;
+  p95_cost_usd: number | null;
+  p99_cost_usd: number | null;
+  p50_total_tokens: number | null;
+  p75_total_tokens: number | null;
+  p95_total_tokens: number | null;
+  p99_total_tokens: number | null;
+  run_count: number;
+}
+
+export interface WorkflowRegressionSignal {
+  workflow_name: string;
+  workflow_title: string | null;
+  recent_runs: number;
+  baseline_runs: number;
+  // Duration (ms) — P75
+  recent_p75_duration_ms: number | null;
+  baseline_p75_duration_ms: number | null;
+  duration_change_pct: number | null;
+  // Cost (USD) — P75
+  recent_p75_cost_usd: number | null;
+  baseline_p75_cost_usd: number | null;
+  cost_change_pct: number | null;
+  // Failure rate (0–100 %)
+  recent_failure_rate: number;
+  baseline_failure_rate: number;
+  failure_rate_change_pp: number;
+  // Regression flags
+  duration_regressed: boolean;
+  cost_regressed: boolean;
+  failure_rate_regressed: boolean;
 }
 
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)

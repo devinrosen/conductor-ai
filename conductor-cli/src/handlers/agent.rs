@@ -55,8 +55,12 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
             };
             let perm_mode = match permission_mode.as_deref() {
                 Some("plan") => Some(conductor_core::config::AgentPermissionMode::Plan),
+                Some("repo-safe") => Some(conductor_core::config::AgentPermissionMode::RepoSafe),
                 Some(other) => {
-                    anyhow::bail!("Unknown permission-mode '{}'; valid values: plan", other)
+                    anyhow::bail!(
+                        "Unknown permission-mode '{}'; valid values: plan, repo-safe",
+                        other
+                    )
                 }
                 None => None,
             };
@@ -325,8 +329,8 @@ pub(crate) fn run_agent(
         cmd.arg("--output-format")
             .arg("stream-json")
             .arg("--verbose")
-            .arg(effective_perm_mode.cli_flag());
-        if let Some(val) = effective_perm_mode.cli_flag_value() {
+            .arg(effective_perm_mode.claude_permission_flag());
+        if let Some(val) = effective_perm_mode.claude_permission_flag_value() {
             cmd.arg(val);
         }
         if let Some(pattern) = effective_perm_mode.allowed_tools() {

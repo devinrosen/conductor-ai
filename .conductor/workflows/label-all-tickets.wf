@@ -1,5 +1,6 @@
 workflow label-all-tickets {
   meta {
+    title       = "Label All Tickets"
     description = "Add appropriate labels to all unlabeled open GitHub issues in a repo"
     trigger     = "manual"
     targets     = ["repo"]
