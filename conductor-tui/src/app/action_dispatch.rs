@@ -1162,8 +1162,8 @@ impl App {
                     ..
                 } = self.state.modal
                 {
-                    let layout = crate::ui::graph::compute_layout(data);
-                    let max_layer = layout.layers.len().saturating_sub(1);
+                    let layers = crate::ui::graph::compute_layers(data);
+                    let max_layer = layers.len().saturating_sub(1);
                     if nav.selected_layer < max_layer {
                         nav.selected_layer += 1;
                         nav.selected_node_idx = 0;
@@ -1182,12 +1182,8 @@ impl App {
                     ..
                 } = self.state.modal
                 {
-                    let layout = crate::ui::graph::compute_layout(data);
-                    let layer_len = layout
-                        .layers
-                        .get(nav.selected_layer)
-                        .map(|l| l.len())
-                        .unwrap_or(0);
+                    let layers = crate::ui::graph::compute_layers(data);
+                    let layer_len = layers.get(nav.selected_layer).map(|l| l.len()).unwrap_or(0);
                     if nav.selected_node_idx + 1 < layer_len {
                         nav.selected_node_idx += 1;
                     }
@@ -1291,9 +1287,17 @@ impl App {
             .filter(|t| !connected_ids.contains(&t.id))
             .count();
 
+        // Annotate nodes with active-worktree status
+        let ticket_worktrees = &self.state.data.ticket_worktrees;
         let nodes: Vec<GraphNodeType> = ticket_map
             .into_values()
-            .map(GraphNodeType::Ticket)
+            .map(|mut n| {
+                n.has_worktree = ticket_worktrees
+                    .get(&n.id)
+                    .and_then(|wts| wts.iter().find(|w| w.is_active()))
+                    .is_some();
+                GraphNodeType::Ticket(n)
+            })
             .collect();
 
         let repo_slug = self
