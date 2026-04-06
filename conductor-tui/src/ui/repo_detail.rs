@@ -240,21 +240,22 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 
     // Compute column widths from the full (unfiltered) ticket list so widths
     // stay stable while the user types a filter query.
-    const MAX_COL_WIDTH: usize = 20;
+    const MAX_ASSIGNEE_DISPLAY: usize = 20;
     let id_width = state
         .detail_tickets
         .iter()
         .map(|t| t.source_id.len())
         .max()
-        .unwrap_or(4)
-        .min(MAX_COL_WIDTH);
+        .unwrap_or(4);
     let assignee_width = state
         .detail_tickets
         .iter()
-        .map(|t| t.assignee.as_deref().unwrap_or("unclaimed").len())
+        .map(|t| match t.assignee.as_deref() {
+            Some(login) => (login.len() + 1).min(MAX_ASSIGNEE_DISPLAY), // +1 for @
+            None => "unclaimed".len(),
+        })
         .max()
-        .unwrap_or("unclaimed".len())
-        .min(MAX_COL_WIDTH);
+        .unwrap_or("unclaimed".len());
 
     let ticket_items: Vec<ListItem> = state
         .filtered_detail_tickets
@@ -303,9 +304,9 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     "⊘ ",
                     Style::default().fg(state.theme.label_error),
                 ));
+            } else {
+                spans.push(super::common::ticket_worktree_dot_span(state, &t.id));
             }
-
-            spans.push(super::common::ticket_worktree_dot_span(state, &t.id));
             let id_str = super::common::truncate(&t.source_id, id_width);
             spans.push(Span::styled(
                 format!("#{:<width$} ", id_str, width = id_width),
