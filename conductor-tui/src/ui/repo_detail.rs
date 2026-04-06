@@ -314,9 +314,9 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 
             match &t.assignee {
                 Some(login) => {
-                    let login_str = super::common::truncate(login, assignee_width - 1);
+                    let login_str = super::common::truncate(login, assignee_width.saturating_sub(1));
                     spans.push(Span::styled(
-                        format!("@{:<width$} ", login_str, width = assignee_width - 1),
+                        format!("@{:<width$} ", login_str, width = assignee_width.saturating_sub(1)),
                         Style::default().fg(state.theme.label_secondary),
                     ));
                 }
