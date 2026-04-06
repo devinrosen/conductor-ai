@@ -123,9 +123,7 @@ fn dfs_tree_order<'a>(
             continue;
         }
         let branch = get_branch(idx);
-        let has_children = children_of
-            .get(branch)
-            .is_some_and(|c| !c.is_empty());
+        let has_children = children_of.get(branch).is_some_and(|c| !c.is_empty());
         positions.push(TreePosition {
             depth,
             is_last_sibling: is_last,
@@ -149,9 +147,7 @@ fn dfs_tree_order<'a>(
     for i in 0..n {
         if !visited.contains(&i) {
             let branch = get_branch(i);
-            let has_children = children_of
-                .get(branch)
-                .is_some_and(|c| !c.is_empty());
+            let has_children = children_of.get(branch).is_some_and(|c| !c.is_empty());
             positions.push(TreePosition {
                 depth: 0,
                 is_last_sibling: true,
@@ -301,8 +297,7 @@ mod tests {
     fn test_build_ticket_tree_indices_flat() {
         let tickets = vec![make_ticket("a"), make_ticket("b"), make_ticket("c")];
         let deps = HashMap::new();
-        let (indices, positions, child_to_parent) =
-            build_ticket_tree_indices(&tickets, &deps);
+        let (indices, positions, child_to_parent) = build_ticket_tree_indices(&tickets, &deps);
 
         assert_eq!(indices.len(), 3);
         assert_eq!(positions.len(), 3);
@@ -321,15 +316,24 @@ mod tests {
         let mut deps = HashMap::new();
         deps.insert("a".to_string(), make_child_dep(&["b"]));
 
-        let (indices, positions, child_to_parent) =
-            build_ticket_tree_indices(&tickets, &deps);
+        let (indices, positions, child_to_parent) = build_ticket_tree_indices(&tickets, &deps);
 
         assert_eq!(indices.len(), 2);
         assert_eq!(child_to_parent.get("b"), Some(&"a"));
 
         // Find position for "a" (parent) and "b" (child)
-        let pos_a = positions.iter().zip(indices.iter()).find(|(_, &i)| tickets[i].id == "a").map(|(p, _)| p).unwrap();
-        let pos_b = positions.iter().zip(indices.iter()).find(|(_, &i)| tickets[i].id == "b").map(|(p, _)| p).unwrap();
+        let pos_a = positions
+            .iter()
+            .zip(indices.iter())
+            .find(|(_, &i)| tickets[i].id == "a")
+            .map(|(p, _)| p)
+            .unwrap();
+        let pos_b = positions
+            .iter()
+            .zip(indices.iter())
+            .find(|(_, &i)| tickets[i].id == "b")
+            .map(|(p, _)| p)
+            .unwrap();
 
         assert!(pos_a.is_parent, "a should be marked is_parent");
         assert_eq!(pos_a.depth, 0);
