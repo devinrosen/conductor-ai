@@ -353,6 +353,29 @@ export interface WorkflowRegressionSignal {
   failure_rate_regressed: boolean;
 }
 
+export interface GateAnalyticsRow {
+  step_name: string;
+  total_gate_hits: number;
+  approved_count: number;
+  rejected_count: number;
+  approval_rate: number; // 0–100
+  avg_wait_ms: number | null;
+  p50_wait_ms: number | null;
+  p95_wait_ms: number | null;
+  avg_feedback_length: number | null;
+}
+
+export interface PendingGateAnalyticsRow {
+  step_id: string;
+  step_name: string;
+  gate_type: string;
+  gate_prompt: string | null;
+  workflow_name: string;
+  workflow_run_id: string;
+  started_at: string;
+  wait_ms_so_far: number;
+}
+
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)
 
 export interface WorkflowInputDecl {

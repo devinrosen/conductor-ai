@@ -17,10 +17,11 @@ use crate::workflow::constants::{
 };
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
-    extract_workflow_title, ActiveWorkflowCounts, PendingGateRow, StepFailureHeatmapRow,
-    StepTokenHeatmapRow, WorkflowFailureRateTrendRow, WorkflowPercentiles,
-    WorkflowRegressionSignal, WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow,
-    WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    extract_workflow_title, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
+    PendingGateRow, StepFailureHeatmapRow, StepTokenHeatmapRow, WorkflowFailureRateTrendRow,
+    WorkflowPercentiles, WorkflowRegressionSignal, WorkflowRun, WorkflowRunContext,
+    WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate,
+    WorkflowTokenTrendRow,
 };
 
 /// Returns `(recent - baseline) / baseline * 100` when both values are present and baseline > 0.
@@ -1348,6 +1349,106 @@ impl<'a> WorkflowManager<'a> {
         }
 
         Ok(signals)
+    }
+
+    /// Per-gate-step aggregate analytics for a workflow within the given day window.
+    ///
+    /// Only counts terminal gate steps (`status IN ('completed', 'failed')`).
+    /// Approval is inferred from `status`: `completed` = approved, `failed` = rejected.
+    /// Wait time is computed via julianday arithmetic on `started_at` / `ended_at`.
+    /// P50 and P95 percentiles are computed per step using the ROW_NUMBER CTE pattern.
+    pub fn get_gate_analytics(
+        &self,
+        workflow_name: &str,
+        days: u32,
+    ) -> Result<Vec<GateAnalyticsRow>> {
+        let mut stmt = self.conn.prepare_cached(
+            "WITH gate_rows AS ( \
+               SELECT \
+                 wrs.step_name, \
+                 wrs.status, \
+                 ROUND((julianday(wrs.ended_at) - julianday(wrs.started_at)) * 86400000) AS wait_ms, \
+                 wrs.gate_feedback \
+               FROM workflow_runs wr \
+               JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
+               WHERE wr.workflow_name = ?1 \
+                 AND wrs.gate_type IS NOT NULL \
+                 AND wrs.status IN ('completed', 'failed') \
+                 AND wr.started_at >= datetime('now', '-' || ?2 || ' days') \
+             ), \
+             ranked AS ( \
+               SELECT \
+                 step_name, \
+                 status, \
+                 wait_ms, \
+                 gate_feedback, \
+                 ROW_NUMBER() OVER (PARTITION BY step_name ORDER BY wait_ms) AS rn, \
+                 COUNT(*) OVER (PARTITION BY step_name) AS cnt \
+               FROM gate_rows \
+             ) \
+             SELECT \
+               step_name, \
+               COUNT(*) AS total_gate_hits, \
+               SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS approved_count, \
+               SUM(CASE WHEN status = 'failed'    THEN 1 ELSE 0 END) AS rejected_count, \
+               COALESCE(CAST(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS REAL) \
+                 / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS approval_rate, \
+               AVG(wait_ms) AS avg_wait_ms, \
+               AVG(CASE WHEN rn = (cnt * 50 + 99) / 100 THEN wait_ms END) AS p50_wait_ms, \
+               AVG(CASE WHEN rn = (cnt * 95 + 99) / 100 THEN wait_ms END) AS p95_wait_ms, \
+               AVG(CAST(LENGTH(gate_feedback) AS REAL)) AS avg_feedback_length \
+             FROM ranked \
+             GROUP BY step_name \
+             ORDER BY total_gate_hits DESC, step_name",
+        )?;
+        let rows = stmt.query_map(params![workflow_name, days], |row| {
+            Ok(GateAnalyticsRow {
+                step_name: row.get(0)?,
+                total_gate_hits: row.get(1)?,
+                approved_count: row.get(2)?,
+                rejected_count: row.get(3)?,
+                approval_rate: row.get(4)?,
+                avg_wait_ms: row.get(5)?,
+                p50_wait_ms: row.get(6)?,
+                p95_wait_ms: row.get(7)?,
+                avg_feedback_length: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Cross-workflow snapshot of all currently-waiting gate steps, ordered by `started_at` ASC
+    /// (longest-waiting first). `wait_ms_so_far` is computed via julianday arithmetic.
+    pub fn get_all_pending_gates(&self) -> Result<Vec<PendingGateAnalyticsRow>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT \
+               wrs.id AS step_id, \
+               wrs.step_name, \
+               wrs.gate_type, \
+               wrs.gate_prompt, \
+               wr.workflow_name, \
+               wr.id AS workflow_run_id, \
+               wrs.started_at, \
+               CAST(ROUND((julianday('now') - julianday(wrs.started_at)) * 86400000) AS INTEGER) AS wait_ms_so_far \
+             FROM workflow_run_steps wrs \
+             JOIN workflow_runs wr ON wr.id = wrs.workflow_run_id \
+             WHERE wrs.status = 'waiting' \
+               AND wrs.gate_type IS NOT NULL \
+             ORDER BY wrs.started_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PendingGateAnalyticsRow {
+                step_id: row.get(0)?,
+                step_name: row.get(1)?,
+                gate_type: row.get(2)?,
+                gate_prompt: row.get(3)?,
+                workflow_name: row.get(4)?,
+                workflow_run_id: row.get(5)?,
+                started_at: row.get(6)?,
+                wait_ms_so_far: row.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 
