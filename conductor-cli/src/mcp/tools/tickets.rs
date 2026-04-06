@@ -981,13 +981,26 @@ mod tests {
         // Upsert parent ticket (source_id "10")
         let mut parent_args = full_ticket_args("test-repo");
         parent_args.insert("source_id".to_string(), Value::String("10".to_string()));
-        parent_args.insert("title".to_string(), Value::String("Parent ticket".to_string()));
+        parent_args.insert(
+            "title".to_string(),
+            Value::String("Parent ticket".to_string()),
+        );
         let r = tool_upsert_ticket(&db, &parent_args);
-        assert_ne!(r.is_error, Some(true), "parent upsert failed: {:?}", r.content);
+        assert_ne!(
+            r.is_error,
+            Some(true),
+            "parent upsert failed: {:?}",
+            r.content
+        );
 
         // Upsert child ticket (source_id "42") with parent="10"
         let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
-        assert_ne!(r.is_error, Some(true), "child upsert failed: {:?}", r.content);
+        assert_ne!(
+            r.is_error,
+            Some(true),
+            "child upsert failed: {:?}",
+            r.content
+        );
 
         assert_eq!(
             count_parent_edges(&db, "42"),
@@ -1059,14 +1072,19 @@ mod tests {
 
         use conductor_core::db::open_database;
         let conn = open_database(&db).expect("open db");
-        let child_count: usize = conn.query_row(
-            "SELECT COUNT(*) FROM ticket_dependencies td \
+        let child_count: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies td \
              JOIN tickets parent ON parent.id = td.from_ticket_id \
              WHERE parent.source_id = '42' AND td.dep_type = 'parent_of'",
-            [],
-            |row| row.get(0),
-        ).unwrap();
-        assert_eq!(child_count, 1, "children should be replaced (1 child remaining)");
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            child_count, 1,
+            "children should be replaced (1 child remaining)"
+        );
     }
 
     #[test]

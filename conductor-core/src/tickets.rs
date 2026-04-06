@@ -286,7 +286,10 @@ impl<'a> TicketSyncer<'a> {
             // blocked_by + children (e.g. from a GitHub sync that doesn't parse body
             // text) is treated as "no opinion" so it does not overwrite dependencies
             // set via MCP or other sources.
-            if !ticket.blocked_by.is_empty() || !ticket.children.is_empty() || ticket.parent.is_some() {
+            if !ticket.blocked_by.is_empty()
+                || !ticket.children.is_empty()
+                || ticket.parent.is_some()
+            {
                 tx.execute(
                     "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'blocks'",
                     params![ticket_id],
