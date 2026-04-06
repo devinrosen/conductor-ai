@@ -902,44 +902,22 @@ impl<'a> WorkflowManager<'a> {
         &self,
         repo_id: Option<&str>,
     ) -> Result<Vec<WorkflowTokenAggregate>> {
-        let (sql, param): (String, Vec<rusqlite::types::Value>) = if let Some(rid) = repo_id {
-            (
-                "SELECT workflow_name, \
-                        COALESCE(AVG(CASE WHEN status='completed' THEN total_input_tokens END), 0.0) AS avg_input, \
-                        COALESCE(AVG(CASE WHEN status='completed' THEN total_output_tokens END), 0.0) AS avg_output, \
-                        COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_read_input_tokens END), 0.0) AS avg_cache_read, \
-                        COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_creation_input_tokens END), 0.0) AS avg_cache_creation, \
-                        COUNT(*) AS run_count, \
-                        COALESCE(CAST(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS success_rate, \
-                        MAX(definition_snapshot) AS definition_snapshot \
-                 FROM workflow_runs \
-                 WHERE status IN ('completed', 'failed') \
-                   AND repo_id = ?1 \
-                 GROUP BY workflow_name \
-                 ORDER BY avg_input + avg_output DESC, run_count DESC"
-                    .to_string(),
-                vec![rusqlite::types::Value::Text(rid.to_owned())],
-            )
-        } else {
-            (
-                "SELECT workflow_name, \
-                        COALESCE(AVG(CASE WHEN status='completed' THEN total_input_tokens END), 0.0) AS avg_input, \
-                        COALESCE(AVG(CASE WHEN status='completed' THEN total_output_tokens END), 0.0) AS avg_output, \
-                        COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_read_input_tokens END), 0.0) AS avg_cache_read, \
-                        COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_creation_input_tokens END), 0.0) AS avg_cache_creation, \
-                        COUNT(*) AS run_count, \
-                        COALESCE(CAST(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS success_rate, \
-                        MAX(definition_snapshot) AS definition_snapshot \
-                 FROM workflow_runs \
-                 WHERE status IN ('completed', 'failed') \
-                 GROUP BY workflow_name \
-                 ORDER BY avg_input + avg_output DESC, run_count DESC"
-                    .to_string(),
-                vec![],
-            )
-        };
-        let mut stmt = self.conn.prepare_cached(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(param.iter()), |row| {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT workflow_name, \
+                    COALESCE(AVG(CASE WHEN status='completed' THEN total_input_tokens END), 0.0) AS avg_input, \
+                    COALESCE(AVG(CASE WHEN status='completed' THEN total_output_tokens END), 0.0) AS avg_output, \
+                    COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_read_input_tokens END), 0.0) AS avg_cache_read, \
+                    COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_creation_input_tokens END), 0.0) AS avg_cache_creation, \
+                    COUNT(*) AS run_count, \
+                    COALESCE(CAST(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS success_rate, \
+                    MAX(definition_snapshot) AS definition_snapshot \
+             FROM workflow_runs \
+             WHERE status IN ('completed', 'failed') \
+               AND (?1 IS NULL OR repo_id = ?1) \
+             GROUP BY workflow_name \
+             ORDER BY avg_input + avg_output DESC, run_count DESC",
+        )?;
+        let rows = stmt.query_map(params![repo_id], |row| {
             let definition_snapshot: Option<String> = row.get(7)?;
             let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
             Ok(WorkflowTokenAggregate {
@@ -998,7 +976,7 @@ impl<'a> WorkflowManager<'a> {
         workflow_name: &str,
         limit_runs: usize,
     ) -> Result<Vec<StepTokenHeatmapRow>> {
-        let sql = format!(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT wrs.step_name, \
                     COALESCE(AVG(ar.input_tokens), 0.0) as avg_input, \
                     COALESCE(AVG(ar.output_tokens), 0.0) as avg_output, \
@@ -1011,13 +989,12 @@ impl<'a> WorkflowManager<'a> {
                AND wr.id IN ( \
                  SELECT id FROM workflow_runs \
                  WHERE workflow_name = ?1 AND status = 'completed' \
-                 ORDER BY started_at DESC LIMIT {limit_runs} \
+                 ORDER BY started_at DESC LIMIT ?2 \
                ) \
              GROUP BY wrs.step_name \
-             ORDER BY (AVG(ar.input_tokens) + AVG(ar.output_tokens)) DESC"
-        );
-        let mut stmt = self.conn.prepare_cached(&sql)?;
-        let rows = stmt.query_map(params![workflow_name], |row| {
+             ORDER BY (AVG(ar.input_tokens) + AVG(ar.output_tokens)) DESC",
+        )?;
+        let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
             Ok(StepTokenHeatmapRow {
                 step_name: row.get(0)?,
                 avg_input: row.get(1)?,
@@ -1071,7 +1048,7 @@ impl<'a> WorkflowManager<'a> {
         workflow_name: &str,
         limit_runs: usize,
     ) -> Result<Vec<StepFailureHeatmapRow>> {
-        let sql = format!(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT wrs.step_name, \
                     COUNT(*) AS total_executions, \
                     SUM(CASE WHEN wrs.status='failed' THEN 1 ELSE 0 END) AS failed_executions, \
@@ -1085,13 +1062,12 @@ impl<'a> WorkflowManager<'a> {
                AND wr.id IN ( \
                  SELECT id FROM workflow_runs \
                  WHERE workflow_name = ?1 AND status IN ('completed', 'failed') \
-                 ORDER BY started_at DESC LIMIT {limit_runs} \
+                 ORDER BY started_at DESC LIMIT ?2 \
                ) \
              GROUP BY wrs.step_name \
-             ORDER BY failure_rate DESC, total_executions DESC"
-        );
-        let mut stmt = self.conn.prepare_cached(&sql)?;
-        let rows = stmt.query_map(params![workflow_name], |row| {
+             ORDER BY failure_rate DESC, total_executions DESC",
+        )?;
+        let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
             Ok(StepFailureHeatmapRow {
                 step_name: row.get(0)?,
                 total_executions: row.get(1)?,
