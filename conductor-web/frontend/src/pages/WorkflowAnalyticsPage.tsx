@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { api } from "../api/client";
-import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow, WorkflowPercentiles } from "../api/types";
+import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow, WorkflowPercentiles, WorkflowRegressionSignal } from "../api/types";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 
 type SortKey = "avg_input" | "avg_output" | "avg_cache_read" | "run_count";
@@ -63,12 +63,16 @@ export function WorkflowAnalyticsPage() {
   const [percentiles, setPercentiles] = useState<WorkflowPercentiles | null>(null);
   const [percentilesLoading, setPercentilesLoading] = useState(false);
 
+  const [regressions, setRegressions] = useState<WorkflowRegressionSignal[]>([]);
+  const [regressionsOpen, setRegressionsOpen] = useState(true);
+
   useEffect(() => {
     setAggLoading(true);
     api.getWorkflowTokenAggregates()
       .then(setAggregates)
       .catch((e) => setAggError(e instanceof Error ? e.message : "Failed to load aggregates"))
       .finally(() => setAggLoading(false));
+    api.getWorkflowRegressions().then(setRegressions).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -141,6 +145,34 @@ export function WorkflowAnalyticsPage() {
     const av = a[sortKey], bv = b[sortKey];
     return sortAsc ? av - bv : bv - av;
   });
+
+  const regressionByWorkflow = useMemo(
+    () => new Map(regressions.map((r) => [r.workflow_name, r])),
+    [regressions],
+  );
+
+  const activeRegressions = useMemo(
+    () => regressions.filter((r) => r.duration_regressed || r.cost_regressed || r.failure_rate_regressed),
+    [regressions],
+  );
+
+  function buildRegressionTooltip(r: WorkflowRegressionSignal): string {
+    const parts: string[] = [];
+    if (r.duration_regressed && r.duration_change_pct !== null) {
+      const from = fmtDuration(r.baseline_p75_duration_ms);
+      const to = fmtDuration(r.recent_p75_duration_ms);
+      parts.push(`P75 duration up ${r.duration_change_pct.toFixed(0)}% (${from} → ${to})`);
+    }
+    if (r.cost_regressed && r.cost_change_pct !== null) {
+      const from = fmtCost(r.baseline_p75_cost_usd);
+      const to = fmtCost(r.recent_p75_cost_usd);
+      parts.push(`P75 cost up ${r.cost_change_pct.toFixed(0)}% (${from} → ${to})`);
+    }
+    if (r.failure_rate_regressed) {
+      parts.push(`Failure rate up ${r.failure_rate_change_pp.toFixed(1)}pp (${r.baseline_failure_rate.toFixed(1)}% → ${r.recent_failure_rate.toFixed(1)}%)`);
+    }
+    return parts.join(" · ");
+  }
 
   const histogramBins = useMemo(() => {
     const paired = runMetrics
@@ -233,6 +265,37 @@ export function WorkflowAnalyticsPage() {
         <p className="text-sm text-gray-500 mt-1">Token usage aggregated across completed workflow runs.</p>
       </div>
 
+      {/* Regressions summary panel — shown only when at least one regression is detected */}
+      {activeRegressions.length > 0 && (
+        <section className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <button
+            className="flex items-center gap-2 w-full text-left"
+            onClick={() => setRegressionsOpen((o) => !o)}
+          >
+            <span className="text-amber-700 font-semibold text-sm">
+              ⚠ {activeRegressions.length} Regression{activeRegressions.length !== 1 ? "s" : ""} Detected
+            </span>
+            <span className="ml-auto text-amber-500 text-xs">{regressionsOpen ? "▲ Hide" : "▼ Show"}</span>
+          </button>
+          {regressionsOpen && (
+            <ul className="mt-3 space-y-2">
+              {activeRegressions.map((r) => (
+                <li key={r.workflow_name} className="text-xs text-amber-800">
+                  <button
+                    className="font-medium hover:underline text-amber-900"
+                    onClick={() => setSelectedWorkflow(r.workflow_name)}
+                  >
+                    {r.workflow_title ?? r.workflow_name}
+                  </button>
+                  <span className="ml-2 text-amber-700">{buildRegressionTooltip(r)}</span>
+                  <span className="ml-2 text-amber-500">({r.recent_runs} recent runs)</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
       {/* Section 1: Aggregate table */}
       <section>
         <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
@@ -284,7 +347,23 @@ export function WorkflowAnalyticsPage() {
                     key={row.workflow_name}
                     className={`hover:bg-gray-50 ${selectedWorkflow === row.workflow_name ? "bg-indigo-50" : ""}`}
                   >
-                    <td className="px-4 py-2 font-medium text-gray-800">{row.workflow_title ?? row.workflow_name}</td>
+                    <td className="px-4 py-2 font-medium text-gray-800">
+                      {row.workflow_title ?? row.workflow_name}
+                      {(() => {
+                        const sig = regressionByWorkflow.get(row.workflow_name);
+                        if (!sig) return null;
+                        const hasRegression = sig.duration_regressed || sig.cost_regressed || sig.failure_rate_regressed;
+                        if (!hasRegression) return null;
+                        return (
+                          <span
+                            className="ml-2 inline-block px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700 font-medium"
+                            title={buildRegressionTooltip(sig)}
+                          >
+                            ⚠ Regression
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtK(row.avg_input)}</td>
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtK(row.avg_output)}</td>
                     <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtK(row.avg_cache_read)}</td>

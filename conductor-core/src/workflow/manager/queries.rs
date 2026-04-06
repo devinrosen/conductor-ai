@@ -11,13 +11,16 @@ use super::helpers::{
     waiting_gate_step_row_mapper,
 };
 use super::WorkflowManager;
-use crate::workflow::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX};
+use crate::workflow::constants::{
+    REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
+    REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
+};
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
     extract_workflow_title, ActiveWorkflowCounts, PendingGateRow, StepFailureHeatmapRow,
-    StepTokenHeatmapRow, WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRun,
-    WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    StepTokenHeatmapRow, WorkflowFailureRateTrendRow, WorkflowPercentiles,
+    WorkflowRegressionSignal, WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow,
+    WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 impl<'a> WorkflowManager<'a> {
@@ -1187,5 +1190,157 @@ impl<'a> WorkflowManager<'a> {
             p99_total_tokens: row.11,
             run_count,
         }))
+    }
+
+    /// Compute passive regression signals for all workflows with sufficient recent run history.
+    ///
+    /// Compares a recent window (`recent_days`) against a baseline window
+    /// (`[recent_days, recent_days + baseline_days]` days ago) using P75 for duration and
+    /// cost, and failure rate (percentage) for the third signal. Workflows with fewer than
+    /// `min_recent_runs` completed runs in the recent window are excluded.
+    ///
+    /// Regression boolean flags are applied in Rust after the query using the threshold
+    /// constants from `constants.rs`, keeping the SQL readable and the raw numbers available
+    /// for display in the UI.
+    pub fn get_workflow_regression_signals(
+        &self,
+        min_recent_runs: i64,
+        recent_days: i64,
+        baseline_days: i64,
+    ) -> Result<Vec<WorkflowRegressionSignal>> {
+        let mut stmt = self.conn.prepare_cached(
+            // Two CTEs each computing per-workflow P75 for duration and cost via
+            // ROW_NUMBER() OVER (PARTITION BY workflow_name), plus failure-rate aggregates.
+            // INNER JOIN ensures workflows with no baseline history are excluded.
+            "WITH recent_ranked AS (
+               SELECT
+                 workflow_name,
+                 total_duration_ms,
+                 total_cost_usd,
+                 status,
+                 definition_snapshot,
+                 ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY total_duration_ms) AS rn_dur,
+                 ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY total_cost_usd)   AS rn_cost,
+                 COUNT(*) OVER (PARTITION BY workflow_name)                               AS cnt
+               FROM workflow_runs
+               WHERE status IN ('completed', 'failed')
+                 AND started_at >= datetime('now', '-' || ?1 || ' days')
+             ),
+             recent AS (
+               SELECT
+                 workflow_name,
+                 COUNT(*) AS total_runs,
+                 SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_runs,
+                 AVG(CASE WHEN rn_dur  = (cnt * 75 + 99) / 100 THEN total_duration_ms END) AS p75_duration_ms,
+                 AVG(CASE WHEN rn_cost = (cnt * 75 + 99) / 100 THEN total_cost_usd    END) AS p75_cost_usd,
+                 COALESCE(CAST(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS REAL)
+                   / NULLIF(COUNT(*), 0) * 100.0, 0.0)                                    AS failure_rate,
+                 MAX(definition_snapshot)                                                  AS definition_snapshot
+               FROM recent_ranked
+               GROUP BY workflow_name
+               HAVING COUNT(*) >= ?2
+             ),
+             baseline_ranked AS (
+               SELECT
+                 workflow_name,
+                 total_duration_ms,
+                 total_cost_usd,
+                 status,
+                 ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY total_duration_ms) AS rn_dur,
+                 ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY total_cost_usd)   AS rn_cost,
+                 COUNT(*) OVER (PARTITION BY workflow_name)                               AS cnt
+               FROM workflow_runs
+               WHERE status IN ('completed', 'failed')
+                 AND started_at >= datetime('now', '-' || (?1 + ?3) || ' days')
+                 AND started_at <  datetime('now', '-' || ?1 || ' days')
+             ),
+             baseline AS (
+               SELECT
+                 workflow_name,
+                 COUNT(*) AS total_runs,
+                 AVG(CASE WHEN rn_dur  = (cnt * 75 + 99) / 100 THEN total_duration_ms END) AS p75_duration_ms,
+                 AVG(CASE WHEN rn_cost = (cnt * 75 + 99) / 100 THEN total_cost_usd    END) AS p75_cost_usd,
+                 COALESCE(CAST(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS REAL)
+                   / NULLIF(COUNT(*), 0) * 100.0, 0.0)                                    AS failure_rate
+               FROM baseline_ranked
+               GROUP BY workflow_name
+             )
+             SELECT
+               r.workflow_name,
+               r.total_runs          AS recent_runs,
+               b.total_runs          AS baseline_runs,
+               r.p75_duration_ms     AS recent_p75_duration_ms,
+               b.p75_duration_ms     AS baseline_p75_duration_ms,
+               r.p75_cost_usd        AS recent_p75_cost_usd,
+               b.p75_cost_usd        AS baseline_p75_cost_usd,
+               r.failure_rate        AS recent_failure_rate,
+               b.failure_rate        AS baseline_failure_rate,
+               r.definition_snapshot
+             FROM recent r
+             INNER JOIN baseline b ON r.workflow_name = b.workflow_name
+             ORDER BY r.workflow_name",
+        )?;
+
+        let rows = stmt.query_map(params![recent_days, min_recent_runs, baseline_days], |row| {
+            let recent_runs: i64 = row.get(1)?;
+            let baseline_runs: i64 = row.get(2)?;
+            let recent_p75_duration_ms: Option<f64> = row.get(3)?;
+            let baseline_p75_duration_ms: Option<f64> = row.get(4)?;
+            let recent_p75_cost_usd: Option<f64> = row.get(5)?;
+            let baseline_p75_cost_usd: Option<f64> = row.get(6)?;
+            let recent_failure_rate: f64 = row.get(7)?;
+            let baseline_failure_rate: f64 = row.get(8)?;
+            let definition_snapshot: Option<String> = row.get(9)?;
+            let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+
+            // Compute percentage change for duration and cost.
+            let duration_change_pct = match (recent_p75_duration_ms, baseline_p75_duration_ms) {
+                (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
+                _ => None,
+            };
+            let cost_change_pct = match (recent_p75_cost_usd, baseline_p75_cost_usd) {
+                (Some(r), Some(b)) if b > 0.0 => Some((r - b) / b * 100.0),
+                _ => None,
+            };
+            let failure_rate_change_pp = recent_failure_rate - baseline_failure_rate;
+
+            Ok(WorkflowRegressionSignal {
+                workflow_name: row.get(0)?,
+                workflow_title,
+                recent_runs,
+                baseline_runs,
+                recent_p75_duration_ms,
+                baseline_p75_duration_ms,
+                duration_change_pct,
+                recent_p75_cost_usd,
+                baseline_p75_cost_usd,
+                cost_change_pct,
+                recent_failure_rate,
+                baseline_failure_rate,
+                failure_rate_change_pp,
+                // Flags set to false here; applied below using threshold constants.
+                duration_regressed: false,
+                cost_regressed: false,
+                failure_rate_regressed: false,
+            })
+        })?;
+
+        let mut signals: Vec<WorkflowRegressionSignal> = rows.collect::<rusqlite::Result<_>>()?;
+
+        // Apply threshold flags in Rust so thresholds are co-located with their constants.
+        for s in &mut signals {
+            s.duration_regressed = s
+                .duration_change_pct
+                .map(|pct| pct > REGRESSION_DURATION_THRESHOLD_PCT)
+                .unwrap_or(false);
+            s.cost_regressed = s
+                .cost_change_pct
+                .map(|pct| pct > REGRESSION_COST_THRESHOLD_PCT)
+                .unwrap_or(false);
+            s.failure_rate_regressed =
+                s.failure_rate_change_pp > REGRESSION_FAILURE_RATE_THRESHOLD_PP;
+        }
+
+        Ok(signals)
     }
 }
