@@ -36,6 +36,7 @@ import type {
   WorkflowRunMetricsRow,
   WorkflowFailureRateTrendRow,
   StepFailureHeatmapRow,
+  WorkflowPercentiles,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -302,6 +303,10 @@ export const api = {
   getStepFailureHeatmap: (workflowName: string, runs = 20) =>
     request<StepFailureHeatmapRow[]>(
       `/workflows/analytics/failure-heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getWorkflowPercentiles: (workflowName: string, days = 30) =>
+    request<WorkflowPercentiles | null>(
+      `/workflows/analytics/percentiles?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
     ),
 
   // Notifications

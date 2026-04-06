@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { api } from "../api/client";
-import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow } from "../api/types";
+import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow, WorkflowPercentiles } from "../api/types";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 
 type SortKey = "avg_input" | "avg_output" | "avg_cache_read" | "run_count";
@@ -11,6 +11,21 @@ function fmtK(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(Math.round(n));
+}
+
+function fmtDuration(ms: number | null): string {
+  if (ms === null) return "—";
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s % 60);
+  return `${m}m${rem.toString().padStart(2, "0")}s`;
+}
+
+function fmtCost(usd: number | null): string {
+  if (usd === null) return "—";
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 export function WorkflowAnalyticsPage() {
@@ -44,6 +59,9 @@ export function WorkflowAnalyticsPage() {
   const [failureHeatmap, setFailureHeatmap] = useState<StepFailureHeatmapRow[]>([]);
   const [failureHeatmapLoading, setFailureHeatmapLoading] = useState(false);
   const [failureHeatmapError, setFailureHeatmapError] = useState<string | null>(null);
+
+  const [percentiles, setPercentiles] = useState<WorkflowPercentiles | null>(null);
+  const [percentilesLoading, setPercentilesLoading] = useState(false);
 
   useEffect(() => {
     setAggLoading(true);
@@ -107,6 +125,18 @@ export function WorkflowAnalyticsPage() {
       .finally(() => setFailureHeatmapLoading(false));
   }, [selectedWorkflow]);
 
+  useEffect(() => {
+    if (!selectedWorkflow) {
+      setPercentiles(null);
+      return;
+    }
+    setPercentilesLoading(true);
+    api.getWorkflowPercentiles(selectedWorkflow, histDays)
+      .then(setPercentiles)
+      .catch(() => setPercentiles(null))
+      .finally(() => setPercentilesLoading(false));
+  }, [selectedWorkflow, histDays]);
+
   const sorted = [...aggregates].sort((a, b) => {
     const av = a[sortKey], bv = b[sortKey];
     return sortAsc ? av - bv : bv - av;
@@ -153,12 +183,26 @@ export function WorkflowAnalyticsPage() {
     const threshold = mean + 2 * sigma;
 
     const maxCount = Math.max(...counts, 1);
-    return bins.map((b) => ({
+    return bins.map((b, i) => ({
       ...b,
       pct: Math.round((b.runs.length / maxCount) * 100),
       outlier: b.runs.length > threshold,
+      isP95: false as boolean,
+      binLo: minVal + i * width,
+      binHi: minVal + (i + 1) * width,
     }));
   }, [runMetrics, histMetric]);
+
+  const histogramBinsWithP95 = useMemo(() => {
+    if (!histogramBins || histMetric !== "duration" || !percentiles?.p95_duration_ms) {
+      return histogramBins;
+    }
+    const p95 = percentiles.p95_duration_ms;
+    return histogramBins.map((b) => ({
+      ...b,
+      isP95: p95 >= b.binLo && p95 < b.binHi,
+    }));
+  }, [histogramBins, histMetric, percentiles]);
 
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortAsc((p) => !p);
@@ -362,25 +406,26 @@ export function WorkflowAnalyticsPage() {
               <LoadingSpinner />
             ) : runMetricsError ? (
               <p className="text-sm text-red-500">{runMetricsError}</p>
-            ) : histogramBins === null ? (
+            ) : histogramBinsWithP95 === null ? (
               <p className="text-sm text-gray-500">Not enough data (need at least 5 completed runs with {histMetric === "duration" ? "duration" : "token"} data).</p>
             ) : (
               <>
                 <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
                   <div className="px-4 py-3 divide-y divide-gray-50">
-                    {histogramBins.map((bin, i) => (
+                    {histogramBinsWithP95.map((bin, i) => (
                       <div
                         key={i}
-                        className={`py-1 cursor-pointer rounded px-1 -mx-1 ${selectedBucketIdx === i ? "bg-indigo-50 ring-1 ring-indigo-200" : "hover:bg-gray-50"}`}
+                        className={`py-1 cursor-pointer rounded px-1 -mx-1 ${selectedBucketIdx === i ? "bg-indigo-50 ring-1 ring-indigo-200" : bin.isP95 ? "ring-1 ring-orange-300 bg-orange-50" : "hover:bg-gray-50"}`}
                         onClick={() => setSelectedBucketIdx(selectedBucketIdx === i ? null : i)}
                       >
                         <div className="flex items-center justify-between gap-2 mb-0.5">
                           <span className="text-xs font-mono text-gray-500 w-20 shrink-0">{bin.label}</span>
+                          {bin.isP95 && <span className="text-xs font-semibold text-orange-500 shrink-0">P95</span>}
                           <span className="text-xs font-mono tabular-nums text-gray-400 shrink-0">{bin.runs.length}</span>
                         </div>
                         <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                           <div
-                            className={`h-full rounded-full ${bin.outlier ? "bg-amber-400" : "bg-indigo-400"}`}
+                            className={`h-full rounded-full ${bin.isP95 ? "bg-orange-400" : bin.outlier ? "bg-amber-400" : "bg-indigo-400"}`}
                             style={{ width: `${bin.pct}%` }}
                           />
                         </div>
@@ -388,11 +433,11 @@ export function WorkflowAnalyticsPage() {
                     ))}
                   </div>
                 </div>
-                {selectedBucketIdx !== null && histogramBins[selectedBucketIdx] && (
+                {selectedBucketIdx !== null && histogramBinsWithP95[selectedBucketIdx] && (
                   <div className="mt-3 rounded-lg border border-gray-200 bg-white p-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-semibold text-gray-600">
-                        Runs in bucket "{histogramBins[selectedBucketIdx].label}" — {histogramBins[selectedBucketIdx].runs.length} runs
+                        Runs in bucket "{histogramBinsWithP95[selectedBucketIdx].label}" — {histogramBinsWithP95[selectedBucketIdx].runs.length} runs
                       </span>
                       <button
                         onClick={() => setSelectedBucketIdx(null)}
@@ -402,7 +447,7 @@ export function WorkflowAnalyticsPage() {
                       </button>
                     </div>
                     <ul className="space-y-1">
-                      {histogramBins[selectedBucketIdx].runs.map(({ runId, startedAt, repoId, worktreeId }) => (
+                      {histogramBinsWithP95[selectedBucketIdx].runs.map(({ runId, startedAt, repoId, worktreeId }) => (
                         <li key={runId} className="text-xs font-mono flex items-center gap-2">
                           {repoId && worktreeId ? (
                             <a
@@ -432,7 +477,61 @@ export function WorkflowAnalyticsPage() {
             )}
           </section>
 
-          {/* Section 4: Failure rate over time */}
+          {/* Section 4: Percentile summary */}
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+              Percentile Summary — {selectedWorkflow}
+            </h3>
+            {percentilesLoading ? (
+              <LoadingSpinner />
+            ) : percentiles === null ? (
+              <p className="text-sm text-gray-500">No percentile data available (need at least one completed run with duration data).</p>
+            ) : (
+              <>
+                {percentiles.run_count < 10 && (
+                  <p className="text-xs text-amber-600 mb-2">Based on {percentiles.run_count} run{percentiles.run_count !== 1 ? "s" : ""} — estimates may be noisy with fewer than 10 runs.</p>
+                )}
+                <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 text-left">
+                        <th className="px-4 py-2 font-medium">Metric</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">P50</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">P75</th>
+                        <th className="px-4 py-2 font-medium tabular-nums text-orange-600">P95</th>
+                        <th className="px-4 py-2 font-medium tabular-nums">P99</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      <tr className="hover:bg-gray-50">
+                        <td className="px-4 py-2 text-gray-700 font-medium">Duration</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtDuration(percentiles.p50_duration_ms)}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtDuration(percentiles.p75_duration_ms)}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-orange-600 font-semibold">{fmtDuration(percentiles.p95_duration_ms)}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtDuration(percentiles.p99_duration_ms)}</td>
+                      </tr>
+                      <tr className="hover:bg-gray-50">
+                        <td className="px-4 py-2 text-gray-700 font-medium">Cost</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtCost(percentiles.p50_cost_usd)}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtCost(percentiles.p75_cost_usd)}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-orange-600 font-semibold">{fmtCost(percentiles.p95_cost_usd)}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{fmtCost(percentiles.p99_cost_usd)}</td>
+                      </tr>
+                      <tr className="hover:bg-gray-50">
+                        <td className="px-4 py-2 text-gray-700 font-medium">Tokens</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{percentiles.p50_total_tokens !== null ? fmtK(percentiles.p50_total_tokens) : "—"}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{percentiles.p75_total_tokens !== null ? fmtK(percentiles.p75_total_tokens) : "—"}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-orange-600 font-semibold">{percentiles.p95_total_tokens !== null ? fmtK(percentiles.p95_total_tokens) : "—"}</td>
+                        <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{percentiles.p99_total_tokens !== null ? fmtK(percentiles.p99_total_tokens) : "—"}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </section>
+
+          {/* Section 5: Failure rate over time (previously 4) */}
           <section>
             <div className="flex items-center gap-4 mb-3">
               <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
