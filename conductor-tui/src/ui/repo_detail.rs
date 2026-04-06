@@ -240,14 +240,63 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     let ticket_items: Vec<ListItem> = state
         .filtered_detail_tickets
         .iter()
-        .map(|t| {
-            let mut spans = vec![
-                super::common::ticket_worktree_dot_span(state, &t.id),
-                Span::styled(
-                    format!("#{} ", t.source_id),
-                    Style::default().fg(state.theme.group_header),
-                ),
-            ];
+        .enumerate()
+        .map(|(i, t)| {
+            let pos = state
+                .detail_ticket_tree_positions
+                .get(i)
+                .cloned()
+                .unwrap_or_default();
+
+            let is_parent = state
+                .data
+                .ticket_dependencies
+                .get(&t.id)
+                .is_some_and(|d| !d.children.is_empty());
+
+            let is_collapsed = state.collapsed_ticket_ids.contains(&t.id);
+
+            let is_blocked = state
+                .data
+                .ticket_dependencies
+                .get(&t.id)
+                .is_some_and(|d| d.blocked_by.iter().any(|b| b.state != "closed"));
+
+            let tree_prefix = pos.to_prefix();
+            let toggle_glyph = if is_parent {
+                if is_collapsed {
+                    "▶ "
+                } else {
+                    "▼ "
+                }
+            } else {
+                ""
+            };
+
+            let mut spans: Vec<Span> = Vec::new();
+
+            if !tree_prefix.is_empty() {
+                spans.push(Span::styled(
+                    tree_prefix,
+                    Style::default().fg(state.theme.label_secondary),
+                ));
+            }
+            if !toggle_glyph.is_empty() {
+                spans.push(Span::raw(toggle_glyph));
+            }
+            if is_blocked {
+                spans.push(Span::styled(
+                    "⊘ ",
+                    Style::default().fg(state.theme.label_error),
+                ));
+            }
+
+            spans.push(super::common::ticket_worktree_dot_span(state, &t.id));
+            spans.push(Span::styled(
+                format!("#{} ", t.source_id),
+                Style::default().fg(state.theme.group_header),
+            ));
+
             if let Some(login) = &t.assignee {
                 spans.push(Span::styled(
                     format!("@{login} "),

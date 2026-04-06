@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use conductor_core::tickets::{Ticket, TicketDependencies};
 use conductor_core::worktree::Worktree;
 
 use super::BranchPickerItem;
@@ -185,6 +186,33 @@ pub fn build_worktree_tree(
     let (indices, positions) = build_worktree_tree_indices(worktrees, default_branch);
     let ordered = indices.into_iter().map(|i| worktrees[i].clone()).collect();
     (ordered, positions)
+}
+
+/// Tree-order tickets by parent/child relationships from `ticket_dependencies`, returning
+/// indices into the input slice and parallel `TreePosition`s — no cloning.
+///
+/// The `deps` map is keyed by ticket ID; each entry's `.children` field lists child tickets.
+/// Tickets whose parent is not present in the input slice are treated as roots.
+pub fn build_ticket_tree_indices(
+    tickets: &[Ticket],
+    deps: &HashMap<String, TicketDependencies>,
+) -> (Vec<usize>, Vec<TreePosition>) {
+    // Build a child_id → parent_id reverse map.
+    let mut child_to_parent: HashMap<&str, &str> = HashMap::new();
+    for (parent_id, dep) in deps {
+        for child in &dep.children {
+            child_to_parent.insert(child.id.as_str(), parent_id.as_str());
+        }
+    }
+
+    let get_branch = |i: usize| tickets[i].id.as_str();
+    let get_parent = |i: usize| {
+        child_to_parent
+            .get(tickets[i].id.as_str())
+            .copied()
+            .unwrap_or("")
+    };
+    dfs_tree_order(tickets.len(), get_branch, get_parent, "")
 }
 
 /// Reorder branch picker items into tree order based on `base_branch` parent-child relationships.
