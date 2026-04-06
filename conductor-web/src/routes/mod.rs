@@ -280,6 +280,10 @@ pub fn api_router() -> Router<AppState> {
             get(workflows::get_failure_heatmap),
         )
         .route(
+            "/api/workflows/analytics/step-retries",
+            get(workflows::get_step_retry_analytics),
+        )
+        .route(
             "/api/workflows/analytics/percentiles",
             get(workflows::get_workflow_percentiles),
         )

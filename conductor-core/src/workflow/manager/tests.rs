@@ -2759,6 +2759,155 @@ fn test_step_failure_heatmap_ordered_by_failure_rate_desc() {
     assert_eq!(result[1].step_name, "step-never-fails");
 }
 
+// ── get_step_retry_analytics ──────────────────────────────────────────────────
+
+// Helper: insert a step with an explicit retry_count in addition to status.
+fn insert_step_with_retries(
+    conn: &rusqlite::Connection,
+    step_id: &str,
+    run_id: &str,
+    step_name: &str,
+    position: i64,
+    status: &str,
+    retry_count: i64,
+) {
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, retry_count) \
+         VALUES (?1, ?2, ?3, 'actor', ?4, ?5, ?6)",
+        rusqlite::params![step_id, run_id, step_name, position, status, retry_count],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_step_retry_analytics_empty_when_no_runs() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_step_retry_analytics("no-such-wf", 10)
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_step_retry_analytics_no_retries() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "retry-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    insert_step_with_retries(&conn, "s1", &run.id, "step-a", 0, "completed", 0);
+
+    let result = mgr.get_step_retry_analytics("retry-wf", 10).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].step_name, "step-a");
+    assert_eq!(result[0].total_executions, 1);
+    assert_eq!(result[0].executions_with_retries, 0);
+    assert!((result[0].retry_rate - 0.0).abs() < 0.01);
+    assert!((result[0].avg_retry_count - 0.0).abs() < 0.01);
+    assert!((result[0].retry_success_rate - 0.0).abs() < 0.01);
+}
+
+#[test]
+fn test_step_retry_analytics_basic() {
+    // One step that was retried (retry_count=2) and completed → 100% retry rate, 100% success
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_named_worktree_run(&conn, "w1", "retry-wf");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+    insert_step_with_retries(&conn, "s1", &run.id, "step-a", 0, "completed", 2);
+
+    let result = mgr.get_step_retry_analytics("retry-wf", 10).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].total_executions, 1);
+    assert_eq!(result[0].executions_with_retries, 1);
+    assert!((result[0].retry_rate - 100.0).abs() < 0.01);
+    assert!((result[0].avg_retry_count - 2.0).abs() < 0.01);
+    assert!((result[0].retry_success_rate - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn test_step_retry_analytics_mixed() {
+    // 4 executions: 1 no-retry-completed, 1 retry-completed, 1 retry-failed, 1 no-retry-failed
+    // retry_rate = 2/4 = 50%; retry_success_rate = 1/2 = 50%; avg_retry_count = avg(1,3)/2 = 2.0
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    for (idx, (wt, rc, status)) in [
+        ("w1", 0_i64, "completed"),
+        ("w2", 1_i64, "completed"),
+        ("w3", 3_i64, "failed"),
+        ("w1", 0_i64, "failed"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let run = create_named_worktree_run(&conn, wt, "retry-wf");
+        let wf_status = if *status == "completed" {
+            WorkflowRunStatus::Completed
+        } else {
+            WorkflowRunStatus::Failed
+        };
+        mgr.update_workflow_status(&run.id, wf_status, None)
+            .unwrap();
+        insert_step_with_retries(&conn, &format!("s{idx}"), &run.id, "step-a", 0, status, *rc);
+    }
+
+    let result = mgr.get_step_retry_analytics("retry-wf", 10).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].total_executions, 4);
+    assert_eq!(result[0].executions_with_retries, 2);
+    assert!((result[0].retry_rate - 50.0).abs() < 0.01);
+    assert!((result[0].avg_retry_count - 2.0).abs() < 0.01); // (1+3)/2
+    assert!((result[0].retry_success_rate - 50.0).abs() < 0.01); // 1 of 2 retried completed
+}
+
+#[test]
+fn test_step_retry_analytics_limit_runs() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // 3 runs; oldest (run1) has a retried step — should be excluded by limit_runs=2
+    let run1 = create_named_worktree_run(&conn, "w1", "retry-wf");
+    let run2 = create_named_worktree_run(&conn, "w1", "retry-wf");
+    let run3 = create_named_worktree_run(&conn, "w1", "retry-wf");
+    for r in [&run1, &run2, &run3] {
+        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+    }
+
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run1.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run2.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = ?1",
+        rusqlite::params![run3.id],
+    )
+    .unwrap();
+
+    // oldest run: retried — must be excluded
+    insert_step_with_retries(&conn, "s-old", &run1.id, "step-a", 0, "completed", 3);
+    // two recent runs: no retries
+    insert_step_with_retries(&conn, "s-r2", &run2.id, "step-a", 0, "completed", 0);
+    insert_step_with_retries(&conn, "s-r3", &run3.id, "step-a", 0, "completed", 0);
+
+    let result = mgr.get_step_retry_analytics("retry-wf", 2).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].total_executions, 2);
+    assert_eq!(result[0].executions_with_retries, 0);
+    assert!((result[0].retry_rate - 0.0).abs() < 0.01);
+}
+
 #[test]
 fn test_get_workflow_percentiles_empty() {
     let conn = setup_db();

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { api } from "../api/client";
-import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow, WorkflowPercentiles, WorkflowRegressionSignal, GateAnalyticsRow, PendingGateAnalyticsRow } from "../api/types";
+import type { WorkflowTokenAggregate, WorkflowTokenTrendRow, StepTokenHeatmapRow, WorkflowRunMetricsRow, WorkflowFailureRateTrendRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, WorkflowPercentiles, WorkflowRegressionSignal, GateAnalyticsRow, PendingGateAnalyticsRow } from "../api/types";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 
 type SortKey = "avg_input" | "avg_output" | "avg_cache_read" | "run_count";
@@ -59,6 +59,10 @@ export function WorkflowAnalyticsPage() {
   const [failureHeatmap, setFailureHeatmap] = useState<StepFailureHeatmapRow[]>([]);
   const [failureHeatmapLoading, setFailureHeatmapLoading] = useState(false);
   const [failureHeatmapError, setFailureHeatmapError] = useState<string | null>(null);
+
+  const [retryData, setRetryData] = useState<StepRetryAnalyticsRow[]>([]);
+  const [retryLoading, setRetryLoading] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
 
   const [percentiles, setPercentiles] = useState<WorkflowPercentiles | null>(null);
   const [percentilesLoading, setPercentilesLoading] = useState(false);
@@ -136,6 +140,16 @@ export function WorkflowAnalyticsPage() {
       .then(setFailureHeatmap)
       .catch((e) => setFailureHeatmapError(e instanceof Error ? e.message : "Failed to load failure heatmap"))
       .finally(() => setFailureHeatmapLoading(false));
+  }, [selectedWorkflow]);
+
+  useEffect(() => {
+    if (!selectedWorkflow) return;
+    setRetryLoading(true);
+    setRetryError(null);
+    api.getStepRetryAnalytics(selectedWorkflow, 20)
+      .then(setRetryData)
+      .catch((e) => setRetryError(e instanceof Error ? e.message : "Failed to load retry analytics"))
+      .finally(() => setRetryLoading(false));
   }, [selectedWorkflow]);
 
   useEffect(() => {
@@ -725,6 +739,72 @@ export function WorkflowAnalyticsPage() {
                             </span>
                           </td>
                           <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.avg_retry_count.toFixed(1)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Section 6: Step Reliability — Retry Analytics */}
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+              Step Reliability — Retry Analytics — {selectedWorkflow}
+            </h3>
+            {retryLoading ? (
+              <LoadingSpinner />
+            ) : retryError ? (
+              <p className="text-sm text-red-500">{retryError}</p>
+            ) : retryData.length === 0 ? (
+              <p className="text-sm text-gray-500">No retry data available.</p>
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 text-left">
+                      <th className="px-4 py-2 font-medium">Step</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Executions</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Retry Rate</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Avg Retries</th>
+                      <th className="px-4 py-2 font-medium tabular-nums">Retry Success Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {retryData.map((row) => {
+                      const rowCls = row.retry_rate >= 15 ? "bg-amber-50" : "";
+                      const retryRateCls = row.retry_rate >= 15
+                        ? "bg-amber-100 text-amber-700"
+                        : "text-gray-700";
+                      const successCls = row.executions_with_retries === 0
+                        ? "text-gray-400"
+                        : row.retry_success_rate >= 80
+                        ? "bg-green-100 text-green-700"
+                        : row.retry_success_rate >= 50
+                        ? "bg-yellow-100 text-yellow-700"
+                        : "bg-red-100 text-red-700";
+                      return (
+                        <tr key={row.step_name} className={`hover:bg-gray-50 ${rowCls}`}>
+                          <td className="px-4 py-2 text-gray-800">{row.step_name.replace(/^workflow:/, "")}</td>
+                          <td className="px-4 py-2 font-mono tabular-nums text-gray-700">{row.total_executions}</td>
+                          <td className="px-4 py-2">
+                            <span className={`inline-block px-1.5 py-0.5 rounded font-mono ${retryRateCls}`}>
+                              {row.retry_rate.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 font-mono tabular-nums text-gray-700">
+                            {row.executions_with_retries > 0 ? row.avg_retry_count.toFixed(1) : "—"}
+                          </td>
+                          <td className="px-4 py-2">
+                            {row.executions_with_retries === 0 ? (
+                              <span className="text-gray-400">—</span>
+                            ) : (
+                              <span className={`inline-block px-1.5 py-0.5 rounded font-mono ${successCls}`}>
+                                {row.retry_success_rate.toFixed(1)}%
+                              </span>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}

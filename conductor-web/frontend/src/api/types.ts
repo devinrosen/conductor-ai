@@ -314,6 +314,18 @@ export interface StepFailureHeatmapRow {
   avg_retry_count: number;
 }
 
+export interface StepRetryAnalyticsRow {
+  step_name: string;
+  total_executions: number;
+  executions_with_retries: number;
+  /** Percentage of executions needing at least one retry. Range: 0–100. */
+  retry_rate: number;
+  /** Average retry count among executions that had at least one retry. */
+  avg_retry_count: number;
+  /** Percentage of retried executions that completed. Range: 0–100. */
+  retry_success_rate: number;
+}
+
 export interface WorkflowPercentiles {
   p50_duration_ms: number | null;
   p75_duration_ms: number | null;
