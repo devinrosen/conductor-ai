@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::db::query_collect;
+use crate::db::{query_collect, with_in_clause};
 use crate::error::{ConductorError, Result};
 use crate::github::has_merged_pr;
 use crate::worktree::WorktreeManager;
@@ -219,6 +219,37 @@ impl<'a> TicketSyncer<'a> {
         let tx = self.conn.unchecked_transaction()?;
         let now = Utc::now().to_rfc3339();
 
+        // Pre-fetch existing raw_json for all tickets that don't supply one,
+        // replacing the per-ticket SELECT with a single bulk query.
+        let none_source_ids: Vec<String> = tickets
+            .iter()
+            .filter(|t| t.raw_json.is_none())
+            .map(|t| t.source_id.clone())
+            .collect();
+        let mut existing_raw_json: HashMap<(String, String), String> = HashMap::new();
+        if !none_source_ids.is_empty() {
+            with_in_clause(
+                "SELECT source_type, source_id, raw_json FROM tickets WHERE repo_id = ?1 AND source_id IN",
+                &[&repo_id as &dyn rusqlite::types::ToSql],
+                &none_source_ids,
+                |sql, params| -> Result<()> {
+                    let mut stmt = tx.prepare(sql)?;
+                    let rows = stmt.query_map(params, |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    })?;
+                    for row in rows {
+                        let (source_type, source_id, raw_json) = row?;
+                        existing_raw_json.insert((source_type, source_id), raw_json);
+                    }
+                    Ok(())
+                },
+            )?;
+        }
+
         // First pass: upsert tickets and their labels, collecting internal IDs.
         let mut ticket_ids: Vec<(&TicketInput, String)> = Vec::with_capacity(tickets.len());
         for ticket in tickets {
@@ -229,15 +260,12 @@ impl<'a> TicketSyncer<'a> {
             // This is resolved in Rust so the SQL layer carries no sentinel knowledge.
             let raw_json: String = match &ticket.raw_json {
                 Some(v) => v.clone(),
-                None => tx
-                    .query_row(
-                        "SELECT raw_json FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                        params![repo_id, ticket.source_type, ticket.source_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .unwrap_or_else(|_| "{}".to_string()),
+                None => existing_raw_json
+                    .get(&(ticket.source_type.clone(), ticket.source_id.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| "{}".to_string()),
             };
-            tx.execute(
+            let ticket_id: String = tx.query_row(
                 "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(repo_id, source_type, source_id) DO UPDATE SET
@@ -249,7 +277,8 @@ impl<'a> TicketSyncer<'a> {
                      priority = excluded.priority,
                      url = excluded.url,
                      synced_at = excluded.synced_at,
-                     raw_json = excluded.raw_json",
+                     raw_json = excluded.raw_json
+                 RETURNING id",
                 params![
                     id,
                     repo_id,
@@ -265,11 +294,6 @@ impl<'a> TicketSyncer<'a> {
                     now,
                     raw_json,
                 ],
-            )?;
-
-            let ticket_id: String = tx.query_row(
-                "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                params![repo_id, ticket.source_type, ticket.source_id],
                 |row| row.get(0),
             )?;
             tx.execute(
@@ -3317,5 +3341,115 @@ mod tests {
             )
             .unwrap();
         assert_eq!(title, "Real Issue Updated");
+    }
+
+    #[test]
+    fn test_batch_upsert_mixed_raw_json_preservation() {
+        // Ticket A has existing raw_json; re-upserted with None → should be preserved.
+        // Ticket B is re-upserted with Some → should be overwritten.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let initial = vec![
+            TicketInput {
+                raw_json: Some(r#"{"keep":"me"}"#.to_string()),
+                ..make_ticket("A", "Ticket A")
+            },
+            TicketInput {
+                raw_json: Some(r#"{"old":"value"}"#.to_string()),
+                ..make_ticket("B", "Ticket B")
+            },
+        ];
+        syncer.upsert_tickets("r1", &initial).unwrap();
+
+        let update = vec![
+            make_ticket("A", "Ticket A updated"), // raw_json = None → preserve
+            TicketInput {
+                raw_json: Some(r#"{"new":"value"}"#.to_string()),
+                ..make_ticket("B", "Ticket B updated")
+            },
+        ];
+        syncer.upsert_tickets("r1", &update).unwrap();
+
+        let raw_a: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = 'A'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            raw_a, r#"{"keep":"me"}"#,
+            "None raw_json must preserve existing value"
+        );
+
+        let raw_b: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = 'B'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            raw_b, r#"{"new":"value"}"#,
+            "Some raw_json must overwrite existing value"
+        );
+    }
+
+    #[test]
+    fn test_batch_upsert_new_tickets_none_raw_json_defaults_to_empty() {
+        // New tickets with raw_json = None should get '{}' as the default.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("X", "New ticket X"),
+            make_ticket("Y", "New ticket Y"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        for source_id in &["X", "Y"] {
+            let raw: String = conn
+                .query_row(
+                    "SELECT raw_json FROM tickets WHERE source_id = ?1",
+                    params![source_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                raw, "{}",
+                "new ticket with None raw_json should default to '{{}}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_returning_id_stable_on_conflict_update() {
+        // Re-upserting an existing ticket must return the same ULID, not a new one.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("99", "Original")])
+            .unwrap();
+        let id_first: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '99'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("99", "Updated title")])
+            .unwrap();
+        let id_second: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '99'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(
+            id_first, id_second,
+            "ULID must be stable across conflict updates"
+        );
     }
 }
