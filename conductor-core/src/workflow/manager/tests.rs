@@ -2867,6 +2867,331 @@ fn test_get_workflow_percentiles_excludes_other_workflows() {
     assert!((p.p50_duration_ms.unwrap() - 5000.0).abs() < 1.0);
 }
 
+
+// ─── get_gate_analytics ────────────────────────────────────────────────────
+
+/// Helper: insert a terminal gate step with explicit started_at / ended_at so
+/// the julianday wait calculation is deterministic.
+#[allow(clippy::too_many_arguments)]
+fn insert_terminal_gate_step(
+    conn: &rusqlite::Connection,
+    step_id: &str,
+    run_id: &str,
+    step_name: &str,
+    status: &str, // "completed" or "failed"
+    started_at: &str,
+    ended_at: &str,
+    feedback: Option<&str>,
+) {
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, gate_type, status, started_at, ended_at, gate_feedback) \
+         VALUES (?1, ?2, ?3, 'gate', 0, 'human_approval', ?4, ?5, ?6, ?7)",
+        rusqlite::params![step_id, run_id, step_name, status, started_at, ended_at, feedback],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_get_gate_analytics_empty() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn)
+        .get_gate_analytics("no-such-wf", 30)
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_get_gate_analytics_single_approved() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "gate-wf");
+
+    // approved gate: 10 000 ms wait (started 10 s before ended)
+    insert_terminal_gate_step(
+        &conn,
+        "gs1",
+        &run.id,
+        "approve",
+        "completed",
+        "2026-04-06T10:00:00Z",
+        "2026-04-06T10:00:10Z", // 10 s = 10 000 ms
+        Some("lgtm"),
+    );
+
+    let rows = mgr.get_gate_analytics("gate-wf", 30).unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.step_name, "approve");
+    assert_eq!(row.total_gate_hits, 1);
+    assert_eq!(row.approved_count, 1);
+    assert_eq!(row.rejected_count, 0);
+    assert!(
+        (row.approval_rate - 100.0).abs() < 0.001,
+        "approval_rate={}",
+        row.approval_rate
+    );
+    // avg_wait_ms should be ~10 000
+    assert!(row.avg_wait_ms.is_some());
+    let avg = row.avg_wait_ms.unwrap();
+    assert!((avg - 10_000.0).abs() < 1.0, "avg_wait_ms={avg}");
+    // p50 and p95 should also resolve to the single row's wait
+    assert!(row.p50_wait_ms.is_some());
+    assert!(row.p95_wait_ms.is_some());
+    // feedback length should reflect "lgtm" (4 chars)
+    assert!(row.avg_feedback_length.is_some());
+    assert!((row.avg_feedback_length.unwrap() - 4.0).abs() < 0.001);
+}
+
+#[test]
+fn test_get_gate_analytics_approved_and_rejected() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "mixed-wf");
+
+    // 2 approved + 1 rejected → approval_rate = 2/3 * 100 ≈ 66.67
+    insert_terminal_gate_step(
+        &conn,
+        "g1",
+        &run.id,
+        "review",
+        "completed",
+        "2026-04-06T10:00:00Z",
+        "2026-04-06T10:00:10Z",
+        None,
+    );
+    insert_terminal_gate_step(
+        &conn,
+        "g2",
+        &run.id,
+        "review",
+        "completed",
+        "2026-04-06T10:00:00Z",
+        "2026-04-06T10:00:20Z",
+        None,
+    );
+    insert_terminal_gate_step(
+        &conn,
+        "g3",
+        &run.id,
+        "review",
+        "failed",
+        "2026-04-06T10:00:00Z",
+        "2026-04-06T10:00:30Z",
+        None,
+    );
+
+    let rows = mgr.get_gate_analytics("mixed-wf", 30).unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.total_gate_hits, 3);
+    assert_eq!(row.approved_count, 2);
+    assert_eq!(row.rejected_count, 1);
+    let expected_rate = 2.0 / 3.0 * 100.0;
+    assert!(
+        (row.approval_rate - expected_rate).abs() < 0.01,
+        "approval_rate={} expected≈{expected_rate}",
+        row.approval_rate
+    );
+}
+
+#[test]
+fn test_get_gate_analytics_multiple_step_names() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "multi-step-wf");
+
+    insert_terminal_gate_step(
+        &conn,
+        "g1",
+        &run.id,
+        "gate-a",
+        "completed",
+        "2026-04-06T10:00:00Z",
+        "2026-04-06T10:00:05Z",
+        None,
+    );
+    insert_terminal_gate_step(
+        &conn,
+        "g2",
+        &run.id,
+        "gate-b",
+        "failed",
+        "2026-04-06T10:00:00Z",
+        "2026-04-06T10:00:15Z",
+        None,
+    );
+
+    let rows = mgr.get_gate_analytics("multi-step-wf", 30).unwrap();
+    assert_eq!(rows.len(), 2);
+    let names: Vec<&str> = rows.iter().map(|r| r.step_name.as_str()).collect();
+    assert!(names.contains(&"gate-a"), "gate-a missing from {names:?}");
+    assert!(names.contains(&"gate-b"), "gate-b missing from {names:?}");
+}
+
+#[test]
+fn test_get_gate_analytics_excludes_other_workflow() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
+    let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
+
+    insert_terminal_gate_step(
+        &conn,
+        "g1",
+        &run_a.id,
+        "gate",
+        "completed",
+        "2026-04-06T10:00:00Z",
+        "2026-04-06T10:00:10Z",
+        None,
+    );
+    insert_terminal_gate_step(
+        &conn,
+        "g2",
+        &run_b.id,
+        "gate",
+        "completed",
+        "2026-04-06T10:00:00Z",
+        "2026-04-06T10:00:10Z",
+        None,
+    );
+
+    let rows = mgr.get_gate_analytics("wf-a", 30).unwrap();
+    assert_eq!(rows.len(), 1, "must only return rows for wf-a");
+}
+
+#[test]
+fn test_get_gate_analytics_excludes_waiting_steps() {
+    // Steps still in 'waiting' status must not be counted (only terminal ones count).
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "wait-wf");
+
+    let step_id = mgr
+        .insert_step(&run.id, "approval", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+        .unwrap();
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+    let rows = mgr.get_gate_analytics("wait-wf", 30).unwrap();
+    assert!(
+        rows.is_empty(),
+        "waiting steps must not appear in gate analytics"
+    );
+}
+
+// ─── get_all_pending_gates ─────────────────────────────────────────────────
+
+#[test]
+fn test_get_all_pending_gates_empty() {
+    let conn = setup_db();
+    let result = WorkflowManager::new(&conn).get_all_pending_gates().unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_get_all_pending_gates_returns_waiting_gate() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "pending-wf");
+
+    let step_id = mgr
+        .insert_step(&run.id, "human-review", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(
+        &step_id,
+        GateType::HumanApproval,
+        Some("Please review"),
+        "1h",
+    )
+    .unwrap();
+    // Transition through Running (sets started_at) then to Waiting.
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Running);
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+    let rows = mgr.get_all_pending_gates().unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.step_id, step_id);
+    assert_eq!(row.step_name, "human-review");
+    assert_eq!(row.workflow_name, "pending-wf");
+    assert_eq!(row.workflow_run_id, run.id);
+    assert_eq!(row.gate_type, "human_approval");
+    assert_eq!(row.gate_prompt.as_deref(), Some("Please review"));
+    // wait_ms_so_far is computed live; tolerate small negative values from clock skew
+    assert!(
+        row.wait_ms_so_far > -1000,
+        "wait_ms_so_far={}",
+        row.wait_ms_so_far
+    );
+}
+
+#[test]
+fn test_get_all_pending_gates_excludes_completed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "done-wf");
+
+    let step_id = mgr
+        .insert_step(&run.id, "gate", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+        .unwrap();
+    mgr.approve_gate(&step_id, "alice", None, None).unwrap();
+
+    let rows = mgr.get_all_pending_gates().unwrap();
+    assert!(rows.is_empty(), "completed gate must not appear");
+}
+
+#[test]
+fn test_get_all_pending_gates_excludes_non_gate_steps() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "actor-wf");
+
+    // Regular actor step put into waiting — must not appear (gate_type IS NULL).
+    let step_id = mgr
+        .insert_step(&run.id, "build", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+    let rows = mgr.get_all_pending_gates().unwrap();
+    assert!(rows.is_empty(), "non-gate step must not appear");
+}
+
+#[test]
+fn test_get_all_pending_gates_cross_workflow() {
+    // Pending gates from multiple different workflows should all appear.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run_a = create_named_worktree_run(&conn, "w1", "wf-alpha");
+    let step_a = mgr
+        .insert_step(&run_a.id, "gate-a", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_a, GateType::HumanApproval, None, "1h")
+        .unwrap();
+    set_step_status(&mgr, &step_a, WorkflowStepStatus::Running);
+    set_step_status(&mgr, &step_a, WorkflowStepStatus::Waiting);
+
+    let run_b = create_named_worktree_run(&conn, "w1", "wf-beta");
+    let step_b = mgr
+        .insert_step(&run_b.id, "gate-b", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_b, GateType::HumanApproval, None, "1h")
+        .unwrap();
+    set_step_status(&mgr, &step_b, WorkflowStepStatus::Running);
+    set_step_status(&mgr, &step_b, WorkflowStepStatus::Waiting);
+
+    let rows = mgr.get_all_pending_gates().unwrap();
+    assert_eq!(rows.len(), 2);
+    let wf_names: Vec<&str> = rows.iter().map(|r| r.workflow_name.as_str()).collect();
+    assert!(wf_names.contains(&"wf-alpha"));
+    assert!(wf_names.contains(&"wf-beta"));
+}
+
 // ── get_workflow_regression_signals ──────────────────────────────────────────
 
 /// Backdate a run's `started_at` to N days ago (required for time-window filtering).
