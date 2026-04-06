@@ -55,7 +55,7 @@ export function RunWorkflowModal({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md border border-gray-600">
         <h3 className="text-lg font-semibold text-gray-200 mb-4">
-          Run: {def.name}
+          Run: {def.title ?? def.name}
         </h3>
 
         <div className="space-y-4">

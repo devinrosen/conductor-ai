@@ -2050,6 +2050,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "test-wf".into(),
+            title: None,
             description: "test".into(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
@@ -2139,6 +2140,7 @@ mod tests {
     fn make_def(name: &str, group: Option<&str>) -> conductor_core::workflow::WorkflowDef {
         conductor_core::workflow::WorkflowDef {
             name: name.to_string(),
+            title: None,
             description: String::new(),
             trigger: conductor_core::workflow::WorkflowTrigger::Manual,
             targets: vec![],

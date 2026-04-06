@@ -137,6 +137,7 @@ impl From<&InputDecl> for InputDeclSummary {
 #[derive(Serialize)]
 pub struct WorkflowDefSummary {
     pub name: String,
+    pub title: Option<String>,
     pub description: String,
     pub trigger: String,
     pub inputs: Vec<InputDeclSummary>,
@@ -149,6 +150,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
     fn from(def: &WorkflowDef) -> Self {
         Self {
             name: def.name.clone(),
+            title: def.title.clone(),
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),

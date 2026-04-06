@@ -1253,6 +1253,7 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
 fn make_workflow_def(name: &str, target: &str) -> conductor_core::workflow::WorkflowDef {
     conductor_core::workflow::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: String::new(),
         trigger: conductor_core::workflow::WorkflowTrigger::Manual,
         targets: vec![target.to_string()],

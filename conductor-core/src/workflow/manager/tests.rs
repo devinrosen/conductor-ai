@@ -1128,6 +1128,7 @@ fn test_set_workflow_run_iteration() {
 fn minimal_workflow(name: &str) -> crate::workflow_dsl::WorkflowDef {
     crate::workflow_dsl::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: "test workflow".to_string(),
         trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
         targets: vec![],
@@ -1574,6 +1575,7 @@ fn test_cancel_run_marks_active_steps_failed() {
 fn make_repo_workflow(name: &str) -> crate::workflow::WorkflowDef {
     crate::workflow::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: "repo-scoped workflow".to_string(),
         trigger: crate::workflow::WorkflowTrigger::Manual,
         targets: vec!["repo".to_string()],
@@ -1588,6 +1590,7 @@ fn make_repo_workflow(name: &str) -> crate::workflow::WorkflowDef {
 fn make_worktree_workflow(name: &str) -> crate::workflow::WorkflowDef {
     crate::workflow::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: "worktree-scoped workflow".to_string(),
         trigger: crate::workflow::WorkflowTrigger::Manual,
         targets: vec!["worktree".to_string()],

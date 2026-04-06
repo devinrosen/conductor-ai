@@ -1683,6 +1683,7 @@ mod tests {
     ) -> WorkflowDef {
         WorkflowDef {
             name: name.to_string(),
+            title: None,
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],

@@ -115,9 +115,14 @@ pub fn handle_workflow(
             if !wf_defs.is_empty() {
                 for def in &wf_defs {
                     let node_count = def.total_nodes();
+                    let display = if def.title.is_some() {
+                        format!("{} [id: {}]", def.display_name(), def.name)
+                    } else {
+                        def.name.clone()
+                    };
                     println!(
-                        "  {:<20} {:<40} [{}, {} nodes]",
-                        def.name, def.description, def.trigger, node_count
+                        "  {:<40} {:<40} [{}, {} nodes]",
+                        display, def.description, def.trigger, node_count
                     );
                 }
             } else {
