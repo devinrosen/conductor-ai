@@ -1201,8 +1201,9 @@ impl App {
         });
 
         self.workflow_threads.push(handle);
-        self.state.status_message =
-            Some(format!("Starting workflow '{workflow_display_name}' on ticket…"));
+        self.state.status_message = Some(format!(
+            "Starting workflow '{workflow_display_name}' on ticket…"
+        ));
     }
 
     pub(super) fn spawn_repo_workflow_in_background(
@@ -1254,8 +1255,9 @@ impl App {
         });
 
         self.workflow_threads.push(handle);
-        self.state.status_message =
-            Some(format!("Starting workflow '{workflow_display_name}' on repo…"));
+        self.state.status_message = Some(format!(
+            "Starting workflow '{workflow_display_name}' on repo…"
+        ));
     }
 
     pub(super) fn spawn_workflow_run_target_in_background(
