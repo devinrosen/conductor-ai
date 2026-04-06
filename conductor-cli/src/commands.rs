@@ -594,6 +594,9 @@ pub enum TicketCommands {
         /// Agent map JSON (pre-resolved agent assignments)
         #[arg(long)]
         agent_map: Option<String>,
+        /// Source ID of the parent ticket within the same source_type (replaces any existing parent)
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// Update a ticket's state, workflow, or agent_map
     Update {
