@@ -118,6 +118,7 @@ impl App {
                         repo.id,
                         repo.slug,
                         repo.remote_url,
+                        true,
                     );
                     return;
                 }
