@@ -37,10 +37,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkflowCommands,
     },
-    /// Manage Claude Code status line integration
-    Statusline {
+    /// Set up Claude Code integration (MCP server registration)
+    Setup {
         #[command(subcommand)]
-        command: StatuslineCommands,
+        command: SetupCommands,
     },
     /// Manage features (multi-worktree coordination branches)
     Feature {
@@ -76,10 +76,10 @@ pub enum McpCommands {
 }
 
 #[derive(Subcommand)]
-pub enum StatuslineCommands {
-    /// Install the conductor status line into Claude Code
+pub enum SetupCommands {
+    /// Register the conductor MCP server in Claude Code
     Install,
-    /// Uninstall the conductor status line from Claude Code
+    /// Unregister the conductor MCP server from Claude Code
     Uninstall,
 }
 

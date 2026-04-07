@@ -239,7 +239,7 @@ pub struct GeneralConfig {
     #[serde(default = "default_true")]
     pub auto_cleanup_merged_branches: bool,
     /// Custom Claude Code configuration directory (e.g. `~/.claude-personal`).
-    /// When set, conductor uses this directory for statusline setup and passes
+    /// When set, conductor uses this directory for MCP server setup and passes
     /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,

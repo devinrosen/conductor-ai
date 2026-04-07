@@ -1,19 +1,10 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
-/// The statusline Python script embedded at compile time.
-static STATUSLINE_SCRIPT: &str = include_str!("../../scripts/statusline.py");
-
-fn conductor_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("cannot determine home directory")?;
-    Ok(home.join(".conductor"))
-}
-
-/// Read and parse `~/.claude/settings.json` (or `path`), returning the JSON
-/// value. Returns `Value::Object({})` if the file does not exist.
+/// Read and parse a JSON settings file, returning `Value::Object({})` if the
+/// file does not exist.
 fn read_settings(path: &Path) -> Result<serde_json::Value> {
     let raw = if path.exists() {
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?
@@ -34,24 +25,8 @@ fn write_settings(path: &Path, value: &serde_json::Value) -> Result<()> {
 }
 
 /// Core install logic, parameterised for testability.
-fn install_to(conductor_dir: &Path, settings_path: &Path) -> Result<()> {
-    // 1. Write the embedded script to <conductor_dir>/statusline.py
-    fs::create_dir_all(conductor_dir)
-        .with_context(|| format!("failed to create {}", conductor_dir.display()))?;
-
-    let script_path = conductor_dir.join("statusline.py");
-    fs::write(&script_path, STATUSLINE_SCRIPT)
-        .with_context(|| format!("failed to write {}", script_path.display()))?;
-
-    // 2. chmod +x
-    let mut perms = fs::metadata(&script_path)
-        .with_context(|| format!("cannot stat {}", script_path.display()))?
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script_path, perms)
-        .with_context(|| format!("failed to chmod {}", script_path.display()))?;
-
-    // 3. Read (or create) settings.json
+fn install_to(settings_path: &Path) -> Result<()> {
+    // Ensure parent directory exists
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -66,13 +41,7 @@ fn install_to(conductor_dir: &Path, settings_path: &Path) -> Result<()> {
         );
     }
 
-    // 4. Set statusLineTool
-    let script_path_str = script_path
-        .to_str()
-        .context("script path is not valid UTF-8")?;
-    value["statusLineTool"] = serde_json::Value::String(script_path_str.to_string());
-
-    // 5. Set mcpServers.conductor
+    // Set mcpServers.conductor
     {
         let mcp_servers = value["mcpServers"]
             .as_object_mut()
@@ -89,18 +58,15 @@ fn install_to(conductor_dir: &Path, settings_path: &Path) -> Result<()> {
         value["mcpServers"] = serde_json::Value::Object(mcp_servers);
     }
 
-    // 6. Write settings back
     write_settings(settings_path, &value)?;
 
-    println!("Conductor status line installed.");
-    println!("  Script:  {}", script_path.display());
-    println!("  Setting: {} → statusLineTool", settings_path.display());
+    println!("Conductor MCP server registered in Claude Code.");
     println!(
         "  Setting: {} → mcpServers.conductor",
         settings_path.display()
     );
     println!();
-    println!("Restart Claude Code to activate the status line and MCP server.");
+    println!("Restart Claude Code to activate the MCP server.");
 
     Ok(())
 }
@@ -117,22 +83,17 @@ fn uninstall_from(settings_path: &Path) -> Result<()> {
 
     let mut value = read_settings(settings_path)?;
 
-    let has_statusline = value.get("statusLineTool").is_some();
     let has_mcp = value
         .get("mcpServers")
         .and_then(|v| v.get("conductor"))
         .is_some();
 
-    if !has_statusline && !has_mcp {
+    if !has_mcp {
         println!(
             "Nothing to uninstall: conductor keys not found in {}.",
             settings_path.display()
         );
         return Ok(());
-    }
-
-    if let Some(obj) = value.as_object_mut() {
-        obj.remove("statusLineTool");
     }
 
     // Remove mcpServers.conductor; drop the whole mcpServers key if empty.
@@ -147,13 +108,13 @@ fn uninstall_from(settings_path: &Path) -> Result<()> {
 
     write_settings(settings_path, &value)?;
 
-    println!("Conductor status line uninstalled.");
+    println!("Conductor MCP server unregistered.");
     println!("  Removed conductor keys from {}", settings_path.display());
 
     Ok(())
 }
 
-fn claude_settings_path() -> Result<PathBuf> {
+fn claude_settings_path() -> Result<std::path::PathBuf> {
     let config = conductor_core::config::load_config()?;
     Ok(config
         .general
@@ -161,20 +122,18 @@ fn claude_settings_path() -> Result<PathBuf> {
         .join("settings.json"))
 }
 
-/// Install the conductor status line into Claude Code.
+/// Register the conductor MCP server in Claude Code's settings.json.
 ///
-/// Writes `~/.conductor/statusline.py`, marks it executable, then updates
-/// `<claude_config_dir>/settings.json` to set `statusLineTool` to that path.
+/// Updates `<claude_config_dir>/settings.json` to add `mcpServers.conductor`.
 /// The Claude config directory is read from conductor's config (`claude_config_dir`),
 /// defaulting to `~/.claude` when unset.
 pub fn install() -> Result<()> {
-    install_to(&conductor_dir()?, &claude_settings_path()?)
+    install_to(&claude_settings_path()?)
 }
 
-/// Uninstall the conductor status line from Claude Code.
+/// Unregister the conductor MCP server from Claude Code's settings.json.
 ///
-/// Removes `statusLineTool` from `<claude_config_dir>/settings.json`.
-/// Leaves `~/.conductor/statusline.py` in place for fast reinstall.
+/// Removes `mcpServers.conductor` from `<claude_config_dir>/settings.json`.
 pub fn uninstall() -> Result<()> {
     uninstall_from(&claude_settings_path()?)
 }
@@ -186,11 +145,9 @@ mod tests {
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    fn temp_dir() -> PathBuf {
+    fn temp_dir() -> std::path::PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("conductor_statusline_test_{n}"));
-        // Remove any stale directory from a prior test run so tests never see
-        // leftover files (e.g. invalid JSON from install_rejects_invalid_json_in_settings).
+        let dir = std::env::temp_dir().join(format!("conductor_setup_test_{n}"));
         if dir.exists() {
             fs::remove_dir_all(&dir).unwrap();
         }
@@ -199,27 +156,14 @@ mod tests {
     }
 
     #[test]
-    fn install_creates_script_and_sets_statusline_tool() {
+    fn install_sets_mcp_server() {
         let root = temp_dir();
-        let conductor = root.join("conductor");
         let settings = root.join("settings.json");
 
-        install_to(&conductor, &settings).unwrap();
+        install_to(&settings).unwrap();
 
-        // Script should exist and be executable
-        let script = conductor.join("statusline.py");
-        assert!(script.exists(), "statusline.py was not created");
-        let mode = fs::metadata(&script).unwrap().permissions().mode();
-        assert!(mode & 0o111 != 0, "statusline.py is not executable");
-
-        // settings.json should have statusLineTool set to the script path
         let raw = fs::read_to_string(&settings).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(
-            v["statusLineTool"].as_str().unwrap(),
-            script.to_str().unwrap()
-        );
-        // mcpServers.conductor should be set
         assert_eq!(
             v["mcpServers"]["conductor"]["command"].as_str().unwrap(),
             "conductor"
@@ -235,33 +179,28 @@ mod tests {
     }
 
     #[test]
-    fn install_updates_existing_settings_json() {
+    fn install_preserves_existing_settings() {
         let root = temp_dir();
-        let conductor = root.join("conductor");
         let settings = root.join("settings.json");
 
-        // Pre-existing settings with another key
         fs::write(&settings, r#"{"someOtherKey": true}"#).unwrap();
 
-        install_to(&conductor, &settings).unwrap();
+        install_to(&settings).unwrap();
 
         let raw = fs::read_to_string(&settings).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        // Original key preserved
         assert!(v["someOtherKey"].as_bool().unwrap());
-        // statusLineTool set
-        assert!(v["statusLineTool"].is_string());
+        assert!(v["mcpServers"]["conductor"].is_object());
     }
 
     #[test]
     fn install_rejects_non_object_settings_json() {
         let root = temp_dir();
-        let conductor = root.join("conductor");
         let settings = root.join("settings.json");
 
         fs::write(&settings, r#"["not", "an", "object"]"#).unwrap();
 
-        let err = install_to(&conductor, &settings).unwrap_err();
+        let err = install_to(&settings).unwrap_err();
         assert!(
             err.to_string().contains("not an object"),
             "unexpected error: {err}"
@@ -271,12 +210,11 @@ mod tests {
     #[test]
     fn install_rejects_invalid_json_in_settings() {
         let root = temp_dir();
-        let conductor = root.join("conductor");
         let settings = root.join("settings.json");
 
         fs::write(&settings, "not json at all").unwrap();
 
-        let err = install_to(&conductor, &settings).unwrap_err();
+        let err = install_to(&settings).unwrap_err();
         assert!(
             err.to_string().contains("invalid JSON"),
             "unexpected error: {err}"
@@ -284,23 +222,15 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_removes_statusline_tool_and_mcp_servers() {
+    fn uninstall_removes_mcp_server() {
         let root = temp_dir();
-        let conductor = root.join("conductor");
         let settings = root.join("settings.json");
 
-        // Install first
-        install_to(&conductor, &settings).unwrap();
-
-        // Now uninstall
+        install_to(&settings).unwrap();
         uninstall_from(&settings).unwrap();
 
         let raw = fs::read_to_string(&settings).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert!(
-            v.get("statusLineTool").is_none(),
-            "statusLineTool should have been removed"
-        );
         assert!(
             v.get("mcpServers").is_none(),
             "mcpServers should have been removed (was empty)"
@@ -310,7 +240,6 @@ mod tests {
     #[test]
     fn uninstall_leaves_other_mcp_servers_untouched() {
         let root = temp_dir();
-        let conductor = root.join("conductor");
         let settings = root.join("settings.json");
 
         // Pre-populate with another MCP server
@@ -320,15 +249,13 @@ mod tests {
         )
         .unwrap();
 
-        // Install (should add conductor entry)
-        install_to(&conductor, &settings).unwrap();
+        install_to(&settings).unwrap();
 
         let raw = fs::read_to_string(&settings).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(v["mcpServers"]["conductor"].is_object());
         assert!(v["mcpServers"]["other-server"].is_object());
 
-        // Uninstall (should remove conductor but leave other-server)
         uninstall_from(&settings).unwrap();
 
         let raw = fs::read_to_string(&settings).unwrap();
@@ -351,7 +278,6 @@ mod tests {
         let settings = root.join("settings.json");
         fs::write(&settings, r#"{"otherKey": 1}"#).unwrap();
 
-        // Should succeed without error even though conductor keys are not set
         uninstall_from(&settings).unwrap();
 
         let raw = fs::read_to_string(&settings).unwrap();
@@ -364,22 +290,19 @@ mod tests {
         let root = temp_dir();
         let settings = root.join("nonexistent_settings.json");
 
-        // Should succeed without error
         uninstall_from(&settings).unwrap();
     }
 
     #[test]
-    fn install_then_reinstall_updates_script() {
+    fn install_then_reinstall_is_idempotent() {
         let root = temp_dir();
-        let conductor = root.join("conductor");
         let settings = root.join("settings.json");
 
-        install_to(&conductor, &settings).unwrap();
-        // Second install should succeed (idempotent)
-        install_to(&conductor, &settings).unwrap();
+        install_to(&settings).unwrap();
+        install_to(&settings).unwrap();
 
         let raw = fs::read_to_string(&settings).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert!(v["statusLineTool"].is_string());
+        assert!(v["mcpServers"]["conductor"].is_object());
     }
 }
