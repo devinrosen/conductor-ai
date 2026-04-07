@@ -918,7 +918,10 @@ workflow build {
         let custom_base = tempfile::TempDir::new().expect("tmpdir");
         // No projects sub-directory created — should return None gracefully.
         let result = conversation_log_tail(worktree_dir.path(), Some(custom_base.path()));
-        assert!(result.is_none(), "missing projects subdir should return None");
+        assert!(
+            result.is_none(),
+            "missing projects subdir should return None"
+        );
     }
 
     #[test]
