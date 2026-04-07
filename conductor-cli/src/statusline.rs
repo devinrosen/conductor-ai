@@ -12,11 +12,6 @@ fn conductor_dir() -> Result<PathBuf> {
     Ok(home.join(".conductor"))
 }
 
-fn claude_settings_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("cannot determine home directory")?;
-    Ok(home.join(".claude").join("settings.json"))
-}
-
 /// Read and parse `~/.claude/settings.json` (or `path`), returning the JSON
 /// value. Returns `Value::Object({})` if the file does not exist.
 fn read_settings(path: &Path) -> Result<serde_json::Value> {
@@ -161,17 +156,23 @@ fn uninstall_from(settings_path: &Path) -> Result<()> {
 /// Install the conductor status line into Claude Code.
 ///
 /// Writes `~/.conductor/statusline.py`, marks it executable, then updates
-/// `~/.claude/settings.json` to set `statusLineTool` to that path.
+/// `<claude_config_dir>/settings.json` to set `statusLineTool` to that path.
+/// The Claude config directory is read from conductor's config (`claude_config_dir`),
+/// defaulting to `~/.claude` when unset.
 pub fn install() -> Result<()> {
-    install_to(&conductor_dir()?, &claude_settings_path()?)
+    let config = conductor_core::config::load_config()?;
+    let claude_dir = config.general.resolved_claude_config_dir()?;
+    install_to(&conductor_dir()?, &claude_dir.join("settings.json"))
 }
 
 /// Uninstall the conductor status line from Claude Code.
 ///
-/// Removes `statusLineTool` from `~/.claude/settings.json`.
+/// Removes `statusLineTool` from `<claude_config_dir>/settings.json`.
 /// Leaves `~/.conductor/statusline.py` in place for fast reinstall.
 pub fn uninstall() -> Result<()> {
-    uninstall_from(&claude_settings_path()?)
+    let config = conductor_core::config::load_config()?;
+    let claude_dir = config.general.resolved_claude_config_dir()?;
+    uninstall_from(&claude_dir.join("settings.json"))
 }
 
 #[cfg(test)]

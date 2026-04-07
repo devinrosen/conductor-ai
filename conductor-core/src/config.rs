@@ -238,6 +238,11 @@ pub struct GeneralConfig {
     /// remove worktree directory, auto-close orphaned features). Defaults to true.
     #[serde(default = "default_true")]
     pub auto_cleanup_merged_branches: bool,
+    /// Custom Claude Code configuration directory (e.g. `~/.claude-personal`).
+    /// When set, conductor uses this directory for statusline setup and passes
+    /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_config_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +298,22 @@ impl Default for GeneralConfig {
             inject_startup_context: true,
             theme: None,
             auto_cleanup_merged_branches: true,
+            claude_config_dir: None,
+        }
+    }
+}
+
+impl GeneralConfig {
+    /// Returns the resolved Claude config directory as a `PathBuf`.
+    ///
+    /// If `claude_config_dir` is set, expands `~` and returns the result.
+    /// Otherwise falls back to `~/.claude`.
+    pub fn resolved_claude_config_dir(&self) -> Result<PathBuf> {
+        match &self.claude_config_dir {
+            Some(raw) => crate::text_util::expand_tilde(raw).map_err(ConductorError::Config),
+            None => dirs::home_dir()
+                .map(|h| h.join(".claude"))
+                .ok_or_else(|| ConductorError::Config("cannot determine home directory".into())),
         }
     }
 }

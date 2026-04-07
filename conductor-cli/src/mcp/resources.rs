@@ -286,7 +286,13 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
             .get_workflow_run(run_id)?
             .ok_or_else(|| anyhow::anyhow!("Workflow run {run_id} not found"))?;
         let steps = wf_mgr.get_workflow_steps(run_id)?;
-        return Ok(format_run_detail_with_log(&conn, &run, &steps));
+        let claude_dir = config.general.resolved_claude_config_dir().ok();
+        return Ok(format_run_detail_with_log(
+            &conn,
+            &run,
+            &steps,
+            claude_dir.as_deref(),
+        ));
     }
 
     if let Some(repo_slug) = uri.strip_prefix("conductor://workflows/") {
@@ -448,16 +454,23 @@ fn format_run_detail(
 
 /// Return the tail of the most recent Claude Code conversation log for a worktree.
 ///
-/// Looks in `~/.claude/projects/<escaped>/` where `<escaped>` is the worktree
-/// path with every `/` replaced by `-`. Returns `None` on any error or if no
-/// relevant messages are found.
-pub(crate) fn conversation_log_tail(worktree_path: &Path) -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
+/// Looks in `<claude_config_dir>/projects/<escaped>/` where `<escaped>` is the
+/// worktree path with every `/` replaced by `-`. Falls back to `~/.claude` when
+/// `claude_config_dir` is `None`. Returns `None` on any error or if no relevant
+/// messages are found.
+pub(crate) fn conversation_log_tail(
+    worktree_path: &Path,
+    claude_config_dir: Option<&Path>,
+) -> Option<String> {
     let escaped = worktree_path.to_str()?.replace('/', "-");
-    let projects_dir = PathBuf::from(&home)
-        .join(".claude")
-        .join("projects")
-        .join(&escaped);
+    let base = match claude_config_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => {
+            let home = std::env::var("HOME").ok()?;
+            PathBuf::from(home).join(".claude")
+        }
+    };
+    let projects_dir = base.join("projects").join(&escaped);
     conversation_log_tail_from_dir(&projects_dir)
 }
 
@@ -530,11 +543,12 @@ pub(crate) fn format_run_detail_with_log(
     conn: &rusqlite::Connection,
     run: &conductor_core::workflow::WorkflowRun,
     steps: &[conductor_core::workflow::WorkflowRunStep],
+    claude_config_dir: Option<&Path>,
 ) -> String {
     let (wt_slug, wt_branch, wt_path) = resolve_worktree_info(conn, run);
     let mut out = format_run_detail(run, steps, wt_slug.as_deref(), wt_branch.as_deref());
     if let Some(path) = wt_path {
-        if let Some(log) = conversation_log_tail(&path) {
+        if let Some(log) = conversation_log_tail(&path, claude_config_dir) {
             out.push_str("\nconversation log (last 20 messages):\n");
             out.push_str(&log);
         }
