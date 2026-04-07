@@ -3,7 +3,7 @@ pub mod dev;
 pub mod feature;
 pub mod mcp;
 pub mod repo;
-pub mod statusline;
+pub mod setup;
 pub mod tickets;
 pub mod workflow;
 pub mod worktree;

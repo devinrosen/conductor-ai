@@ -341,6 +341,18 @@ pub(crate) fn run_agent(
             .stderr(Stdio::inherit())
             .current_dir(worktree_path);
 
+        // Pass CLAUDE_CONFIG_DIR when explicitly configured so agent runs use
+        // the custom Claude config directory instead of the default ~/.claude.
+        match config.general.custom_claude_config_dir() {
+            Some(Ok(dir)) => {
+                cmd.env("CLAUDE_CONFIG_DIR", dir);
+            }
+            Some(Err(e)) => {
+                eprintln!("[conductor] Warning: failed to resolve claude_config_dir — agent will use default ~/.claude: {e}");
+            }
+            None => {}
+        }
+
         // Inject GH_TOKEN from the GitHub App installation token so all `gh` calls
         // made by the agent (including `gh pr create`) use the bot identity rather
         // than the human `gh` CLI user. Fall back gracefully when not configured.
