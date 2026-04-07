@@ -153,6 +153,14 @@ fn uninstall_from(settings_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn claude_settings_path() -> Result<PathBuf> {
+    let config = conductor_core::config::load_config()?;
+    Ok(config
+        .general
+        .resolved_claude_config_dir()?
+        .join("settings.json"))
+}
+
 /// Install the conductor status line into Claude Code.
 ///
 /// Writes `~/.conductor/statusline.py`, marks it executable, then updates
@@ -160,9 +168,7 @@ fn uninstall_from(settings_path: &Path) -> Result<()> {
 /// The Claude config directory is read from conductor's config (`claude_config_dir`),
 /// defaulting to `~/.claude` when unset.
 pub fn install() -> Result<()> {
-    let config = conductor_core::config::load_config()?;
-    let claude_dir = config.general.resolved_claude_config_dir()?;
-    install_to(&conductor_dir()?, &claude_dir.join("settings.json"))
+    install_to(&conductor_dir()?, &claude_settings_path()?)
 }
 
 /// Uninstall the conductor status line from Claude Code.
@@ -170,9 +176,7 @@ pub fn install() -> Result<()> {
 /// Removes `statusLineTool` from `<claude_config_dir>/settings.json`.
 /// Leaves `~/.conductor/statusline.py` in place for fast reinstall.
 pub fn uninstall() -> Result<()> {
-    let config = conductor_core::config::load_config()?;
-    let claude_dir = config.general.resolved_claude_config_dir()?;
-    uninstall_from(&claude_dir.join("settings.json"))
+    uninstall_from(&claude_settings_path()?)
 }
 
 #[cfg(test)]

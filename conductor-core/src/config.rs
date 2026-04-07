@@ -309,8 +309,8 @@ impl GeneralConfig {
     /// If `claude_config_dir` is set, expands `~` and returns the result.
     /// Otherwise falls back to `~/.claude`.
     pub fn resolved_claude_config_dir(&self) -> Result<PathBuf> {
-        match &self.claude_config_dir {
-            Some(raw) => crate::text_util::expand_tilde(raw).map_err(ConductorError::Config),
+        match self.custom_claude_config_dir() {
+            Some(result) => result,
             None => dirs::home_dir()
                 .map(|h| h.join(".claude"))
                 .ok_or_else(|| ConductorError::Config("cannot determine home directory".into())),
