@@ -55,7 +55,10 @@ pub async fn list_all_tickets(
         tickets.retain(|t| t.state != "closed");
     }
     let dependencies = syncer.get_all_dependencies()?;
-    Ok(Json(TicketListResponse { tickets, dependencies }))
+    Ok(Json(TicketListResponse {
+        tickets,
+        dependencies,
+    }))
 }
 
 pub async fn list_tickets(
@@ -72,7 +75,10 @@ pub async fn list_tickets(
         tickets.retain(|t| t.state != "closed");
     }
     let dependencies = syncer.get_all_dependencies_for_repo(&repo_id)?;
-    Ok(Json(TicketListResponse { tickets, dependencies }))
+    Ok(Json(TicketListResponse {
+        tickets,
+        dependencies,
+    }))
 }
 
 /// Fetch tickets using `fetch`, then apply the sync (upsert + close + mark worktrees).
@@ -266,8 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_all_tickets_shows_closed_when_requested() {
-        let (status, body) =
-            get_ticket_list("/api/tickets?show_closed=true", seeded_state()).await;
+        let (status, body) = get_ticket_list("/api/tickets?show_closed=true", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
         let tickets = body["tickets"].as_array().unwrap();
         assert_eq!(
