@@ -685,6 +685,7 @@ pub fn spawn_ticket_sync_for_repo(
     repo_id: String,
     repo_slug: String,
     remote_url: String,
+    force: bool,
 ) {
     thread::spawn(move || {
         let db = db_path();
@@ -721,10 +722,10 @@ pub fn spawn_ticket_sync_for_repo(
                 })
                 .unwrap_or(true),
             Ok(None) => true,
-            Err(_) => false,
+            Err(_) => true,
         };
 
-        if !is_stale {
+        if !force && !is_stale {
             let _ = tx.send(Action::TicketSyncDone);
             return;
         }

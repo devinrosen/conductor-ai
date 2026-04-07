@@ -844,6 +844,7 @@ impl App {
                         repo_id.clone(),
                         repo.slug.clone(),
                         remote_url,
+                        false,
                     );
                 }
             }
