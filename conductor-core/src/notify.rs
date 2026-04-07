@@ -1,5 +1,7 @@
 use crate::agent::{AgentRun, AgentRunStatus};
-use crate::config::NotificationConfig;
+use crate::config::{HookConfig, NotificationConfig};
+use crate::notification_event::NotificationEvent;
+use crate::notification_hooks::HookRunner;
 use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
 use crate::workflow::WorkflowRun;
 use crate::workflow::WorkflowRunStatus;
@@ -134,14 +136,16 @@ pub fn try_claim_notification(
     }
 }
 
-/// Dispatch a notification using the common 4-step pattern.
+/// Dispatch a notification using the common 5-step pattern.
 ///
 /// 1. Try to claim notification for deduplication
 /// 2. Persist in-app notification
 /// 3. Show desktop notification with error logging
 /// 4. Send Slack notification if configured
+/// 5. Fire user-configured notification hooks (shell/HTTP)
 ///
 /// Returns `true` if the notification was dispatched, `false` if deduplicated.
+#[allow(clippy::too_many_arguments)]
 fn dispatch_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
@@ -149,6 +153,8 @@ fn dispatch_notification(
     dedup_event_type: &str,
     notification: &CreateNotification<'_>,
     slack_text: &str,
+    hooks: &[HookConfig],
+    event: Option<&NotificationEvent>,
 ) -> bool {
     // Step 1: Try to claim notification for deduplication
     if !try_claim_notification(conn, dedup_entity_id, dedup_event_type) {
@@ -169,6 +175,12 @@ fn dispatch_notification(
 
     // Step 4: Send Slack notification if configured
     maybe_send_slack(config, slack_text);
+
+    // Step 5: Fire user-configured notification hooks (fire-and-forget)
+    if let Some(evt) = event {
+        HookRunner::new(hooks).fire(evt);
+    }
+
     true
 }
 
@@ -178,9 +190,11 @@ fn dispatch_notification(
 /// `on_success`/`on_failure` guards. A cross-process dedup check via
 /// `notification_log` prevents duplicate notifications when multiple TUI/web
 /// instances run concurrently. A `notify_rust` error is logged as a warning.
+/// Matching entries in `notify_hooks` are fired after the dedup claim succeeds.
 pub fn fire_workflow_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
     run_id: &str,
     workflow_name: &str,
     target_label: Option<&str>,
@@ -225,17 +239,44 @@ pub fn fire_workflow_notification(
         None => format!("[conductor] workflow \"{workflow_name}\" {status_word}"),
     };
 
-    dispatch_notification(conn, config, run_id, event_type, &notification, &slack_text);
+    let hook_event = if succeeded {
+        NotificationEvent::WorkflowRunCompleted {
+            run_id: run_id.to_string(),
+            label: body.clone(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            url: None,
+        }
+    } else {
+        NotificationEvent::WorkflowRunFailed {
+            run_id: run_id.to_string(),
+            label: body.clone(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            url: None,
+        }
+    };
+
+    dispatch_notification(
+        conn,
+        config,
+        run_id,
+        event_type,
+        &notification,
+        &slack_text,
+        notify_hooks,
+        Some(&hook_event),
+    );
 }
 
 /// Fire a desktop notification for an agent feedback request.
 ///
 /// Gated on `config.enabled`. Uses `(request_id, "feedback_requested")` as the
 /// dedup key so each feedback request fires at most one notification across all
-/// processes.
+/// processes. Matching entries in `notify_hooks` are fired after the dedup claim
+/// succeeds.
 pub fn fire_feedback_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
     request_id: &str,
     prompt_preview: &str,
 ) {
@@ -255,6 +296,14 @@ pub fn fire_feedback_notification(
 
     let slack_text = format!("[conductor] agent run waiting for feedback: {prompt_preview}");
 
+    let hook_event = NotificationEvent::FeedbackRequested {
+        run_id: request_id.to_string(),
+        label: prompt_preview.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        url: None,
+        prompt_preview: prompt_preview.to_string(),
+    };
+
     dispatch_notification(
         conn,
         config,
@@ -262,6 +311,8 @@ pub fn fire_feedback_notification(
         "feedback_requested",
         &notification,
         &slack_text,
+        notify_hooks,
+        Some(&hook_event),
     );
 }
 
@@ -269,9 +320,11 @@ pub fn fire_feedback_notification(
 ///
 /// Gated on `config.enabled` and per-event `on_success`/`on_failure` guards.
 /// Uses `(run_id, "agent_completed"|"agent_failed")` as the dedup key.
+/// Matching entries in `notify_hooks` are fired after the dedup claim succeeds.
 pub fn fire_agent_run_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
     run_id: &str,
     worktree_slug: Option<&str>,
     succeeded: bool,
@@ -327,7 +380,34 @@ pub fn fire_agent_run_notification(
         None => format!("[conductor] agent run {status_word}"),
     };
 
-    dispatch_notification(conn, config, run_id, event_type, &notification, &slack_text);
+    let label = worktree_slug.unwrap_or(run_id).to_string();
+    let hook_event = if succeeded {
+        NotificationEvent::AgentRunCompleted {
+            run_id: run_id.to_string(),
+            label,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            url: None,
+        }
+    } else {
+        NotificationEvent::AgentRunFailed {
+            run_id: run_id.to_string(),
+            label,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            url: None,
+            error: error_msg.map(|s| s.to_string()),
+        }
+    };
+
+    dispatch_notification(
+        conn,
+        config,
+        run_id,
+        event_type,
+        &notification,
+        &slack_text,
+        notify_hooks,
+        Some(&hook_event),
+    );
 }
 
 /// Build the notification title and body for a gate based on its type.
@@ -411,10 +491,12 @@ pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateTy
 /// Fire a desktop notification for a workflow gate waiting for action.
 ///
 /// Gated on `config.enabled` and per-gate-type flags. Uses `(step_id, "gate_waiting")`
-/// as the dedup key.
+/// as the dedup key. Matching entries in `notify_hooks` are fired after the dedup
+/// claim succeeds.
 pub fn fire_gate_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
     params: &GateNotificationParams<'_>,
 ) {
     if !should_notify_gate(config, params.gate_type) {
@@ -447,6 +529,18 @@ pub fn fire_gate_notification(
 
     let slack_text = format!("[conductor] {title}: {body}");
 
+    let wf_label = match params.target_label {
+        Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
+        None => params.workflow_name.to_string(),
+    };
+    let hook_event = NotificationEvent::GateWaiting {
+        run_id: params.step_id.to_string(),
+        label: wf_label,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        url: None,
+        step_name: params.step_name.to_string(),
+    };
+
     dispatch_notification(
         conn,
         config,
@@ -454,6 +548,8 @@ pub fn fire_gate_notification(
         "gate_waiting",
         &notification,
         &slack_text,
+        notify_hooks,
+        Some(&hook_event),
     );
 }
 
@@ -556,6 +652,8 @@ pub fn fire_grouped_gate_notification(
         "gates_grouped",
         &notification,
         &slack_text,
+        &[],
+        None,
     );
 }
 
@@ -832,7 +930,7 @@ mod tests {
     fn fire_workflow_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_workflow_notification(&conn, &cfg, "run-1", "my-workflow", None, true);
+        fire_workflow_notification(&conn, &cfg, &[], "run-1", "my-workflow", None, true);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-1'",
@@ -850,7 +948,7 @@ mod tests {
     fn fire_workflow_notification_disabled_does_not_claim_on_failure() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_workflow_notification(&conn, &cfg, "run-6", "my-workflow", None, false);
+        fire_workflow_notification(&conn, &cfg, &[], "run-6", "my-workflow", None, false);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-6'",
@@ -868,7 +966,7 @@ mod tests {
     fn fire_workflow_notification_on_success_false_does_not_claim_success() {
         let conn = in_memory_db();
         let cfg = config(true, false, true);
-        fire_workflow_notification(&conn, &cfg, "run-2", "my-workflow", None, true);
+        fire_workflow_notification(&conn, &cfg, &[], "run-2", "my-workflow", None, true);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-2'",
@@ -886,7 +984,7 @@ mod tests {
     fn fire_workflow_notification_on_failure_false_does_not_claim_failure() {
         let conn = in_memory_db();
         let cfg = config(true, true, false); // enabled, on_success=true, on_failure=false
-        fire_workflow_notification(&conn, &cfg, "run-5", "my-workflow", None, false);
+        fire_workflow_notification(&conn, &cfg, &[], "run-5", "my-workflow", None, false);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-5'",
@@ -905,8 +1003,8 @@ mod tests {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
         // Fire twice — second call must be a no-op (claim already taken).
-        fire_workflow_notification(&conn, &cfg, "run-3", "my-workflow", None, true);
-        fire_workflow_notification(&conn, &cfg, "run-3", "my-workflow", None, true);
+        fire_workflow_notification(&conn, &cfg, &[], "run-3", "my-workflow", None, true);
+        fire_workflow_notification(&conn, &cfg, &[], "run-3", "my-workflow", None, true);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-3' AND event_type = 'completed'",
@@ -931,8 +1029,24 @@ mod tests {
     fn fire_workflow_notification_enabled_claims_once_for_failure() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_workflow_notification(&conn, &cfg, "run-4", "my-workflow", Some("main"), false);
-        fire_workflow_notification(&conn, &cfg, "run-4", "my-workflow", Some("main"), false);
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            "run-4",
+            "my-workflow",
+            Some("main"),
+            false,
+        );
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            "run-4",
+            "my-workflow",
+            Some("main"),
+            false,
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-4' AND event_type = 'failed'",
@@ -952,7 +1066,7 @@ mod tests {
     fn fire_feedback_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_feedback_notification(&conn, &cfg, "req-1", "Is this correct?");
+        fire_feedback_notification(&conn, &cfg, &[], "req-1", "Is this correct?");
         // Notification was gated — no claim should have been recorded.
         let count: i64 = conn
             .query_row(
@@ -972,8 +1086,8 @@ mod tests {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
         // Fire twice — second call must be a no-op (claim already taken).
-        fire_feedback_notification(&conn, &cfg, "req-2", "preview");
-        fire_feedback_notification(&conn, &cfg, "req-2", "preview");
+        fire_feedback_notification(&conn, &cfg, &[], "req-2", "preview");
+        fire_feedback_notification(&conn, &cfg, &[], "req-2", "preview");
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'req-2' AND event_type = 'feedback_requested'",
@@ -1119,6 +1233,7 @@ mod tests {
         fire_gate_notification(
             &conn,
             &cfg,
+            &[],
             &GateNotificationParams {
                 step_id: "step-1",
                 step_name: "Deploy to prod",
@@ -1150,8 +1265,8 @@ mod tests {
             gate_type: Some(&GateType::HumanApproval),
             gate_prompt: Some("Ready?"),
         };
-        fire_gate_notification(&conn, &cfg, &params);
-        fire_gate_notification(&conn, &cfg, &params);
+        fire_gate_notification(&conn, &cfg, &[], &params);
+        fire_gate_notification(&conn, &cfg, &[], &params);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-2' AND event_type = 'gate_waiting'",
@@ -1174,8 +1289,8 @@ mod tests {
             gate_type: None,
             gate_prompt: None,
         };
-        fire_gate_notification(&conn, &cfg, &params);
-        fire_gate_notification(&conn, &cfg, &params);
+        fire_gate_notification(&conn, &cfg, &[], &params);
+        fire_gate_notification(&conn, &cfg, &[], &params);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-3' AND event_type = 'gate_waiting'",
@@ -1253,6 +1368,7 @@ mod tests {
         fire_gate_notification(
             &conn,
             &cfg,
+            &[],
             &GateNotificationParams {
                 step_id: "step-ci-1",
                 step_name: "wait-for-ci",
@@ -1282,6 +1398,7 @@ mod tests {
         fire_gate_notification(
             &conn,
             &cfg,
+            &[],
             &GateNotificationParams {
                 step_id: "step-human-1",
                 step_name: "approve",
@@ -1434,7 +1551,7 @@ mod tests {
     fn fire_agent_run_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_agent_run_notification(&conn, &cfg, "agent-1", Some("my-wt"), true, None);
+        fire_agent_run_notification(&conn, &cfg, &[], "agent-1", Some("my-wt"), true, None);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-1'",
@@ -1452,8 +1569,8 @@ mod tests {
     fn fire_agent_run_notification_success_claims_once() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_agent_run_notification(&conn, &cfg, "agent-2", Some("feat/foo"), true, None);
-        fire_agent_run_notification(&conn, &cfg, "agent-2", Some("feat/foo"), true, None);
+        fire_agent_run_notification(&conn, &cfg, &[], "agent-2", Some("feat/foo"), true, None);
+        fire_agent_run_notification(&conn, &cfg, &[], "agent-2", Some("feat/foo"), true, None);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-2' AND event_type = 'agent_completed'",
@@ -1477,6 +1594,7 @@ mod tests {
         fire_agent_run_notification(
             &conn,
             &cfg,
+            &[],
             "agent-3",
             Some("fix/bar"),
             false,
@@ -1485,6 +1603,7 @@ mod tests {
         fire_agent_run_notification(
             &conn,
             &cfg,
+            &[],
             "agent-3",
             Some("fix/bar"),
             false,
@@ -1509,7 +1628,7 @@ mod tests {
     fn fire_agent_run_notification_on_success_false_suppresses_success() {
         let conn = in_memory_db();
         let cfg = config(true, false, true);
-        fire_agent_run_notification(&conn, &cfg, "agent-4", None, true, None);
+        fire_agent_run_notification(&conn, &cfg, &[], "agent-4", None, true, None);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-4'",
@@ -1524,7 +1643,7 @@ mod tests {
     fn fire_agent_run_notification_on_failure_false_suppresses_failure() {
         let conn = in_memory_db();
         let cfg = config(true, true, false);
-        fire_agent_run_notification(&conn, &cfg, "agent-5", None, false, Some("err"));
+        fire_agent_run_notification(&conn, &cfg, &[], "agent-5", None, false, Some("err"));
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-5'",

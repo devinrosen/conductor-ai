@@ -85,12 +85,21 @@ async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
 fn notify_workflow(
     conn: &rusqlite::Connection,
     notifications: &conductor_core::config::NotificationConfig,
+    notify_hooks: &[conductor_core::config::HookConfig],
     run_id: &str,
     workflow_name: &str,
     label: Option<&str>,
     succeeded: bool,
 ) {
-    fire_workflow_notification(conn, notifications, run_id, workflow_name, label, succeeded);
+    fire_workflow_notification(
+        conn,
+        notifications,
+        notify_hooks,
+        run_id,
+        workflow_name,
+        label,
+        succeeded,
+    );
 }
 
 // ── Response types ────────────────────────────────────────────────────
@@ -331,6 +340,7 @@ pub async fn run_workflow(
     let wt_target_label = format!("{repo_slug}/{wt_slug}");
     let config = state.config.read().await.clone();
     let notifications = config.notifications.clone();
+    let notify_hooks = config.notify.hooks.clone();
     // Slot receives the real workflow run ULID once execute_workflow creates the
     // DB record. On the error path we prefer the real ULID (so dedup aligns with
     // any concurrent TUI notification keyed on the same ID); we fall back to the
@@ -395,6 +405,7 @@ pub async fn run_workflow(
                     notify_workflow(
                         conn,
                         &notifications,
+                        &notify_hooks,
                         &res.workflow_run_id,
                         &workflow_name,
                         Some(&wt_target_label),
@@ -422,6 +433,7 @@ pub async fn run_workflow(
                     notify_workflow(
                         conn,
                         &notifications,
+                        &notify_hooks,
                         &error_run_id,
                         &workflow_name,
                         Some(&wt_target_label),
@@ -654,6 +666,7 @@ pub async fn post_workflow_run(
 
         let result = execute_workflow(&input);
         let notifications = config.notifications.clone();
+        let notify_hooks = config.notify.hooks.clone();
 
         match result {
             Ok(res) => {
@@ -663,6 +676,7 @@ pub async fn post_workflow_run(
                 notify_workflow(
                     &conn,
                     &notifications,
+                    &notify_hooks,
                     &res.workflow_run_id,
                     &workflow_name,
                     Some(&target_label),
@@ -685,6 +699,7 @@ pub async fn post_workflow_run(
                 notify_workflow(
                     &conn,
                     &notifications,
+                    &notify_hooks,
                     &error_run_id,
                     &workflow_name,
                     Some(&target_label),
@@ -1142,6 +1157,7 @@ pub async fn resume_workflow_endpoint(
     let state_clone = state.clone();
     let run_id = id.clone();
     let notifications = config.notifications.clone();
+    let notify_hooks = config.notify.hooks.clone();
     let db_path = state.db_path.clone();
     tokio::task::spawn_blocking(move || {
         let params = WorkflowResumeStandalone {
@@ -1172,6 +1188,7 @@ pub async fn resume_workflow_endpoint(
                 notify_workflow(
                     &conn,
                     &notifications,
+                    &notify_hooks,
                     &res.workflow_run_id,
                     &workflow_name,
                     target_label.as_deref(),
@@ -1191,6 +1208,7 @@ pub async fn resume_workflow_endpoint(
                 notify_workflow(
                     &conn,
                     &notifications,
+                    &notify_hooks,
                     &params.workflow_run_id,
                     &workflow_name,
                     target_label.as_deref(),
@@ -1615,7 +1633,15 @@ mod tests {
         let notifications = conductor_core::config::NotificationConfig::default(); // enabled=false
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, "test-run-id", "test-wf", None, false);
+            notify_workflow(
+                &conn,
+                &notifications,
+                &[],
+                "test-run-id",
+                "test-wf",
+                None,
+                false,
+            );
         })
         .await
         .unwrap();
@@ -1657,6 +1683,7 @@ mod tests {
             notify_workflow(
                 &conn,
                 &notifications1,
+                &[],
                 &key1,
                 "my-workflow",
                 Some("repo/wt"),
@@ -1674,6 +1701,7 @@ mod tests {
             notify_workflow(
                 &conn,
                 &notifications,
+                &[],
                 &key2,
                 "my-workflow",
                 Some("repo/wt"),
@@ -1705,7 +1733,7 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, "run-notify-1", "my-workflow", None, true);
+            notify_workflow(&conn, &notifications, &[], "run-notify-1", "my-workflow", None, true);
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn

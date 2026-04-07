@@ -157,6 +157,53 @@ pub struct WebPushConfig {
     pub vapid_subject: Option<String>,
 }
 
+/// Configuration for a single notification hook (shell or HTTP).
+///
+/// ```toml
+/// [[notify.hooks]]
+/// on = "workflow_run.*"
+/// run = "~/.conductor/hooks/notify.sh"
+///
+/// [[notify.hooks]]
+/// on = "gate.waiting"
+/// url = "https://hooks.example.com/conductor"
+/// headers = { Authorization = "$CONDUCTOR_HOOK_TOKEN" }
+/// timeout_ms = 5000
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HookConfig {
+    /// Glob pattern for event names, e.g. `"*"`, `"workflow_run.*"`, `"gate.waiting"`.
+    pub on: String,
+    /// Shell command to run (passed to `sh -c`). Receives `CONDUCTOR_*` env vars.
+    #[serde(default)]
+    pub run: Option<String>,
+    /// URL to POST JSON payload to.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// HTTP headers; values starting with `$` are resolved from environment.
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+    /// Request/process timeout in milliseconds. Defaults to 10 000.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// For `cost_spike` / `duration_spike`: minimum multiple over baseline to trigger.
+    #[serde(default)]
+    pub threshold_multiple: Option<f64>,
+    /// For `gate.pending_too_long`: fire after gate has been waiting this many ms.
+    #[serde(default)]
+    pub gate_pending_ms: Option<u64>,
+    /// Optional workflow name filter: only fire for events from this workflow.
+    #[serde(default)]
+    pub workflow: Option<String>,
+}
+
+/// Top-level `[notify]` section containing user-configured notification hooks.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NotifyConfig {
+    #[serde(default)]
+    pub hooks: Vec<HookConfig>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -169,6 +216,8 @@ pub struct Config {
     pub notifications: NotificationConfig,
     #[serde(default)]
     pub web_push: WebPushConfig,
+    #[serde(default)]
+    pub notify: NotifyConfig,
 }
 
 /// Top-level `[github]` section.
