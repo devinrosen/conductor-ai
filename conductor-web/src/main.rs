@@ -278,6 +278,7 @@ async fn main() -> Result<()> {
                     conductor_core::notify::fire_agent_run_notification(
                         &conn,
                         &cfg.notifications,
+                        &cfg.notify.hooks,
                         &t.run_id,
                         t.worktree_slug.as_deref(),
                         t.succeeded,
@@ -343,6 +344,7 @@ async fn main() -> Result<()> {
                     conductor_core::notify::fire_workflow_notification(
                         &conn,
                         &cfg.notifications,
+                        &cfg.notify.hooks,
                         &t.run_id,
                         &t.workflow_name,
                         t.target_label.as_deref(),

@@ -103,6 +103,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                             crate::notify::fire_workflow_notification(
                                 conn,
                                 &config.notifications,
+                                &config.notify.hooks,
                                 &t.run_id,
                                 &t.workflow_name,
                                 t.target_label.as_deref(),
@@ -117,6 +118,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 crate::notify::fire_feedback_notification(
                                     conn,
                                     &config.notifications,
+                                    &config.notify.hooks,
                                     &req.id,
                                     &req.prompt,
                                 );
@@ -152,6 +154,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     crate::notify::fire_gate_notification(
                                         conn,
                                         &config.notifications,
+                                        &config.notify.hooks,
                                         &crate::notify::GateNotificationParams {
                                             step_id: &step.id,
                                             step_name: &step.step_name,
@@ -173,6 +176,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     crate::notify::fire_grouped_gate_notification(
                                         conn,
                                         &config.notifications,
+                                        &config.notify.hooks,
                                         &crate::notify::GroupedGateNotificationParams {
                                             run_id,
                                             workflow_name,
@@ -213,6 +217,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 crate::notify::fire_agent_run_notification(
                                     conn,
                                     &config.notifications,
+                                    &config.notify.hooks,
                                     &t.run_id,
                                     t.worktree_slug.as_deref(),
                                     t.succeeded,
