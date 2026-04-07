@@ -169,9 +169,7 @@ fn dispatch_notification(
     persist_notification(conn, params.notification);
 
     // Step 3: Show desktop notification with error logging
-    if let Err(e) =
-        show_desktop_notification(params.notification.title, params.notification.body)
-    {
+    if let Err(e) = show_desktop_notification(params.notification.title, params.notification.body) {
         tracing::warn!(
             entity_id = params.notification.entity_id,
             kind = params.notification.kind,
