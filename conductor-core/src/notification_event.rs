@@ -216,7 +216,7 @@ impl NotificationEvent {
         }
     }
 
-    fn label(&self) -> &str {
+    pub(crate) fn label(&self) -> &str {
         match self {
             Self::WorkflowRunCompleted { label, .. }
             | Self::WorkflowRunFailed { label, .. }
@@ -435,5 +435,131 @@ mod tests {
         };
         let v = event.to_json();
         assert_eq!(v["step_name"], "approve");
+    }
+
+    #[test]
+    fn event_name_spike_and_pending_variants() {
+        assert_eq!(
+            NotificationEvent::WorkflowRunCostSpike {
+                run_id: "r".into(),
+                label: "l".into(),
+                timestamp: "t".into(),
+                url: None,
+                multiple: 3.0,
+            }
+            .event_name(),
+            "workflow_run.cost_spike"
+        );
+        assert_eq!(
+            NotificationEvent::WorkflowRunDurationSpike {
+                run_id: "r".into(),
+                label: "l".into(),
+                timestamp: "t".into(),
+                url: None,
+                multiple: 2.5,
+            }
+            .event_name(),
+            "workflow_run.duration_spike"
+        );
+        assert_eq!(
+            NotificationEvent::GatePendingTooLong {
+                run_id: "r".into(),
+                label: "l".into(),
+                timestamp: "t".into(),
+                url: None,
+                step_name: "s".into(),
+                pending_ms: 60_000,
+            }
+            .event_name(),
+            "gate.pending_too_long"
+        );
+    }
+
+    #[test]
+    fn to_env_vars_cost_spike_includes_multiple() {
+        let event = NotificationEvent::WorkflowRunCostSpike {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            multiple: 4.2,
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_EVENT"], "workflow_run.cost_spike");
+        assert_eq!(vars["CONDUCTOR_MULTIPLE"], "4.2");
+    }
+
+    #[test]
+    fn to_env_vars_duration_spike_includes_multiple() {
+        let event = NotificationEvent::WorkflowRunDurationSpike {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            multiple: 1.5,
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_EVENT"], "workflow_run.duration_spike");
+        assert_eq!(vars["CONDUCTOR_MULTIPLE"], "1.5");
+    }
+
+    #[test]
+    fn to_env_vars_gate_pending_too_long_includes_step_and_ms() {
+        let event = NotificationEvent::GatePendingTooLong {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            step_name: "review".into(),
+            pending_ms: 90_000,
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_EVENT"], "gate.pending_too_long");
+        assert_eq!(vars["CONDUCTOR_STEP_NAME"], "review");
+        assert_eq!(vars["CONDUCTOR_PENDING_MS"], "90000");
+    }
+
+    #[test]
+    fn to_json_cost_spike_includes_multiple() {
+        let event = NotificationEvent::WorkflowRunCostSpike {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            multiple: 3.0,
+        };
+        let v = event.to_json();
+        assert_eq!(v["event"], "workflow_run.cost_spike");
+        assert!((v["multiple"].as_f64().unwrap() - 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn to_json_duration_spike_includes_multiple() {
+        let event = NotificationEvent::WorkflowRunDurationSpike {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            multiple: 2.5,
+        };
+        let v = event.to_json();
+        assert_eq!(v["event"], "workflow_run.duration_spike");
+        assert!((v["multiple"].as_f64().unwrap() - 2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn to_json_gate_pending_too_long_includes_step_and_ms() {
+        let event = NotificationEvent::GatePendingTooLong {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            step_name: "review".into(),
+            pending_ms: 90_000,
+        };
+        let v = event.to_json();
+        assert_eq!(v["event"], "gate.pending_too_long");
+        assert_eq!(v["step_name"], "review");
+        assert_eq!(v["pending_ms"], 90_000u64);
     }
 }

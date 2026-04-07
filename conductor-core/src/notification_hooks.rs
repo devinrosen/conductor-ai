@@ -1,4 +1,3 @@
-use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::config::HookConfig;
@@ -22,11 +21,48 @@ pub(crate) fn glob_matches(pattern: &str, event_name: &str) -> bool {
     pattern == event_name
 }
 
+/// Returns `true` if `event` passes all optional filter fields on `hook`.
+///
+/// - `threshold_multiple`: for `cost_spike` / `duration_spike` events, the event's
+///   `multiple` must be >= the configured minimum; other events pass through.
+/// - `gate_pending_ms`: for `gate.pending_too_long` events, the event's `pending_ms`
+///   must be >= the configured minimum; other events pass through.
+/// - `workflow`: the event's label must start with the configured workflow name.
+fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bool {
+    if let Some(min_multiple) = hook.threshold_multiple {
+        match event {
+            NotificationEvent::WorkflowRunCostSpike { multiple, .. }
+            | NotificationEvent::WorkflowRunDurationSpike { multiple, .. } => {
+                if *multiple < min_multiple {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(min_pending_ms) = hook.gate_pending_ms {
+        if let NotificationEvent::GatePendingTooLong { pending_ms, .. } = event {
+            if *pending_ms < min_pending_ms {
+                return false;
+            }
+        }
+    }
+
+    if let Some(ref wf_filter) = hook.workflow {
+        if !event.label().starts_with(wf_filter.as_str()) {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Execute a shell hook for `event`, enforcing the configured timeout.
 ///
 /// The command is run via `sh -c` with all `CONDUCTOR_*` env vars injected.
-/// If the process does not finish within `timeout_ms`, it is killed and a warning
-/// is logged. All failures are non-fatal (logged as warnings).
+/// If the process does not finish within `timeout_ms`, it is killed via
+/// `Child::kill()` and a warning is logged. All failures are non-fatal.
 fn run_shell_hook(hook: &HookConfig, event: &NotificationEvent) {
     let Some(ref cmd) = hook.run else { return };
 
@@ -46,31 +82,31 @@ fn run_shell_hook(hook: &HookConfig, event: &NotificationEvent) {
         }
     };
 
-    // Enforce timeout via a watchdog thread + channel.
-    // The child is moved into the thread; we use recv_timeout to cap the wait.
-    let (tx, rx) = mpsc::channel::<std::process::ExitStatus>();
-    std::thread::spawn(move || match child.wait() {
-        Ok(status) => {
-            let _ = tx.send(status);
-        }
-        Err(e) => {
-            tracing::warn!("shell hook wait error: {e}");
-        }
-    });
+    // Poll with try_wait so we retain ownership of `child` and can kill it on timeout.
+    let timeout = Duration::from_millis(timeout_ms);
+    let start = std::time::Instant::now();
 
-    match rx.recv_timeout(Duration::from_millis(timeout_ms)) {
-        Ok(status) => {
-            if !status.success() {
-                tracing::warn!(cmd = %cmd, "shell hook exited with non-zero status: {status}");
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    tracing::warn!(cmd = %cmd, "shell hook exited with non-zero status: {status}");
+                }
+                return;
             }
-        }
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            tracing::warn!(cmd = %cmd, timeout_ms, "shell hook timed out");
-            // The spawned thread holds the child; it will be dropped when the
-            // thread exits. The OS will eventually reap the orphaned process.
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            // wait() failed inside the thread — already logged there.
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    tracing::warn!(cmd = %cmd, timeout_ms, "shell hook timed out");
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap zombie
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                tracing::warn!(cmd = %cmd, "shell hook wait error: {e}");
+                return;
+            }
         }
     }
 }
@@ -103,10 +139,22 @@ fn run_http_hook(hook: &HookConfig, event: &NotificationEvent) {
 }
 
 /// Resolve a header value: if it starts with `$`, look it up in the environment.
-/// Returns the original string if the variable is not set.
+///
+/// Returns the resolved value, or the original `$VAR_NAME` string if the variable
+/// is not set (and logs a warning so silent authentication failures are visible).
 fn resolve_env_var(s: &str) -> String {
     if let Some(var_name) = s.strip_prefix('$') {
-        std::env::var(var_name).unwrap_or_else(|_| s.to_string())
+        match std::env::var(var_name) {
+            Ok(val) => val,
+            Err(_) => {
+                tracing::warn!(
+                    var = %var_name,
+                    "HTTP hook header references unset env var ${var_name}; \
+                     passing literal string — authentication may fail"
+                );
+                s.to_string()
+            }
+        }
     } else {
         s.to_string()
     }
@@ -128,7 +176,9 @@ impl HookRunner {
         }
     }
 
-    /// Fire all hooks whose `on` pattern matches `event.event_name()`.
+    /// Fire all hooks whose `on` pattern matches `event.event_name()` and whose
+    /// optional filter fields (`threshold_multiple`, `gate_pending_ms`, `workflow`)
+    /// are satisfied by the event.
     ///
     /// Each matching hook is executed in a separate OS thread so the caller is
     /// never blocked. Both `run` (shell) and `url` (HTTP) hooks can coexist in
@@ -137,6 +187,9 @@ impl HookRunner {
         let event_name = event.event_name();
         for hook in &self.hooks {
             if !glob_matches(&hook.on, event_name) {
+                continue;
+            }
+            if !hook_event_passes_filters(hook, event) {
                 continue;
             }
             let hook_clone = hook.clone();
@@ -220,6 +273,127 @@ mod tests {
         assert_eq!(result, "resolved-value");
     }
 
+    // ── hook_event_passes_filters ────────────────────────────────────────
+
+    #[test]
+    fn filter_threshold_multiple_blocks_below_minimum() {
+        let hook = HookConfig {
+            on: "workflow_run.*".into(),
+            threshold_multiple: Some(3.0),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCostSpike {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            multiple: 2.0, // below 3.0 threshold
+        };
+        assert!(!hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_threshold_multiple_passes_at_or_above_minimum() {
+        let hook = HookConfig {
+            on: "workflow_run.*".into(),
+            threshold_multiple: Some(3.0),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCostSpike {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            multiple: 3.5, // above 3.0 threshold
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_threshold_multiple_ignored_for_non_spike_events() {
+        let hook = HookConfig {
+            on: "*".into(),
+            threshold_multiple: Some(5.0),
+            ..Default::default()
+        };
+        // Non-spike events are not filtered by threshold_multiple
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_gate_pending_ms_blocks_below_minimum() {
+        let hook = HookConfig {
+            on: "gate.*".into(),
+            gate_pending_ms: Some(60_000),
+            ..Default::default()
+        };
+        let event = NotificationEvent::GatePendingTooLong {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            step_name: "s".into(),
+            pending_ms: 30_000, // below 60_000 threshold
+        };
+        assert!(!hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_gate_pending_ms_passes_at_or_above_minimum() {
+        let hook = HookConfig {
+            on: "gate.*".into(),
+            gate_pending_ms: Some(60_000),
+            ..Default::default()
+        };
+        let event = NotificationEvent::GatePendingTooLong {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            step_name: "s".into(),
+            pending_ms: 120_000, // above threshold
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_workflow_name_blocks_non_matching_label() {
+        let hook = HookConfig {
+            on: "*".into(),
+            workflow: Some("deploy".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "ticket-to-pr on main".into(),
+            timestamp: "t".into(),
+            url: None,
+        };
+        assert!(!hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_workflow_name_passes_matching_label() {
+        let hook = HookConfig {
+            on: "*".into(),
+            workflow: Some("deploy".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "deploy on main".into(),
+            timestamp: "t".into(),
+            url: None,
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
     // ── HookRunner::fire ─────────────────────────────────────────────────
 
     #[test]
@@ -252,6 +426,34 @@ mod tests {
         };
         // Non-matching: should return immediately without spawning.
         runner.fire(&event);
+    }
+
+    #[test]
+    fn hook_runner_filtered_hook_not_fired() {
+        let dir = tempfile::tempdir().unwrap();
+        let out_file = dir.path().join("filtered.txt");
+        let out_path = out_file.to_str().unwrap().to_string();
+
+        // Hook matches the event name but threshold_multiple filter blocks it
+        let hook = HookConfig {
+            on: "workflow_run.*".into(),
+            run: Some(format!("echo fired > '{out_path}'")),
+            threshold_multiple: Some(5.0),
+            timeout_ms: Some(3_000),
+            ..Default::default()
+        };
+        let runner = HookRunner::new(&[hook]);
+        let event = NotificationEvent::WorkflowRunCostSpike {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            multiple: 2.0, // below threshold
+        };
+        runner.fire(&event);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // File should NOT have been created because the filter blocked it
+        assert!(!out_file.exists());
     }
 
     #[test]

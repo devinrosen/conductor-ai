@@ -136,6 +136,16 @@ pub fn try_claim_notification(
     }
 }
 
+/// Parameters for the common 5-step notification dispatch pattern.
+struct DispatchParams<'a> {
+    dedup_entity_id: &'a str,
+    dedup_event_type: &'a str,
+    notification: &'a CreateNotification<'a>,
+    slack_text: &'a str,
+    hooks: &'a [HookConfig],
+    event: Option<&'a NotificationEvent>,
+}
+
 /// Dispatch a notification using the common 5-step pattern.
 ///
 /// 1. Try to claim notification for deduplication
@@ -145,40 +155,36 @@ pub fn try_claim_notification(
 /// 5. Fire user-configured notification hooks (shell/HTTP)
 ///
 /// Returns `true` if the notification was dispatched, `false` if deduplicated.
-#[allow(clippy::too_many_arguments)]
 fn dispatch_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
-    dedup_entity_id: &str,
-    dedup_event_type: &str,
-    notification: &CreateNotification<'_>,
-    slack_text: &str,
-    hooks: &[HookConfig],
-    event: Option<&NotificationEvent>,
+    params: &DispatchParams<'_>,
 ) -> bool {
     // Step 1: Try to claim notification for deduplication
-    if !try_claim_notification(conn, dedup_entity_id, dedup_event_type) {
+    if !try_claim_notification(conn, params.dedup_entity_id, params.dedup_event_type) {
         return false;
     }
 
     // Step 2: Persist in-app notification
-    persist_notification(conn, notification);
+    persist_notification(conn, params.notification);
 
     // Step 3: Show desktop notification with error logging
-    if let Err(e) = show_desktop_notification(notification.title, notification.body) {
+    if let Err(e) =
+        show_desktop_notification(params.notification.title, params.notification.body)
+    {
         tracing::warn!(
-            entity_id = notification.entity_id,
-            kind = notification.kind,
+            entity_id = params.notification.entity_id,
+            kind = params.notification.kind,
             "desktop notification failed: {e}"
         );
     }
 
     // Step 4: Send Slack notification if configured
-    maybe_send_slack(config, slack_text);
+    maybe_send_slack(config, params.slack_text);
 
     // Step 5: Fire user-configured notification hooks (fire-and-forget)
-    if let Some(evt) = event {
-        HookRunner::new(hooks).fire(evt);
+    if let Some(evt) = params.event {
+        HookRunner::new(params.hooks).fire(evt);
     }
 
     true
@@ -258,12 +264,14 @@ pub fn fire_workflow_notification(
     dispatch_notification(
         conn,
         config,
-        run_id,
-        event_type,
-        &notification,
-        &slack_text,
-        notify_hooks,
-        Some(&hook_event),
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: event_type,
+            notification: &notification,
+            slack_text: &slack_text,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
+        },
     );
 }
 
@@ -307,12 +315,14 @@ pub fn fire_feedback_notification(
     dispatch_notification(
         conn,
         config,
-        request_id,
-        "feedback_requested",
-        &notification,
-        &slack_text,
-        notify_hooks,
-        Some(&hook_event),
+        &DispatchParams {
+            dedup_entity_id: request_id,
+            dedup_event_type: "feedback_requested",
+            notification: &notification,
+            slack_text: &slack_text,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
+        },
     );
 }
 
@@ -401,12 +411,14 @@ pub fn fire_agent_run_notification(
     dispatch_notification(
         conn,
         config,
-        run_id,
-        event_type,
-        &notification,
-        &slack_text,
-        notify_hooks,
-        Some(&hook_event),
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: event_type,
+            notification: &notification,
+            slack_text: &slack_text,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
+        },
     );
 }
 
@@ -544,12 +556,14 @@ pub fn fire_gate_notification(
     dispatch_notification(
         conn,
         config,
-        params.step_id,
-        "gate_waiting",
-        &notification,
-        &slack_text,
-        notify_hooks,
-        Some(&hook_event),
+        &DispatchParams {
+            dedup_entity_id: params.step_id,
+            dedup_event_type: "gate_waiting",
+            notification: &notification,
+            slack_text: &slack_text,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
+        },
     );
 }
 
@@ -613,6 +627,7 @@ pub struct GroupedGateNotificationParams<'a> {
     pub target_label: Option<&'a str>,
     pub gate_types: Vec<Option<&'a GateType>>,
     pub count: usize,
+    pub notify_hooks: &'a [HookConfig],
 }
 
 /// Fire a single grouped desktop notification for multiple gates in the same run.
@@ -645,15 +660,29 @@ pub fn fire_grouped_gate_notification(
 
     let slack_text = format!("[conductor] {title}: {body}");
 
+    let wf_label = match params.target_label {
+        Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
+        None => params.workflow_name.to_string(),
+    };
+    let hook_event = NotificationEvent::GateWaiting {
+        run_id: params.run_id.to_string(),
+        label: wf_label,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        url: None,
+        step_name: format!("{} gates pending", params.count),
+    };
+
     dispatch_notification(
         conn,
         config,
-        params.run_id,
-        "gates_grouped",
-        &notification,
-        &slack_text,
-        &[],
-        None,
+        &DispatchParams {
+            dedup_entity_id: params.run_id,
+            dedup_event_type: "gates_grouped",
+            notification: &notification,
+            slack_text: &slack_text,
+            hooks: params.notify_hooks,
+            event: Some(&hook_event),
+        },
     );
 }
 
@@ -1510,6 +1539,7 @@ mod tests {
                 target_label: None,
                 gate_types: vec![Some(&GateType::HumanApproval)],
                 count: 2,
+                notify_hooks: &[],
             },
         );
         let count: i64 = conn
@@ -1532,6 +1562,7 @@ mod tests {
             target_label: None,
             gate_types: vec![Some(&GateType::PrChecks), Some(&GateType::PrApproval)],
             count: 2,
+            notify_hooks: &[],
         };
         fire_grouped_gate_notification(&conn, &cfg, &params);
         fire_grouped_gate_notification(&conn, &cfg, &params);

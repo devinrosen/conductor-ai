@@ -182,6 +182,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                             target_label: target_label.as_deref(),
                                             gate_types,
                                             count: steps.len(),
+                                            notify_hooks: &config.notify.hooks,
                                         },
                                     );
                                     notified_grouped_run_ids.insert(run_id.clone());
