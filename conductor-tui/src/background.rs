@@ -176,13 +176,13 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     crate::notify::fire_grouped_gate_notification(
                                         conn,
                                         &config.notifications,
+                                        &config.notify.hooks,
                                         &crate::notify::GroupedGateNotificationParams {
                                             run_id,
                                             workflow_name,
                                             target_label: target_label.as_deref(),
                                             gate_types,
                                             count: steps.len(),
-                                            notify_hooks: &config.notify.hooks,
                                         },
                                     );
                                     notified_grouped_run_ids.insert(run_id.clone());

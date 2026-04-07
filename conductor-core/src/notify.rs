@@ -625,7 +625,6 @@ pub struct GroupedGateNotificationParams<'a> {
     pub target_label: Option<&'a str>,
     pub gate_types: Vec<Option<&'a GateType>>,
     pub count: usize,
-    pub notify_hooks: &'a [HookConfig],
 }
 
 /// Fire a single grouped desktop notification for multiple gates in the same run.
@@ -634,6 +633,7 @@ pub struct GroupedGateNotificationParams<'a> {
 pub fn fire_grouped_gate_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
     params: &GroupedGateNotificationParams<'_>,
 ) {
     if !config.enabled {
@@ -678,7 +678,7 @@ pub fn fire_grouped_gate_notification(
             dedup_event_type: "gates_grouped",
             notification: &notification,
             slack_text: &slack_text,
-            hooks: params.notify_hooks,
+            hooks: notify_hooks,
             event: Some(&hook_event),
         },
     );
@@ -1531,13 +1531,13 @@ mod tests {
         fire_grouped_gate_notification(
             &conn,
             &cfg,
+            &[],
             &GroupedGateNotificationParams {
                 run_id: "run-g1",
                 workflow_name: "deploy",
                 target_label: None,
                 gate_types: vec![Some(&GateType::HumanApproval)],
                 count: 2,
-                notify_hooks: &[],
             },
         );
         let count: i64 = conn
@@ -1560,10 +1560,9 @@ mod tests {
             target_label: None,
             gate_types: vec![Some(&GateType::PrChecks), Some(&GateType::PrApproval)],
             count: 2,
-            notify_hooks: &[],
         };
-        fire_grouped_gate_notification(&conn, &cfg, &params);
-        fire_grouped_gate_notification(&conn, &cfg, &params);
+        fire_grouped_gate_notification(&conn, &cfg, &[], &params);
+        fire_grouped_gate_notification(&conn, &cfg, &[], &params);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-g2' AND event_type = 'gates_grouped'",

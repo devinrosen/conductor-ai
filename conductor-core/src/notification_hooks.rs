@@ -105,6 +105,8 @@ fn run_shell_hook(hook: &HookConfig, event: &NotificationEvent) {
             }
             Err(e) => {
                 tracing::warn!(cmd = %cmd, "shell hook wait error: {e}");
+                let _ = child.kill();
+                let _ = child.wait(); // reap zombie
                 return;
             }
         }
