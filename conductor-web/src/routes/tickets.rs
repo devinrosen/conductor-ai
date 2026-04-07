@@ -174,7 +174,16 @@ pub async fn list_ticket_deps(
     // Validate repo exists
     RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let syncer = TicketSyncer::new(&db);
-    let deps = syncer.get_all_dependencies()?;
+
+    // Collect ticket IDs belonging to this repo so we can scope the result.
+    let repo_ticket_ids: std::collections::HashSet<String> = syncer
+        .list(Some(&repo_id))?
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+
+    let mut deps = syncer.get_all_dependencies()?;
+    deps.retain(|id, _| repo_ticket_ids.contains(id));
     Ok(Json(deps))
 }
 

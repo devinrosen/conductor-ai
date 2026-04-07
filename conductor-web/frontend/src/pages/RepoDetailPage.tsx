@@ -49,7 +49,7 @@ export function RepoDetailPage() {
   const {
     data: ticketDeps,
     refetch: refetchTicketDeps,
-  } = useApi(() => api.listTicketDeps(repoId!), [repoId]);
+  } = useApi(() => api.listTicketDeps(repoId!), [repoId, showClosedTickets]);
 
   const { data: latestRuns, refetch: refetchRuns } = useApi(
     () => api.latestRunsByWorktreeForRepo(repoId!),
