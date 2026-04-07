@@ -148,7 +148,7 @@ pub(super) fn tool_get_run(
     use conductor_core::workflow::WorkflowManager;
 
     let run_id = require_arg!(args, "run_id");
-    let (conn, _config) = match open_db_and_config(db_path) {
+    let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
@@ -162,7 +162,13 @@ pub(super) fn tool_get_run(
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
-    tool_ok(format_run_detail_with_log(&conn, &run, &steps))
+    let claude_dir = config.general.resolve_optional_claude_dir();
+    tool_ok(format_run_detail_with_log(
+        &conn,
+        &run,
+        &steps,
+        claude_dir.as_deref(),
+    ))
 }
 
 pub(super) fn tool_cancel_run(

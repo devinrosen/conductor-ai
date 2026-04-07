@@ -235,7 +235,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             let mut spans = vec![
                 Span::raw("  \u{2514} "),
                 Span::styled(
-                    format!("{:<20}", def.name),
+                    format!("{:<20}", def.display_name()),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -1143,7 +1143,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{:<20}", truncate(&run.workflow_name, 20)),
+                            format!("{:<20}", truncate(run.display_name(), 20)),
                             Style::default().add_modifier(Modifier::BOLD),
                         ),
                     ];
@@ -1217,7 +1217,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{:<20}", truncate(&run.workflow_name, 20)),
+                            format!("{:<20}", truncate(run.display_name(), 20)),
                             Style::default()
                                 .fg(state.theme.label_secondary)
                                 .add_modifier(Modifier::BOLD),
@@ -1425,7 +1425,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             Line::from(vec![
                 Span::styled(" Workflow: ", label_style),
                 Span::styled(
-                    run.workflow_name.clone(),
+                    run.display_name(),
                     Style::default()
                         .fg(state.theme.label_accent)
                         .add_modifier(Modifier::BOLD),
@@ -1630,7 +1630,7 @@ fn render_step_list(
             Span::styled(root_symbol, Style::default().fg(root_color)),
             Span::raw("  "),
             Span::styled(
-                format!("{:<20}", root.workflow_name),
+                format!("{:<20}", root.display_name()),
                 Style::default()
                     .fg(state.theme.label_primary)
                     .add_modifier(Modifier::BOLD),
@@ -1641,6 +1641,18 @@ fn render_step_list(
             ),
         ])));
     }
+
+    // Find the index of the step with the highest combined token usage
+    let max_token_idx: Option<usize> = {
+        let mut best: Option<(usize, i64)> = None;
+        for (i, step) in state.data.workflow_steps.iter().enumerate() {
+            let total = step.input_tokens.unwrap_or(0) + step.output_tokens.unwrap_or(0);
+            if total > 0 && best.is_none_or(|(_, b)| total > b) {
+                best = Some((i, total));
+            }
+        }
+        best.map(|(i, _)| i)
+    };
 
     items.extend(
         state
@@ -1666,7 +1678,13 @@ fn render_step_list(
                     Span::raw("  "),
                     Span::styled(
                         format!("{:<20}", step.step_name),
-                        Style::default().add_modifier(Modifier::BOLD),
+                        if max_token_idx == Some(i) {
+                            Style::default()
+                                .add_modifier(Modifier::BOLD)
+                                .fg(state.theme.label_accent)
+                        } else {
+                            Style::default().add_modifier(Modifier::BOLD)
+                        },
                     ),
                     Span::styled(
                         format!("  [{:<5}]", step.role),
@@ -1677,6 +1695,23 @@ fn render_step_list(
                         Style::default().fg(state.theme.label_accent),
                     ),
                 ];
+
+                // Token columns: show compact ↑/↓ counts when present
+                if let (Some(inp), Some(out)) = (step.input_tokens, step.output_tokens) {
+                    let fmt_k = |n: i64| -> String {
+                        if n >= 1_000_000 {
+                            format!("{:.1}M", n as f64 / 1_000_000.0)
+                        } else if n >= 1_000 {
+                            format!("{:.1}k", n as f64 / 1_000.0)
+                        } else {
+                            format!("{n}")
+                        }
+                    };
+                    spans.push(Span::styled(
+                        format!("  ↑{} ↓{}", fmt_k(inp), fmt_k(out)),
+                        Style::default().fg(state.theme.label_secondary),
+                    ));
+                }
 
                 if step.iteration > 0 {
                     spans.push(Span::styled(
@@ -2025,6 +2060,7 @@ mod tests {
     fn empty_workflow_def(name: &str, body: Vec<WorkflowNode>) -> WorkflowDef {
         WorkflowDef {
             name: name.to_string(),
+            title: None,
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],

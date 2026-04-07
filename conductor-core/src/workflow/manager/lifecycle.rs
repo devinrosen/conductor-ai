@@ -9,7 +9,7 @@ use crate::error::{ConductorError, Result};
 
 use super::WorkflowManager;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::WorkflowRun;
+use crate::workflow::types::{extract_workflow_title, WorkflowRun};
 
 impl<'a> WorkflowManager<'a> {
     pub fn create_workflow_run(
@@ -78,6 +78,7 @@ impl<'a> WorkflowManager<'a> {
             ],
         )?;
 
+        let workflow_title = extract_workflow_title(definition_snapshot);
         Ok(WorkflowRun {
             id,
             workflow_name: workflow_name.to_string(),
@@ -99,6 +100,7 @@ impl<'a> WorkflowManager<'a> {
             iteration: 0,
             blocked_on: None,
             feature_id: feature_id.map(String::from),
+            workflow_title,
             total_input_tokens: None,
             total_output_tokens: None,
             total_cache_read_input_tokens: None,

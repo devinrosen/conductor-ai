@@ -1,5 +1,6 @@
 workflow draft-release-notes {
   meta {
+    title       = "Draft Release Notes"
     description = "Analyze a PR and produce a draft release notes entry"
     trigger     = "manual"
     targets     = ["pr"]

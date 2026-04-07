@@ -2,14 +2,26 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use conductor_core::error::ConductorError;
 
+#[derive(Debug)]
 pub enum ApiError {
     Core(ConductorError),
     Internal(String),
+    /// A structured 409 Conflict response with a typed JSON body (e.g. dirty-branch check).
+    Conflict(serde_json::Value),
+    /// 404 Not Found for cases not covered by ConductorError variants.
+    NotFound(String),
+    /// 503 Service Unavailable (e.g. optional feature not configured).
+    ServiceUnavailable(String),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            ApiError::Conflict(body) => {
+                return (StatusCode::CONFLICT, axum::Json(body)).into_response();
+            }
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            ApiError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             ApiError::Internal(msg) => {
                 tracing::error!(error = %msg, "internal request error");
                 (StatusCode::INTERNAL_SERVER_ERROR, msg)
@@ -24,7 +36,8 @@ impl IntoResponse for ApiError {
                     | ConductorError::FeedbackNotFound { .. }
                     | ConductorError::AgentRunNotInConversation { .. }
                     | ConductorError::FeedbackRunMismatch { .. }
-                    | ConductorError::ConversationNotFound { .. } => StatusCode::NOT_FOUND,
+                    | ConductorError::ConversationNotFound { .. }
+                    | ConductorError::FeatureNotFound { .. } => StatusCode::NOT_FOUND,
                     ConductorError::RepoAlreadyExists { .. }
                     | ConductorError::WorktreeAlreadyExists { .. }
                     | ConductorError::IssueSourceAlreadyExists { .. }
@@ -84,6 +97,15 @@ mod tests {
         let err = ApiError::Internal("something went wrong".into());
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn feature_not_found_maps_to_404() {
+        let err = ApiError::Core(ConductorError::FeatureNotFound {
+            name: "my-feature".into(),
+        });
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

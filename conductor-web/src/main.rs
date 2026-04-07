@@ -412,10 +412,19 @@ async fn main() -> Result<()> {
 
     // Spawn a 2-second background poller that emits AgentStep SSE events for
     // each new agent_run_events row written by running CLI agents.
+    //
+    // Circuit-breaker: after POLLER_FAIL_THRESHOLD consecutive failures the
+    // poll interval backs off to POLLER_BACKOFF_SECS and logs at ERROR level.
+    // The interval and log level reset to normal on the next success.
+    const POLLER_FAIL_THRESHOLD: u32 = 5;
+    const POLLER_NORMAL_SECS: u64 = 2;
+    const POLLER_BACKOFF_SECS: u64 = 30;
     let step_poller_state = state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(POLLER_NORMAL_SECS));
         let mut tracker: StepTracker = StepTracker::new();
+        let mut consecutive_failures: u32 = 0;
         loop {
             interval.tick().await;
             let db = step_poller_state.db.clone();
@@ -457,9 +466,44 @@ async fn main() -> Result<()> {
             })
             .await;
             match result {
-                Ok(Ok(new_tracker)) => tracker = new_tracker,
-                Ok(Err(e)) => tracing::warn!("step-event poller failed: {e}"),
-                Err(join_err) => tracing::warn!("step-event poller panicked: {join_err}"),
+                Ok(Ok(new_tracker)) => {
+                    if consecutive_failures >= POLLER_FAIL_THRESHOLD {
+                        tracing::info!("step-event poller recovered after {consecutive_failures} consecutive failures");
+                        interval = tokio::time::interval(std::time::Duration::from_secs(
+                            POLLER_NORMAL_SECS,
+                        ));
+                    }
+                    consecutive_failures = 0;
+                    tracker = new_tracker;
+                }
+                Ok(Err(e)) => {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= POLLER_FAIL_THRESHOLD {
+                        tracing::error!(
+                            consecutive_failures,
+                            "step-event poller failing repeatedly: {e} — backing off to {POLLER_BACKOFF_SECS}s interval"
+                        );
+                        interval = tokio::time::interval(std::time::Duration::from_secs(
+                            POLLER_BACKOFF_SECS,
+                        ));
+                    } else {
+                        tracing::warn!("step-event poller failed: {e}");
+                    }
+                }
+                Err(join_err) => {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= POLLER_FAIL_THRESHOLD {
+                        tracing::error!(
+                            consecutive_failures,
+                            "step-event poller panicking repeatedly: {join_err} — backing off to {POLLER_BACKOFF_SECS}s interval"
+                        );
+                        interval = tokio::time::interval(std::time::Duration::from_secs(
+                            POLLER_BACKOFF_SECS,
+                        ));
+                    } else {
+                        tracing::warn!("step-event poller panicked: {join_err}");
+                    }
+                }
             }
         }
     });

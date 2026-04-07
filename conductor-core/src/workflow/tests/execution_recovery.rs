@@ -217,6 +217,42 @@ fn test_recover_stuck_steps_failed_child_marks_step_failed() {
 }
 
 #[test]
+fn test_recover_stuck_steps_skips_step_with_purged_child_run() {
+    // A step whose child_run_id references an agent run that no longer exists
+    // (e.g. purged) must be left in 'running' status and not cause an error.
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let parent = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let wf_run = wf_mgr
+        .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    let step_id = wf_mgr
+        .insert_step(&wf_run.id, "agent-step", "actor", false, 0, 0)
+        .unwrap();
+
+    // Point the step at a child_run_id that does not exist in agent_runs.
+    conn.execute(
+        "UPDATE workflow_run_steps SET status = 'running', child_run_id = 'nonexistent-run-id' \
+         WHERE id = ?1",
+        rusqlite::params![step_id],
+    )
+    .unwrap();
+
+    let recovered = wf_mgr.recover_stuck_steps().unwrap();
+    assert_eq!(recovered, 0, "purged child run should not be recovered");
+
+    let steps = wf_mgr.get_workflow_steps(&wf_run.id).unwrap();
+    assert_eq!(
+        steps[0].status,
+        WorkflowStepStatus::Running,
+        "step must remain in 'running' when child_run_id is missing from agent_runs"
+    );
+}
+
+#[test]
 fn test_fetch_child_final_output_returns_last_completed_step() {
     let conn = setup_db();
     let (mgr, run_id) = create_child_run(&conn);
@@ -585,36 +621,6 @@ fn test_restore_completed_step_restores_gate_feedback() {
 
 // ── reap_finalization_stuck_workflow_runs tests ─────────────────────────────
 
-/// Helper: create a running workflow run with a parent agent run.
-fn make_running_wf(conn: &rusqlite::Connection, name: &str) -> (String, String) {
-    let agent_mgr = AgentManager::new(conn);
-    let wf_mgr = WorkflowManager::new(conn);
-    let parent = agent_mgr.create_run(Some("w1"), name, None, None).unwrap();
-    let run = wf_mgr
-        .create_workflow_run(name, Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
-        .unwrap();
-    (run.id, parent.id)
-}
-
-/// Helper: insert a terminal step into a workflow run.
-fn insert_terminal_step(
-    conn: &rusqlite::Connection,
-    wf_run_id: &str,
-    status: WorkflowStepStatus,
-    position: i64,
-) {
-    let wf_mgr = WorkflowManager::new(conn);
-    let step_id = wf_mgr
-        .insert_step(wf_run_id, "step", "actor", false, position, 0)
-        .unwrap();
-    wf_mgr
-        .update_step_status(&step_id, status, None, None, None, None, None)
-        .unwrap();
-}
-
 #[test]
 fn test_reap_finalization_all_completed_marks_completed() {
     let conn = setup_db();
@@ -696,17 +702,11 @@ fn test_reap_finalization_already_terminal_not_touched() {
     let conn = setup_db();
     let wf_mgr = WorkflowManager::new(&conn);
 
-    let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "flow", None, None)
-        .unwrap();
-    let run = wf_mgr
-        .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let (run_id, _) = make_running_wf(&conn, "flow");
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .update_workflow_status(&run_id, WorkflowRunStatus::Completed, None)
         .unwrap();
-    insert_terminal_step(&conn, &run.id, WorkflowStepStatus::Completed, 0);
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
 
     let count = wf_mgr.reap_finalization_stuck_workflow_runs(-1).unwrap();
     assert_eq!(count, 0);
@@ -825,4 +825,24 @@ fn test_reap_finalization_child_run_not_reaped() {
 
     let child = wf_mgr.get_workflow_run(&child_run.id).unwrap().unwrap();
     assert_eq!(child.status, WorkflowRunStatus::Running);
+}
+
+#[test]
+fn test_reap_finalization_respects_threshold() {
+    // Verifies that a recently-finished run is NOT reaped when threshold_secs hasn't elapsed.
+    // All existing tests use threshold=-1 (bypass), but production uses threshold=60.
+    // Using i64::MAX ensures elapsed time will never exceed the threshold.
+    let conn = setup_db();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let (run_id, _) = make_running_wf(&conn, "flow");
+    insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
+
+    let count = wf_mgr
+        .reap_finalization_stuck_workflow_runs(i64::MAX)
+        .unwrap();
+    assert_eq!(count, 0);
+
+    let run = wf_mgr.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Running);
 }

@@ -143,6 +143,9 @@ pub enum ConductorError {
 
     #[error("cannot delete conversation {id}: it has an active or waiting agent run")]
     ConversationHasActiveRun { id: String },
+
+    #[error("notification error: {0}")]
+    Notification(String),
 }
 
 impl ConductorError {
@@ -193,6 +196,7 @@ impl ConductorError {
             Self::UnknownSourceType(_) => 43,
             Self::ConversationNotFound { .. } => 57,
             Self::ConversationHasActiveRun { .. } => 58,
+            Self::Notification(_) => 70,
         }
     }
 }
@@ -253,6 +257,7 @@ mod tests {
             ConductorError::UnknownSourceType("jira".into()),
             ConductorError::ConversationNotFound { id: "id".into() },
             ConductorError::ConversationHasActiveRun { id: "id".into() },
+            ConductorError::Notification("notif".into()),
         ]
     }
 

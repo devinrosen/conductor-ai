@@ -2199,23 +2199,6 @@ fn insert_running_root_run(conn: &Connection, run_id: &str) {
     .unwrap();
 }
 
-/// Insert a terminal step with an explicit ended_at timestamp.
-fn insert_terminal_step(
-    conn: &Connection,
-    step_id: &str,
-    run_id: &str,
-    status: &str,
-    ended_at: &str,
-) {
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, ended_at) \
-         VALUES (?1, ?2, 'step-a', 'actor', 0, ?3, 0, ?4)",
-        params![step_id, run_id, status, ended_at],
-    )
-    .unwrap();
-}
-
 /// Insert a non-terminal step (pending/running/waiting) with no ended_at.
 fn insert_non_terminal_step(conn: &Connection, step_id: &str, run_id: &str, status: &str) {
     conn.execute(
@@ -2232,7 +2215,7 @@ fn test_reap_stuck_workflow_runs_detects_stale_run() {
     let conn = setup_db();
     insert_running_root_run(&conn, "stuck-run");
     // Step completed with an old ended_at — well past any reasonable threshold.
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s1",
         "stuck-run",
@@ -2316,7 +2299,7 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
         params![parent.id],
     )
     .unwrap();
-    insert_terminal_step(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
@@ -2330,21 +2313,21 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
     insert_workflow_run(&conn, "completed-run", "test-wf", "completed", None);
     insert_workflow_run(&conn, "failed-run", "test-wf", "failed", None);
     insert_workflow_run(&conn, "waiting-run", "test-wf", "waiting", None);
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s1",
         "completed-run",
         "completed",
         "2020-01-01T00:00:00Z",
     );
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s2",
         "failed-run",
         "completed",
         "2020-01-01T00:00:00Z",
     );
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s3",
         "waiting-run",
@@ -2374,9 +2357,9 @@ fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
     insert_running_root_run(&conn, "stuck-1");
     insert_running_root_run(&conn, "stuck-2");
     insert_running_root_run(&conn, "stuck-3");
-    insert_terminal_step(&conn, "s1", "stuck-1", "completed", "2020-01-01T00:00:00Z");
-    insert_terminal_step(&conn, "s2", "stuck-2", "failed", "2020-01-01T00:00:00Z");
-    insert_terminal_step(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s1", "stuck-1", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s2", "stuck-2", "failed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
@@ -2384,231 +2367,108 @@ fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
 }
 
 // ---------------------------------------------------------------------------
-// detect_stale_workflow_runs — stale watchdog tests
+// detect_stuck_workflow_run_ids — stuck run detection tests
+// (Tests the refactored API that replaced detect_stale_workflow_runs)
 // ---------------------------------------------------------------------------
 
-/// Insert a running root run with target_label for stale tests.
-fn insert_running_root_run_with_label(
-    conn: &Connection,
-    run_id: &str,
-    workflow_name: &str,
-    target_label: Option<&str>,
-) {
-    let agent_mgr = AgentManager::new(conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
-    conn.execute(
-        "INSERT INTO workflow_runs \
-         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-          started_at, parent_workflow_run_id, target_label) \
-         VALUES (?1, ?2, NULL, ?3, 'running', 0, 'manual', \
-                 '2025-01-01T00:00:00Z', NULL, ?4)",
-        params![run_id, workflow_name, parent.id, target_label],
-    )
-    .unwrap();
-}
-
-/// Insert a step in 'running' status with a specific started_at.
-fn insert_running_step_with_started_at(
-    conn: &Connection,
-    step_id: &str,
-    run_id: &str,
-    step_name: &str,
-    started_at: &str,
-) {
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
-         VALUES (?1, ?2, ?3, 'actor', 0, 'running', 0, ?4)",
-        params![step_id, run_id, step_name, started_at],
-    )
-    .unwrap();
-}
-
 #[test]
-fn test_detect_stale_workflow_runs_finds_old_running_step() {
+fn test_detect_stuck_finds_run_with_only_terminal_steps() {
     let conn = setup_db();
-    insert_running_root_run_with_label(&conn, "stale-run", "deploy", Some("repo/wt"));
-    // Step started 2 hours ago
-    insert_running_step_with_started_at(
-        &conn,
-        "s1",
-        "stale-run",
-        "code-review",
-        "2020-01-01T00:00:00Z",
-    );
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
-    assert_eq!(stale.len(), 1);
-    assert_eq!(stale[0].run_id, "stale-run");
-    assert_eq!(stale[0].workflow_name, "deploy");
-    assert_eq!(stale[0].target_label.as_deref(), Some("repo/wt"));
-    assert_eq!(stale[0].step_name, "code-review");
-    assert!(stale[0].running_minutes > 60);
-}
-
-#[test]
-fn test_detect_stale_workflow_runs_skips_fresh_step() {
-    let conn = setup_db();
-    insert_running_root_run_with_label(&conn, "fresh-run", "deploy", None);
-    // Step started just now — use SQL now() to set started_at.
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
-         VALUES ('s1', 'fresh-run', 'code-review', 'actor', 0, 'running', 0, \
-                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
-        [],
-    )
-    .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
-    assert!(stale.is_empty(), "fresh running step should not be stale");
-}
-
-#[test]
-fn test_detect_stale_workflow_runs_skips_completed_step() {
-    let conn = setup_db();
-    insert_running_root_run_with_label(&conn, "done-run", "deploy", None);
-    // Step is completed, not running — should not be detected.
-    insert_terminal_step(&conn, "s1", "done-run", "completed", "2020-01-01T00:00:00Z");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
-    assert!(stale.is_empty(), "completed step should not trigger stale");
-}
-
-#[test]
-fn test_detect_stale_workflow_runs_skips_sub_workflows() {
-    let conn = setup_db();
-    insert_running_root_run_with_label(&conn, "root-run", "parent-wf", None);
-    // Insert a sub-workflow with old running step.
+    // Insert a running root run whose only step is completed (old ended_at).
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES ('sub-run', 'child-wf', NULL, ?1, 'running', 0, 'manual', \
-                 '2025-01-01T00:00:00Z', 'root-run')",
+         VALUES ('stuck-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL)",
         params![parent.id],
     )
     .unwrap();
-    insert_running_step_with_started_at(&conn, "s1", "sub-run", "step-a", "2020-01-01T00:00:00Z");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
-    assert_eq!(
-        stale.len(),
-        1,
-        "sub-workflow steps should also trigger stale detection"
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "stuck-run",
+        "completed",
+        "2020-01-01T00:00:00Z",
     );
-    assert_eq!(stale[0].run_id, "sub-run");
-}
-
-#[test]
-fn test_detect_stale_workflow_runs_disabled_when_zero() {
-    let conn = setup_db();
-    insert_running_root_run_with_label(&conn, "stale-run", "deploy", None);
-    insert_running_step_with_started_at(&conn, "s1", "stale-run", "step-a", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(0).unwrap();
-    assert!(stale.is_empty(), "threshold 0 should disable detection");
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids[0], "stuck-run");
 }
 
-// ---------------------------------------------------------------------------
-// reap_stale_workflow_runs — tmux liveness check + mark-as-failed tests
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_reap_stale_reaps_dead_agent() {
+fn test_detect_stuck_skips_run_with_active_steps() {
     let conn = setup_db();
-    insert_running_root_run_with_label(&conn, "stale-run", "deploy", Some("repo/wt"));
-    // Create a child agent run with a tmux window that is NOT in the live set.
     let agent_mgr = AgentManager::new(&conn);
-    let child = agent_mgr
-        .create_run(None, "step prompt", Some("dead-window-xyz"), None)
-        .unwrap();
-    // Insert step referencing that child agent run.
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES ('active-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL)",
+        params![parent.id],
+    )
+    .unwrap();
+    // Step is still running — run is not stuck.
     conn.execute(
         "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, \
-          started_at, child_run_id) \
-         VALUES ('s1', 'stale-run', 'code-review', 'actor', 0, 'running', 0, \
-                 '2020-01-01T00:00:00Z', ?1)",
-        params![child.id],
+         (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
+         VALUES ('s1', 'active-run', 'code-review', 'actor', 0, 'running', 0, '2020-01-01T00:00:00Z')",
+        [],
     )
     .unwrap();
 
     let mgr = WorkflowManager::new(&conn);
-    // Empty live_windows → agent is dead.
-    let live_windows = std::collections::HashSet::new();
-    let reaped = mgr.reap_stale_workflow_runs(60, &live_windows).unwrap();
-    assert_eq!(reaped.len(), 1);
-    assert_eq!(reaped[0].run_id, "stale-run");
-    assert_eq!(reaped[0].step_name, "code-review");
-
-    // Verify the workflow run is now failed.
-    let run = mgr.get_workflow_run("stale-run").unwrap().unwrap();
-    assert_eq!(run.status, WorkflowRunStatus::Failed);
-
-    // Verify the child agent run is now failed.
-    let agent_run = agent_mgr.get_run(&child.id).unwrap().unwrap();
-    assert_eq!(agent_run.status, crate::agent::AgentRunStatus::Failed);
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert!(ids.is_empty(), "run with active steps should not be stuck");
 }
 
+// ---------------------------------------------------------------------------
+// recover_stuck_steps — step recovery tests
+// ---------------------------------------------------------------------------
+
 #[test]
-fn test_reap_stale_skips_live_agent() {
+fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
     let conn = setup_db();
-    insert_running_root_run_with_label(&conn, "alive-run", "deploy", None);
     let agent_mgr = AgentManager::new(&conn);
-    let child = agent_mgr
-        .create_run(None, "step prompt", Some("alive-window"), None)
-        .unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
     conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, \
-          started_at, child_run_id) \
-         VALUES ('s1', 'alive-run', 'code-review', 'actor', 0, 'running', 0, \
-                 '2020-01-01T00:00:00Z', ?1)",
-        params![child.id],
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES ('recover-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL)",
+        params![parent.id],
     )
     .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    // The tmux window IS in the live set → agent is alive, skip.
-    let mut live_windows = std::collections::HashSet::new();
-    live_windows.insert("alive-window".to_string());
-    let reaped = mgr.reap_stale_workflow_runs(60, &live_windows).unwrap();
-    assert!(reaped.is_empty(), "live agent should not be reaped");
-
-    // Verify the workflow run is still running.
-    let run = mgr.get_workflow_run("alive-run").unwrap().unwrap();
-    assert_eq!(run.status, WorkflowRunStatus::Running);
-}
-
-#[test]
-fn test_reap_stale_reaps_step_with_no_tmux_window() {
-    let conn = setup_db();
-    insert_running_root_run_with_label(&conn, "no-tmux-run", "deploy", None);
-    // Child agent run with no tmux window (None) → treated as dead.
-    let agent_mgr = AgentManager::new(&conn);
+    // Create a child agent run and mark it completed via SQL.
     let child = agent_mgr
         .create_run(None, "step prompt", None, None)
         .unwrap();
     conn.execute(
+        "UPDATE agent_runs SET status = 'completed' WHERE id = ?1",
+        params![child.id],
+    )
+    .unwrap();
+
+    // Insert a step still marked 'running' but whose child is terminal.
+    conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           started_at, child_run_id) \
-         VALUES ('s1', 'no-tmux-run', 'step-a', 'actor', 0, 'running', 0, \
+         VALUES ('s1', 'recover-run', 'code-review', 'actor', 0, 'running', 0, \
                  '2020-01-01T00:00:00Z', ?1)",
         params![child.id],
     )
     .unwrap();
 
     let mgr = WorkflowManager::new(&conn);
-    let live_windows = std::collections::HashSet::new();
-    let reaped = mgr.reap_stale_workflow_runs(60, &live_windows).unwrap();
-    assert_eq!(reaped.len(), 1, "no tmux window should be treated as dead");
+    let recovered = mgr.recover_stuck_steps().unwrap();
+    assert_eq!(recovered, 1, "should recover the stuck step");
 }

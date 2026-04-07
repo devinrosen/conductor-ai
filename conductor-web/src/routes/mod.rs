@@ -8,13 +8,14 @@ pub mod model_config;
 pub mod notifications;
 pub mod push;
 pub mod repos;
+pub mod slack;
 pub mod stats;
 pub mod tickets;
 pub mod workflows;
 pub mod worktrees;
 
 use axum::http::HeaderValue;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -75,10 +76,7 @@ pub fn api_router() -> Router<AppState> {
             "/api/worktrees/{id}/model",
             patch(worktrees::patch_worktree_model),
         )
-        .route(
-            "/api/worktrees/{id}/link-ticket",
-            post(worktrees::link_ticket),
-        )
+        .route("/api/worktrees/{id}/ticket", put(worktrees::link_ticket))
         // Tickets
         .route("/api/ticket-labels", get(tickets::list_ticket_labels))
         .route("/api/tickets", get(tickets::list_all_tickets))
@@ -88,12 +86,9 @@ pub fn api_router() -> Router<AppState> {
             "/api/repos/{id}/workflows",
             get(workflows::list_repo_workflow_defs),
         )
-        .route(
-            "/api/tickets/{ticket_id}/detail",
-            get(tickets::ticket_detail),
-        )
+        .route("/api/tickets/{id}", get(tickets::ticket_detail))
         // Features
-        .route("/api/repos/{slug}/features", get(features::list_features))
+        .route("/api/repos/{id}/features", get(features::list_features))
         // Agent stats (aggregates)
         .route(
             "/api/worktrees/{id}/agent-runs",
@@ -262,6 +257,51 @@ pub fn api_router() -> Router<AppState> {
             "/api/workflows/runs/{id}/gate/reject",
             post(workflows::reject_gate),
         )
+        // Workflow token analytics
+        .route(
+            "/api/workflows/analytics/aggregates",
+            get(workflows::get_token_aggregates),
+        )
+        .route(
+            "/api/workflows/analytics/trend",
+            get(workflows::get_token_trend),
+        )
+        .route(
+            "/api/workflows/analytics/heatmap",
+            get(workflows::get_step_heatmap),
+        )
+        .route(
+            "/api/workflows/analytics/runs",
+            get(workflows::get_run_metrics),
+        )
+        .route(
+            "/api/workflows/analytics/failure-trend",
+            get(workflows::get_failure_trend),
+        )
+        .route(
+            "/api/workflows/analytics/failure-heatmap",
+            get(workflows::get_failure_heatmap),
+        )
+        .route(
+            "/api/workflows/analytics/step-retries",
+            get(workflows::get_step_retry_analytics),
+        )
+        .route(
+            "/api/workflows/analytics/percentiles",
+            get(workflows::get_workflow_percentiles),
+        )
+        .route(
+            "/api/workflows/analytics/regressions",
+            get(workflows::get_workflow_regressions),
+        )
+        .route(
+            "/api/workflows/analytics/gates",
+            get(workflows::get_gate_analytics),
+        )
+        .route(
+            "/api/workflows/analytics/gates/pending",
+            get(workflows::get_pending_gates),
+        )
         // Workflow Templates
         .route("/api/templates", get(workflows::list_templates))
         .route(
@@ -284,7 +324,7 @@ pub fn api_router() -> Router<AppState> {
             get(notifications::unread_count),
         )
         .route(
-            "/api/notifications/read-all",
+            "/api/notifications/read",
             post(notifications::mark_all_read),
         )
         .route(
@@ -302,6 +342,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/push/subscribe",
             post(push::subscribe_push).delete(push::unsubscribe_push),
         )
+        // Slack slash commands
+        .route("/api/slack/commands", post(slack::handle_slash_command))
         // Model Config
         .route(
             "/api/config/model",

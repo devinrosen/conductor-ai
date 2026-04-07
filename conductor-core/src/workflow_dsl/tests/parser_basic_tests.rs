@@ -530,3 +530,71 @@ workflow no-targets {
         def.targets
     );
 }
+
+// ---------------------------------------------------------------------------
+// title field — parser and display_name()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_parse_meta_title() {
+    let input = r#"
+workflow my-wf {
+  meta {
+    description = "A workflow"
+    title = "My Workflow"
+    trigger = "manual"
+    targets = ["worktree"]
+  }
+  call step
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    assert_eq!(def.title.as_deref(), Some("My Workflow"));
+}
+
+#[test]
+fn test_parse_meta_no_title_defaults_to_none() {
+    let input = r#"
+workflow my-wf {
+  meta {
+    description = "A workflow"
+    trigger = "manual"
+    targets = ["worktree"]
+  }
+  call step
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    assert!(def.title.is_none());
+}
+
+#[test]
+fn test_display_name_with_title() {
+    let input = r#"
+workflow my-wf {
+  meta {
+    description = "A workflow"
+    title = "Pretty Name"
+    targets = ["worktree"]
+  }
+  call step
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    assert_eq!(def.display_name(), "Pretty Name");
+}
+
+#[test]
+fn test_display_name_falls_back_to_name() {
+    let input = r#"
+workflow my-wf {
+  meta {
+    description = "A workflow"
+    targets = ["worktree"]
+  }
+  call step
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    assert_eq!(def.display_name(), "my-wf");
+}

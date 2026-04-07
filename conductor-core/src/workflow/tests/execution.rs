@@ -1640,6 +1640,12 @@ fn test_metadata_fields_basic() {
         gate_feedback: None,
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     };
     let entries = step.metadata_fields();
     assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
@@ -1720,6 +1726,12 @@ fn test_metadata_fields_optional_sections() {
         gate_feedback: Some("Looks good".into()),
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     };
     let entries = step.metadata_fields();
     assert!(entries.contains(&MetadataEntry::Field {
@@ -3270,18 +3282,6 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
 // ---------------------------------------------------------------------------
 // evaluate_hooks integration tests
 // ---------------------------------------------------------------------------
-
-/// Helper: set up a temp dir with `.conductor/config.toml` and optional workflow files.
-fn setup_hooks_dir(config_toml: &str, workflows: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let conductor_dir = dir.path().join(".conductor");
-    std::fs::create_dir_all(conductor_dir.join("workflows")).unwrap();
-    std::fs::write(conductor_dir.join("config.toml"), config_toml).unwrap();
-    for (name, content) in workflows {
-        std::fs::write(conductor_dir.join("workflows").join(name), content).unwrap();
-    }
-    dir
-}
 
 #[test]
 fn test_hook_chain_prevention_when_triggered_by_hook() {

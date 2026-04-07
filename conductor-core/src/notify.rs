@@ -44,6 +44,35 @@ fn maybe_send_slack(config: &NotificationConfig, text: &str) {
     }
 }
 
+/// Send a message to the configured Slack webhook synchronously.
+///
+/// Returns `Ok(())` if sent, or an error if Slack is not configured or the
+/// request failed. Unlike `maybe_send_slack` this blocks until delivery
+/// completes, which is appropriate for CLI commands that exit immediately.
+pub fn send_slack_sync(config: &NotificationConfig, text: &str) -> crate::error::Result<()> {
+    let url = config
+        .slack
+        .webhook_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| {
+            crate::error::ConductorError::Config(
+                "Slack webhook_url is not configured in ~/.conductor/config.toml".to_string(),
+            )
+        })?;
+    let escaped = escape_slack_mrkdwn(text);
+    let body = serde_json::json!({ "text": escaped });
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .build();
+    agent.post(url).send_json(&body).map_err(|e| {
+        crate::error::ConductorError::Notification(format!(
+            "Slack webhook POST to {url} failed: {e}"
+        ))
+    })?;
+    Ok(())
+}
+
 /// Persist an in-app notification record. Logs a warning on failure.
 fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
     let mgr = NotificationManager::new(conn);
@@ -105,6 +134,44 @@ pub fn try_claim_notification(
     }
 }
 
+/// Dispatch a notification using the common 4-step pattern.
+///
+/// 1. Try to claim notification for deduplication
+/// 2. Persist in-app notification
+/// 3. Show desktop notification with error logging
+/// 4. Send Slack notification if configured
+///
+/// Returns `true` if the notification was dispatched, `false` if deduplicated.
+fn dispatch_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    dedup_entity_id: &str,
+    dedup_event_type: &str,
+    notification: &CreateNotification<'_>,
+    slack_text: &str,
+) -> bool {
+    // Step 1: Try to claim notification for deduplication
+    if !try_claim_notification(conn, dedup_entity_id, dedup_event_type) {
+        return false;
+    }
+
+    // Step 2: Persist in-app notification
+    persist_notification(conn, notification);
+
+    // Step 3: Show desktop notification with error logging
+    if let Err(e) = show_desktop_notification(notification.title, notification.body) {
+        tracing::warn!(
+            entity_id = notification.entity_id,
+            kind = notification.kind,
+            "desktop notification failed: {e}"
+        );
+    }
+
+    // Step 4: Send Slack notification if configured
+    maybe_send_slack(config, slack_text);
+    true
+}
+
 /// Fire a desktop notification for a workflow completion, respecting user config.
 ///
 /// Filters are applied in order: master `enabled` flag, then per-event
@@ -124,18 +191,12 @@ pub fn fire_workflow_notification(
     }
 
     let event_type = if succeeded { "completed" } else { "failed" };
-    if !try_claim_notification(conn, run_id, event_type) {
-        return;
-    }
-
     let title = if succeeded {
         "Conductor \u{2014} Workflow Finished"
     } else {
         "Conductor \u{2014} Workflow Failed"
     };
     let body = notification_body(workflow_name, target_label);
-
-    // Persist in-app notification
     let severity = if succeeded {
         NotificationSeverity::Info
     } else {
@@ -146,21 +207,15 @@ pub fn fire_workflow_notification(
     } else {
         "workflow_failed"
     };
-    persist_notification(
-        conn,
-        &CreateNotification {
-            kind,
-            title,
-            body: &body,
-            severity,
-            entity_id: Some(run_id),
-            entity_type: Some("workflow_run"),
-        },
-    );
 
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(run_id, workflow_name, "desktop notification failed: {e}");
-    }
+    let notification = CreateNotification {
+        kind,
+        title,
+        body: &body,
+        severity,
+        entity_id: Some(run_id),
+        entity_type: Some("workflow_run"),
+    };
 
     let status_word = if succeeded { "completed" } else { "failed" };
     let slack_text = match target_label {
@@ -169,7 +224,8 @@ pub fn fire_workflow_notification(
         }
         None => format!("[conductor] workflow \"{workflow_name}\" {status_word}"),
     };
-    maybe_send_slack(config, &slack_text);
+
+    dispatch_notification(conn, config, run_id, event_type, &notification, &slack_text);
 }
 
 /// Fire a desktop notification for an agent feedback request.
@@ -187,31 +243,26 @@ pub fn fire_feedback_notification(
         return;
     }
 
-    if !try_claim_notification(conn, request_id, "feedback_requested") {
-        return;
-    }
-
     let title = "Conductor \u{2014} Agent Needs Input";
-
-    // Persist in-app notification
-    persist_notification(
-        conn,
-        &CreateNotification {
-            kind: "feedback_requested",
-            title,
-            body: prompt_preview,
-            severity: NotificationSeverity::Warning,
-            entity_id: Some(request_id),
-            entity_type: Some("agent_run"),
-        },
-    );
-
-    if let Err(e) = show_desktop_notification(title, prompt_preview) {
-        tracing::warn!(request_id, "desktop notification failed: {e}");
-    }
+    let notification = CreateNotification {
+        kind: "feedback_requested",
+        title,
+        body: prompt_preview,
+        severity: NotificationSeverity::Warning,
+        entity_id: Some(request_id),
+        entity_type: Some("agent_run"),
+    };
 
     let slack_text = format!("[conductor] agent run waiting for feedback: {prompt_preview}");
-    maybe_send_slack(config, &slack_text);
+
+    dispatch_notification(
+        conn,
+        config,
+        request_id,
+        "feedback_requested",
+        &notification,
+        &slack_text,
+    );
 }
 
 /// Fire a notification for a standalone agent run that reached a terminal state.
@@ -235,9 +286,6 @@ pub fn fire_agent_run_notification(
     } else {
         "agent_failed"
     };
-    if !try_claim_notification(conn, run_id, event_type) {
-        return;
-    }
 
     let title = if succeeded {
         "Conductor \u{2014} Agent Run Finished"
@@ -263,28 +311,23 @@ pub fn fire_agent_run_notification(
     } else {
         NotificationSeverity::ActionRequired
     };
-    persist_notification(
-        conn,
-        &CreateNotification {
-            kind: event_type,
-            title,
-            body: &body,
-            severity,
-            entity_id: Some(run_id),
-            entity_type: Some("agent_run"),
-        },
-    );
 
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(run_id, "desktop notification failed: {e}");
-    }
+    let notification = CreateNotification {
+        kind: event_type,
+        title,
+        body: &body,
+        severity,
+        entity_id: Some(run_id),
+        entity_type: Some("agent_run"),
+    };
 
     let status_word = if succeeded { "completed" } else { "failed" };
     let slack_text = match worktree_slug {
         Some(slug) => format!("[conductor] agent run {status_word} on {slug}"),
         None => format!("[conductor] agent run {status_word}"),
     };
-    maybe_send_slack(config, &slack_text);
+
+    dispatch_notification(conn, config, run_id, event_type, &notification, &slack_text);
 }
 
 /// Build the notification title and body for a gate based on its type.
@@ -378,10 +421,6 @@ pub fn fire_gate_notification(
         return;
     }
 
-    if !try_claim_notification(conn, params.step_id, "gate_waiting") {
-        return;
-    }
-
     let (title, body) = gate_notification_text(
         params.gate_type,
         params.step_name,
@@ -390,36 +429,32 @@ pub fn fire_gate_notification(
         params.gate_prompt,
     );
 
-    // Persist in-app notification
     let severity = match params.gate_type {
         Some(GateType::HumanApproval | GateType::HumanReview) => {
             NotificationSeverity::ActionRequired
         }
         _ => NotificationSeverity::Warning,
     };
-    persist_notification(
-        conn,
-        &CreateNotification {
-            kind: "gate_waiting",
-            title,
-            body: &body,
-            severity,
-            entity_id: Some(params.step_id),
-            entity_type: Some("workflow_step"),
-        },
-    );
 
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(
-            step_id = params.step_id,
-            step_name = params.step_name,
-            workflow_name = params.workflow_name,
-            "desktop notification failed: {e}"
-        );
-    }
+    let notification = CreateNotification {
+        kind: "gate_waiting",
+        title,
+        body: &body,
+        severity,
+        entity_id: Some(params.step_id),
+        entity_type: Some("workflow_step"),
+    };
 
     let slack_text = format!("[conductor] {title}: {body}");
-    maybe_send_slack(config, &slack_text);
+
+    dispatch_notification(
+        conn,
+        config,
+        params.step_id,
+        "gate_waiting",
+        &notification,
+        &slack_text,
+    );
 }
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
@@ -496,10 +531,6 @@ pub fn fire_grouped_gate_notification(
         return;
     }
 
-    if !try_claim_notification(conn, params.run_id, "gates_grouped") {
-        return;
-    }
-
     let (title, body) = grouped_gate_notification_text(
         &params.gate_types,
         params.workflow_name,
@@ -507,29 +538,25 @@ pub fn fire_grouped_gate_notification(
         params.count,
     );
 
-    // Persist in-app notification
-    persist_notification(
-        conn,
-        &CreateNotification {
-            kind: "gate_waiting",
-            title,
-            body: &body,
-            severity: NotificationSeverity::ActionRequired,
-            entity_id: Some(params.run_id),
-            entity_type: Some("workflow_run"),
-        },
-    );
-
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(
-            run_id = params.run_id,
-            workflow_name = params.workflow_name,
-            "grouped desktop notification failed: {e}"
-        );
-    }
+    let notification = CreateNotification {
+        kind: "gate_waiting",
+        title,
+        body: &body,
+        severity: NotificationSeverity::ActionRequired,
+        entity_id: Some(params.run_id),
+        entity_type: Some("workflow_run"),
+    };
 
     let slack_text = format!("[conductor] {title}: {body}");
-    maybe_send_slack(config, &slack_text);
+
+    dispatch_notification(
+        conn,
+        config,
+        params.run_id,
+        "gates_grouped",
+        &notification,
+        &slack_text,
+    );
 }
 
 /// A workflow run that freshly transitioned to a terminal state.
@@ -569,7 +596,7 @@ pub fn detect_workflow_terminal_transitions<'a>(
             if now_terminal && status_changed {
                 transitions.push(WorkflowTerminalTransition {
                     run_id: run.id.clone(),
-                    workflow_name: run.workflow_name.clone(),
+                    workflow_name: run.display_name().to_string(),
                     target_label: run.target_label.clone(),
                     succeeded: matches!(run.status, WorkflowRunStatus::Completed),
                 });
@@ -1748,6 +1775,7 @@ mod tests {
             iteration: 0,
             blocked_on: None,
             feature_id: None,
+            workflow_title: None,
             total_input_tokens: None,
             total_output_tokens: None,
             total_cache_read_input_tokens: None,
@@ -2144,5 +2172,51 @@ mod tests {
         assert!(title.contains("Quality Gate"), "title: {title}");
         assert!(body.contains("check-quality"), "body: {body}");
         assert!(body.contains("review-pr"), "body: {body}");
+    }
+
+    // --- send_slack_sync: missing webhook URL error path ---
+
+    #[test]
+    fn send_slack_sync_missing_url_returns_config_error() {
+        let cfg = NotificationConfig {
+            enabled: true,
+            workflows: WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+                on_stale: true,
+            },
+            slack: SlackConfig::default(), // webhook_url = None
+        };
+        let result = send_slack_sync(&cfg, "test message");
+        assert!(result.is_err(), "expected error when webhook_url is None");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::ConductorError::Config(_)),
+            "expected Config error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn send_slack_sync_empty_url_returns_config_error() {
+        let cfg = NotificationConfig {
+            enabled: true,
+            workflows: WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+                on_stale: true,
+            },
+            slack: SlackConfig {
+                webhook_url: Some("".to_string()),
+                signing_secret: None,
+            },
+        };
+        let result = send_slack_sync(&cfg, "test message");
+        assert!(result.is_err(), "expected error when webhook_url is empty");
     }
 }

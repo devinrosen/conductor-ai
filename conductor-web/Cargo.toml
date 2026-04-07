@@ -30,6 +30,10 @@ base64 = "0.22"
 p256 = { version = "0.13", features = ["ecdsa"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 chrono = { version = "0.4", features = ["serde"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+serde_urlencoded = "0.7"
 
 [dev-dependencies]
 conductor-core = { path = "../conductor-core", features = ["test-helpers", "test-notifications"] }

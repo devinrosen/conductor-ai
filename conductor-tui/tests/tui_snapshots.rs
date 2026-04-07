@@ -9,6 +9,9 @@ use conductor_tui::state::{
     RepoDetailFocus, TreePosition, View, WorktreeDetailFocus,
 };
 use conductor_tui::ui;
+use conductor_tui::ui::graph::{
+    EdgeType, GraphData, GraphEdge, GraphNavState, GraphNodeType, TicketGraphNode,
+};
 use ratatui::{backend::TestBackend, Terminal};
 
 // ─── Fixture helpers ────────────────────────────────────────────────────────
@@ -99,7 +102,7 @@ fn make_tickets(repos: &[Repo]) -> Vec<Ticket> {
             body: "Implement OAuth login using GitHub provider.".into(),
             state: "open".into(),
             labels: "".into(),
-            assignee: None,
+            assignee: Some("devinrosen".into()),
             priority: None,
             url: "https://github.com/user/my-app/issues/123".into(),
             synced_at: "2024-01-10T00:00:00Z".into(),
@@ -319,6 +322,7 @@ fn snap_workflow_run_detail_with_steps() {
         iteration: 0,
         blocked_on: None,
         feature_id: None,
+        workflow_title: None,
         total_input_tokens: None,
         total_output_tokens: None,
         total_cache_read_input_tokens: None,
@@ -359,6 +363,10 @@ fn snap_workflow_run_detail_with_steps() {
             output_file: None,
             gate_options: None,
             gate_selections: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         },
         WorkflowRunStep {
             id: "step2".into(),
@@ -389,6 +397,10 @@ fn snap_workflow_run_detail_with_steps() {
             output_file: None,
             gate_options: None,
             gate_selections: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         },
     ];
 
@@ -407,6 +419,7 @@ fn snap_workflow_def_detail() {
 
     state.selected_workflow_def = Some(WorkflowDef {
         name: "deploy-pipeline".into(),
+        title: None,
         description: "Deploy pipeline workflow".into(),
         trigger: conductor_core::workflow::WorkflowTrigger::Manual,
         targets: vec!["worktree".into()],
@@ -522,16 +535,19 @@ fn snap_modal_branch_picker() {
                 depth: 0,
                 is_last_sibling: false,
                 ancestors_are_last: vec![],
+                is_parent: true,
             },
             TreePosition {
                 depth: 1,
                 is_last_sibling: false,
                 ancestors_are_last: vec![false],
+                is_parent: false,
             },
             TreePosition {
                 depth: 1,
                 is_last_sibling: true,
                 ancestors_are_last: vec![true],
+                is_parent: false,
             },
         ],
         selected: 0,
@@ -608,5 +624,76 @@ fn snap_modal_theme_picker() {
         original_theme: default_theme,
         original_name: "conductor".into(),
     };
+    insta::assert_snapshot!(render_to_string(&state));
+}
+
+#[test]
+fn snap_graph_view() {
+    let mut state = make_state();
+
+    // 4 connected nodes: A blocks B, C is parent of D
+    // 2 unconnected nodes (not in the graph)
+    let nodes = vec![
+        GraphNodeType::Ticket(TicketGraphNode {
+            id: "01TKT00000000000000000001A".into(),
+            source_id: "101".into(),
+            title: "Setup CI pipeline".into(),
+            state: "closed".into(),
+            labels: "infra".into(),
+            assignee: None,
+            has_worktree: false,
+        }),
+        GraphNodeType::Ticket(TicketGraphNode {
+            id: "01TKT00000000000000000002B".into(),
+            source_id: "102".into(),
+            title: "Add deployment step".into(),
+            state: "open".into(),
+            labels: "".into(),
+            assignee: None,
+            has_worktree: false,
+        }),
+        GraphNodeType::Ticket(TicketGraphNode {
+            id: "01TKT00000000000000000003C".into(),
+            source_id: "103".into(),
+            title: "Auth epic".into(),
+            state: "open".into(),
+            labels: "epic".into(),
+            assignee: Some("alice".into()),
+            has_worktree: false,
+        }),
+        GraphNodeType::Ticket(TicketGraphNode {
+            id: "01TKT00000000000000000004D".into(),
+            source_id: "104".into(),
+            title: "OAuth login flow".into(),
+            state: "open".into(),
+            labels: "".into(),
+            assignee: None,
+            has_worktree: false,
+        }),
+    ];
+
+    let edges = vec![
+        GraphEdge {
+            from: "01TKT00000000000000000001A".into(),
+            to: "01TKT00000000000000000002B".into(),
+            edge_type: EdgeType::BlockedBy,
+        },
+        GraphEdge {
+            from: "01TKT00000000000000000003C".into(),
+            to: "01TKT00000000000000000004D".into(),
+            edge_type: EdgeType::ParentChild,
+        },
+    ];
+
+    state.modal = Modal::GraphView {
+        data: GraphData {
+            nodes,
+            edges,
+            unconnected_count: 2,
+        },
+        nav: GraphNavState::default(),
+        title: "Dependency Graph — my-app tickets".into(),
+    };
+
     insta::assert_snapshot!(render_to_string(&state));
 }

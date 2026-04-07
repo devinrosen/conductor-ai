@@ -526,6 +526,44 @@ impl App {
             self.state.status_message = Some("Select a worktree first".to_string());
         }
     }
+
+    /// Spawn a background thread to run `check_main_health()` before creating a worktree.
+    ///
+    /// Shows a non-dismissable `Modal::Progress`. On completion, sends
+    /// `Action::MainHealthCheckComplete` which `action_dispatch.rs` handles.
+    pub(super) fn spawn_main_health_check(
+        &mut self,
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        from_pr: Option<u32>,
+        from_branch: Option<String>,
+    ) {
+        let Some(bg_tx) = self.bg_tx.clone() else {
+            return;
+        };
+        self.state.modal = Modal::Progress {
+            message: "Checking main branch status\u{2026}".into(),
+        };
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let status = (|| -> Result<_, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                conductor_core::worktree::WorktreeManager::new(&conn, &config)
+                    .check_main_health(&repo_slug, from_branch.as_deref())
+                    .map_err(|e| e.to_string())
+            })();
+            let _ = bg_tx.send(crate::action::Action::MainHealthCheckComplete {
+                repo_slug,
+                wt_name,
+                ticket_id,
+                from_pr,
+                from_branch,
+                status,
+            });
+        });
+    }
 }
 
 #[cfg(test)]

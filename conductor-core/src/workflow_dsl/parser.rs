@@ -264,6 +264,7 @@ impl Parser {
         let name = self.expect_ident()?;
         self.expect(&Token::LBrace)?;
 
+        let mut title: Option<String> = None;
         let mut description = String::new();
         let mut trigger = WorkflowTrigger::Manual;
         let mut targets: Vec<String> = Vec::new();
@@ -281,6 +282,9 @@ impl Parser {
                     let kvs = self.parse_kvs()?;
                     self.expect(&Token::RBrace)?;
 
+                    if let Some(t) = kvs.get("title") {
+                        title = Some(t.as_str().to_string());
+                    }
                     if let Some(desc) = kvs.get("description") {
                         description = desc.as_str().to_string();
                     }
@@ -369,6 +373,7 @@ impl Parser {
 
         Ok(WorkflowDef {
             name,
+            title,
             description,
             trigger,
             targets,

@@ -166,6 +166,7 @@ fn tree_position_to_prefix_depth_zero_returns_empty() {
         depth: 0,
         is_last_sibling: false,
         ancestors_are_last: vec![],
+        is_parent: false,
     };
     assert_eq!(pos.to_prefix(), "");
 }
@@ -176,6 +177,7 @@ fn tree_position_to_prefix_non_last_sibling() {
         depth: 1,
         is_last_sibling: false,
         ancestors_are_last: vec![],
+        is_parent: false,
     };
     assert_eq!(pos.to_prefix(), "├ ");
 }
@@ -186,6 +188,7 @@ fn tree_position_to_prefix_last_sibling() {
         depth: 1,
         is_last_sibling: true,
         ancestors_are_last: vec![],
+        is_parent: false,
     };
     assert_eq!(pos.to_prefix(), "└ ");
 }
@@ -196,6 +199,7 @@ fn tree_position_to_prefix_nested_with_non_last_ancestor() {
         depth: 2,
         is_last_sibling: false,
         ancestors_are_last: vec![false],
+        is_parent: false,
     };
     assert_eq!(pos.to_prefix(), "│ ├ ");
 }
@@ -206,6 +210,7 @@ fn tree_position_to_prefix_nested_with_last_ancestor() {
         depth: 2,
         is_last_sibling: true,
         ancestors_are_last: vec![true],
+        is_parent: false,
     };
     assert_eq!(pos.to_prefix(), "  └ ");
 }
@@ -216,6 +221,7 @@ fn tree_position_to_prefix_deep_mixed_ancestors() {
         depth: 3,
         is_last_sibling: false,
         ancestors_are_last: vec![false, true],
+        is_parent: false,
     };
     assert_eq!(pos.to_prefix(), "│   ├ ");
 }

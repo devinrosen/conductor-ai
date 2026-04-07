@@ -9,9 +9,12 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
-    RunIdSlot, WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
+    GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
+    StepRetryAnalyticsRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
+    WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -136,6 +139,7 @@ impl From<&InputDecl> for InputDeclSummary {
 #[derive(Serialize)]
 pub struct WorkflowDefSummary {
     pub name: String,
+    pub title: Option<String>,
     pub description: String,
     pub trigger: String,
     pub inputs: Vec<InputDeclSummary>,
@@ -148,6 +152,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
     fn from(def: &WorkflowDef) -> Self {
         Self {
             name: def.name.clone(),
+            title: def.title.clone(),
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
@@ -837,6 +842,185 @@ pub async fn get_workflow_steps(
     Ok(Json(steps))
 }
 
+/// GET /api/workflows/analytics/aggregates?repo_id=
+#[derive(Deserialize)]
+pub struct AggregatesQuery {
+    pub repo_id: Option<String>,
+}
+
+pub async fn get_token_aggregates(
+    State(state): State<AppState>,
+    Query(q): Query<AggregatesQuery>,
+) -> Result<Json<Vec<WorkflowTokenAggregate>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let rows = mgr.get_workflow_token_aggregates(q.repo_id.as_deref())?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/trend?workflow_name=&granularity=daily|weekly
+#[derive(Deserialize)]
+pub struct TrendQuery {
+    pub workflow_name: String,
+    pub granularity: Option<String>,
+}
+
+pub async fn get_token_trend(
+    State(state): State<AppState>,
+    Query(q): Query<TrendQuery>,
+) -> Result<Json<Vec<WorkflowTokenTrendRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let granularity = q.granularity.as_deref().unwrap_or("daily");
+    let rows = mgr.get_workflow_token_trend(&q.workflow_name, granularity)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/heatmap?workflow_name=&runs=20
+#[derive(Deserialize)]
+pub struct HeatmapQuery {
+    pub workflow_name: String,
+    pub runs: Option<usize>,
+}
+
+pub async fn get_step_heatmap(
+    State(state): State<AppState>,
+    Query(q): Query<HeatmapQuery>,
+) -> Result<Json<Vec<StepTokenHeatmapRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_token_heatmap(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/runs?workflow_name=&days=30
+#[derive(Deserialize)]
+pub struct RunMetricsQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+pub async fn get_run_metrics(
+    State(state): State<AppState>,
+    Query(q): Query<RunMetricsQuery>,
+) -> Result<Json<Vec<WorkflowRunMetricsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let rows = mgr.get_run_metrics(&q.workflow_name, days)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/failure-trend?workflow_name=&granularity=daily|weekly
+#[derive(Deserialize)]
+pub struct FailureTrendQuery {
+    pub workflow_name: String,
+    pub granularity: Option<String>,
+}
+
+pub async fn get_failure_trend(
+    State(state): State<AppState>,
+    Query(q): Query<FailureTrendQuery>,
+) -> Result<Json<Vec<WorkflowFailureRateTrendRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let granularity = q.granularity.as_deref().unwrap_or("daily");
+    let rows = mgr.get_workflow_failure_rate_trend(&q.workflow_name, granularity)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/failure-heatmap?workflow_name=&runs=20
+pub async fn get_failure_heatmap(
+    State(state): State<AppState>,
+    Query(q): Query<HeatmapQuery>,
+) -> Result<Json<Vec<StepFailureHeatmapRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_failure_heatmap(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/step-retries?workflow_name=&runs=20
+pub async fn get_step_retry_analytics(
+    State(state): State<AppState>,
+    Query(q): Query<HeatmapQuery>,
+) -> Result<Json<Vec<StepRetryAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_retry_analytics(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/percentiles?workflow_name=&days=30
+#[derive(Deserialize)]
+pub struct PercentilesQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+pub async fn get_workflow_percentiles(
+    State(state): State<AppState>,
+    Query(q): Query<PercentilesQuery>,
+) -> Result<Json<Option<WorkflowPercentiles>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let result = mgr.get_workflow_percentiles(&q.workflow_name, days)?;
+    Ok(Json(result))
+}
+
+/// GET /api/workflows/analytics/regressions?recent_days=7&baseline_days=30&min_runs=5
+#[derive(Deserialize)]
+pub struct RegressionsQuery {
+    pub recent_days: Option<i64>,
+    pub baseline_days: Option<i64>,
+    pub min_runs: Option<i64>,
+}
+
+pub async fn get_workflow_regressions(
+    State(state): State<AppState>,
+    Query(q): Query<RegressionsQuery>,
+) -> Result<Json<Vec<WorkflowRegressionSignal>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let recent_days = q.recent_days.unwrap_or(7);
+    let baseline_days = q.baseline_days.unwrap_or(30);
+    let min_runs = q.min_runs.unwrap_or(REGRESSION_MIN_RECENT_RUNS);
+    let signals = mgr.get_workflow_regression_signals(min_runs, recent_days, baseline_days)?;
+    Ok(Json(signals))
+}
+
+/// GET /api/workflows/analytics/gates?workflow_name=&days=30
+#[derive(Deserialize)]
+pub struct GateAnalyticsQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+pub async fn get_gate_analytics(
+    State(state): State<AppState>,
+    Query(q): Query<GateAnalyticsQuery>,
+) -> Result<Json<Vec<GateAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let rows = mgr.get_gate_analytics(&q.workflow_name, days)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/gates/pending
+pub async fn get_pending_gates(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PendingGateAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let rows = mgr.get_all_pending_gates()?;
+    Ok(Json(rows))
+}
+
 /// GET /api/workflows/runs/{id}/steps/{step_name}/log
 pub async fn get_workflow_step_log(
     State(state): State<AppState>,
@@ -1446,6 +1630,7 @@ mod tests {
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
+                on_stale: true,
             },
             slack: conductor_core::config::SlackConfig::default(),
         }
@@ -2289,6 +2474,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "test-wf".to_string(),
+            title: None,
             description: "A test workflow".to_string(),
             trigger: WorkflowTrigger::Manual,
             targets: vec!["repo".to_string(), "worktree".to_string()],
@@ -2312,6 +2498,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "all-contexts-wf".to_string(),
+            title: None,
             description: "Applies to all contexts".to_string(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],

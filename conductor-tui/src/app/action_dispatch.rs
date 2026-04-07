@@ -258,6 +258,65 @@ impl App {
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
             Action::LinkTicket => self.handle_link_ticket(),
+            Action::MainHealthCheckComplete {
+                repo_slug,
+                wt_name,
+                ticket_id,
+                from_pr,
+                from_branch,
+                status,
+            } => match status {
+                Err(e) => {
+                    self.state.modal = Modal::Error {
+                        message: format!("Main branch health check failed: {e}"),
+                    };
+                }
+                Ok(health) if health.is_dirty => {
+                    let mut message = format!(
+                        "Base branch has {} uncommitted change(s):\n",
+                        health.dirty_files.len()
+                    );
+                    for f in health.dirty_files.iter().take(10) {
+                        message.push_str(&format!("  {f}\n"));
+                    }
+                    if health.dirty_files.len() > 10 {
+                        message
+                            .push_str(&format!("  … and {} more\n", health.dirty_files.len() - 10));
+                    }
+                    message.push_str("\nProceed anyway?");
+                    self.state.modal = Modal::Confirm {
+                        title: "Dirty Base Branch".to_string(),
+                        message,
+                        on_confirm: crate::state::ConfirmAction::CreateWorktree {
+                            repo_slug,
+                            wt_name,
+                            ticket_id,
+                            from_pr,
+                            from_branch,
+                            force_dirty: true,
+                        },
+                    };
+                }
+                Ok(health) => {
+                    if health.commits_behind > 0 {
+                        self.state.status_message = Some(format!(
+                            "Base branch is {} commit(s) behind origin (will fast-forward)",
+                            health.commits_behind
+                        ));
+                    }
+                    self.spawn_worktree_create(
+                        repo_slug,
+                        wt_name,
+                        conductor_core::worktree::WorktreeCreateOptions {
+                            ticket_id,
+                            from_pr,
+                            from_branch,
+                            pre_health: Some(health),
+                            ..Default::default()
+                        },
+                    );
+                }
+            },
             Action::FeatureBranchesLoaded {
                 repo_slug,
                 wt_name,
@@ -379,6 +438,36 @@ impl App {
 
             // Agent issue creation toggle
             Action::ToggleAgentIssues => self.handle_toggle_agent_issues(),
+
+            // Ticket tree collapse/expand toggle
+            Action::ToggleTicketCollapse => {
+                let idx = self.state.detail_ticket_index;
+                let is_parent = self
+                    .state
+                    .detail_ticket_tree_positions
+                    .get(idx)
+                    .is_some_and(|p| p.is_parent);
+                if is_parent {
+                    if let Some(ticket_id) = self
+                        .state
+                        .filtered_detail_tickets
+                        .get(idx)
+                        .map(|t| t.id.clone())
+                    {
+                        if self.state.collapsed_ticket_ids.contains(&ticket_id) {
+                            self.state.collapsed_ticket_ids.remove(&ticket_id);
+                        } else {
+                            self.state.collapsed_ticket_ids.insert(ticket_id);
+                        }
+                        self.state.rebuild_filtered_tickets();
+                        // Clamp index after visibility change.
+                        let len = self.state.filtered_detail_tickets.len();
+                        if len > 0 && self.state.detail_ticket_index >= len {
+                            self.state.detail_ticket_index = len - 1;
+                        }
+                    }
+                }
+            }
 
             // Ticket closed visibility toggle
             Action::ToggleClosedTickets => {
@@ -844,6 +933,7 @@ impl App {
                 self.state.data.worktrees = payload.worktrees;
                 self.state.data.tickets = payload.tickets;
                 self.state.data.ticket_labels = payload.ticket_labels;
+                self.state.data.ticket_dependencies = payload.ticket_dependencies;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
                 self.state.data.latest_workflow_runs_by_worktree =
@@ -1049,8 +1139,188 @@ impl App {
                 }
                 self.refresh_data();
             }
+
+            // ── Graph view actions ─────────────────────────────────────────
+            Action::OpenTicketGraphView => {
+                self.open_ticket_graph_view();
+            }
+
+            Action::OpenWorkflowStepGraphView => {
+                self.state.status_message = Some("Workflow step graph view coming soon".into());
+            }
+
+            Action::GraphNavLeft => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.selected_layer = nav.selected_layer.saturating_sub(1);
+                    nav.selected_node_idx = 0;
+                }
+            }
+            Action::GraphNavRight => {
+                if let Modal::GraphView {
+                    ref mut nav,
+                    ref data,
+                    ..
+                } = self.state.modal
+                {
+                    let max_layer = data.compute_layers().len().saturating_sub(1);
+                    if nav.selected_layer < max_layer {
+                        nav.selected_layer += 1;
+                        nav.selected_node_idx = 0;
+                    }
+                }
+            }
+            Action::GraphNavUp => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.selected_node_idx = nav.selected_node_idx.saturating_sub(1);
+                }
+            }
+            Action::GraphNavDown => {
+                if let Modal::GraphView {
+                    ref mut nav,
+                    ref data,
+                    ..
+                } = self.state.modal
+                {
+                    let layer_len = data
+                        .compute_layers()
+                        .get(nav.selected_layer)
+                        .map(|l| l.len())
+                        .unwrap_or(0);
+                    if nav.selected_node_idx + 1 < layer_len {
+                        nav.selected_node_idx += 1;
+                    }
+                }
+            }
+            Action::GraphPanLeft => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.pan_x = nav.pan_x.saturating_sub(4);
+                    if nav.pan_x < 0 {
+                        nav.pan_x = 0;
+                    }
+                }
+            }
+            Action::GraphPanRight => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.pan_x = nav.pan_x.saturating_add(4);
+                }
+            }
+            Action::GraphPanUp => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.pan_y = nav.pan_y.saturating_sub(4);
+                    if nav.pan_y < 0 {
+                        nav.pan_y = 0;
+                    }
+                }
+            }
+            Action::GraphPanDown => {
+                if let Modal::GraphView { ref mut nav, .. } = self.state.modal {
+                    nav.pan_y = nav.pan_y.saturating_add(4);
+                }
+            }
         }
         true
+    }
+
+    /// Build and open the ticket dependency graph for the current repo.
+    fn open_ticket_graph_view(&mut self) {
+        use crate::ui::graph::{
+            EdgeType, GraphData, GraphEdge, GraphNavState, GraphNodeType, TicketGraphNode,
+        };
+
+        let tickets = self.state.detail_tickets.clone();
+        let deps = self.state.data.ticket_dependencies.clone();
+
+        // Collect all node IDs that appear in at least one edge
+        let mut connected_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let mut edges: Vec<GraphEdge> = Vec::new();
+
+        for ticket in &tickets {
+            if let Some(d) = deps.get(&ticket.id) {
+                for blocker in &d.blocked_by {
+                    connected_ids.insert(ticket.id.clone());
+                    connected_ids.insert(blocker.id.clone());
+                    edges.push(GraphEdge {
+                        from: blocker.id.clone(),
+                        to: ticket.id.clone(),
+                        edge_type: EdgeType::BlockedBy,
+                    });
+                }
+                if let Some(parent) = &d.parent {
+                    connected_ids.insert(ticket.id.clone());
+                    connected_ids.insert(parent.id.clone());
+                    edges.push(GraphEdge {
+                        from: parent.id.clone(),
+                        to: ticket.id.clone(),
+                        edge_type: EdgeType::ParentChild,
+                    });
+                }
+            }
+        }
+
+        // Deduplicate edges
+        edges.sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
+        edges.dedup_by(|a, b| a.from == b.from && a.to == b.to);
+
+        // Collect all unique ticket IDs we need nodes for (from tickets list + deps)
+        let mut ticket_map: std::collections::HashMap<String, TicketGraphNode> =
+            std::collections::HashMap::new();
+        for t in &tickets {
+            ticket_map.insert(t.id.clone(), TicketGraphNode::from_ticket(t));
+        }
+        // Also add tickets referenced in deps that may not be in detail_tickets
+        for ticket in &tickets {
+            if let Some(d) = deps.get(&ticket.id) {
+                for blocker in &d.blocked_by {
+                    ticket_map
+                        .entry(blocker.id.clone())
+                        .or_insert_with(|| TicketGraphNode::from_ticket(blocker));
+                }
+                if let Some(parent) = &d.parent {
+                    ticket_map
+                        .entry(parent.id.clone())
+                        .or_insert_with(|| TicketGraphNode::from_ticket(parent));
+                }
+            }
+        }
+
+        let unconnected_count = tickets
+            .iter()
+            .filter(|t| !connected_ids.contains(&t.id))
+            .count();
+
+        // Annotate nodes with active-worktree status
+        let ticket_worktrees = &self.state.data.ticket_worktrees;
+        let nodes: Vec<GraphNodeType> = ticket_map
+            .into_values()
+            .map(|mut n| {
+                n.has_worktree = ticket_worktrees
+                    .get(&n.id)
+                    .and_then(|wts| wts.iter().find(|w| w.is_active()))
+                    .is_some();
+                GraphNodeType::Ticket(n)
+            })
+            .collect();
+
+        let repo_slug = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+            .map(|r| r.slug.clone())
+            .unwrap_or_else(|| "repo".into());
+
+        let title = format!("Dependency Graph — {repo_slug} tickets");
+
+        self.state.modal = Modal::GraphView {
+            data: GraphData {
+                nodes,
+                edges,
+                unconnected_count,
+            },
+            nav: GraphNavState::default(),
+            title,
+        };
     }
 
     /// Handle the result of a repo-scoped agent launch or stop operation.

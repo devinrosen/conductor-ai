@@ -1,5 +1,6 @@
 workflow roundtable-testing {
   meta {
+    title       = "Testing Roundtable"
     description = "Testing roundtable review"
     trigger     = "manual"
     targets     = ["pr", "worktree"]

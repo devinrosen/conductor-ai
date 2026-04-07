@@ -9,9 +9,9 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::github;
 use conductor_core::github_app;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
-use conductor_core::jira_acli;
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
+use conductor_core::ticket_source::TicketSource;
 use conductor_core::tickets::{TicketInput, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
@@ -385,6 +385,7 @@ pub fn poll_data() -> Option<PollResult> {
     let worktrees = wt_mgr.list(None, true).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
     let ticket_labels = ticket_syncer.get_all_labels().unwrap_or_default();
+    let ticket_dependencies = ticket_syncer.get_all_dependencies().unwrap_or_default();
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
@@ -519,6 +520,7 @@ pub fn poll_data() -> Option<PollResult> {
         worktrees,
         tickets,
         ticket_labels,
+        ticket_dependencies,
         latest_agent_runs,
         ticket_agent_totals,
         latest_workflow_runs_by_worktree,
@@ -656,36 +658,19 @@ fn sync_sources_for_repo(
         }
     } else {
         for source in sources {
-            match source.source_type.as_str() {
-                "github" => {
-                    let action = match serde_json::from_str::<GitHubConfig>(&source.config_json) {
-                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "github", || {
-                            github::sync_github_issues(&cfg.owner, &cfg.repo, token)
-                        }),
-                        Err(e) => Action::TicketSyncFailed {
-                            repo_slug: repo_slug.to_string(),
-                            error: format!("invalid github config: {e}"),
-                        },
-                    };
-                    if !tx.send(action) {
-                        return false;
-                    }
+            let action = match TicketSource::from_issue_source(&source) {
+                Ok(ts) => {
+                    let ts = ts.with_repo_slug(repo_slug);
+                    let source_type = ts.source_type_str();
+                    sync_repo(syncer, repo_id, repo_slug, source_type, || ts.sync(token))
                 }
-                "jira" => {
-                    let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
-                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "jira", || {
-                            jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-                        }),
-                        Err(e) => Action::TicketSyncFailed {
-                            repo_slug: repo_slug.to_string(),
-                            error: format!("invalid jira config: {e}"),
-                        },
-                    };
-                    if !tx.send(action) {
-                        return false;
-                    }
-                }
-                _ => {}
+                Err(e) => Action::TicketSyncFailed {
+                    repo_slug: repo_slug.to_string(),
+                    error: format!("unsupported source type {:?}: {e}", source.source_type),
+                },
+            };
+            if !tx.send(action) {
+                return false;
             }
         }
     }
@@ -700,6 +685,7 @@ pub fn spawn_ticket_sync_for_repo(
     repo_id: String,
     repo_slug: String,
     remote_url: String,
+    force: bool,
 ) {
     thread::spawn(move || {
         let db = db_path();
@@ -736,10 +722,10 @@ pub fn spawn_ticket_sync_for_repo(
                 })
                 .unwrap_or(true),
             Ok(None) => true,
-            Err(_) => false,
+            Err(_) => true,
         };
 
-        if !is_stale {
+        if !force && !is_stale {
             let _ = tx.send(Action::TicketSyncDone);
             return;
         }
@@ -1170,8 +1156,11 @@ mod tests {
             assignee: None,
             priority: None,
             url: "https://example.com".into(),
-            raw_json: "{}".into(),
+            raw_json: None,
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
         };
 
         let action = sync_repo(&syncer, "r1", "test-repo", "github", || Ok(vec![ticket]));
@@ -1217,8 +1206,11 @@ mod tests {
             assignee: None,
             priority: None,
             url: "https://example.com".into(),
-            raw_json: "{}".into(),
+            raw_json: None,
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
         };
 
         let action = sync_repo(&syncer, "nonexistent-repo", "test-repo", "github", || {

@@ -167,20 +167,34 @@ It proposes targeted documentation updates: new or amended ADR entries, API doc 
 - `escalate` — surface to a human gate before proceeding
 - `remediate` — spawn a sub-agent with the failure context and step definition; attempt a fix; re-run the step
 
-**Tier B — Supervisor workflow:** A special workflow type that watches a set of other workflows. When a watched run reaches a terminal failure state, the supervisor triggers a remediation workflow with the failed run's full context injected. This is a watchdog-of-workflows pattern.
+**Tier B — Workflow failure watchdog:** A cron-triggered workflow using the `foreach workflow_runs` step from [RFC 010](rfc/open/010-for-each-ticket-workflow-step.md) watches for failed runs and triggers a remediation workflow per failure. This is a watchdog-of-workflows pattern implemented as a usage convention on a general primitive, not a distinct workflow type.
 
-The supervisor itself runs as a persistent background cron (e.g., every 5 minutes) — analogous to the orphan reaper from issue #277, but at the workflow level rather than the agent level.
+```
+workflow triage-failures {
+  meta { description = "Find failed runs and file improvement issues" }
+
+  foreach failed-runs {
+    over         = workflow_runs
+    filter       = { status = "failed" }
+    max_parallel = 4
+    workflow     = "diagnose-and-issue"
+    inputs       = { run_id = "{{item.id}}" }
+    on_child_fail = continue
+  }
+}
+```
+
+A `RemediationContext` struct is injected into each child run: failed run ID, failed step, error message, prior attempt count.
 
 **Conductor primitive:**
 - `on_failure` policy field on step definitions (Tier A)
-- `supervisor` workflow type with a `watches` list and a `remediation_workflow` reference (Tier B)
-- `RemediationContext` struct injected into remediation runs: failed run ID, failed step, error message, prior attempt count
+- `foreach workflow_runs` step in a cron-triggered workflow (Tier B) — no separate `supervisor` type needed
 
 **Open questions:**
-- Remediation loops: how do we prevent a remediation workflow from triggering its own remediator? A `max_remediation_depth` setting.
+- Remediation loops: how do we prevent a remediation workflow from triggering its own remediator? A `max_remediation_depth` option on the `foreach` step, or a convention that remediation workflows do not themselves contain `foreach workflow_runs` steps.
 - Who gets paged when Tier B escalates? Integration with notification channels (Slack, email) is a dependency.
 
-**Daemon note:** The Tier B supervisor is the forcing function for the v2 daemon. It needs to watch multiple concurrent workflow runs and react to state transitions — not poll on an interval. SQLite polling every few seconds is workable for a small number of runs but becomes latency-sensitive and architecturally awkward at scale. Stage 7b should not be built on top of the polling model; it should land on top of the daemon's event bus. Together with stage 5b, this is the clearest signal that the daemon RFC should be opened before implementing either.
+**Daemon note:** Cron-triggered `foreach workflow_runs` polling every few minutes is a known approximation of event-driven remediation. It gets most of the value under v1's architecture, but reacting to run completion *events* is strictly better at scale. Together with stage 5b, this is the clearest signal that the daemon RFC should be opened before optimising either.
 
 ---
 
@@ -227,7 +241,9 @@ These stages have a natural delivery order. Earlier stages are prerequisites for
 
 **Stages 1–4 ship under the library-first v1 architecture.** They are trigger-and-wait operations that fit the existing polling + background threads model.
 
-**Stages 5b and 7b (Tier B supervisor) are the daemon trigger.** Both require persistent, event-driven background processes that run independently of any human-facing binary. These two stages should not be implemented until the v2 daemon RFC is open. See [docs/VISION.md](./VISION.md#v2-daemon-extraction) for the daemon design.
+**Stages 1–4 and 7b ship under the library-first v1 architecture.** Stage 7b uses `foreach workflow_runs` on a cron schedule — polling is a known approximation but gets most of the value without a daemon.
+
+**Stages 5b and 7b (event-driven)** are the daemon trigger. Reacting to run completion *events* rather than polling is where the v1 polling model shows strain. These should not be fully optimised until the v2 daemon RFC is open. See [docs/VISION.md](./VISION.md#v2-daemon-extraction) for the daemon design.
 
 ---
 
@@ -241,8 +257,9 @@ These stages have a natural delivery order. Earlier stages are prerequisites for
 | `await_deployment` step type | 5a | Polls deployment source until confirmed or timed out |
 | `production_signal` watchdog | 5b | Monitors post-deploy metrics; emits regression events |
 | `synthesize_docs` step type | 6 | Proposes doc updates from PR diff + ticket context |
+| `foreach` step type | — | General fan-out over tickets (dep-ordered), repos, or workflow runs — see [RFC 010](rfc/open/010-for-each-ticket-workflow-step.md) |
 | `on_failure` step policy | 7a | Per-step retry, skip, escalate, or remediate on failure |
-| Supervisor workflow type | 7b | Watches a set of workflows; triggers remediation on failure |
+| `foreach workflow_runs` (cron) | 7b | Watches for failed runs; triggers remediation workflow per failure — replaces the `supervisor` workflow type |
 | `research_synthesis` workflow type | 8 | Reads completion signals; proposes ranked research tickets |
 
 ---
@@ -258,6 +275,6 @@ IDEAS.md (half-formed) → RFC (design) → ROADMAP (scheduled) → code
 Current status:
 - **`validate_resolution` (stage 4):** Ready for RFC. Most concrete, highest leverage, unblocks L2.
 - **`pre_flight` (stage 1):** Near-RFC. Needs rubric design decision resolved first.
-- **Supervisor workflow (stage 7b):** IDEAS.md. Needs stage 4 to land first.
+- **Failure watchdog / `foreach workflow_runs` (stage 7b):** RFC 010. Implemented as a cron-triggered `foreach workflow_runs` workflow. Needs stage 4 to land first for the remediation child workflow to have useful resolution context.
 - **`production_signal` watchdog (stage 5b):** IDEAS.md. Deployment source abstraction needs design.
 - **`research_synthesis` (stage 8):** IDEAS.md. Depends on stages 4 and 6.

@@ -16,16 +16,15 @@ pub struct FeaturesResponse {
 
 pub async fn list_features(
     State(state): State<AppState>,
-    Path(repo_slug): Path<String>,
+    Path(repo_id): Path<String>,
 ) -> Result<Json<FeaturesResponse>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
 
-    // Verify repo exists
-    RepoManager::new(&db, &config).get_by_slug(&repo_slug)?;
+    let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
 
     let mgr = FeatureManager::new(&db, &config);
-    let features = mgr.list(&repo_slug)?;
+    let features = mgr.list(&repo.slug)?;
 
     Ok(Json(FeaturesResponse {
         features,

@@ -10,7 +10,7 @@ mod commands;
 mod handlers;
 mod helpers;
 mod mcp;
-mod statusline;
+mod setup;
 
 use commands::{Cli, Commands};
 
@@ -49,7 +49,7 @@ fn main() -> Result<()> {
         Commands::Workflow { command } => {
             handlers::workflow::handle_workflow(command, &conn, &config)?
         }
-        Commands::Statusline { command } => handlers::statusline::handle_statusline(command)?,
+        Commands::Setup { command } => handlers::setup::handle_setup(command)?,
         Commands::Mcp { command } => handlers::mcp::handle_mcp(command)?,
         Commands::Dev { command } => handlers::dev::handle_dev(command)?,
     }
