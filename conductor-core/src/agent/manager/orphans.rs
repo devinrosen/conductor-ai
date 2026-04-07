@@ -58,6 +58,15 @@ impl<'a> AgentManager<'a> {
             row_to_agent_run,
         )?;
 
+        if active_runs.is_empty() {
+            return Ok(0);
+        }
+
+        tracing::debug!(
+            "reap_orphaned_runs: checking {} active agent run(s)",
+            active_runs.len()
+        );
+
         // Fetch parent_run_ids of active (non-terminal) workflow runs.
         // Workflow parent runs are created with tmux_window = None by design
         // and must not be reaped while their workflow is still active.
@@ -65,6 +74,10 @@ impl<'a> AgentManager<'a> {
 
         // Fetch all live tmux window names once (avoids N+1 subprocess spawns).
         let live_windows = list_live_tmux_windows();
+        tracing::debug!(
+            "reap_orphaned_runs: {} live tmux window(s)",
+            live_windows.len()
+        );
 
         let mut reaped = 0;
         for run in &active_runs {
@@ -76,18 +89,43 @@ impl<'a> AgentManager<'a> {
                 if live_windows.contains(name.as_str()) {
                     continue;
                 }
+                tracing::warn!(
+                    "reap_orphaned_runs: tmux window {name:?} gone for run {} (started_at={}, worktree={:?})",
+                    run.id,
+                    run.started_at,
+                    run.worktree_id,
+                );
+            } else {
+                tracing::warn!(
+                    "reap_orphaned_runs: run {} has no tmux_window (started_at={}, worktree={:?})",
+                    run.id,
+                    run.started_at,
+                    run.worktree_id,
+                );
             }
             // Window is gone — try to recover result from log file
             if try_recover_from_log(self, &run.id).is_some() {
+                tracing::info!(
+                    "reap_orphaned_runs: recovered result from log for run {}",
+                    run.id
+                );
                 reaped += 1;
                 continue;
             }
             // No result in log — mark as failed
+            tracing::warn!(
+                "reap_orphaned_runs: no log recovery possible for run {}, marking as failed",
+                run.id
+            );
             self.update_run_failed(
                 &run.id,
                 "tmux session lost — agent may have completed but result was not captured",
             )?;
             reaped += 1;
+        }
+
+        if reaped > 0 {
+            tracing::info!("reap_orphaned_runs: reaped {reaped} orphaned run(s)");
         }
 
         // Best-effort cleanup of stale stderr capture files (older than 1 hour).

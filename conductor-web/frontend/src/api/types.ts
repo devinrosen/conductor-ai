@@ -69,6 +69,18 @@ export interface CreateRepoRequest {
   workspace_dir?: string;
 }
 
+export interface GithubPr {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  state: string;
+  head_ref_name: string;
+  is_draft: boolean;
+  review_decision: string | null;
+  ci_status: string;
+}
+
 export interface CreateWorktreeRequest {
   name: string;
   from_branch?: string;
@@ -155,6 +167,11 @@ export interface TicketDependencies {
   blocks: Ticket[];
   parent: Ticket | null;
   children: Ticket[];
+}
+
+export interface TicketListResponse {
+  tickets: Ticket[];
+  dependencies: Record<string, TicketDependencies>;
 }
 
 export interface TicketDetail {
@@ -312,6 +329,80 @@ export interface StepFailureHeatmapRow {
   /** Percentage of executions that failed. Range: 0–100. */
   failure_rate: number;
   avg_retry_count: number;
+}
+
+export interface StepRetryAnalyticsRow {
+  step_name: string;
+  total_executions: number;
+  executions_with_retries: number;
+  /** Percentage of executions needing at least one retry. Range: 0–100. */
+  retry_rate: number;
+  /** Average retry count among executions that had at least one retry. */
+  avg_retry_count: number;
+  /** Percentage of retried executions that completed. Range: 0–100. */
+  retry_success_rate: number;
+}
+
+export interface WorkflowPercentiles {
+  p50_duration_ms: number | null;
+  p75_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  p99_duration_ms: number | null;
+  p50_cost_usd: number | null;
+  p75_cost_usd: number | null;
+  p95_cost_usd: number | null;
+  p99_cost_usd: number | null;
+  p50_total_tokens: number | null;
+  p75_total_tokens: number | null;
+  p95_total_tokens: number | null;
+  p99_total_tokens: number | null;
+  run_count: number;
+}
+
+export interface WorkflowRegressionSignal {
+  workflow_name: string;
+  workflow_title: string | null;
+  recent_runs: number;
+  baseline_runs: number;
+  // Duration (ms) — P75
+  recent_p75_duration_ms: number | null;
+  baseline_p75_duration_ms: number | null;
+  duration_change_pct: number | null;
+  // Cost (USD) — P75
+  recent_p75_cost_usd: number | null;
+  baseline_p75_cost_usd: number | null;
+  cost_change_pct: number | null;
+  // Failure rate (0–100 %)
+  recent_failure_rate: number;
+  baseline_failure_rate: number;
+  failure_rate_change_pp: number;
+  // Regression flags
+  duration_regressed: boolean;
+  cost_regressed: boolean;
+  failure_rate_regressed: boolean;
+}
+
+export interface GateAnalyticsRow {
+  step_name: string;
+  total_gate_hits: number;
+  approved_count: number;
+  rejected_count: number;
+  approval_rate: number; // 0–100
+  avg_wait_ms: number | null;
+  p50_wait_ms: number | null;
+  p95_wait_ms: number | null;
+  avg_feedback_length: number | null;
+}
+
+export interface PendingGateAnalyticsRow {
+  step_id: string;
+  step_name: string;
+  gate_type: string;
+  gate_prompt: string | null;
+  workflow_name: string;
+  workflow_run_id: string;
+  started_at: string;
+  wait_ms_so_far: number;
 }
 
 // Workflow Definition AST types (matches Rust WorkflowDef serialization)

@@ -43,9 +43,11 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                     for source in sources {
                         match TicketSource::from_issue_source(&source) {
                             Ok(ts) => {
+                                let ts = ts.with_repo_slug(&r.slug);
                                 let label = match ts.source_type_str() {
                                     "github" => "GitHub issues",
                                     "jira" => "Jira issues",
+                                    "vantage" => "Vantage deliverables",
                                     other => other,
                                 };
                                 sync_repo(
@@ -181,6 +183,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
             priority,
             workflow,
             agent_map,
+            parent,
         } => {
             let repo_obj = RepoManager::new(conn, config).get_by_slug(&repo)?;
 
@@ -202,9 +205,10 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                 assignee,
                 priority,
                 url,
-                raw_json: "{}".to_string(),
+                raw_json: None,
                 blocked_by: vec![],
                 children: vec![],
+                parent,
             };
 
             let syncer = TicketSyncer::new(conn);

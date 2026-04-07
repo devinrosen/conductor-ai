@@ -403,20 +403,23 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_upsert_ticket",
             "Upsert a ticket from any external source into conductor. Idempotent on (repo, source_type, source_id). \
-             Use this from a sync workflow to keep tickets current without modifying conductor-ai source code.",
+             Use this from a sync workflow to keep tickets current without modifying conductor-ai source code. \
+             Dependency fields use replace semantics: `children` replaces all child relationships on every call \
+             (omit children to leave existing children unchanged); `parent` replaces any existing parent relationship.",
             schema(&[
-                ("repo",        "Repo slug",                                                           true),
-                ("source_type", "Free-form source identifier, e.g. 'sdlc', 'linear'",                 true),
-                ("source_id",   "Unique ID in the source system",                                      true),
-                ("title",       "Ticket title",                                                        true),
-                ("state",       "open | in_progress | closed",                                         true),
-                ("body",        "Ticket body/description",                                             false),
-                ("url",         "URL to the ticket in the source system",                              false),
-                ("labels",      "Comma-separated label names",                                         false),
-                ("assignee",    "Assignee username or name",                                           false),
-                ("priority",    "Priority string",                                                     false),
-                ("blocked_by",  "Comma-separated source IDs of tickets that block this one",           false),
-                ("children",    "Comma-separated source IDs of child tickets (this ticket is parent)", false),
+                ("repo",        "Repo slug",                                                                                                                           true),
+                ("source_type", "Free-form source identifier, e.g. 'sdlc', 'linear'",                                                                                 true),
+                ("source_id",   "Unique ID in the source system",                                                                                                      true),
+                ("title",       "Ticket title",                                                                                                                        true),
+                ("state",       "open | in_progress | closed",                                                                                                         true),
+                ("body",        "Ticket body/description",                                                                                                             false),
+                ("url",         "URL to the ticket in the source system",                                                                                              false),
+                ("labels",      "Comma-separated label names",                                                                                                         false),
+                ("assignee",    "Assignee username or name",                                                                                                           false),
+                ("priority",    "Priority string",                                                                                                                     false),
+                ("blocked_by",  "Comma-separated source IDs of tickets that block this one",                                                                           false),
+                ("children",    "Comma-separated source IDs of child tickets (this ticket is parent). REPLACES existing children on every call — include all children or previously set ones will be removed.", false),
+                ("parent",      "Source ID of the parent ticket within the same source_type. Sets this ticket as a child of that parent. REPLACES any existing parent — last write wins.", false),
             ]),
         ),
         Tool::new(

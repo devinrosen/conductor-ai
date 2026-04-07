@@ -3,8 +3,7 @@ import { useParams, Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
-import type { AgentRun, Ticket } from "../api/types";
-import { buildTicketTree, isActivelyBlocked } from "../utils/ticketTree";
+import type { AgentRun, Ticket, WorkflowRun } from "../api/types";
 import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
@@ -13,10 +12,14 @@ import { RepoAgentRunCard } from "../components/agents/RepoAgentRunCard";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
 import { StatusBadge } from "../components/shared/StatusBadge";
+import { ColumnHeader, type SortDirection } from "../components/shared/ColumnHeader";
+import { parseLabels, getPipelineStatus, filterTicketsByColumns, sortTickets } from "../utils/ticketUtils";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
 import { ModelPicker } from "../components/shared/ModelPicker";
+import { buildTicketTree } from "../utils/ticketDeps";
+import { deriveWorktreeSlug } from "../utils/worktreeUtils";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -41,17 +44,16 @@ export function RepoDetailPage() {
   } = useApi(() => api.listWorktrees(repoId!, showCompletedWorktrees), [repoId, showCompletedWorktrees]);
 
   const {
-    data: tickets,
+    data: ticketList,
     loading: ticketsLoading,
     refetch: refetchTickets,
   } = useApi(() => api.listTickets(repoId!, showClosedTickets), [repoId, showClosedTickets]);
+  const tickets = ticketList?.tickets ?? null;
+  const ticketDependencies = ticketList?.dependencies ?? {};
 
-  const {
-    data: ticketDeps,
-    refetch: refetchTicketDeps,
-  } = useApi(() => api.listTicketDeps(repoId!), [repoId, showClosedTickets]);
+  const { data: prs } = useApi(() => api.listPrs(repoId!), [repoId]);
 
-  const { data: latestRuns, refetch: refetchRuns } = useApi(
+  const { refetch: refetchRuns } = useApi(
     () => api.latestRunsByWorktreeForRepo(repoId!),
     [repoId],
   );
@@ -66,6 +68,57 @@ export function RepoDetailPage() {
     refetch: refetchSources,
   } = useApi(() => api.listIssueSources(repoId!), [repoId]);
 
+  const hasVantage = issueSources?.some((s) => s.source_type === "vantage") ?? false;
+  const allVantage = (issueSources?.length ?? 0) > 0 && issueSources!.every((s) => s.source_type === "vantage");
+
+  // Ticket table sort/filter state
+  type TicketSortColumn = "source_id" | "title" | "state" | "assignee" | "pipeline" | null;
+  const [ticketSortColumn, setTicketSortColumn] = useState<TicketSortColumn>(null);
+  const [ticketSortDir, setTicketSortDir] = useState<SortDirection>(null);
+  const [ticketColumnFilters, setTicketColumnFilters] = useState<Record<string, Set<string>>>({});
+
+  const ticketFilterOptions = useMemo(() => {
+    if (!tickets) return {};
+    const states = new Set<string>();
+    const assignees = new Set<string>();
+    const labels = new Set<string>();
+    const pipelines = new Set<string>();
+    for (const t of tickets) {
+      states.add(t.state);
+      if (t.assignee) assignees.add(t.assignee);
+      for (const l of parseLabels(t.labels)) labels.add(l);
+      const ps = getPipelineStatus(t);
+      if (ps) pipelines.add(ps);
+    }
+    return {
+      state: Array.from(states).sort(),
+      assignee: Array.from(assignees).sort(),
+      labels: Array.from(labels).sort(),
+      pipeline: Array.from(pipelines).sort(),
+    };
+  }, [tickets]);
+
+  const sortedFilteredTickets = useMemo(() => {
+    if (!tickets) return [];
+    const noRepo = () => "";
+    let result = filterTicketsByColumns([...tickets], ticketColumnFilters, noRepo);
+    result = sortTickets(result, ticketSortColumn, ticketSortDir, noRepo);
+    return result;
+  }, [tickets, ticketColumnFilters, ticketSortColumn, ticketSortDir]);
+
+  function handleTicketSort(col: string, dir: SortDirection) {
+    setTicketSortColumn(dir ? (col as TicketSortColumn) : null);
+    setTicketSortDir(dir);
+  }
+
+  function handleTicketFilter(col: string, values: Set<string>) {
+    setTicketColumnFilters((prev) => ({ ...prev, [col]: values }));
+  }
+
+  function ticketSortDirFor(col: string): SortDirection {
+    return ticketSortColumn === col ? ticketSortDir : null;
+  }
+
   const {
     data: repoAgentRuns,
     refetch: refetchRepoAgentRuns,
@@ -79,11 +132,6 @@ export function RepoDetailPage() {
   const activeRepoAgent: AgentRun | undefined = repoAgentRuns?.find(
     (r) => r.status === "running" || r.status === "waiting_for_feedback",
   );
-
-  const ticketTree = useMemo(() => {
-    if (!tickets || !ticketDeps) return null;
-    return buildTicketTree(tickets, ticketDeps);
-  }, [tickets, ticketDeps]);
 
   async function handleStartRepoAgent() {
     if (!repoAgentPrompt.trim()) return;
@@ -117,7 +165,6 @@ export function RepoDetailPage() {
     const handleTicketsChange = (ev: ConductorEventData) => {
       if (!ev.data || ev.data.repo_id === repoId) {
         refetchTickets();
-        refetchTicketDeps();
       }
     };
     const handleAgentChange = (_ev: ConductorEventData) => {
@@ -143,7 +190,7 @@ export function RepoDetailPage() {
       },
     };
     return map;
-  }, [repoId, refetchWorktrees, refetchTickets, refetchTicketDeps, refetchRuns, refetchTotals, refetchSources, refetchRepoAgentRuns]);
+  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals, refetchSources, refetchRepoAgentRuns]);
 
   useConductorEvents(sseHandlers);
 
@@ -155,11 +202,146 @@ export function RepoDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [unregisterRepoConfirm, setUnregisterRepoConfirm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+
+  const toggleCollapse = useCallback((sourceId: string) => {
+    setCollapsedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(sourceId)) next.delete(sourceId);
+      else next.add(sourceId);
+      return next;
+    });
+  }, []);
   const [createWtOpen, setCreateWtOpen] = useState(false);
   const [editingModel, setEditingModel] = useState(false);
   const highlightIssues = useOnboardingHighlight("issue-sources");
   const [settingsOpen, setSettingsOpen] = useState(highlightIssues);
+  const [startingWorkflow, setStartingWorkflow] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Fetch active workflow runs for this repo to show running indicators on tickets
+  const { data: activeWorkflowRuns, refetch: refetchWorkflowRuns } = useApi(
+    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed", "completed"]),
+    [],
+  );
+
+  // Build ticket dependency tree using API-provided deps (all source types)
+  const ticketTree = useMemo(
+    () =>
+      tickets
+        ? buildTicketTree(
+            tickets,
+            worktrees ?? undefined,
+            prs ?? undefined,
+            Object.keys(ticketDependencies).length > 0 ? ticketDependencies : undefined,
+          )
+        : null,
+    [tickets, worktrees, prs, ticketDependencies],
+  );
+
+  // Map ticket internal id → source_id (e.g. "D-160") for worktree display
+  const ticketSourceIdMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of tickets ?? []) m.set(t.id, t.source_id);
+    return m;
+  }, [tickets]);
+
+  // Set of ticket IDs that already have a worktree
+  const ticketsWithWorktree = useMemo(() => {
+    const s = new Set<string>();
+    for (const wt of worktrees ?? []) {
+      if (wt.ticket_id) s.add(wt.ticket_id);
+    }
+    return s;
+  }, [worktrees]);
+
+  // Map worktree_id -> workflow run (for both worktree table and ticket indicators)
+  // Prefers: running/pending/waiting > completed > failed (most recent wins within tier)
+  const workflowRunByWorktreeId = useMemo(() => {
+    const m = new Map<string, WorkflowRun>();
+    if (!activeWorkflowRuns) return m;
+    const priority = (s: string) =>
+      s === "running" || s === "pending" || s === "waiting" ? 3 : s === "completed" ? 2 : 1;
+    for (const run of activeWorkflowRuns) {
+      // Only top-level runs (no parent workflow), scoped to this repo
+      if (run.repo_id === repoId && run.worktree_id && !run.parent_workflow_run_id) {
+        const existing = m.get(run.worktree_id);
+        if (!existing || priority(run.status) > priority(existing.status) ||
+            (priority(run.status) === priority(existing.status) && run.started_at > existing.started_at)) {
+          m.set(run.worktree_id, run);
+        }
+      }
+    }
+    return m;
+  }, [activeWorkflowRuns, repoId]);
+
+  // Map ticket source_id -> workflow status (via worktree linkage)
+  const workflowStatusByTicketSourceId = useMemo(() => {
+    const m = new Map<string, WorkflowRun["status"]>();
+    if (!worktrees || !workflowRunByWorktreeId.size) return m;
+    for (const wt of worktrees) {
+      const run = workflowRunByWorktreeId.get(wt.id);
+      if (!run) continue;
+      if (tickets && wt.ticket_id) {
+        const ticket = tickets.find((t) => t.id === wt.ticket_id);
+        if (ticket) {
+          m.set(ticket.source_id, run.status);
+        }
+      }
+    }
+    return m;
+  }, [worktrees, workflowRunByWorktreeId, tickets]);
+
+  async function handleStartTicketToPr(ticket: Ticket) {
+    if (startingWorkflow) return;
+    setStartingWorkflow(ticket.id);
+    try {
+      const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title);
+      // Parse base_branch from Vantage deliverable if present
+      let fromBranch: string | undefined;
+      try {
+        const raw = JSON.parse(ticket.raw_json);
+        if (raw.base_branch) fromBranch = raw.base_branch;
+      } catch { /* ignore */ }
+      const wt = await api.createWorktree(repoId!, {
+        name: wtName,
+        ticket_id: ticket.id,
+        from_branch: fromBranch,
+      });
+      const result = await api.runWorkflow(wt.id, {
+        name: "ticket-to-pr",
+        inputs: {
+          ticket_id: ticket.source_id,
+          qualify: "true",
+          auto_merge: "false",
+        },
+      });
+      refetchWorktrees();
+      refetchWorkflowRuns();
+
+      // Poll for early failure — workflows that fail during init (schema validation,
+      // missing agents, etc.) complete before the first poll would normally catch them.
+      if (result.run_id) {
+        setTimeout(async () => {
+          try {
+            const run = await api.getWorkflowRun(result.run_id);
+            if (run?.status === "failed") {
+              setActionError(
+                `Workflow failed: ${run.result_summary || "unknown error"}`,
+              );
+              refetchWorkflowRuns();
+            }
+          } catch {
+            // Ignore poll errors
+          }
+        }, 3000);
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to start workflow");
+    } finally {
+      setStartingWorkflow(null);
+    }
+  }
 
   async function handleSyncTickets() {
     setSyncing(true);
@@ -256,6 +438,39 @@ export function RepoDetailPage() {
     { key: "Escape", handler: handleEscape, description: "Close / deselect" },
   ]);
 
+  function renderTicketRows(ticketList: Ticket[], depth: number): React.ReactNode[] {
+    const rows: React.ReactNode[] = [];
+    for (const t of ticketList) {
+      const children = ticketTree?.childMap.get(t.source_id);
+      const hasChildren = !!children && children.length > 0;
+      const isCollapsed = collapsedNodes.has(t.source_id);
+      const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | "failed" | "completed" | undefined;
+      rows.push(
+        <TicketRow
+          key={`${t.id}-d${depth}`}
+          ticket={t}
+          agentTotals={ticketTotals?.[t.id]}
+          onClick={setSelectedTicket}
+          depth={depth}
+          blocked={ticketTree?.blocked.has(t.id) ?? false}
+          unlocked={ticketTree?.unlocked.has(t.id) ?? false}
+          workflowStatus={wfStatus ?? null}
+          onStartWorkflow={handleStartTicketToPr}
+          showPipeline={hasVantage}
+          hideStateAndLabels={allVantage}
+          hasChildren={hasChildren}
+          collapsed={isCollapsed}
+          onToggleCollapse={toggleCollapse}
+          hasWorktree={ticketsWithWorktree.has(t.id)}
+        />,
+      );
+      if (hasChildren && !isCollapsed) {
+        rows.push(...renderTicketRows(children, depth + 1));
+      }
+    }
+    return rows;
+  }
+
   if (!repo) {
     return (
       <div className="text-center py-12">
@@ -282,13 +497,6 @@ export function RepoDetailPage() {
           </svg>
         </button>
       </div>
-
-      {actionError && (
-        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
-          <span>{actionError}</span>
-          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-600 ml-2">&times;</button>
-        </div>
-      )}
 
       {/* Settings (collapsible) */}
       {settingsOpen && (
@@ -540,9 +748,9 @@ export function RepoDetailPage() {
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
                 <tr>
                   <th className="px-4 py-2">Branch</th>
+                  <th className="px-4 py-2">Ticket</th>
                   <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2">Agent</th>
-                  <th className="px-4 py-2">Path</th>
+                  <th className="px-4 py-2">Workflow</th>
                   <th className="px-4 py-2">Created</th>
                   <th className="px-4 py-2"></th>
                 </tr>
@@ -552,10 +760,11 @@ export function RepoDetailPage() {
                   <WorktreeRow
                     key={wt.id}
                     worktree={wt}
-                    latestRun={latestRuns?.[wt.id]}
+                    workflowRun={workflowRunByWorktreeId.get(wt.id)}
                     onDelete={setDeleteTarget}
                     selected={index === selectedIndex}
                     index={index}
+                    ticketSourceId={wt.ticket_id ? ticketSourceIdMap.get(wt.ticket_id) : null}
                   />
                 ))}
               </tbody>
@@ -612,45 +821,52 @@ export function RepoDetailPage() {
           <>
             <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
               <table className="w-full text-sm min-w-[480px]">
-                <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                <thead className="bg-gray-50 text-left text-gray-500">
                   <tr>
-                    <th className="px-4 py-2">#</th>
-                    <th className="px-4 py-2">Title</th>
-                    <th className="px-4 py-2">State</th>
-                    <th className="px-4 py-2">Labels</th>
-                    <th className="px-4 py-2">Assignee</th>
-                    <th className="px-4 py-2">Agent</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase">#</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase">Title</th>
+                    {!allVantage && <ColumnHeader label="State" columnKey="state" sortDirection={ticketSortDirFor("state")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.state} activeFilters={ticketColumnFilters.state} onFilter={handleTicketFilter} />}
+                    {!allVantage && <ColumnHeader label="Labels" columnKey="labels" sortDirection={null} onSort={() => {}} filterOptions={ticketFilterOptions.labels} activeFilters={ticketColumnFilters.labels} onFilter={handleTicketFilter} />}
+                    <ColumnHeader label="Assignee" columnKey="assignee" sortDirection={ticketSortDirFor("assignee")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.assignee} activeFilters={ticketColumnFilters.assignee} onFilter={handleTicketFilter} />
+                    {hasVantage && <ColumnHeader label="Pipeline" columnKey="pipeline" sortDirection={ticketSortDirFor("pipeline")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.pipeline} activeFilters={ticketColumnFilters.pipeline} onFilter={handleTicketFilter} />}
+                    <th className="px-4 py-2 text-xs font-medium uppercase">Agent</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {(ticketTree ? ticketTree.ordered : tickets).map((t, i) => (
+                  {ticketTree ? renderTicketRows(ticketTree.roots, 0) : sortedFilteredTickets.map((t) => (
                     <TicketRow
                       key={t.id}
                       ticket={t}
                       agentTotals={ticketTotals?.[t.id]}
                       onClick={setSelectedTicket}
-                      treePosition={ticketTree?.positions[i]}
-                      blocked={ticketDeps ? isActivelyBlocked(t.id, ticketDeps) : false}
+                      showPipeline={hasVantage}
+                      hideStateAndLabels={allVantage}
                     />
                   ))}
                 </tbody>
               </table>
             </div>
             <div className="md:hidden space-y-2">
-              {(ticketTree ? ticketTree.ordered : tickets).map((t, i) => (
+              {tickets.map((t) => (
                 <TicketCard
                   key={t.id}
                   ticket={t}
                   agentTotals={ticketTotals?.[t.id]}
                   onClick={setSelectedTicket}
-                  treePosition={ticketTree?.positions[i]}
-                  blocked={ticketDeps ? isActivelyBlocked(t.id, ticketDeps) : false}
                 />
               ))}
             </div>
           </>
         )}
       </section>
+
+      {/* Error toast — fixed at top so it's always visible */}
+      {actionError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-lg w-full px-4 py-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg shadow-lg flex items-center justify-between">
+          <span className="truncate">{actionError}</span>
+          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-600 ml-3 shrink-0">&times;</button>
+        </div>
+      )}
 
       {/* Dialogs */}
       {selectedTicket && (

@@ -9,11 +9,12 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
-    RunIdSlot, StepFailureHeatmapRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig,
-    WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowResumeStandalone,
-    WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus, WorkflowRunStep, WorkflowTokenAggregate,
-    WorkflowTokenTrendRow,
+    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
+    GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
+    StepRetryAnalyticsRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
+    WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -930,20 +931,93 @@ pub async fn get_failure_trend(
 }
 
 /// GET /api/workflows/analytics/failure-heatmap?workflow_name=&runs=20
-#[derive(Deserialize)]
-pub struct FailureHeatmapQuery {
-    pub workflow_name: String,
-    pub runs: Option<usize>,
-}
-
 pub async fn get_failure_heatmap(
     State(state): State<AppState>,
-    Query(q): Query<FailureHeatmapQuery>,
+    Query(q): Query<HeatmapQuery>,
 ) -> Result<Json<Vec<StepFailureHeatmapRow>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let limit = q.runs.unwrap_or(20);
     let rows = mgr.get_step_failure_heatmap(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/step-retries?workflow_name=&runs=20
+pub async fn get_step_retry_analytics(
+    State(state): State<AppState>,
+    Query(q): Query<HeatmapQuery>,
+) -> Result<Json<Vec<StepRetryAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_retry_analytics(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/percentiles?workflow_name=&days=30
+#[derive(Deserialize)]
+pub struct PercentilesQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+pub async fn get_workflow_percentiles(
+    State(state): State<AppState>,
+    Query(q): Query<PercentilesQuery>,
+) -> Result<Json<Option<WorkflowPercentiles>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let result = mgr.get_workflow_percentiles(&q.workflow_name, days)?;
+    Ok(Json(result))
+}
+
+/// GET /api/workflows/analytics/regressions?recent_days=7&baseline_days=30&min_runs=5
+#[derive(Deserialize)]
+pub struct RegressionsQuery {
+    pub recent_days: Option<i64>,
+    pub baseline_days: Option<i64>,
+    pub min_runs: Option<i64>,
+}
+
+pub async fn get_workflow_regressions(
+    State(state): State<AppState>,
+    Query(q): Query<RegressionsQuery>,
+) -> Result<Json<Vec<WorkflowRegressionSignal>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let recent_days = q.recent_days.unwrap_or(7);
+    let baseline_days = q.baseline_days.unwrap_or(30);
+    let min_runs = q.min_runs.unwrap_or(REGRESSION_MIN_RECENT_RUNS);
+    let signals = mgr.get_workflow_regression_signals(min_runs, recent_days, baseline_days)?;
+    Ok(Json(signals))
+}
+
+/// GET /api/workflows/analytics/gates?workflow_name=&days=30
+#[derive(Deserialize)]
+pub struct GateAnalyticsQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+pub async fn get_gate_analytics(
+    State(state): State<AppState>,
+    Query(q): Query<GateAnalyticsQuery>,
+) -> Result<Json<Vec<GateAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let rows = mgr.get_gate_analytics(&q.workflow_name, days)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/gates/pending
+pub async fn get_pending_gates(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PendingGateAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let rows = mgr.get_all_pending_gates()?;
     Ok(Json(rows))
 }
 

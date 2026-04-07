@@ -20,6 +20,12 @@ use crate::events::ConductorEvent;
 use crate::state::AppState;
 
 #[derive(Serialize)]
+pub struct TicketListResponse {
+    pub tickets: Vec<Ticket>,
+    pub dependencies: HashMap<String, TicketDependencies>,
+}
+
+#[derive(Serialize)]
 pub struct SyncResult {
     pub synced: usize,
     pub closed: usize,
@@ -42,21 +48,25 @@ pub struct TicketListQuery {
 pub async fn list_all_tickets(
     State(state): State<AppState>,
     Query(params): Query<TicketListQuery>,
-) -> Result<Json<Vec<Ticket>>, ApiError> {
+) -> Result<Json<TicketListResponse>, ApiError> {
     let db = state.db.lock().await;
     let syncer = TicketSyncer::new(&db);
     let mut tickets = syncer.list(None)?;
     if !params.show_closed {
         tickets.retain(|t| t.state != "closed");
     }
-    Ok(Json(tickets))
+    let dependencies = syncer.get_all_dependencies()?;
+    Ok(Json(TicketListResponse {
+        tickets,
+        dependencies,
+    }))
 }
 
 pub async fn list_tickets(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
     Query(params): Query<TicketListQuery>,
-) -> Result<Json<Vec<Ticket>>, ApiError> {
+) -> Result<Json<TicketListResponse>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     RepoManager::new(&db, &config).get_by_id(&repo_id)?;
@@ -65,7 +75,11 @@ pub async fn list_tickets(
     if !params.show_closed {
         tickets.retain(|t| t.state != "closed");
     }
-    Ok(Json(tickets))
+    let dependencies = syncer.get_all_dependencies_for_repo(&repo_id)?;
+    Ok(Json(TicketListResponse {
+        tickets,
+        dependencies,
+    }))
 }
 
 /// Fetch tickets using `fetch`, then apply the sync (upsert + close + mark worktrees).
@@ -113,6 +127,7 @@ pub async fn sync_tickets(
     } else {
         for source in sources {
             if let Ok(ts) = TicketSource::from_issue_source(&source) {
+                let ts = ts.with_repo_slug(&repo.slug);
                 let source_type_str = ts.source_type_str();
                 let (synced, closed) =
                     sync_source(&syncer, &repo.id, source_type_str, || ts.sync(token));
@@ -165,28 +180,6 @@ pub async fn ticket_detail(
     }))
 }
 
-pub async fn list_ticket_deps(
-    State(state): State<AppState>,
-    Path(repo_id): Path<String>,
-) -> Result<Json<HashMap<String, TicketDependencies>>, ApiError> {
-    let db = state.db.lock().await;
-    let config = state.config.read().await;
-    // Validate repo exists
-    RepoManager::new(&db, &config).get_by_id(&repo_id)?;
-    let syncer = TicketSyncer::new(&db);
-
-    // Collect ticket IDs belonging to this repo so we can scope the result.
-    let repo_ticket_ids: std::collections::HashSet<String> = syncer
-        .list(Some(&repo_id))?
-        .into_iter()
-        .map(|t| t.id)
-        .collect();
-
-    let mut deps = syncer.get_all_dependencies()?;
-    deps.retain(|id, _| repo_ticket_ids.contains(id));
-    Ok(Json(deps))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,10 +211,11 @@ mod tests {
                 assignee: None,
                 priority: None,
                 url: String::new(),
-                raw_json: "{}".to_string(),
+                raw_json: None,
                 label_details: vec![],
                 blocked_by: vec![],
                 children: vec![],
+                parent: None,
             },
             TicketInput {
                 source_type: "github".to_string(),
@@ -233,10 +227,11 @@ mod tests {
                 assignee: None,
                 priority: None,
                 url: String::new(),
-                raw_json: "{}".to_string(),
+                raw_json: None,
                 label_details: vec![],
                 blocked_by: vec![],
                 children: vec![],
+                parent: None,
             },
         ];
         syncer.upsert_tickets("r1", &tickets).unwrap();
@@ -253,7 +248,7 @@ mod tests {
         }
     }
 
-    async fn get_json(uri: &str, state: AppState) -> (StatusCode, Vec<serde_json::Value>) {
+    async fn get_ticket_list(uri: &str, state: AppState) -> (StatusCode, serde_json::Value) {
         let app = api_router().with_state(state);
         let response = app
             .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
@@ -263,22 +258,24 @@ mod tests {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         (status, json)
     }
 
     #[tokio::test]
     async fn list_all_tickets_hides_closed_by_default() {
-        let (status, tickets) = get_json("/api/tickets", seeded_state()).await;
+        let (status, body) = get_ticket_list("/api/tickets", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
+        let tickets = body["tickets"].as_array().unwrap();
         assert_eq!(tickets.len(), 1, "closed ticket must be hidden by default");
         assert_eq!(tickets[0]["state"], "open");
     }
 
     #[tokio::test]
     async fn list_all_tickets_shows_closed_when_requested() {
-        let (status, tickets) = get_json("/api/tickets?show_closed=true", seeded_state()).await;
+        let (status, body) = get_ticket_list("/api/tickets?show_closed=true", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
+        let tickets = body["tickets"].as_array().unwrap();
         assert_eq!(
             tickets.len(),
             2,
@@ -288,17 +285,19 @@ mod tests {
 
     #[tokio::test]
     async fn list_repo_tickets_hides_closed_by_default() {
-        let (status, tickets) = get_json("/api/repos/r1/tickets", seeded_state()).await;
+        let (status, body) = get_ticket_list("/api/repos/r1/tickets", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
+        let tickets = body["tickets"].as_array().unwrap();
         assert_eq!(tickets.len(), 1, "closed ticket must be hidden by default");
         assert_eq!(tickets[0]["state"], "open");
     }
 
     #[tokio::test]
     async fn list_repo_tickets_shows_closed_when_requested() {
-        let (status, tickets) =
-            get_json("/api/repos/r1/tickets?show_closed=true", seeded_state()).await;
+        let (status, body) =
+            get_ticket_list("/api/repos/r1/tickets?show_closed=true", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
+        let tickets = body["tickets"].as_array().unwrap();
         assert_eq!(
             tickets.len(),
             2,

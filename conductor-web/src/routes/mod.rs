@@ -8,6 +8,7 @@ pub mod model_config;
 pub mod notifications;
 pub mod push;
 pub mod repos;
+pub mod slack;
 pub mod stats;
 pub mod tickets;
 pub mod workflows;
@@ -55,6 +56,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/github/repos",
             get(repos::discover_github_repos_handler),
         )
+        // PRs
+        .route("/api/repos/{id}/prs", get(repos::list_prs))
         // Worktrees
         .route("/api/worktrees", get(worktrees::list_all_worktrees))
         .route(
@@ -79,10 +82,6 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/tickets", get(tickets::list_all_tickets))
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
-        .route(
-            "/api/repos/{id}/tickets/deps",
-            get(tickets::list_ticket_deps),
-        )
         .route(
             "/api/repos/{id}/workflows",
             get(workflows::list_repo_workflow_defs),
@@ -283,6 +282,26 @@ pub fn api_router() -> Router<AppState> {
             "/api/workflows/analytics/failure-heatmap",
             get(workflows::get_failure_heatmap),
         )
+        .route(
+            "/api/workflows/analytics/step-retries",
+            get(workflows::get_step_retry_analytics),
+        )
+        .route(
+            "/api/workflows/analytics/percentiles",
+            get(workflows::get_workflow_percentiles),
+        )
+        .route(
+            "/api/workflows/analytics/regressions",
+            get(workflows::get_workflow_regressions),
+        )
+        .route(
+            "/api/workflows/analytics/gates",
+            get(workflows::get_gate_analytics),
+        )
+        .route(
+            "/api/workflows/analytics/gates/pending",
+            get(workflows::get_pending_gates),
+        )
         // Workflow Templates
         .route("/api/templates", get(workflows::list_templates))
         .route(
@@ -323,6 +342,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/push/subscribe",
             post(push::subscribe_push).delete(push::unsubscribe_push),
         )
+        // Slack slash commands
+        .route("/api/slack/commands", post(slack::handle_slash_command))
         // Model Config
         .route(
             "/api/config/model",

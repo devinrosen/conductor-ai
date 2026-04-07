@@ -567,6 +567,99 @@ pub struct StepFailureHeatmapRow {
     pub avg_retry_count: f64,
 }
 
+/// Per-step retry statistics across recent terminal runs of a workflow.
+#[derive(Debug, Clone, Serialize)]
+pub struct StepRetryAnalyticsRow {
+    pub step_name: String,
+    pub total_executions: i64,
+    pub executions_with_retries: i64,
+    /// Percentage of executions that needed at least one retry. Range: 0.0–100.0.
+    pub retry_rate: f64,
+    /// Average retry count among executions that had at least one retry.
+    pub avg_retry_count: f64,
+    /// Percentage of retried executions that completed successfully. Range: 0.0–100.0.
+    pub retry_success_rate: f64,
+}
+
+/// P50/P75/P95/P99 percentile distributions for duration, cost, and tokens.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowPercentiles {
+    // Duration percentiles (milliseconds)
+    pub p50_duration_ms: Option<f64>,
+    pub p75_duration_ms: Option<f64>,
+    pub p95_duration_ms: Option<f64>,
+    pub p99_duration_ms: Option<f64>,
+    // Cost percentiles (USD)
+    pub p50_cost_usd: Option<f64>,
+    pub p75_cost_usd: Option<f64>,
+    pub p95_cost_usd: Option<f64>,
+    pub p99_cost_usd: Option<f64>,
+    // Total token percentiles (input + output)
+    pub p50_total_tokens: Option<f64>,
+    pub p75_total_tokens: Option<f64>,
+    pub p95_total_tokens: Option<f64>,
+    pub p99_total_tokens: Option<f64>,
+    pub run_count: i64,
+}
+
+/// Passive regression signal for a single workflow.
+///
+/// Compares a recent window (last N days) against a baseline window (prior M days)
+/// across three signals: P75 duration, P75 cost, and failure rate.
+/// Boolean regression flags are set in Rust after the query, using threshold constants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowRegressionSignal {
+    pub workflow_name: String,
+    pub workflow_title: Option<String>,
+    pub recent_runs: i64,
+    pub baseline_runs: i64,
+    // Duration (ms) — P75
+    pub recent_p75_duration_ms: Option<f64>,
+    pub baseline_p75_duration_ms: Option<f64>,
+    pub duration_change_pct: Option<f64>,
+    // Cost (USD) — P75
+    pub recent_p75_cost_usd: Option<f64>,
+    pub baseline_p75_cost_usd: Option<f64>,
+    pub cost_change_pct: Option<f64>,
+    // Failure rate (0–100 %)
+    pub recent_failure_rate: f64,
+    pub baseline_failure_rate: f64,
+    pub failure_rate_change_pp: f64,
+    // Regression flags
+    pub duration_regressed: bool,
+    pub cost_regressed: bool,
+    pub failure_rate_regressed: bool,
+}
+
+/// Per-gate-step aggregate analytics for a workflow (one row per step_name).
+/// Approval is inferred from status: completed = approved, failed = rejected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GateAnalyticsRow {
+    pub step_name: String,
+    pub total_gate_hits: i64,
+    pub approved_count: i64,
+    pub rejected_count: i64,
+    pub approval_rate: f64, // 0–100 %
+    pub avg_wait_ms: Option<f64>,
+    pub p50_wait_ms: Option<f64>,
+    pub p95_wait_ms: Option<f64>,
+    pub avg_feedback_length: Option<f64>, // proxy for feedback quality
+}
+
+/// Cross-workflow snapshot of all currently-waiting gate steps (one row per step).
+/// Distinct from `PendingGateRow` which is TUI-enriched and repo-scoped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingGateAnalyticsRow {
+    pub step_id: String,
+    pub step_name: String,
+    pub gate_type: String,
+    pub gate_prompt: Option<String>,
+    pub workflow_name: String,
+    pub workflow_run_id: String,
+    pub started_at: String,
+    pub wait_ms_so_far: i64,
+}
+
 /// Raw per-run metrics for histogram distribution (one row per completed run).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunMetricsRow {

@@ -145,7 +145,7 @@ pub(super) fn tool_sync_tickets(
                 continue;
             }
         };
-        let fetch_result = ts.sync(None);
+        let fetch_result = ts.with_repo_slug(&repo.slug).sync(None);
         match fetch_result {
             Ok(tickets) => {
                 let (synced, closed) =
@@ -190,6 +190,7 @@ pub(super) fn tool_upsert_ticket(
     let priority = get_arg(args, "priority").map(|s| s.to_string());
     let blocked_by = parse_comma_arg(args, "blocked_by");
     let children = parse_comma_arg(args, "children");
+    let parent = get_arg(args, "parent").map(|s| s.to_string());
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
@@ -211,9 +212,10 @@ pub(super) fn tool_upsert_ticket(
         assignee,
         priority,
         url,
-        raw_json: "{}".to_string(),
+        raw_json: None,
         blocked_by,
         children,
+        parent,
     };
 
     let syncer = TicketSyncer::new(&conn);
@@ -446,10 +448,11 @@ mod tests {
             assignee: None,
             priority: None,
             url: "https://github.com/x/y/issues/42".to_string(),
-            raw_json: "{}".to_string(),
+            raw_json: None,
             label_details: vec![],
             blocked_by: vec![],
             children: vec![],
+            parent: None,
         };
         let syncer = TicketSyncer::new(&conn);
         syncer.sync_and_close_tickets(&repo.id, "github", &[ticket]);
@@ -930,6 +933,184 @@ mod tests {
         assert!(
             after.is_none(),
             "workflow_run ticket_id should be NULL after ticket deletion, got: {after:?}"
+        );
+    }
+
+    // ---- parent field tests ----
+
+    fn upsert_ticket_with_args(db: &std::path::Path, extra: &[(&str, &str)]) -> CallToolResult {
+        let mut args = full_ticket_args("test-repo");
+        for (k, v) in extra {
+            args.insert(k.to_string(), Value::String(v.to_string()));
+        }
+        tool_upsert_ticket(db, &args)
+    }
+
+    fn count_parent_edges(db: &std::path::Path, child_source_id: &str) -> usize {
+        use conductor_core::db::open_database;
+        let conn = open_database(db).expect("open db");
+        conn.query_row(
+            "SELECT COUNT(*) FROM ticket_dependencies td \
+             JOIN tickets child ON child.id = td.to_ticket_id \
+             WHERE child.source_id = ?1 AND td.dep_type = 'parent_of'",
+            rusqlite::params![child_source_id],
+            |row| row.get::<_, usize>(0),
+        )
+        .unwrap_or(0)
+    }
+
+    fn get_parent_source_id(db: &std::path::Path, child_source_id: &str) -> Option<String> {
+        use conductor_core::db::open_database;
+        let conn = open_database(db).expect("open db");
+        conn.query_row(
+            "SELECT parent.source_id FROM ticket_dependencies td \
+             JOIN tickets child  ON child.id  = td.to_ticket_id \
+             JOIN tickets parent ON parent.id = td.from_ticket_id \
+             WHERE child.source_id = ?1 AND td.dep_type = 'parent_of'",
+            rusqlite::params![child_source_id],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    #[test]
+    fn test_upsert_ticket_parent_field_creates_relationship() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert parent ticket (source_id "10")
+        let mut parent_args = full_ticket_args("test-repo");
+        parent_args.insert("source_id".to_string(), Value::String("10".to_string()));
+        parent_args.insert(
+            "title".to_string(),
+            Value::String("Parent ticket".to_string()),
+        );
+        let r = tool_upsert_ticket(&db, &parent_args);
+        assert_ne!(
+            r.is_error,
+            Some(true),
+            "parent upsert failed: {:?}",
+            r.content
+        );
+
+        // Upsert child ticket (source_id "42") with parent="10"
+        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        assert_ne!(
+            r.is_error,
+            Some(true),
+            "child upsert failed: {:?}",
+            r.content
+        );
+
+        assert_eq!(
+            count_parent_edges(&db, "42"),
+            1,
+            "expected 1 parent_of edge for child"
+        );
+        assert_eq!(
+            get_parent_source_id(&db, "42").as_deref(),
+            Some("10"),
+            "parent source_id should be '10'"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_parent_replaces_existing() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert two parent tickets
+        for sid in ["10", "11"] {
+            let mut a = full_ticket_args("test-repo");
+            a.insert("source_id".to_string(), Value::String(sid.to_string()));
+            a.insert("title".to_string(), Value::String(format!("Parent {sid}")));
+            let r = tool_upsert_ticket(&db, &a);
+            assert_ne!(r.is_error, Some(true));
+        }
+
+        // Set parent to "10"
+        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        assert_ne!(r.is_error, Some(true));
+        assert_eq!(get_parent_source_id(&db, "42").as_deref(), Some("10"));
+
+        // Replace with parent "11"
+        let r = upsert_ticket_with_args(&db, &[("parent", "11")]);
+        assert_ne!(r.is_error, Some(true));
+        assert_eq!(
+            count_parent_edges(&db, "42"),
+            1,
+            "should have exactly 1 parent after replace"
+        );
+        assert_eq!(
+            get_parent_source_id(&db, "42").as_deref(),
+            Some("11"),
+            "parent should now be '11'"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_children_replaces_not_merges() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert two child tickets
+        for sid in ["10", "11"] {
+            let mut a = full_ticket_args("test-repo");
+            a.insert("source_id".to_string(), Value::String(sid.to_string()));
+            a.insert("title".to_string(), Value::String(format!("Child {sid}")));
+            let r = tool_upsert_ticket(&db, &a);
+            assert_ne!(r.is_error, Some(true));
+        }
+
+        // Upsert parent (source_id "42") with children=[10, 11]
+        let r = upsert_ticket_with_args(&db, &[("children", "10,11")]);
+        assert_ne!(r.is_error, Some(true));
+
+        // Re-upsert with only child [10] — 11 should be removed
+        let r = upsert_ticket_with_args(&db, &[("children", "10")]);
+        assert_ne!(r.is_error, Some(true));
+
+        use conductor_core::db::open_database;
+        let conn = open_database(&db).expect("open db");
+        let child_count: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies td \
+             JOIN tickets parent ON parent.id = td.from_ticket_id \
+             WHERE parent.source_id = '42' AND td.dep_type = 'parent_of'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            child_count, 1,
+            "children should be replaced (1 child remaining)"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_parent_no_opinion_when_absent() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert parent ticket
+        let mut parent_args = full_ticket_args("test-repo");
+        parent_args.insert("source_id".to_string(), Value::String("10".to_string()));
+        parent_args.insert("title".to_string(), Value::String("Parent".to_string()));
+        let r = tool_upsert_ticket(&db, &parent_args);
+        assert_ne!(r.is_error, Some(true));
+
+        // Set parent relationship via parent field
+        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        assert_ne!(r.is_error, Some(true));
+        assert_eq!(count_parent_edges(&db, "42"), 1);
+
+        // Re-upsert child without parent field — should leave relationship untouched
+        let r = upsert_ticket_with_args(&db, &[]);
+        assert_ne!(r.is_error, Some(true));
+        assert_eq!(
+            count_parent_edges(&db, "42"),
+            1,
+            "existing parent relationship should not be removed when parent field is absent"
         );
     }
 }

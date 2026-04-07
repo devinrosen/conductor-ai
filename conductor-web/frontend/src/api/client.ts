@@ -2,13 +2,13 @@ import type {
   Repo,
   Worktree,
   WorktreeWithStatus,
-  Ticket,
   TicketLabel,
   TicketAgentTotals,
+  TicketListResponse,
   TicketDetail,
-  TicketDependencies,
   CreateRepoRequest,
   CreateWorktreeRequest,
+  GithubPr,
   SyncResult,
   AgentRun,
   AgentEvent,
@@ -37,6 +37,11 @@ import type {
   WorkflowRunMetricsRow,
   WorkflowFailureRateTrendRow,
   StepFailureHeatmapRow,
+  StepRetryAnalyticsRow,
+  WorkflowPercentiles,
+  WorkflowRegressionSignal,
+  GateAnalyticsRow,
+  PendingGateAnalyticsRow,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -66,6 +71,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ model }),
     }),
+
+  // PRs
+  listPrs: (repoId: string) => request<GithubPr[]>(`/repos/${repoId}/prs`),
 
   // Worktrees
   listAllWorktrees: (showCompleted = false) =>
@@ -99,9 +107,9 @@ export const api = {
   // Tickets
   ticketLabels: () => request<TicketLabel[]>("/ticket-labels"),
   listAllTickets: (showClosed = false) =>
-    request<Ticket[]>(showClosed ? "/tickets?show_closed=true" : "/tickets"),
+    request<TicketListResponse>(showClosed ? "/tickets?show_closed=true" : "/tickets"),
   listTickets: (repoId: string, showClosed = false) =>
-    request<Ticket[]>(
+    request<TicketListResponse>(
       showClosed
         ? `/repos/${repoId}/tickets?show_closed=true`
         : `/repos/${repoId}/tickets`,
@@ -110,8 +118,6 @@ export const api = {
     request<SyncResult>(`/repos/${repoId}/tickets/sync`, { method: "POST" }),
   getTicketDetail: (ticketId: string) =>
     request<TicketDetail>(`/tickets/${ticketId}`),
-  listTicketDeps: (repoId: string) =>
-    request<Record<string, TicketDependencies>>(`/repos/${repoId}/tickets/deps`),
 
   // Agent stats (aggregates)
   latestRunsByWorktree: () =>
@@ -252,7 +258,7 @@ export const api = {
   getWorkflowDef: (worktreeId: string, name: string) =>
     request<WorkflowDef>(`/worktrees/${worktreeId}/workflows/defs/${encodeURIComponent(name)}`),
   runWorkflow: (worktreeId: string, data: RunWorkflowRequest) =>
-    request<{ status: string; worktree_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
+    request<{ status: string; worktree_id: string; run_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -306,6 +312,22 @@ export const api = {
     request<StepFailureHeatmapRow[]>(
       `/workflows/analytics/failure-heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
     ),
+  getStepRetryAnalytics: (workflowName: string, runs = 20) =>
+    request<StepRetryAnalyticsRow[]>(
+      `/workflows/analytics/step-retries?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getWorkflowPercentiles: (workflowName: string, days = 30) =>
+    request<WorkflowPercentiles | null>(
+      `/workflows/analytics/percentiles?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getWorkflowRegressions: () =>
+    request<WorkflowRegressionSignal[]>("/workflows/analytics/regressions"),
+  getGateAnalytics: (workflowName: string, days = 30) =>
+    request<GateAnalyticsRow[]>(
+      `/workflows/analytics/gates?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getPendingGates: () =>
+    request<PendingGateAnalyticsRow[]>("/workflows/analytics/gates/pending"),
 
   // Notifications
   listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>

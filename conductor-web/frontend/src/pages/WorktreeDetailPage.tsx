@@ -36,10 +36,11 @@ export function WorktreeDetailPage() {
     refetch: refetchWorktrees,
   } = useApi(() => api.listWorktrees(repoId!), [repoId]);
 
-  const { data: tickets, refetch: refetchTickets } = useApi(
+  const { data: ticketList, refetch: refetchTickets } = useApi(
     () => api.listTickets(repoId!),
     [repoId],
   );
+  const tickets = ticketList?.tickets ?? null;
 
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
