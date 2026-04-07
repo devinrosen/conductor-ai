@@ -809,6 +809,31 @@ impl<'a> TicketSyncer<'a> {
         })
     }
 
+    /// Batch-loads dependencies for tickets belonging to a single repo.
+    /// Returns `ticket_id → TicketDependencies`. Used by per-repo API endpoints
+    /// to avoid loading the entire dependency graph for every API call.
+    pub fn get_all_dependencies_for_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<HashMap<String, TicketDependencies>> {
+        let blocks_rows = query_dep_pairs_for_repo(self.conn, "blocks", repo_id)?;
+        let parent_rows = query_dep_pairs_for_repo(self.conn, "parent_of", repo_id)?;
+
+        let mut map: HashMap<String, TicketDependencies> = HashMap::new();
+
+        for (from_id, to_id, from_ticket, to_ticket) in blocks_rows {
+            map.entry(to_id).or_default().blocked_by.push(from_ticket);
+            map.entry(from_id).or_default().blocks.push(to_ticket);
+        }
+
+        for (from_id, to_id, from_ticket, to_ticket) in parent_rows {
+            map.entry(to_id).or_default().parent = Some(from_ticket);
+            map.entry(from_id).or_default().children.push(to_ticket);
+        }
+
+        Ok(map)
+    }
+
     /// Batch-loads dependencies for all tickets in two queries (one per dep_type).
     /// Returns `ticket_id → TicketDependencies`. Used by the TUI background
     /// poller to avoid N+1 queries.
@@ -1111,6 +1136,41 @@ fn query_dep_pairs(
          JOIN tickets tt ON tt.id = d.to_ticket_id
          WHERE d.dep_type = ?1",
         rusqlite::params![dep_type],
+        |row| {
+            let from_id: String = row.get(0)?;
+            let to_id: String = row.get(1)?;
+            let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
+            let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+            Ok((from_id, to_id, from_ticket, to_ticket))
+        },
+    )
+}
+
+/// Like `query_dep_pairs` but scoped to a single repo (edges where at least one
+/// endpoint belongs to `repo_id`). Uses INNER JOIN so orphaned edges are silently
+/// excluded rather than returning an error — acceptable for display-only paths.
+fn query_dep_pairs_for_repo(
+    conn: &Connection,
+    dep_type: &str,
+    repo_id: &str,
+) -> Result<Vec<(String, String, Ticket, Ticket)>> {
+    const FROM_OFFSET: usize = 2;
+    const TO_OFFSET: usize = 17;
+
+    query_collect(
+        conn,
+        "SELECT d.from_ticket_id, d.to_ticket_id,
+         tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+         tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+         tf.workflow, tf.agent_map,
+         tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+         tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+         tt.workflow, tt.agent_map
+         FROM ticket_dependencies d
+         JOIN tickets tf ON tf.id = d.from_ticket_id
+         JOIN tickets tt ON tt.id = d.to_ticket_id
+         WHERE d.dep_type = ?1 AND (tf.repo_id = ?2 OR tt.repo_id = ?2)",
+        rusqlite::params![dep_type, repo_id],
         |row| {
             let from_id: String = row.get(0)?;
             let to_id: String = row.get(1)?;
@@ -3421,6 +3481,75 @@ mod tests {
                 "new ticket with None raw_json should default to '{{}}'"
             );
         }
+    }
+
+    #[test]
+    fn test_get_all_dependencies_for_repo_maps_both_directions() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "A" blocks ticket "B", both in "r1"
+        let ta = make_ticket("A", "Blocker");
+        let mut tb = make_ticket("B", "Blocked");
+        tb.blocked_by = vec!["A".to_string()];
+
+        // ticket "P" is parent of "C", both in "r1"
+        let tc = make_ticket("C", "Child");
+        let mut tp = make_ticket("P", "Parent");
+        tp.children = vec!["C".to_string()];
+
+        syncer.upsert_tickets("r1", &[ta, tb, tc, tp]).unwrap();
+
+        let all = syncer
+            .get_all_dependencies_for_repo("r1")
+            .expect("get_all_dependencies_for_repo");
+
+        let id_a = ticket_id_for_source(&conn, "A");
+        let id_b = ticket_id_for_source(&conn, "B");
+        let id_p = ticket_id_for_source(&conn, "P");
+        let id_c = ticket_id_for_source(&conn, "C");
+
+        let deps_b = all.get(&id_b).expect("entry for ticket B");
+        assert_eq!(source_ids(&deps_b.blocked_by), vec!["A"], "B blocked_by A");
+        assert!(deps_b.blocks.is_empty(), "B blocks nothing");
+
+        let deps_a = all.get(&id_a).expect("entry for ticket A");
+        assert_eq!(source_ids(&deps_a.blocks), vec!["B"], "A blocks B");
+        assert!(deps_a.blocked_by.is_empty(), "A is not blocked");
+
+        let deps_c = all.get(&id_c).expect("entry for ticket C");
+        assert_eq!(
+            deps_c.parent.as_ref().map(|t| t.source_id.as_str()),
+            Some("P"),
+            "C parent is P"
+        );
+        assert!(deps_c.children.is_empty());
+
+        let deps_p = all.get(&id_p).expect("entry for ticket P");
+        assert_eq!(source_ids(&deps_p.children), vec!["C"], "P children: C");
+        assert!(deps_p.parent.is_none());
+    }
+
+    #[test]
+    fn test_get_all_dependencies_for_repo_empty_when_no_deps() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Tickets with no dependency edges — map should be empty.
+        syncer
+            .upsert_tickets("r1", &[make_ticket("X", "Solo")])
+            .unwrap();
+
+        let result = syncer
+            .get_all_dependencies_for_repo("r1")
+            .expect("get_all_dependencies_for_repo");
+        assert!(result.is_empty(), "no deps means empty map");
+
+        // Unknown repo also returns empty map without error.
+        let empty = syncer
+            .get_all_dependencies_for_repo("nonexistent-repo")
+            .expect("nonexistent repo returns Ok");
+        assert!(empty.is_empty(), "unknown repo returns empty map");
     }
 
     #[test]

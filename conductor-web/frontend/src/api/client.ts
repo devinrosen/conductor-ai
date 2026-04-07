@@ -2,9 +2,9 @@ import type {
   Repo,
   Worktree,
   WorktreeWithStatus,
-  Ticket,
   TicketLabel,
   TicketAgentTotals,
+  TicketListResponse,
   TicketDetail,
   CreateRepoRequest,
   CreateWorktreeRequest,
@@ -107,9 +107,9 @@ export const api = {
   // Tickets
   ticketLabels: () => request<TicketLabel[]>("/ticket-labels"),
   listAllTickets: (showClosed = false) =>
-    request<Ticket[]>(showClosed ? "/tickets?show_closed=true" : "/tickets"),
+    request<TicketListResponse>(showClosed ? "/tickets?show_closed=true" : "/tickets"),
   listTickets: (repoId: string, showClosed = false) =>
-    request<Ticket[]>(
+    request<TicketListResponse>(
       showClosed
         ? `/repos/${repoId}/tickets?show_closed=true`
         : `/repos/${repoId}/tickets`,
