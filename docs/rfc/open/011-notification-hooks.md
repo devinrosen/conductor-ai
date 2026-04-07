@@ -50,13 +50,17 @@ This replaces all built-in channel implementations. Slack, Discord, ntfy, PagerD
 |---|---|
 | `workflow_run.completed` | Workflow finished successfully |
 | `workflow_run.failed` | Workflow finished with failure |
+| `workflow_run.cost_spike` | Run cost exceeded threshold multiple of rolling average |
+| `workflow_run.duration_spike` | Run duration exceeded threshold multiple of P75 |
 | `agent_run.completed` | Agent run finished successfully |
 | `agent_run.failed` | Agent run finished with failure |
-| `gate.waiting` | Gate is blocked and requires action |
+| `gate.waiting` | Gate is blocked and requires action (fires immediately) |
+| `gate.pending_too_long` | Gate has been waiting longer than a configured threshold |
 | `feedback.requested` | Agent is waiting for user input |
 
 Event names support glob matching in `on`:
-- `workflow_run.*` matches both `workflow_run.completed` and `workflow_run.failed`
+- `workflow_run.*` matches all `workflow_run` events including spikes
+- `gate.*` matches both `gate.waiting` and `gate.pending_too_long`
 - `*` matches all events
 
 ---
@@ -132,7 +136,7 @@ All events include a common base set. Event-specific fields are additive.
 | `timestamp` | string | ISO 8601 |
 | `url` | string | Deep link into conductor-web (if running) |
 
-**`workflow_run.*`:**
+**`workflow_run.completed` / `workflow_run.failed`:**
 
 | Field | Type | Description |
 |---|---|---|
@@ -140,6 +144,27 @@ All events include a common base set. Event-specific fields are additive.
 | `status` | string | `completed` or `failed` |
 | `error` | string? | Error message if failed |
 | `duration_ms` | integer? | Wall-clock duration |
+| `cost_usd` | number? | Token cost of the run in USD |
+
+**`workflow_run.cost_spike`:**
+
+| Field | Type | Description |
+|---|---|---|
+| `workflow_name` | string | Workflow file name |
+| `cost_usd` | number | Token cost of this run in USD |
+| `avg_cost_usd` | number | Rolling 30-day average cost in USD |
+| `multiple` | number | `cost_usd / avg_cost_usd` (e.g. `4.2`) |
+| `duration_ms` | integer | Wall-clock duration |
+
+**`workflow_run.duration_spike`:**
+
+| Field | Type | Description |
+|---|---|---|
+| `workflow_name` | string | Workflow file name |
+| `duration_ms` | integer | Wall-clock duration of this run |
+| `p75_duration_ms` | integer | P75 duration over past 30 days |
+| `multiple` | number | `duration_ms / p75_duration_ms` (e.g. `3.1`) |
+| `cost_usd` | number? | Token cost of the run in USD |
 
 **`agent_run.*`:**
 
@@ -158,6 +183,17 @@ All events include a common base set. Event-specific fields are additive.
 | `step_name` | string | Gate step name |
 | `gate_type` | string | `human_approval`, `pr_review`, `ci`, `quality` |
 | `gate_prompt` | string? | Prompt text shown at the gate |
+
+**`gate.pending_too_long`:**
+
+| Field | Type | Description |
+|---|---|---|
+| `workflow_name` | string | Parent workflow |
+| `step_name` | string | Gate step name |
+| `gate_type` | string | `human_approval`, `pr_review`, `ci`, `quality` |
+| `gate_prompt` | string? | Prompt text shown at the gate |
+| `wait_duration_ms` | integer | How long the gate has been waiting |
+| `threshold_ms` | integer | Configured threshold that was exceeded |
 
 **`feedback.requested`:**
 
@@ -185,6 +221,24 @@ headers = { "X-Token" = "$SLACK_TOKEN" }      # optional
 on = "workflow_run.*"
 run = "notify-send Conductor '{{workflow_name}} {{status}}'"
 timeout_ms = 5000                  # optional, default 10000
+
+# Spike/anomaly events: threshold_multiple and gate_pending_ms only apply
+# to the matching event types; they are ignored on other events.
+[[notify.hooks]]
+on = "workflow_run.cost_spike"
+workflow = "deploy-prod"           # optional: limit to a specific workflow
+threshold_multiple = 3.0           # fire if cost > 3x rolling 30-day avg (default: 3.0)
+run = "~/.conductor/hooks/cost-alert.sh"
+
+[[notify.hooks]]
+on = "workflow_run.duration_spike"
+threshold_multiple = 2.0           # fire if duration > 2x P75 (default: 2.0)
+url = "https://hooks.slack.com/services/..."
+
+[[notify.hooks]]
+on = "gate.pending_too_long"
+gate_pending_ms = 14400000         # fire if gate waiting > 4h (default: 3600000 / 1h)
+run = "~/.conductor/hooks/gate-alert.sh"
 ```
 
 ```rust
@@ -199,6 +253,13 @@ pub struct HookConfig {
     pub headers: Option<HashMap<String, String>>,
     /// Timeout in milliseconds (default: 10000)
     pub timeout_ms: Option<u64>,
+    /// Only for workflow_run.cost_spike / workflow_run.duration_spike:
+    /// fire if metric exceeds this multiple of baseline (default: 3.0 for cost, 2.0 for duration)
+    pub threshold_multiple: Option<f64>,
+    /// Only for gate.pending_too_long: fire after gate has waited this many ms (default: 3_600_000 / 1h)
+    pub gate_pending_ms: Option<u64>,
+    /// Only for spike events: limit hook to a specific workflow name (default: all workflows)
+    pub workflow: Option<String>,
 }
 ```
 
@@ -342,6 +403,16 @@ A migration note in the changelog with copy-paste hook snippets covers the Slack
 
 6. **Settings page becomes informational, not editable.** Avoids building a config editor in the browser. Discoverability is served by listing configured hooks and offering a test-fire button.
 
+7. **Spike and anomaly detection uses per-hook thresholds, not global config.** `threshold_multiple` and `gate_pending_ms` live on the hook entry that subscribes to the event, not in a global `[notify]` block. This lets users set different thresholds for different workflows (e.g. tighter cost alerting on expensive workflows). Defaults: 3.0× for cost spikes, 2.0× for duration spikes, 1 hour for gate timeouts.
+
+8. **Baseline requires a minimum of 5 runs.** Cost and duration spike events are suppressed until there are at least 5 completed runs for the workflow in the rolling window. Avoids false positives on new or rarely-run workflows.
+
+9. **`gate.pending_too_long` is deduplicated per run per threshold crossing.** Once fired for a run, it will not re-fire on subsequent background poll ticks for the same run. This is handled via the existing `notification_log` deduplication table.
+
+10. **`workflow_run.cost_spike` and `workflow_run.duration_spike` are additive to `workflow_run.failed`.** A failed run that also cost 5× the average will fire both `workflow_run.failed` and `workflow_run.cost_spike`. Hooks subscribing to `workflow_run.*` receive all of them.
+
+> **Note:** This RFC supersedes GitHub issue [#1836](https://github.com/devinrosen/conductor-ai/issues/1836) (notification hooks for workflow failures and cost/duration spikes). The use cases from that issue are fully covered by the event taxonomy and config schema above.
+
 ---
 
 ## Open Questions
@@ -361,17 +432,19 @@ A migration note in the changelog with copy-paste hook snippets covers the Slack
 ## Implementation Order
 
 1. Define `NotificationEvent` struct and `to_payload()` serialization
-2. Add `HookConfig` to `Config` struct; parse `[[notify.hooks]]` from TOML
+2. Add `HookConfig` to `Config` struct; parse `[[notify.hooks]]` from TOML (including `threshold_multiple`, `gate_pending_ms`, `workflow` fields)
 3. Implement `HookRunner` with shell and HTTP dispatch, glob matching, timeout
 4. Wire `HookRunner::fire()` into `dispatch_notification()` (replaces steps 3–4)
 5. Remove `notify-rust` integration and `show_desktop_notification()`
 6. Remove Slack sender (`maybe_send_slack`, `send_slack_message`, etc.)
 7. Remove Web Push infrastructure (`push.rs`, VAPID key generation, push routes)
 8. Remove `[notifications.slack]` and `[web_push]` config structs (with deprecation warning first)
-9. Update web Settings page to show configured hooks + test-fire button
-10. Add `docs/examples/hooks/` with Slack, Discord, ntfy, macOS examples
+9. Add spike detection: after `persist_workflow_metrics()` in `lifecycle.rs`, compute rolling 30-day avg cost and P75 duration (min 5 runs); fire `workflow_run.cost_spike` / `workflow_run.duration_spike` if thresholds exceeded
+10. Add gate timeout detection: in the TUI/web background poll, check `gate.waiting` runs older than `gate_pending_ms` threshold and fire `gate.pending_too_long` (deduplicated per run per threshold crossing)
+11. Update web Settings page to show configured hooks + test-fire button
+12. Add `docs/examples/hooks/` with Slack, Discord, ntfy, macOS examples; add `conductor notifications test <event>` CLI command
 
-Steps 1–4 land as a single PR. Steps 5–8 are a follow-on cleanup PR. Steps 9–10 are independent.
+Steps 1–4 land as a single PR. Steps 5–8 are a follow-on cleanup PR. Steps 9–10 are a follow-on analytics PR. Steps 11–12 are independent.
 
 ---
 
