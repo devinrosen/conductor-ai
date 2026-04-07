@@ -340,7 +340,7 @@ impl GeneralConfig {
         match self.custom_claude_config_dir() {
             Some(Ok(dir)) => Some(dir),
             Some(Err(e)) => {
-                eprintln!("[conductor] Warning: failed to resolve claude_config_dir — conversation log will use default ~/.claude: {e}");
+                tracing::warn!("failed to resolve claude_config_dir — will use default ~/.claude: {e}");
                 None
             }
             None => None,
@@ -1362,6 +1362,41 @@ bot_name = "my-bot"
         let result = config.custom_claude_config_dir().unwrap().unwrap();
         let expected = dirs::home_dir().unwrap().join(".claude-custom");
         assert_eq!(result, expected);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_optional_claude_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_optional_claude_dir_none_when_not_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        // Not configured → None (no fallback to ~/.claude)
+        assert!(config.resolve_optional_claude_dir().is_none());
+    }
+
+    #[test]
+    fn test_resolve_optional_claude_dir_some_for_absolute_path() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/my-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolve_optional_claude_dir();
+        assert_eq!(result, Some(PathBuf::from("/tmp/my-claude")));
+    }
+
+    #[test]
+    fn test_resolve_optional_claude_dir_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-personal".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolve_optional_claude_dir();
+        let expected = dirs::home_dir().unwrap().join(".claude-personal");
+        assert_eq!(result, Some(expected));
     }
 
     #[test]
