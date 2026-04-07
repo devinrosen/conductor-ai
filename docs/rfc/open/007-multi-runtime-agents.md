@@ -274,10 +274,47 @@ call research:       # uses gemini (defined in research.md frontmatter)
 call implement:      # uses claude (defined in implement.md frontmatter)
 ```
 
-### 7. DB Migration
+### 7. Per-Repo Runtime Overrides
+
+Runtime settings can be overridden on a per-repo basis via a `runtime_overrides` JSON column on the `repos` table. This is stored locally in each user's SQLite DB (`~/.conductor/conductor.db`) and does not affect other developers.
+
+```json
+{
+  "claude": { "config_dir": "~/.claude-personal" },
+  "gemini": { "config_dir": "~/.gemini-work" }
+}
+```
+
+**Resolution chain** for any runtime setting:
+
+```
+per-repo SQLite runtime_overrides
+  → global config.toml [runtimes.<name>]
+    → compiled-in defaults
+```
+
+`RepoManager` exposes a typed accessor for reading these overrides:
+
+```rust
+impl RepoManager<'_> {
+    /// Returns the resolved config_dir for a given runtime, checking
+    /// per-repo overrides first, then global config, then the default.
+    pub fn runtime_config_dir(
+        &self,
+        repo_id: &str,
+        runtime: &str,
+        global_config: &Config,
+    ) -> Option<PathBuf>;
+}
+```
+
+This design intentionally defers per-repo override *writes* (CLI/TUI surface) to the RFC 007 implementation, as the full runtime abstraction is needed to make the UX coherent.
+
+### 8. DB Migrations
 
 ```sql
 ALTER TABLE agent_runs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude';
+ALTER TABLE repos ADD COLUMN runtime_overrides TEXT;  -- JSON, nullable
 ```
 
 ---
@@ -297,6 +334,8 @@ ALTER TABLE agent_runs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude';
 6. **`script` runtime as escape hatch.** Wraps any CLI tool (ADK, Codex, custom scripts) without needing native conductor support for each one.
 
 7. **CLI-based runtimes use a single generic `CliRuntime`**, not per-tool implementations. Any CLI agent that accepts a prompt (via flag or stdin) and exits on completion can be configured via `[runtimes.<name>]` with `type = "cli"` — no code changes required to add a new CLI tool. `ClaudeRuntime` stays separate because it has deep conductor integration (`--run-id`, resume, event parsing) that doesn't generalize.
+
+8. **Per-repo runtime overrides live in SQLite**, not in a checked-in config file. A nullable `runtime_overrides TEXT` (JSON) column on `repos` stores a map of runtime name → override settings. Because `~/.conductor/conductor.db` is local to each user, this is safe for multi-developer repos — no shared state. The resolution chain is: per-repo SQLite → global `config.toml [runtimes.<name>]` → compiled-in defaults. `RepoManager` exposes a typed accessor so callers never parse JSON directly.
 
 ---
 
@@ -322,13 +361,14 @@ ALTER TABLE agent_runs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude';
 2. Add `RuntimeConfig` to `Config` (with `type`, `binary`, `args`, `prompt_via`, `result_field`, etc.)
 3. Define `AgentRuntime` trait (`spawn`, `poll`, `is_alive`, `cancel`)
 4. Extract existing tmux logic into `ClaudeRuntime` (pure refactor, no behavior change)
-5. Add DB migration for `runtime` column
-6. Wire runtime dispatch into `execute_call_with_schema`
-7. Implement `CliRuntime` (generic tmux-based runner — covers Gemini CLI, Codex CLI, etc.)
-8. Implement `ScriptRuntime` (escape hatch for arbitrary shell commands)
-9. Implement `OpenAIRuntime` (API-based, optional — only if there's a concrete use case)
+5. Add DB migrations for `runtime` column on `agent_runs` and `runtime_overrides` column on `repos`
+6. Add `RepoManager::runtime_config_dir()` typed accessor for per-repo override resolution
+7. Wire runtime dispatch into `execute_call_with_schema`
+8. Implement `CliRuntime` (generic tmux-based runner — covers Gemini CLI, Codex CLI, etc.)
+9. Implement `ScriptRuntime` (escape hatch for arbitrary shell commands)
+10. Implement `OpenAIRuntime` (API-based, optional — only if there's a concrete use case)
 
-Steps 1–6 land as a single PR with no functional change (Claude-only, but via the trait). Steps 7–8 are independent and can land separately. Step 9 is deferred until there's a concrete use case.
+Steps 1–7 land as a single PR with no functional change (Claude-only, but via the trait). Steps 8–9 are independent and can land separately. Step 10 is deferred until there's a concrete use case.
 
 ---
 
