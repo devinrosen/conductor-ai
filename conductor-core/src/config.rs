@@ -340,7 +340,9 @@ impl GeneralConfig {
         match self.custom_claude_config_dir() {
             Some(Ok(dir)) => Some(dir),
             Some(Err(e)) => {
-                tracing::warn!("failed to resolve claude_config_dir — will use default ~/.claude: {e}");
+                tracing::warn!(
+                    "failed to resolve claude_config_dir — will use default ~/.claude: {e}"
+                );
                 None
             }
             None => None,
