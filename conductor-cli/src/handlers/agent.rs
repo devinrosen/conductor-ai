@@ -343,10 +343,14 @@ pub(crate) fn run_agent(
 
         // Pass CLAUDE_CONFIG_DIR when explicitly configured so agent runs use
         // the custom Claude config directory instead of the default ~/.claude.
-        if config.general.claude_config_dir.is_some() {
-            if let Ok(dir) = config.general.resolved_claude_config_dir() {
+        match config.general.custom_claude_config_dir() {
+            Some(Ok(dir)) => {
                 cmd.env("CLAUDE_CONFIG_DIR", dir);
             }
+            Some(Err(e)) => {
+                eprintln!("[conductor] Warning: failed to resolve claude_config_dir — agent will use default ~/.claude: {e}");
+            }
+            None => {}
         }
 
         // Inject GH_TOKEN from the GitHub App installation token so all `gh` calls

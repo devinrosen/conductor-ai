@@ -316,6 +316,21 @@ impl GeneralConfig {
                 .ok_or_else(|| ConductorError::Config("cannot determine home directory".into())),
         }
     }
+
+    /// Returns the custom Claude config directory only when explicitly configured.
+    ///
+    /// Returns `None` when `claude_config_dir` is not set (use the default `~/.claude`).
+    /// Returns `Some(Ok(path))` when configured and tilde-expansion succeeds.
+    /// Returns `Some(Err(...))` when configured but tilde-expansion fails.
+    ///
+    /// Prefer this over accessing `claude_config_dir` directly — callers should
+    /// never need to inspect the raw field to distinguish "not configured" from
+    /// "resolution error".
+    pub fn custom_claude_config_dir(&self) -> Option<Result<PathBuf>> {
+        self.claude_config_dir
+            .as_deref()
+            .map(|raw| crate::text_util::expand_tilde(raw).map_err(ConductorError::Config))
+    }
 }
 
 impl Default for DefaultsConfig {
@@ -1263,6 +1278,75 @@ bot_name = "my-bot"
             std::env::remove_var("CONDUCTOR_DB_PATH");
         }
         assert_eq!(result, PathBuf::from(custom));
+    }
+
+    // -----------------------------------------------------------------------
+    // resolved_claude_config_dir / custom_claude_config_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolved_claude_config_dir_none_falls_back_to_home_claude() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        // Should be <home>/.claude
+        let expected = dirs::home_dir().unwrap().join(".claude");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_resolved_claude_config_dir_absolute_path() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/my-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        assert_eq!(result, PathBuf::from("/tmp/my-claude"));
+    }
+
+    #[test]
+    fn test_resolved_claude_config_dir_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-personal".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        let expected = dirs::home_dir().unwrap().join(".claude-personal");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_none_when_not_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        assert!(config.custom_claude_config_dir().is_none());
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_some_ok_when_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/custom-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.custom_claude_config_dir();
+        assert!(result.is_some());
+        let path = result.unwrap().unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/custom-claude"));
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_some_ok_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-custom".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.custom_claude_config_dir().unwrap().unwrap();
+        let expected = dirs::home_dir().unwrap().join(".claude-custom");
+        assert_eq!(result, expected);
     }
 
     #[test]
