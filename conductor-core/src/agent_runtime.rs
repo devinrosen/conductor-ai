@@ -659,9 +659,13 @@ mod tests {
     #[test]
     fn format_spawn_failure_error_with_log_only() {
         // Log path alone without failure line → None (not actionable without reason)
-        let stderr = "[conductor] Agent log saved to /Users/devin/.conductor/agent-logs/01ABC.log\n";
+        let stderr =
+            "[conductor] Agent log saved to /Users/devin/.conductor/agent-logs/01ABC.log\n";
         let result = super::format_spawn_failure_error("my-window", stderr);
-        assert!(result.is_none(), "expected None when no failure line present");
+        assert!(
+            result.is_none(),
+            "expected None when no failure line present"
+        );
     }
 
     #[test]
