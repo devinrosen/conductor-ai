@@ -162,14 +162,7 @@ pub(super) fn tool_get_run(
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
-    let claude_dir = match config.general.custom_claude_config_dir() {
-        Some(Ok(dir)) => Some(dir),
-        Some(Err(e)) => {
-            eprintln!("[conductor] Warning: failed to resolve claude_config_dir — conversation log will use default ~/.claude: {e}");
-            None
-        }
-        None => None,
-    };
+    let claude_dir = config.general.resolve_optional_claude_dir();
     tool_ok(format_run_detail_with_log(
         &conn,
         &run,

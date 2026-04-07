@@ -331,6 +331,21 @@ impl GeneralConfig {
             .as_deref()
             .map(|raw| crate::text_util::expand_tilde(raw).map_err(ConductorError::Config))
     }
+
+    /// Resolves the custom Claude config directory, logging a warning and returning `None` on error.
+    ///
+    /// Returns `None` when no custom directory is configured or when resolution fails.
+    /// Callers that need to distinguish the error case should use [`custom_claude_config_dir`] instead.
+    pub fn resolve_optional_claude_dir(&self) -> Option<PathBuf> {
+        match self.custom_claude_config_dir() {
+            Some(Ok(dir)) => Some(dir),
+            Some(Err(e)) => {
+                eprintln!("[conductor] Warning: failed to resolve claude_config_dir — conversation log will use default ~/.claude: {e}");
+                None
+            }
+            None => None,
+        }
+    }
 }
 
 impl Default for DefaultsConfig {
