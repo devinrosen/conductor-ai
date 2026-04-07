@@ -1,6 +1,6 @@
 # RFC 009: Ticket Dependency Graph
 
-**Status:** Partially Implemented — workflow engine primitives deferred to [RFC 010](010-for-each-ticket-workflow-step.md)
+**Status:** Closed — remaining workflow engine primitives tracked in [RFC 010](../open/010-for-each-ticket-workflow-step.md)
 **Date:** 2026-04-01
 **Author:** Devin
 
