@@ -1,8 +1,10 @@
 workflow roundtable-ui {
   meta {
+    title       = "UX Roundtable"
     description = "UX roundtable review"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
+    group       = "Review"
   }
 
   parallel {

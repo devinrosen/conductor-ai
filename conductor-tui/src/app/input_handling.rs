@@ -244,6 +244,12 @@ impl App {
             return;
         }
 
+        // TemplatePicker: confirm the selected template
+        if matches!(self.state.modal, Modal::TemplatePicker { .. }) {
+            self.handle_template_picker_confirm();
+            return;
+        }
+
         // ConfirmByName: only proceed if typed value matches expected slug
         if let Modal::ConfirmByName {
             ref expected,
@@ -368,8 +374,26 @@ impl App {
                             if features.is_empty() && orphans.is_empty() {
                                 return Ok(Vec::new());
                             }
+                            let stale_threshold = config.defaults.stale_feature_days;
+                            let features_with_stale: Vec<(
+                                conductor_core::feature::FeatureRow,
+                                Option<u64>,
+                            )> = features
+                                .into_iter()
+                                .map(|f| {
+                                    let sd = if FeatureManager::is_stale(&f, stale_threshold) {
+                                        FeatureManager::stale_days(&f)
+                                    } else {
+                                        None
+                                    };
+                                    (f, sd)
+                                })
+                                .collect();
                             Ok::<Vec<BranchPickerItem>, String>(
-                                BranchPickerItem::from_features_and_orphans(&features, &orphans),
+                                BranchPickerItem::from_features_and_orphans_with_stale(
+                                    &features_with_stale,
+                                    &orphans,
+                                ),
                             )
                         })();
                         match result {
@@ -441,10 +465,17 @@ impl App {
                             ticket_id,
                             from_pr,
                             from_branch,
+                            force_dirty: false,
                         },
                     };
                 } else {
-                    self.spawn_worktree_create(repo_slug, wt_name, ticket_id, from_pr, from_branch);
+                    self.spawn_main_health_check(
+                        repo_slug,
+                        wt_name,
+                        ticket_id,
+                        from_pr,
+                        from_branch,
+                    );
                 }
             }
             InputAction::LinkTicket { worktree_id } => {
@@ -585,6 +616,17 @@ impl App {
                 };
                 self.do_dispatch_workflow(action.target, action.workflow_def, inputs, model);
             }
+            InputAction::RepoAgentPrompt {
+                repo_id,
+                repo_path,
+                repo_slug,
+                resume_session_id,
+            } => {
+                if value.is_empty() {
+                    return;
+                }
+                self.start_repo_agent_tmux(value, repo_id, repo_path, repo_slug, resume_session_id);
+            }
             InputAction::OrchestratePrompt {
                 worktree_id,
                 worktree_path,
@@ -635,8 +677,27 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
+                // Convert user input based on feedback type (select → option value)
+                let resolved_value = if let Some(ref fb) = self.state.data.pending_feedback {
+                    use conductor_core::agent::normalize_feedback_response;
+                    match normalize_feedback_response(
+                        &fb.feedback_type,
+                        fb.options.as_deref(),
+                        &value,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.state.modal = Modal::Error {
+                                message: format!("Failed to encode feedback response: {e}"),
+                            };
+                            return;
+                        }
+                    }
+                } else {
+                    value.clone()
+                };
                 let mgr = AgentManager::new(&self.conn);
-                match mgr.submit_feedback(&feedback_id, &value) {
+                match mgr.submit_feedback(&feedback_id, &resolved_value) {
                     Ok(_) => {
                         self.state.status_message =
                             Some("Feedback submitted — agent resumed".to_string());
@@ -800,8 +861,26 @@ impl App {
                         .list_unregistered_branches(&repo.id, &repo.default_branch)
                         .map_err(|e| format!("Failed to list unregistered branches: {e}"))?;
 
+                    let stale_threshold = config.defaults.stale_feature_days;
+                    let features_with_stale: Vec<(
+                        conductor_core::feature::FeatureRow,
+                        Option<u64>,
+                    )> = features
+                        .into_iter()
+                        .map(|f| {
+                            let sd = if FeatureManager::is_stale(&f, stale_threshold) {
+                                FeatureManager::stale_days(&f)
+                            } else {
+                                None
+                            };
+                            (f, sd)
+                        })
+                        .collect();
                     Ok::<Vec<BranchPickerItem>, String>(
-                        BranchPickerItem::from_features_and_orphans(&features, &orphans),
+                        BranchPickerItem::from_features_and_orphans_with_stale(
+                            &features_with_stale,
+                            &orphans,
+                        ),
                     )
                 })();
                 match result {
@@ -1071,12 +1150,14 @@ mod tests {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: None,
+                stale_days: None,
             },
             crate::state::BranchPickerItem {
                 branch: Some("feat/notifications".to_string()),
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: Some("main".to_string()),
+                stale_days: None,
             },
         ]
     }
@@ -1210,12 +1291,14 @@ mod tests {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: None,
+                stale_days: None,
             },
             BranchPickerItem {
                 branch: Some("feat/notifications".to_string()),
                 worktree_count: 2,
                 ticket_count: 1,
                 base_branch: Some("main".to_string()),
+                stale_days: None,
             },
         ];
         app.handle_feature_branches_loaded(

@@ -14,6 +14,16 @@ pub(super) fn tool_approve_gate(
     let run_id = require_arg!(args, "run_id");
     let feedback = get_arg(args, "feedback");
 
+    // Optional selections: JSON array of strings, e.g. ["finding-1","finding-2"]
+    let selections: Option<Vec<String>> =
+        args.get("selections")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            });
+
     let (conn, _config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -24,7 +34,7 @@ pub(super) fn tool_approve_gate(
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
     };
-    match wf_mgr.approve_gate(&step.id, "mcp", feedback) {
+    match wf_mgr.approve_gate(&step.id, "mcp", feedback, selections.as_deref()) {
         Ok(()) => tool_ok(format!("Gate approved for run {run_id}.")),
         Err(e) => tool_err(e),
     }

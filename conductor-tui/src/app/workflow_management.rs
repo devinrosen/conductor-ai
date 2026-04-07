@@ -4,8 +4,53 @@ use std::sync::Arc;
 
 use conductor_core::worktree::WorktreeManager;
 
+/// (target_label, ticket_id, repo_slug, wt_slug) resolved from a worktree.
+type WorktreeLabelParts = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 use crate::action::Action;
-use crate::state::{ConfirmAction, Modal, View, WorkflowRunDetailFocus};
+use crate::state::{ConfirmAction, Modal, View, WorkflowPickerItem, WorkflowRunDetailFocus};
+
+/// Build the flat item list for the workflow picker, inserting non-selectable
+/// `Header` rows before each named group.  Groups are sorted alphabetically;
+/// workflows within each group are also sorted alphabetically by name.
+/// Ungrouped workflows appear after all named groups, with no header.
+pub(crate) fn insert_group_headers(
+    defs: Vec<conductor_core::workflow::WorkflowDef>,
+) -> Vec<WorkflowPickerItem> {
+    use std::collections::BTreeMap;
+
+    let mut grouped: BTreeMap<String, Vec<conductor_core::workflow::WorkflowDef>> = BTreeMap::new();
+    let mut ungrouped: Vec<conductor_core::workflow::WorkflowDef> = Vec::new();
+
+    for def in defs {
+        match def.group.clone() {
+            Some(g) => grouped.entry(g).or_default().push(def),
+            None => ungrouped.push(def),
+        }
+    }
+
+    let mut items: Vec<WorkflowPickerItem> = Vec::new();
+
+    for (group_name, mut group_defs) in grouped {
+        group_defs.sort_by(|a, b| a.name.cmp(&b.name));
+        items.push(WorkflowPickerItem::Header(group_name));
+        for def in group_defs {
+            items.push(WorkflowPickerItem::Workflow(def));
+        }
+    }
+
+    ungrouped.sort_by(|a, b| a.name.cmp(&b.name));
+    for def in ungrouped {
+        items.push(WorkflowPickerItem::Workflow(def));
+    }
+
+    items
+}
 
 /// Error type for [`App::resolve_workflow_target`].
 ///
@@ -176,7 +221,7 @@ impl App {
         if def_len > 0 && self.state.workflow_def_index >= def_len {
             self.state.workflow_def_index = def_len - 1;
         }
-        let run_len = self.state.visible_workflow_run_rows().len();
+        let run_len = self.state.visible_workflow_run_rows_len();
         if run_len > 0 && self.state.workflow_run_index >= run_len {
             self.state.workflow_run_index = run_len - 1;
         }
@@ -398,13 +443,13 @@ impl App {
             return;
         }
 
+        let items = insert_group_headers(defs);
+        let selected = items.iter().position(|i| i.is_selectable()).unwrap_or(0);
         self.state.modal = Modal::WorkflowPicker {
             target,
-            items: defs
-                .into_iter()
-                .map(crate::state::WorkflowPickerItem::Workflow)
-                .collect(),
-            selected: 0,
+            items,
+            selected,
+            scroll_offset: 0,
         };
     }
 
@@ -484,13 +529,13 @@ impl App {
             return;
         }
 
+        let items = insert_group_headers(defs);
+        let selected = items.iter().position(|i| i.is_selectable()).unwrap_or(0);
         self.state.modal = Modal::WorkflowPicker {
             target,
-            items: defs
-                .into_iter()
-                .map(crate::state::WorkflowPickerItem::Workflow)
-                .collect(),
-            selected: 0,
+            items,
+            selected,
+            scroll_offset: 0,
         };
     }
 
@@ -500,6 +545,20 @@ impl App {
         defs: Vec<conductor_core::workflow::WorkflowDef>,
         warnings: Vec<conductor_core::workflow::WorkflowWarning>,
     ) {
+        let mut defs = defs;
+        defs.sort_by(|a, b| {
+            let ka = (
+                if a.group.is_none() { 1u8 } else { 0u8 },
+                a.group.as_deref().unwrap_or(""),
+                a.name.as_str(),
+            );
+            let kb = (
+                if b.group.is_none() { 1u8 } else { 0u8 },
+                b.group.as_deref().unwrap_or(""),
+                b.name.as_str(),
+            );
+            ka.cmp(&kb)
+        });
         self.state.data.workflow_defs = defs;
         if let Some(msg) = workflow_parse_warning_message(&warnings) {
             self.state.status_message = Some(msg);
@@ -526,9 +585,17 @@ impl App {
             return;
         };
 
+        // Headers are non-selectable: ignore Enter presses on them.
+        if matches!(item, WorkflowPickerItem::Header(_)) {
+            return;
+        }
+
         self.state.modal = Modal::None;
 
         match item {
+            WorkflowPickerItem::Header(_) => {
+                unreachable!("Header items are non-selectable and guarded above")
+            }
             WorkflowPickerItem::Workflow(def) => {
                 let mut prefill = std::collections::HashMap::new();
                 match &target {
@@ -646,7 +713,7 @@ impl App {
                 Ok(Some(active)) => {
                     self.state.status_message = Some(format!(
                         "Workflow '{}' is already running — cancel it before starting another",
-                        active.workflow_name
+                        active.display_name()
                     ));
                     return;
                 }
@@ -813,6 +880,10 @@ impl App {
                     return;
                 }
 
+                // Try the in-memory cache first.  If the worktree was just
+                // created and the background refresh hasn't fired yet, the
+                // cache will miss and we fall back to a direct DB query so
+                // that target_label is never stored as an empty string.
                 let (wt_target_label, wt_ticket_id, repo_slug, wt_slug) = self
                     .state
                     .data
@@ -827,14 +898,38 @@ impl App {
                             .find(|r| r.id == w.repo_id)
                             .map(|r| {
                                 (
-                                    format!("{}/{}", r.slug, w.slug),
+                                    Some(format!("{}/{}", r.slug, w.slug)),
                                     w.ticket_id.clone(),
                                     Some(r.slug.clone()),
                                     Some(w.slug.clone()),
                                 )
                             })
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| {
+                        // Cache miss — query DB directly to avoid storing "".
+                        use conductor_core::config::db_path;
+                        use conductor_core::db::open_database;
+                        let label = (|| -> Option<WorktreeLabelParts> {
+                            let conn = open_database(&db_path()).ok()?;
+                            let (repo_slug, wt_slug, ticket_id): (String, String, Option<String>) =
+                                conn.query_row(
+                                    "SELECT r.slug, w.slug, w.ticket_id \
+                                     FROM worktrees w \
+                                     JOIN repos r ON r.id = w.repo_id \
+                                     WHERE w.id = ?1",
+                                    rusqlite::params![worktree_id],
+                                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                                )
+                                .ok()?;
+                            Some((
+                                Some(format!("{repo_slug}/{wt_slug}")),
+                                ticket_id,
+                                Some(repo_slug),
+                                Some(wt_slug),
+                            ))
+                        })();
+                        label.unwrap_or((None, None, None, None))
+                    });
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
@@ -946,7 +1041,7 @@ impl App {
                         repo_path,
                         ticket_id,
                         run_inputs,
-                        format!("workflow_run:{workflow_run_id}"),
+                        Some(format!("workflow_run:{workflow_run_id}")),
                         model,
                         repo_slug,
                         wt_slug,
@@ -978,14 +1073,14 @@ impl App {
         repo_path: String,
         ticket_id: Option<String>,
         inputs: std::collections::HashMap<String, String>,
-        target_label: String,
+        target_label: Option<String>,
         model: Option<String>,
         repo_slug: Option<String>,
         wt_slug: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         let handle = std::thread::spawn(move || {
@@ -1023,20 +1118,23 @@ impl App {
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
-                target_label: Some(target_label),
+                target_label,
                 feature_id,
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
+                extra_plugin_dirs: vec![],
+                db_path: None,
             };
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, None, result);
+            send_workflow_result(&bg_tx, def.display_name(), None, result);
         });
 
         self.workflow_threads.push(handle);
-        self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
+        self.state.status_message = Some(format!("Starting workflow '{workflow_display_name}'…"));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1052,7 +1150,7 @@ impl App {
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         let handle = std::thread::spawn(move || {
@@ -1092,15 +1190,20 @@ impl App {
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
+                extra_plugin_dirs: vec![],
+                db_path: None,
             };
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, None, result);
+            send_workflow_result(&bg_tx, def.display_name(), None, result);
         });
 
         self.workflow_threads.push(handle);
-        self.state.status_message = Some(format!("Starting workflow '{workflow_name}' on ticket…"));
+        self.state.status_message = Some(format!(
+            "Starting workflow '{workflow_display_name}' on ticket…"
+        ));
     }
 
     pub(super) fn spawn_repo_workflow_in_background(
@@ -1114,7 +1217,7 @@ impl App {
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         let handle = std::thread::spawn(move || {
@@ -1141,15 +1244,20 @@ impl App {
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
+                extra_plugin_dirs: vec![],
+                db_path: None,
             };
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, None, result);
+            send_workflow_result(&bg_tx, def.display_name(), None, result);
         });
 
         self.workflow_threads.push(handle);
-        self.state.status_message = Some(format!("Starting workflow '{workflow_name}' on repo…"));
+        self.state.status_message = Some(format!(
+            "Starting workflow '{workflow_display_name}' on repo…"
+        ));
     }
 
     pub(super) fn spawn_workflow_run_target_in_background(
@@ -1162,7 +1270,7 @@ impl App {
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         let handle = std::thread::spawn(move || {
@@ -1189,16 +1297,19 @@ impl App {
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
+                extra_plugin_dirs: vec![],
+                db_path: None,
             };
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, None, result);
+            send_workflow_result(&bg_tx, def.display_name(), None, result);
         });
 
         self.workflow_threads.push(handle);
         self.state.status_message = Some(format!(
-            "Starting workflow '{workflow_name}' on workflow run…"
+            "Starting workflow '{workflow_display_name}' on workflow run…"
         ));
     }
 
@@ -1256,6 +1367,7 @@ impl App {
                     .map(crate::state::WorkflowPickerItem::Workflow)
                     .collect(),
                 selected: 0,
+                scroll_offset: 0,
             };
         }
     }
@@ -1273,12 +1385,12 @@ impl App {
 
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let pr_label = format!("{}#{}", pr_ref.repo_slug(), pr_ref.number);
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         self.state.status_message = Some(format!(
-            "Starting workflow '{workflow_name}' on {pr_label}…"
+            "Starting workflow '{workflow_display_name}' on {pr_label}…"
         ));
 
         let handle = std::thread::spawn(move || {
@@ -1315,7 +1427,7 @@ impl App {
                 conductor_core::workflow::resolve_conductor_bin_dir(),
             );
 
-            send_workflow_result(&bg_tx, &workflow_name, Some(&pr_label), result);
+            send_workflow_result(&bg_tx, &workflow_display_name, Some(&pr_label), result);
         });
 
         self.workflow_threads.push(handle);
@@ -1344,7 +1456,7 @@ impl App {
 
         self.state.modal = Modal::Confirm {
             title: "Resume Workflow".to_string(),
-            message: format!("Resume workflow run '{}'?", run.workflow_name),
+            message: format!("Resume workflow run '{}'?", run.display_name()),
             on_confirm: ConfirmAction::ResumeWorkflow {
                 workflow_run_id: run.id.clone(),
             },
@@ -1380,7 +1492,7 @@ impl App {
 
         self.state.modal = Modal::Confirm {
             title: "Resume Workflow".to_string(),
-            message: format!("Resume workflow run '{}'?", run.workflow_name),
+            message: format!("Resume workflow run '{}'?", run.display_name()),
             on_confirm: ConfirmAction::ResumeWorkflow {
                 workflow_run_id: run.id,
             },
@@ -1403,7 +1515,7 @@ impl App {
 
         self.state.modal = Modal::Confirm {
             title: "Cancel Workflow".to_string(),
-            message: format!("Cancel workflow run '{}'?", run.workflow_name),
+            message: format!("Cancel workflow run '{}'?", run.display_name()),
             on_confirm: ConfirmAction::CancelWorkflow {
                 workflow_run_id: run.id.clone(),
             },
@@ -1417,6 +1529,8 @@ impl App {
         if let Modal::GateAction {
             ref step_id,
             ref feedback,
+            ref options,
+            ref selected,
             ..
         } = self.state.modal
         {
@@ -1426,7 +1540,21 @@ impl App {
             } else {
                 Some(feedback.as_str())
             };
-            match wf_mgr.approve_gate(step_id, "tui-user", fb) {
+            // Collect checked selections (only when options are present).
+            let selections: Option<Vec<String>> = if options.is_empty() {
+                None
+            } else {
+                Some(
+                    options
+                        .iter()
+                        .zip(selected.iter())
+                        .filter_map(
+                            |(opt, &checked)| if checked { Some(opt.clone()) } else { None },
+                        )
+                        .collect(),
+                )
+            };
+            match wf_mgr.approve_gate(step_id, "tui-user", fb, selections.as_deref()) {
                 Ok(()) => {
                     self.state.status_message = Some("Gate approved".to_string());
                 }
@@ -1443,11 +1571,31 @@ impl App {
         if let Some(ref run_id) = self.state.selected_workflow_run_id {
             let wf_mgr = WorkflowManager::new(&self.conn);
             if let Ok(Some(step)) = wf_mgr.find_waiting_gate(run_id) {
+                // Deserialize gate_options if present.
+                let options: Vec<String> = step
+                    .gate_options
+                    .as_deref()
+                    .and_then(|json| {
+                        serde_json::from_str::<Vec<serde_json::Value>>(json)
+                            .ok()
+                            .map(|arr| {
+                                arr.into_iter()
+                                    .filter_map(|v| {
+                                        v.get("value").and_then(|s| s.as_str()).map(String::from)
+                                    })
+                                    .collect()
+                            })
+                    })
+                    .unwrap_or_default();
+                let n = options.len();
                 self.state.modal = Modal::GateAction {
                     run_id: run_id.clone(),
                     step_id: step.id.clone(),
                     gate_prompt: step.gate_prompt.unwrap_or_default(),
                     feedback: String::new(),
+                    selected: vec![false; n],
+                    focused_option: 0,
+                    options,
                 };
             } else {
                 self.state.status_message = Some("No waiting gate found".to_string());
@@ -1652,7 +1800,7 @@ impl App {
             Ok(Some(active)) => {
                 self.state.status_message = Some(format!(
                     "Workflow '{}' is already running — cancel it before starting another",
-                    active.workflow_name
+                    active.display_name()
                 ));
                 true
             }
@@ -1701,6 +1849,98 @@ impl App {
             }
             None => (None, "not set".to_string()),
         }
+    }
+
+    /// Open the template picker modal with embedded templates.
+    pub(super) fn handle_pick_template(&mut self) {
+        use conductor_core::workflow_template::list_embedded_templates;
+
+        let templates = list_embedded_templates();
+        if templates.is_empty() {
+            self.state.modal = Modal::Error {
+                message: "No workflow templates available.".to_string(),
+            };
+            return;
+        }
+
+        // Resolve repo context
+        let (repo_slug, repo_path) = match self.selected_repo_slug_and_path() {
+            Some(v) => v,
+            None => {
+                self.state.status_message = Some("No repo selected".to_string());
+                return;
+            }
+        };
+
+        // Resolve optional worktree context
+        let wt_path = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|wt_id| self.resolve_worktree_paths(wt_id))
+            .map(|(path, _)| path);
+
+        self.state.modal = Modal::TemplatePicker {
+            items: templates,
+            selected: 0,
+            repo_slug,
+            repo_path,
+            worktree_path: wt_path,
+        };
+    }
+
+    /// Confirm the selected template and build the instantiation prompt off-thread.
+    pub(super) fn handle_template_picker_confirm(&mut self) {
+        let (template, repo_path, wt_path) = if let Modal::TemplatePicker {
+            ref items,
+            selected,
+            ref repo_path,
+            ref worktree_path,
+            ..
+        } = self.state.modal
+        {
+            if let Some(tmpl) = items.get(selected) {
+                (tmpl.clone(), repo_path.clone(), worktree_path.clone())
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        let Some(ref bg_tx) = self.bg_tx else {
+            return;
+        };
+        let tx = bg_tx.clone();
+
+        self.state.modal = Modal::Progress {
+            message: "Building template prompt…".into(),
+        };
+
+        let working_dir = wt_path.unwrap_or_else(|| repo_path.clone());
+        let repo_path_owned = repo_path;
+        std::thread::spawn(move || {
+            use conductor_core::workflow_template::{
+                build_instantiation_prompt, collect_existing_workflow_names,
+            };
+
+            let existing_names = collect_existing_workflow_names(&working_dir, &repo_path_owned);
+            let prompt_result =
+                build_instantiation_prompt(&template, &working_dir, &existing_names);
+
+            let _ = tx.send(Action::TemplateInstantiateReady {
+                template_name: format!("{} v{}", template.metadata.name, template.metadata.version),
+                suggested_filename: prompt_result.suggested_filename,
+                prompt: prompt_result.prompt,
+            });
+        });
+    }
+
+    /// Helper: get the repo slug and local path for the selected repo.
+    fn selected_repo_slug_and_path(&self) -> Option<(String, String)> {
+        let repo_id = self.state.selected_repo_id.as_ref()?;
+        let repo = self.state.data.repos.iter().find(|r| r.id == *repo_id)?;
+        Some((repo.slug.clone(), repo.local_path.clone()))
     }
 }
 
@@ -1814,9 +2054,11 @@ mod tests {
 
         let def = WorkflowDef {
             name: "test-wf".into(),
+            title: None,
             description: "test".into(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![InputDecl {
                 name: "workflow_run_id".into(),
                 required: false,
@@ -1895,5 +2137,87 @@ mod tests {
             }
             other => panic!("Expected Modal::Error, got {:?}", other),
         }
+    }
+
+    // ── insert_group_headers ──────────────────────────────────────────────────
+
+    fn make_def(name: &str, group: Option<&str>) -> conductor_core::workflow::WorkflowDef {
+        conductor_core::workflow::WorkflowDef {
+            name: name.to_string(),
+            title: None,
+            description: String::new(),
+            trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+            targets: vec![],
+            group: group.map(String::from),
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn insert_group_headers_empty_input_returns_empty() {
+        let items = insert_group_headers(vec![]);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn insert_group_headers_all_ungrouped_no_headers() {
+        let defs = vec![make_def("beta", None), make_def("alpha", None)];
+        let items = insert_group_headers(defs);
+        // No headers — all items are Workflow variants, sorted alphabetically.
+        assert_eq!(items.len(), 2);
+        assert!(items
+            .iter()
+            .all(|i| matches!(i, WorkflowPickerItem::Workflow(_))));
+        assert!(matches!(&items[0], WorkflowPickerItem::Workflow(d) if d.name == "alpha"));
+        assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "beta"));
+    }
+
+    #[test]
+    fn insert_group_headers_all_grouped_inserts_headers() {
+        let defs = vec![
+            make_def("b-wf", Some("GroupB")),
+            make_def("a-wf", Some("GroupA")),
+        ];
+        let items = insert_group_headers(defs);
+        // GroupA comes before GroupB (alphabetical). Each group gets a Header + Workflow.
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], WorkflowPickerItem::Header(l) if l == "GroupA"));
+        assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "a-wf"));
+        assert!(matches!(&items[2], WorkflowPickerItem::Header(l) if l == "GroupB"));
+        assert!(matches!(&items[3], WorkflowPickerItem::Workflow(d) if d.name == "b-wf"));
+    }
+
+    #[test]
+    fn insert_group_headers_mixed_grouped_and_ungrouped() {
+        let defs = vec![
+            make_def("ungrouped-z", None),
+            make_def("grouped-a", Some("G")),
+            make_def("ungrouped-a", None),
+        ];
+        let items = insert_group_headers(defs);
+        // Group "G" first (header + workflow), then ungrouped sorted alphabetically.
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], WorkflowPickerItem::Header(l) if l == "G"));
+        assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "grouped-a"));
+        assert!(matches!(&items[2], WorkflowPickerItem::Workflow(d) if d.name == "ungrouped-a"));
+        assert!(matches!(&items[3], WorkflowPickerItem::Workflow(d) if d.name == "ungrouped-z"));
+    }
+
+    #[test]
+    fn insert_group_headers_workflows_within_group_sorted() {
+        let defs = vec![
+            make_def("zzz", Some("G")),
+            make_def("aaa", Some("G")),
+            make_def("mmm", Some("G")),
+        ];
+        let items = insert_group_headers(defs);
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], WorkflowPickerItem::Header(_)));
+        assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "aaa"));
+        assert!(matches!(&items[2], WorkflowPickerItem::Workflow(d) if d.name == "mmm"));
+        assert!(matches!(&items[3], WorkflowPickerItem::Workflow(d) if d.name == "zzz"));
     }
 }

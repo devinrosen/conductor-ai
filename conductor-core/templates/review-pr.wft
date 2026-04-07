@@ -1,0 +1,54 @@
+---
+name: review-pr
+description: Run a parallel review swarm across multiple dimensions and aggregate findings into a PR comment
+version: "1.0.0"
+target_types:
+  - pr
+  - worktree
+hints:
+  - Check if the repo uses database migrations (e.g. diesel, sqlx, alembic, flyway) — the detect-db-migrations script should grep for migration files
+  - Inspect the repo's language/stack to set appropriate reviewer agent names and specializations (e.g. a React frontend needs a different security reviewer than a Rust backend)
+  - Look at the repo's existing test patterns to calibrate what "good test coverage" means here
+  - Check if there's a .github/PULL_REQUEST_TEMPLATE.md — the submit-review script should post a comment that complements the PR template
+  - If the repo has multiple services or packages, the review agents may need to be scoped per-service
+  - Consider whether performance review makes sense for this repo type (e.g. skip for pure docs repos)
+---
+workflow review-pr {
+  meta {
+    description = "Run review swarm and aggregate findings"
+    trigger     = "manual"
+    targets     = ["pr", "worktree"]
+    group       = "Review"
+  }
+
+  inputs {
+    scope default = "full"
+  }
+
+  script detect-db-migrations {
+    run = ".conductor/scripts/detect-db-migrations.sh"
+  }
+  script detect-file-types {
+    run = ".conductor/scripts/detect-file-types.sh"
+  }
+
+  parallel {
+    output    = "review-findings"
+    with      = ["review-diff-scope", "off-diff-findings"]
+    fail_fast = false
+    call review-architecture    { retries = 1 }
+    call review-dry-abstraction { retries = 1 }
+    call review-security        { retries = 1  if = "detect-file-types.has_code_changes" }
+    call review-performance     { retries = 1  if = "detect-file-types.has_code_changes" }
+    call review-error-handling  { retries = 1  if = "detect-file-types.has_code_changes" }
+    call review-test-coverage   { retries = 1  if = "detect-file-types.has_code_changes" }
+    call review-db-migrations   { retries = 1  if = "detect-db-migrations.has_db_migrations" }
+  }
+
+  script submit-review {
+    run = ".conductor/scripts/submit-review.sh"
+    as  = "reviewer"
+    env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" DRY_RUN = "{{dry_run}}" }
+  }
+  call review-aggregator { output = "review-aggregator" retries = 1 }
+}

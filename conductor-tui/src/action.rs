@@ -4,7 +4,7 @@ use conductor_core::agent::{AgentRun, AgentRunEvent, FeedbackRequest, TicketAgen
 use conductor_core::feature::FeatureRow;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
-use conductor_core::tickets::{Ticket, TicketLabel};
+use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
     WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary, WorkflowWarning,
 };
@@ -47,6 +47,7 @@ pub struct DataRefreshedPayload {
     pub worktrees: Vec<Worktree>,
     pub tickets: Vec<Ticket>,
     pub ticket_labels: HashMap<String, Vec<TicketLabel>>,
+    pub ticket_dependencies: HashMap<String, TicketDependencies>,
     pub latest_agent_runs: HashMap<String, AgentRun>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// Most recent workflow run per worktree (for inline indicators in the Worktrees panel).
@@ -66,6 +67,12 @@ pub struct DataRefreshedPayload {
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
     /// Number of unread in-app notifications.
     pub unread_notification_count: usize,
+    /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
+    pub latest_repo_agent_runs: HashMap<String, AgentRun>,
+    /// All worktree-scoped agent events keyed by worktree_id (populated by background poller).
+    pub worktree_agent_events: HashMap<String, Vec<AgentRunEvent>>,
+    /// All repo-scoped agent events keyed by repo_id (populated by background poller).
+    pub repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
 }
 
 /// Every user intent or background result flows through this enum.
@@ -166,8 +173,10 @@ pub enum Action {
 
     // Agent triggers (tmux-based)
     LaunchAgent,
+    PromptRepoAgent,
     OrchestrateAgent,
     StopAgent,
+    RestartAgent,
     #[allow(dead_code)]
     CopyLastCodeBlock,
     ExpandAgentEvent,
@@ -251,6 +260,16 @@ pub enum Action {
         message: String,
     },
 
+    // Background result for pre-creation main branch health check
+    MainHealthCheckComplete {
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        from_pr: Option<u32>,
+        from_branch: Option<String>,
+        status: Result<conductor_core::worktree::MainHealthStatus, String>,
+    },
+
     // Background results for worktree creation
     WorktreeCreated {
         wt_id: String,
@@ -262,6 +281,31 @@ pub enum Action {
     },
     WorktreeCreateFailed {
         message: String,
+    },
+
+    // Background result for repo agent launch
+    RepoAgentLaunched {
+        result: Result<String, String>,
+    },
+    // Background result for repo agent stop
+    RepoAgentStopComplete {
+        result: Result<String, String>,
+    },
+    // Background result for worktree agent launch
+    AgentLaunchComplete {
+        result: Result<String, String>,
+    },
+    // Background result for orchestrate agent launch
+    OrchestrateLaunchComplete {
+        result: Result<String, String>,
+    },
+    // Background result for worktree agent stop
+    AgentStopComplete {
+        result: Result<String, String>,
+    },
+    // Background result for agent restart
+    AgentRestartComplete {
+        result: Result<String, String>,
     },
 
     // Background result for worktree delete readiness check
@@ -312,8 +356,9 @@ pub enum Action {
     },
     SelectBranch(Option<usize>),
 
-    /// Select a workflow picker item by number-key shortcut (0-indexed).
-    SelectWorkflowItem(usize),
+    /// Select a list-picker item by number-key shortcut (0-indexed).
+    /// Used by both WorkflowPicker and TemplatePicker modals.
+    SelectListItem(usize),
     /// Background result: workflow items loaded, ready to show post-create workflow picker.
     PostCreatePickerReady {
         items: Vec<crate::state::WorkflowPickerItem>,
@@ -325,12 +370,22 @@ pub enum Action {
     },
 
     // Workflow actions
+    /// Toggle collapse/expand for the selected parent ticket row.
+    ToggleTicketCollapse,
     /// Toggle expand/collapse for the hovered parent run row.
     ToggleWorkflowRunCollapse,
     /// Toggle collapse/expand for the workflow definitions pane (Space key on Defs focus).
     ToggleWorkflowDefsCollapse,
     /// Open a workflow picker for the current context (worktree, PR, etc.)
     PickWorkflow,
+    /// Open the template picker for the current context (scaffold a new workflow from a template).
+    PickTemplate,
+    /// Background result: template instantiation prompt was built successfully.
+    TemplateInstantiateReady {
+        template_name: String,
+        prompt: String,
+        suggested_filename: String,
+    },
     RunWorkflow,
     RunPrWorkflow,
     ResumeWorkflow,
@@ -347,6 +402,8 @@ pub enum Action {
     ToggleDefStepTree,
     GateInputChar(char),
     GateInputBackspace,
+    /// Toggle the focused checklist option in a multi-select gate modal.
+    GateToggleOption,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
 
     // Notification modal loaded
@@ -372,4 +429,26 @@ pub enum Action {
 
     // No-op (unhandled key)
     None,
+
+    // ── Graph view actions ─────────────────────────────────────────────────
+    /// Open the ticket dependency graph for the current repo's tickets.
+    OpenTicketGraphView,
+    /// Stub: open workflow step graph (keybinding reserved for future use).
+    OpenWorkflowStepGraphView,
+    /// Move graph selection left (to previous layer).
+    GraphNavLeft,
+    /// Move graph selection right (to next layer).
+    GraphNavRight,
+    /// Move graph selection up (to previous node in layer).
+    GraphNavUp,
+    /// Move graph selection down (to next node in layer).
+    GraphNavDown,
+    /// Pan the graph viewport left.
+    GraphPanLeft,
+    /// Pan the graph viewport right.
+    GraphPanRight,
+    /// Pan the graph viewport up.
+    GraphPanUp,
+    /// Pan the graph viewport down.
+    GraphPanDown,
 }

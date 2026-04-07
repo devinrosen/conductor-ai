@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 48;
+pub const LATEST_SCHEMA_VERSION: u32 = 62;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -734,24 +734,36 @@ pub fn run(conn: &Connection) -> Result<()> {
     }
 
     // Migration 037: add 'script' to the role CHECK constraint and add output_file column.
-    // Requires a table swap (FK constraint). Guarded by output_file column existence
-    // to be idempotent and to skip gracefully on partial test schemas.
+    // Requires a table swap (FK constraint). The table swap serves two purposes:
+    // (1) add output_file column, (2) update role CHECK to include 'script'.
+    // We must run the swap if EITHER is missing (column absent OR constraint stale).
     if version < 37 {
         let has_output_file: bool = conn
             .prepare("SELECT output_file FROM workflow_run_steps LIMIT 0")
             .is_ok();
-        if !has_output_file {
-            let steps_table_exists = conn
-                .prepare("SELECT 1 FROM workflow_run_steps LIMIT 0")
-                .is_ok();
-            if steps_table_exists {
-                with_foreign_keys_off(conn, || {
-                    conn.execute_batch(include_str!(
-                        "migrations/037_workflow_step_output_file.sql"
-                    ))?;
-                    Ok(())
-                })?;
-            }
+        let needs_swap = if !has_output_file {
+            // Column missing — need the swap if the table exists at all.
+            conn.prepare("SELECT 1 FROM workflow_run_steps LIMIT 0")
+                .is_ok()
+        } else {
+            // Column exists — check if the CHECK constraint includes 'script'.
+            let has_script_role: bool = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_run_steps'",
+                    [],
+                    |row| {
+                        let ddl: String = row.get(0)?;
+                        Ok(ddl.contains("'script'"))
+                    },
+                )
+                .unwrap_or(false);
+            !has_script_role
+        };
+        if needs_swap {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!("migrations/037_workflow_step_output_file.sql"))?;
+                Ok(())
+            })?;
         }
         bump_version(conn, 37)?;
     }
@@ -887,6 +899,149 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 48)?;
     }
 
+    if version < 49 {
+        conn.execute_batch(include_str!("migrations/049_feature_last_commit_at.sql"))?;
+        bump_version(conn, 49)?;
+    }
+
+    if version < 50 {
+        // Only ALTER if feedback_requests table exists (created in migration 18).
+        let has_table: bool = conn
+            .prepare("SELECT 1 FROM feedback_requests LIMIT 0")
+            .is_ok();
+        if has_table {
+            let has_col: bool = conn
+                .prepare("SELECT feedback_type FROM feedback_requests LIMIT 0")
+                .is_ok();
+            if !has_col {
+                conn.execute_batch(include_str!("migrations/050_feedback_type_and_timeout.sql"))?;
+            }
+        }
+        bump_version(conn, 50)?;
+    }
+
+    // Migration 051: add repo_id column to agent_runs for repo-scoped agents.
+    if version < 51 {
+        let has_repo_id: bool = conn
+            .prepare("SELECT repo_id FROM agent_runs LIMIT 0")
+            .is_ok();
+        if !has_repo_id {
+            conn.execute_batch(include_str!("migrations/051_agent_run_repo_id.sql"))?;
+        }
+        bump_version(conn, 51)?;
+    }
+
+    // Migration 052: create push_subscriptions table for PWA push notifications.
+    if version < 52 {
+        let has_table: bool = conn
+            .prepare("SELECT 1 FROM push_subscriptions LIMIT 0")
+            .is_ok();
+        if !has_table {
+            conn.execute_batch(include_str!("migrations/052_push_subscriptions.sql"))?;
+        }
+        bump_version(conn, 52)?;
+    }
+
+    // Migration 053: covering index on agent_runs(worktree_id, started_at) to
+    // speed up the latest-run-per-worktree subquery in list_all_with_status().
+    if version < 53 {
+        conn.execute_batch(include_str!(
+            "migrations/053_idx_agent_runs_worktree_started.sql"
+        ))?;
+        bump_version(conn, 53)?;
+    }
+
+    // Migration 054: add workflow column to tickets table for routing overrides.
+    if version < 54 {
+        conn.execute_batch(include_str!("migrations/054_ticket_workflow.sql"))?;
+        bump_version(conn, 54)?;
+    }
+
+    // Migration 055: add agent_map column to tickets table for pre-resolved agent assignments.
+    if version < 55 {
+        conn.execute_batch(include_str!("migrations/055_ticket_agent_map.sql"))?;
+        bump_version(conn, 55)?;
+    }
+
+    // Migration 056: add gate_options and gate_selections columns to
+    // workflow_run_steps for dynamic multi-select gate support.
+    if version < 56 {
+        conn.execute_batch(include_str!("migrations/056_gate_options.sql"))?;
+        bump_version(conn, 56)?;
+    }
+
+    // Migration 057: backfill target_label for workflow_runs that have a
+    // worktree_id but a NULL or empty target_label (pre-033 rows and TUI
+    // race condition where cache hadn't refreshed after worktree creation).
+    if version < 57 {
+        conn.execute_batch(include_str!(
+            "migrations/057_backfill_workflow_run_target_label.sql"
+        ))?;
+        bump_version(conn, 57)?;
+    }
+
+    // Migration 058: drop the FK constraint on workflow_run_steps.child_run_id
+    // so that workflow-type steps can store a workflow_runs.id value (the iOS
+    // app needs this for navigation to child workflow run detail views).
+    if version < 58 {
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_run_steps'",
+            [],
+            |row| row.get(0),
+        )?;
+        if table_exists {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!(
+                    "migrations/058_workflow_step_child_run_id_drop_fk.sql"
+                ))?;
+                Ok(())
+            })?;
+        }
+        bump_version(conn, 58)?;
+    }
+
+    // Migration 059: add 8 aggregated metrics columns to workflow_runs
+    // (total_input_tokens, total_output_tokens, total_cache_read_input_tokens,
+    //  total_cache_creation_input_tokens, total_turns, total_cost_usd,
+    //  total_duration_ms, model). All nullable — no backfill required.
+    if version < 59 {
+        conn.execute_batch(include_str!("migrations/059_workflow_run_token_usage.sql"))?;
+        bump_version(conn, 59)?;
+    }
+
+    // Migration 060: create conversations table for repo/worktree-scoped agent chat.
+    if version < 60 {
+        let has_table: bool = conn.prepare("SELECT 1 FROM conversations LIMIT 0").is_ok();
+        if !has_table {
+            conn.execute_batch(include_str!("migrations/060_conversations.sql"))?;
+        }
+        bump_version(conn, 60)?;
+    }
+
+    // Migration 061: add conversation_id FK to agent_runs.
+    if version < 61 {
+        let has_col: bool = conn
+            .prepare("SELECT conversation_id FROM agent_runs LIMIT 0")
+            .is_ok();
+        if !has_col {
+            conn.execute_batch(include_str!(
+                "migrations/061_agent_runs_conversation_id.sql"
+            ))?;
+        }
+        bump_version(conn, 61)?;
+    }
+
+    // Migration 062: ticket_dependencies join table (RFC 009 prerequisite).
+    if version < 62 {
+        let has_table: bool = conn
+            .prepare("SELECT 1 FROM ticket_dependencies LIMIT 0")
+            .is_ok();
+        if !has_table {
+            conn.execute_batch(include_str!("migrations/062_ticket_dependencies.sql"))?;
+        }
+        bump_version(conn, 62)?;
+    }
+
     Ok(())
 }
 
@@ -970,6 +1125,36 @@ mod tests {
                 definition_snapshot TEXT,
                 inputs              TEXT
             );
+            -- workflow_run_steps at version 26: columns from migrations 020, 021, 023.
+            -- Migration 037 does a table swap, so this minimal form is intentional.
+            CREATE TABLE workflow_run_steps (
+                id                TEXT PRIMARY KEY,
+                workflow_run_id   TEXT NOT NULL,
+                step_name         TEXT NOT NULL,
+                role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate')),
+                can_commit        INTEGER NOT NULL DEFAULT 0,
+                condition_expr    TEXT,
+                status            TEXT NOT NULL DEFAULT 'pending',
+                child_run_id      TEXT,
+                position          INTEGER NOT NULL DEFAULT 0,
+                started_at        TEXT,
+                ended_at          TEXT,
+                result_text       TEXT,
+                condition_met     INTEGER,
+                iteration         INTEGER NOT NULL DEFAULT 0,
+                parallel_group_id TEXT,
+                context_out       TEXT,
+                markers_out       TEXT,
+                retry_count       INTEGER NOT NULL DEFAULT 0,
+                gate_type         TEXT,
+                gate_prompt       TEXT,
+                gate_timeout      TEXT,
+                gate_approved_by  TEXT,
+                gate_approved_at  TEXT,
+                gate_feedback     TEXT,
+                structured_output TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);
             INSERT INTO _conductor_meta VALUES ('schema_version', '26');
             INSERT INTO repos VALUES ('r1', 'test-repo', '/tmp/repo',
                 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z', NULL);
@@ -1048,7 +1233,10 @@ mod tests {
         // Call with a closure that always fails.
         let result = with_foreign_keys_off(&conn, || {
             Err(crate::error::ConductorError::Git(
-                "simulated migration error".to_string(),
+                crate::error::SubprocessFailure::from_message(
+                    "test",
+                    "simulated migration error".to_string(),
+                ),
             ))
         });
         assert!(result.is_err(), "helper must propagate the closure error");
@@ -1179,6 +1367,32 @@ mod tests {
         )
         .unwrap();
         conn.execute_batch(workflow_runs_ddl).unwrap();
+        // workflow_run_steps as it exists at v46 (all columns up to migration 039).
+        conn.execute_batch(
+            "CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate','workflow','script')),
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending'
+                                   CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
+                 child_run_id      TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 position          INTEGER NOT NULL,
+                 started_at        TEXT, ended_at TEXT, result_text TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT, markers_out TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type TEXT, gate_prompt TEXT, gate_timeout TEXT,
+                 gate_approved_by TEXT, gate_approved_at TEXT, gate_feedback TEXT,
+                 structured_output TEXT, output_file TEXT
+             );
+             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);",
+        )
+        .unwrap();
         conn.execute_batch(
             "INSERT INTO _conductor_meta VALUES ('schema_version', '46');
              INSERT INTO repos VALUES ('r1', 'test-repo', '/tmp/repo',
@@ -1356,6 +1570,134 @@ mod tests {
         assert_eq!(name, "ok-flow");
     }
 
+    // -----------------------------------------------------------------------
+    // Migration 058 tests
+    // -----------------------------------------------------------------------
+
+    /// Verifies that migration 058 preserves existing rows in `workflow_run_steps`
+    /// and removes the FK constraint on `child_run_id` so that workflow-type steps
+    /// can store a `workflow_runs.id` value (not just `agent_runs.id`).
+    #[test]
+    fn test_migration_058_preserves_rows_and_drops_fk() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Minimal pre-058 schema: only the tables migration 058 touches.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY,
+                 workflow_name TEXT NOT NULL,
+                 worktree_id TEXT,
+                 parent_run_id TEXT,
+                 status TEXT NOT NULL DEFAULT 'pending',
+                 dry_run INTEGER NOT NULL DEFAULT 0,
+                 trigger TEXT NOT NULL DEFAULT 'manual',
+                 started_at TEXT NOT NULL,
+                 ended_at TEXT,
+                 result_summary TEXT,
+                 definition_snapshot TEXT,
+                 inputs TEXT,
+                 ticket_id TEXT,
+                 repo_id TEXT,
+                 parent_workflow_run_id TEXT,
+                 target_label TEXT,
+                 default_bot_name TEXT,
+                 iteration INTEGER NOT NULL DEFAULT 0,
+                 blocked_on TEXT,
+                 feature_id TEXT,
+                 feature_iteration INTEGER,
+                 triggered_by TEXT,
+                 run_id TEXT
+             );
+             CREATE TABLE agent_runs (
+                 id TEXT PRIMARY KEY,
+                 worktree_id TEXT,
+                 prompt TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'running',
+                 started_at TEXT NOT NULL
+             );
+             -- workflow_run_steps at v57: child_run_id has FK to agent_runs
+             CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate','workflow','script')),
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending'
+                                   CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
+                 child_run_id      TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 position          INTEGER NOT NULL,
+                 started_at        TEXT,
+                 ended_at          TEXT,
+                 result_text       TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT,
+                 markers_out       TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type         TEXT,
+                 gate_prompt       TEXT,
+                 gate_timeout      TEXT,
+                 gate_approved_by  TEXT,
+                 gate_approved_at  TEXT,
+                 gate_feedback     TEXT,
+                 structured_output TEXT,
+                 output_file       TEXT,
+                 gate_options      TEXT,
+                 gate_selections   TEXT
+             );
+             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run
+               ON workflow_run_steps(workflow_run_id);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '57');
+             INSERT INTO agent_runs (id, prompt, started_at)
+                 VALUES ('ar1', 'test', '2024-01-01T00:00:00Z');
+             INSERT INTO workflow_runs (id, workflow_name, trigger, started_at)
+                 VALUES ('wfr1', 'my-flow', 'manual', '2024-01-01T00:00:00Z'),
+                        ('wfr2', 'child-flow', 'manual', '2024-01-01T00:00:00Z');
+             INSERT INTO workflow_run_steps
+                 (id, workflow_run_id, step_name, role, position, child_run_id)
+                 VALUES ('s1', 'wfr1', 'workflow:child-flow', 'workflow', 0, 'ar1');",
+        )
+        .unwrap();
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        // Apply migration 058.
+        run(&conn).unwrap();
+
+        // The original step row must survive with child_run_id intact.
+        let child_id: Option<String> = conn
+            .query_row(
+                "SELECT child_run_id FROM workflow_run_steps WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("step row must survive migration 058");
+        assert_eq!(child_id.as_deref(), Some("ar1"));
+
+        // After migration, child_run_id must accept a workflow_runs.id value
+        // (the FK to agent_runs has been dropped).
+        conn.execute(
+            "INSERT INTO workflow_run_steps
+             (id, workflow_run_id, step_name, role, position, child_run_id)
+             VALUES ('s2', 'wfr1', 'workflow:another', 'workflow', 1, 'wfr2')",
+            [],
+        )
+        .expect("child_run_id must accept a workflow_runs id after migration 058");
+
+        let wf_child_id: Option<String> = conn
+            .query_row(
+                "SELECT child_run_id FROM workflow_run_steps WHERE id = 's2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(wf_child_id.as_deref(), Some("wfr2"));
+    }
+
     #[test]
     fn test_stale_binary_detection() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1381,5 +1723,295 @@ mod tests {
             msg.contains("cargo build"),
             "error should suggest rebuilding, got: {msg}"
         );
+    }
+
+    /// Verifies that migration 056 adds `gate_options` and `gate_selections`
+    /// columns to `workflow_run_steps` unconditionally.
+    ///
+    /// Builds a minimal schema positioned at version 55 (with `workflow_run_steps`
+    /// as it exists at that point, without the new columns), then runs migration 056
+    /// and asserts both columns appear.
+    #[test]
+    fn test_migration_056_adds_gate_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Minimal schema at v55: only the tables and columns that exist at that
+        // version.  workflow_run_steps has the full v46 DDL (output_file included,
+        // added by migration 037) but NOT gate_options/gate_selections.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE repos (
+                 id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE,
+                 local_path TEXT NOT NULL, remote_url TEXT NOT NULL,
+                 workspace_dir TEXT NOT NULL, created_at TEXT NOT NULL
+             );
+             CREATE TABLE worktrees (
+                 id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
+                 slug TEXT NOT NULL, branch TEXT NOT NULL, path TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,
+                 base_branch TEXT NOT NULL DEFAULT 'main'
+             );
+             CREATE TABLE agent_runs (
+                 id TEXT PRIMARY KEY, worktree_id TEXT,
+                 prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running',
+                 started_at TEXT NOT NULL
+             );
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY, workflow_name TEXT NOT NULL,
+                 worktree_id TEXT, parent_run_id TEXT NOT NULL DEFAULT '',
+                 status TEXT NOT NULL DEFAULT 'pending',
+                 dry_run INTEGER NOT NULL DEFAULT 0,
+                 trigger TEXT NOT NULL DEFAULT 'manual',
+                 started_at TEXT NOT NULL,
+                 target_label TEXT
+             );
+             -- workflow_run_steps at v55: all columns through migration 039,
+             -- but NOT gate_options/gate_selections (added by 056).
+             -- Must match the SELECT list used by migration 058's table swap.
+             CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL DEFAULT 'actor',
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending',
+                 child_run_id      TEXT,
+                 position          INTEGER NOT NULL DEFAULT 0,
+                 started_at        TEXT,
+                 ended_at          TEXT,
+                 result_text       TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT,
+                 markers_out       TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type         TEXT,
+                 gate_prompt       TEXT,
+                 gate_timeout      TEXT,
+                 gate_approved_by  TEXT,
+                 gate_approved_at  TEXT,
+                 gate_feedback     TEXT,
+                 structured_output TEXT,
+                 output_file       TEXT
+             );
+             INSERT INTO _conductor_meta VALUES ('schema_version', '55');",
+        )
+        .unwrap();
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        // Before migration 056: neither column should exist.
+        let col_names: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(workflow_run_steps)")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert!(
+            !col_names.contains(&"gate_options".to_string()),
+            "gate_options must not exist before migration 056"
+        );
+        assert!(
+            !col_names.contains(&"gate_selections".to_string()),
+            "gate_selections must not exist before migration 056"
+        );
+
+        // Apply migration 056 (and anything beyond, though the DB has no other
+        // tables needed by later migrations — they are no-ops for this test's
+        // purpose because they touch different tables).
+        run(&conn).unwrap();
+
+        // After migration 056: both columns must exist.
+        let col_names_after: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(workflow_run_steps)")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert!(
+            col_names_after.contains(&"gate_options".to_string()),
+            "gate_options must exist after migration 056"
+        );
+        assert!(
+            col_names_after.contains(&"gate_selections".to_string()),
+            "gate_selections must exist after migration 056"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 062 tests
+    // -----------------------------------------------------------------------
+
+    /// Inserts a minimal repo (`r1`) and two tickets (`t1`, `t2`) used by migration 062
+    /// fixture tests.
+    fn insert_ticket_dependency_fixtures(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES ('r1', 'repo1', '/tmp/repo', 'https://example.com/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', 'https://example.com/1', '2024-01-01T00:00:00Z');
+             INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', 'https://example.com/2', '2024-01-01T00:00:00Z');",
+        )
+        .unwrap();
+    }
+
+    /// Verifies that `ticket_dependencies` exists on a fresh DB after all migrations.
+    #[test]
+    fn test_ticket_dependencies_table_exists() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+        // A simple SELECT proves the table exists.
+        conn.execute_batch("SELECT 1 FROM ticket_dependencies LIMIT 0")
+            .expect("ticket_dependencies table must exist after migration 062");
+    }
+
+    /// Verifies that deleting a ticket cascades to its dependency rows.
+    #[test]
+    fn test_ticket_dependencies_on_delete_cascade() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        // Insert a minimal repo and two tickets.
+        insert_ticket_dependency_fixtures(&conn);
+        conn.execute_batch(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
+        )
+        .unwrap();
+
+        // Confirm the row exists.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies WHERE from_ticket_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Delete the blocking ticket — the dependency row must cascade away.
+        conn.execute("DELETE FROM tickets WHERE id = 't1'", [])
+            .unwrap();
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies WHERE from_ticket_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count_after, 0,
+            "dependency row must be removed on ticket delete"
+        );
+    }
+
+    /// Verifies that deleting the *target* ticket (to_ticket_id) also cascades.
+    #[test]
+    fn test_ticket_dependencies_on_delete_cascade_to_ticket() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        insert_ticket_dependency_fixtures(&conn);
+        conn.execute_batch(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
+        )
+        .unwrap();
+
+        // Delete the target ticket — the dependency row must cascade away.
+        conn.execute("DELETE FROM tickets WHERE id = 't2'", [])
+            .unwrap();
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies WHERE to_ticket_id = 't2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count_after, 0,
+            "dependency row must be removed when target ticket is deleted"
+        );
+    }
+
+    /// Verifies that `dep_type` defaults to `'blocks'` when omitted.
+    #[test]
+    fn test_ticket_dependencies_dep_type_default() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        insert_ticket_dependency_fixtures(&conn);
+        conn.execute_batch(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id) VALUES ('t1', 't2');",
+        )
+        .unwrap();
+
+        let dep_type: String = conn
+            .query_row(
+                "SELECT dep_type FROM ticket_dependencies WHERE from_ticket_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(dep_type, "blocks", "dep_type must default to 'blocks'");
+    }
+
+    /// Verifies that inserting an invalid `dep_type` value is rejected.
+    #[test]
+    fn test_ticket_dependencies_check_constraint() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        insert_ticket_dependency_fixtures(&conn);
+
+        let result = conn.execute(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type)
+             VALUES ('t1', 't2', 'invalid_type')",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "CHECK constraint must reject invalid dep_type"
+        );
+    }
+
+    #[test]
+    fn test_ticket_dependencies_both_dep_types_for_same_pair() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run(&conn).unwrap();
+
+        insert_ticket_dependency_fixtures(&conn);
+
+        conn.execute_batch(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type)
+             VALUES ('t1', 't2', 'blocks');
+             INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type)
+             VALUES ('t1', 't2', 'parent_of');",
+        )
+        .expect("both dep_types for the same ticket pair must be storable");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies WHERE from_ticket_id = 't1' AND to_ticket_id = 't2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2, "both 'blocks' and 'parent_of' rows must coexist");
     }
 }

@@ -361,6 +361,87 @@ pub fn count_turns_incremental(path: &str, prev_offset: u64, prev_count: i64) ->
     (offset + complete_end as u64, base_count + new_turns)
 }
 
+/// Scan an in-flight agent log file and sum token usage from all `assistant` events.
+///
+/// Returns `(input_tokens, output_tokens, cache_read_input_tokens,
+/// cache_creation_input_tokens)` as cumulative totals across every complete
+/// `assistant` event in the file.  Returns `(0, 0, 0, 0)` on any I/O error
+/// (best-effort telemetry — callers should swallow errors).
+///
+/// Only complete lines (up to the last `\n`) are processed to avoid counting
+/// a partially-written JSON event.
+pub(crate) fn scan_partial_token_usage(path: &str) -> (i64, i64, i64, i64) {
+    use std::io::{Read as _, Seek, SeekFrom};
+
+    let mut file = match std::fs::File::open(Path::new(path)) {
+        Ok(f) => f,
+        Err(_) => return (0, 0, 0, 0),
+    };
+    let len = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return (0, 0, 0, 0),
+    };
+    if len == 0 {
+        return (0, 0, 0, 0);
+    }
+    if file.seek(SeekFrom::Start(0)).is_err() {
+        return (0, 0, 0, 0);
+    }
+    let mut buf = String::new();
+    if file.read_to_string(&mut buf).is_err() {
+        return (0, 0, 0, 0);
+    }
+
+    // Only process up to the last complete line (ending with '\n').
+    let complete_end = match buf.rfind('\n') {
+        Some(pos) => pos + 1,
+        None => return (0, 0, 0, 0),
+    };
+    let complete = &buf[..complete_end];
+
+    let mut input: i64 = 0;
+    let mut output: i64 = 0;
+    let mut cache_read: i64 = 0;
+    let mut cache_creation: i64 = 0;
+
+    for line in complete.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let usage = value.get("message").and_then(|m| m.get("usage"));
+        let Some(usage) = usage else {
+            continue;
+        };
+        if let Some(v) = usage.get("input_tokens").and_then(|v| v.as_i64()) {
+            input += v;
+        }
+        if let Some(v) = usage.get("output_tokens").and_then(|v| v.as_i64()) {
+            output += v;
+        }
+        if let Some(v) = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_i64())
+        {
+            cache_read += v;
+        }
+        if let Some(v) = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_i64())
+        {
+            cache_creation += v;
+        }
+    }
+
+    (input, output, cache_read, cache_creation)
+}
+
 /// Extract the text content from a tool_result block.
 /// Content can be a plain string or an array of content blocks.
 fn extract_tool_result_text(block: &serde_json::Value) -> String {
@@ -1064,5 +1145,72 @@ mod tests {
         let result = redact_secrets(input);
         assert!(result.contains("[REDACTED]"), "got: {result}");
         assert!(!result.contains("secret123"));
+    }
+
+    // ── scan_partial_token_usage ────────────────────────────────────────────
+
+    fn write_log_lines(lines: &[&str]) -> (tempfile::TempDir, String) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("run.log");
+        let content: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, content).unwrap();
+        (dir, path.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn test_scan_partial_token_usage_missing_file() {
+        let tokens = scan_partial_token_usage("/nonexistent/path/run.log");
+        assert_eq!(tokens, (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_scan_partial_token_usage_empty_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("run.log");
+        std::fs::write(&path, "").unwrap();
+        let tokens = scan_partial_token_usage(path.to_str().unwrap());
+        assert_eq!(tokens, (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_scan_partial_token_usage_single_event() {
+        let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":20,"cache_creation_input_tokens":10}}}"#;
+        let (_dir, path) = write_log_lines(&[line]);
+        let tokens = scan_partial_token_usage(&path);
+        assert_eq!(tokens, (100, 50, 20, 10));
+    }
+
+    #[test]
+    fn test_scan_partial_token_usage_multiple_events_summed() {
+        let line1 = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":20,"cache_creation_input_tokens":10}}}"#;
+        let line2 = r#"{"type":"assistant","message":{"usage":{"input_tokens":200,"output_tokens":80,"cache_read_input_tokens":30,"cache_creation_input_tokens":5}}}"#;
+        let (_dir, path) = write_log_lines(&[line1, line2]);
+        let tokens = scan_partial_token_usage(&path);
+        assert_eq!(tokens, (300, 130, 50, 15));
+    }
+
+    #[test]
+    fn test_scan_partial_token_usage_ignores_non_assistant_events() {
+        let assistant = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+        let result_ev = r#"{"type":"result","usage":{"input_tokens":999,"output_tokens":999,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}"#;
+        let system_ev = r#"{"type":"system","subtype":"init","model":"claude-opus-4-6"}"#;
+        let (_dir, path) = write_log_lines(&[assistant, result_ev, system_ev]);
+        let tokens = scan_partial_token_usage(&path);
+        // Only the assistant event should be counted
+        assert_eq!(tokens, (100, 50, 0, 0));
+    }
+
+    #[test]
+    fn test_scan_partial_token_usage_partial_last_line_skipped() {
+        let complete = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+        let partial = r#"{"type":"assistant","message":{"usage":{"input_tokens":999"#; // no trailing \n
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("run.log");
+        // complete line has \n; partial line does not
+        let content = format!("{complete}\n{partial}");
+        std::fs::write(&path, content).unwrap();
+        let tokens = scan_partial_token_usage(path.to_str().unwrap());
+        // Only the complete line should be counted
+        assert_eq!(tokens, (100, 50, 0, 0));
     }
 }

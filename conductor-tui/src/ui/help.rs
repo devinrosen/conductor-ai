@@ -70,7 +70,22 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        help_line("Space", "Collapse/expand parent ticket (tree view)", theme),
         help_line("I", "Toggle agent-issues filter", theme),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Repo Detail — Repo Agent",
+            Style::default()
+                .fg(theme.label_accent)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        help_line("p", "Prompt repo agent (read-only)", theme),
+        help_line("x", "Stop running repo agent", theme),
+        help_line("f", "Submit feedback to repo agent", theme),
+        help_line("F", "Dismiss feedback request", theme),
+        help_line("j / k", "Scroll repo agent activity", theme),
+        help_line("Enter", "Expand selected event", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Workflow Column",

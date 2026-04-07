@@ -139,6 +139,24 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(ticket_line),
     ];
 
+    // PR row — index 9, only present when a PR exists for this branch
+    if let Some(pr) = state.find_pr_for_worktree(&wt.branch) {
+        let pr_state_color = match pr.state.as_str() {
+            "OPEN" => state.theme.status_completed,
+            "MERGED" => state.theme.label_info,
+            _ => state.theme.label_secondary,
+        };
+        lines.push(Line::from(vec![
+            Span::styled("PR: ", Style::default().fg(state.theme.label_secondary)),
+            Span::raw(format!("#{} — {}", pr.number, pr.title)),
+            Span::raw("  "),
+            Span::styled(
+                format!("[{}]", pr.state.to_lowercase()),
+                Style::default().fg(pr_state_color),
+            ),
+        ]));
+    }
+
     if let Some(ref completed) = wt.completed_at {
         lines.push(Line::from(vec![
             Span::styled(
@@ -162,16 +180,38 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 
         // Show pending feedback request prompt
         if let Some(ref fb) = state.data.pending_feedback {
+            let type_label = match fb.feedback_type {
+                conductor_core::agent::FeedbackType::Text => "",
+                conductor_core::agent::FeedbackType::Confirm => " [y/n]",
+                conductor_core::agent::FeedbackType::SingleSelect => " [select one]",
+                conductor_core::agent::FeedbackType::MultiSelect => " [select many]",
+            };
             lines.push(Line::from(vec![
                 Span::styled(
                     "  Feedback: ",
                     Style::default().fg(state.theme.status_waiting),
                 ),
                 Span::styled(
-                    fb.prompt.clone(),
+                    format!("{}{type_label}", fb.prompt),
                     Style::default().fg(state.theme.label_primary),
                 ),
             ]));
+            // Show options for select types
+            if let Some(ref opts) = fb.options {
+                for (i, opt) in opts.iter().enumerate() {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {}. {}", i + 1, opt.label),
+                        Style::default().fg(state.theme.label_secondary),
+                    )));
+                }
+            }
+            // Show timeout info
+            if let Some(timeout) = fb.timeout_secs {
+                lines.push(Line::from(Span::styled(
+                    format!("    (auto-dismiss in {timeout}s)"),
+                    Style::default().fg(state.theme.label_secondary),
+                )));
+            }
         }
 
         // Show child runs if this is a parent (supervisor) run

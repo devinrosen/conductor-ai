@@ -1,15 +1,23 @@
 #![allow(unused_imports)]
 
-mod common;
-mod execution;
+pub(super) mod common;
+mod execution_loops;
+mod execution_misc;
+mod execution_recovery;
+mod execution_steps;
+mod execution_variables;
+mod execution_workflow;
 mod gates;
+mod helpers;
 mod manager;
 mod output;
 mod resumption;
+mod types;
 
 pub(super) use super::engine::{
-    bubble_up_child_step_results, completed_keys_from_steps, fetch_child_final_output,
-    resolve_child_inputs, restore_completed_step, ExecutionState, ResumeContext,
+    bubble_up_child_step_results, completed_keys_from_steps, execute_nodes,
+    fetch_child_final_output, resolve_child_inputs, restore_completed_step, ExecutionState,
+    ResumeContext,
 };
 pub(super) use super::executors::{
     execute_call, execute_do, execute_do_while, execute_unless, execute_while, handle_gate_timeout,

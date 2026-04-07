@@ -1,8 +1,10 @@
 workflow generate-diagrams {
   meta {
+    title       = "Generate Diagrams"
     description = "Generate Mermaid diagram files for a repo; bootstraps personas.md on first run"
     trigger     = "manual"
     targets     = ["repo"]
+    group       = "Analysis"
   }
 
   inputs {

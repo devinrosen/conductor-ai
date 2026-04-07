@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
+
+/// Ticket columns for SELECT queries that join `tickets` with alias `t`.
+const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::db::query_collect;
+use crate::db::{query_collect, with_in_clause};
 use crate::error::{ConductorError, Result};
 use crate::github::has_merged_pr;
 use crate::worktree::WorktreeManager;
@@ -25,6 +28,8 @@ pub struct Ticket {
     pub url: String,
     pub synced_at: String,
     pub raw_json: String,
+    pub workflow: Option<String>,
+    pub agent_map: Option<String>,
 }
 
 /// A normalized ticket from any source, ready to be upserted into the database.
@@ -38,10 +43,20 @@ pub struct TicketInput {
     pub assignee: Option<String>,
     pub priority: Option<String>,
     pub url: String,
-    pub raw_json: String,
+    pub raw_json: Option<String>,
     /// Label details (name + color) for populating the ticket_labels join table.
     /// Pass `vec![]` for sources that do not supply color data.
     pub label_details: Vec<TicketLabelInput>,
+    /// Source IDs (within the same source_type) of tickets that block this one.
+    /// Resolved to internal ULIDs and written to ticket_dependencies during upsert.
+    pub blocked_by: Vec<String>,
+    /// Source IDs of child tickets (this ticket is the parent).
+    /// Resolved to internal ULIDs and written to ticket_dependencies during upsert.
+    pub children: Vec<String>,
+    /// Source ID of the parent ticket (this ticket is a child).
+    /// Resolved and written to ticket_dependencies during upsert.
+    /// Setting this replaces any existing parent relationship for this ticket.
+    pub parent: Option<String>,
 }
 
 const VALID_TICKET_STATES: &[&str] = &["open", "in_progress", "closed"];
@@ -77,6 +92,44 @@ pub struct TicketLabel {
     pub color: Option<String>,
 }
 
+/// Dependency relationships for a single ticket.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TicketDependencies {
+    /// Tickets that must complete before this one (blocks this ticket).
+    pub blocked_by: Vec<Ticket>,
+    /// Tickets that this ticket blocks.
+    pub blocks: Vec<Ticket>,
+    /// Parent ticket, if any.
+    pub parent: Option<Ticket>,
+    /// Child tickets.
+    pub children: Vec<Ticket>,
+}
+
+impl TicketDependencies {
+    /// Returns `true` if this ticket has at least one unresolved (non-closed) blocker.
+    pub fn is_actively_blocked(&self) -> bool {
+        self.blocked_by.iter().any(|b| b.state != "closed")
+    }
+
+    /// Returns an iterator over unresolved (non-closed) blockers.
+    pub fn active_blockers(&self) -> impl Iterator<Item = &Ticket> {
+        self.blocked_by.iter().filter(|b| b.state != "closed")
+    }
+}
+
+/// A ticket that is ready to be worked on: not closed, has no unresolved blockers,
+/// and is not already linked to an active workflow run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadyTicket {
+    pub id: String,
+    pub source_id: String,
+    pub title: String,
+    pub url: String,
+    /// The dep_type of an incoming parent_of edge, if any ('parent_of'), or `None` for
+    /// unconstrained tickets with no dependency edges pointing at them.
+    pub dep_type: Option<String>,
+}
+
 /// Filter options for [`TicketSyncer::list_filtered`].
 pub struct TicketFilter {
     /// Only include tickets that have ALL of these labels.
@@ -99,6 +152,14 @@ impl Ticket {
     }
 }
 
+fn ticket_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
+    let id = id.into();
+    move |e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound { id },
+        _ => ConductorError::Database(e),
+    }
+}
+
 pub struct TicketSyncer<'a> {
     conn: &'a Connection,
 }
@@ -110,6 +171,39 @@ const CLOSED_TICKET_ARTIFACTS_SQL: &str = "SELECT r.local_path, w.path, w.branch
        AND w.status != 'merged'
        AND w.ticket_id IS NOT NULL
        AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')";
+
+/// Look up the internal ULID for a dependency ticket by its source_id.
+/// Checks `id_map` first (O(1) in-batch lookup) then falls back to a DB query.
+/// Returns `None` if the ticket does not exist; the caller is responsible for
+/// warning and skipping the dependency in that case.
+fn resolve_dep_ticket_id(
+    id_map: &HashMap<&str, &str>,
+    tx: &rusqlite::Transaction<'_>,
+    repo_id: &str,
+    source_type: &str,
+    src: &str,
+    owner_source_id: &str,
+    context: &str,
+) -> Result<Option<String>> {
+    if let Some(&id) = id_map.get(src) {
+        return Ok(Some(id.to_string()));
+    }
+    match tx.query_row(
+        "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+        params![repo_id, source_type, src],
+        |row| row.get(0),
+    ) {
+        Ok(id) => Ok(Some(id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            warn!("ticket dependency source_id {} not found, skipping", src);
+            Ok(None)
+        }
+        Err(e) => Err(ConductorError::TicketSync(format!(
+            "ticket {}: {} lookup for source_id={}: {}",
+            owner_source_id, context, src, e
+        ))),
+    }
+}
 
 impl<'a> TicketSyncer<'a> {
     pub fn new(conn: &'a Connection) -> Self {
@@ -125,10 +219,53 @@ impl<'a> TicketSyncer<'a> {
         let tx = self.conn.unchecked_transaction()?;
         let now = Utc::now().to_rfc3339();
 
+        // Pre-fetch existing raw_json for all tickets that don't supply one,
+        // replacing the per-ticket SELECT with a single bulk query.
+        let none_source_ids: Vec<String> = tickets
+            .iter()
+            .filter(|t| t.raw_json.is_none())
+            .map(|t| t.source_id.clone())
+            .collect();
+        let mut existing_raw_json: HashMap<(String, String), String> = HashMap::new();
+        if !none_source_ids.is_empty() {
+            with_in_clause(
+                "SELECT source_type, source_id, raw_json FROM tickets WHERE repo_id = ?1 AND source_id IN",
+                &[&repo_id as &dyn rusqlite::types::ToSql],
+                &none_source_ids,
+                |sql, params| -> Result<()> {
+                    let mut stmt = tx.prepare(sql)?;
+                    let rows = stmt.query_map(params, |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    })?;
+                    for row in rows {
+                        let (source_type, source_id, raw_json) = row?;
+                        existing_raw_json.insert((source_type, source_id), raw_json);
+                    }
+                    Ok(())
+                },
+            )?;
+        }
+
+        // First pass: upsert tickets and their labels, collecting internal IDs.
+        let mut ticket_ids: Vec<(&TicketInput, String)> = Vec::with_capacity(tickets.len());
         for ticket in tickets {
             let id = crate::new_id();
             let labels_json = ticket.labels_json();
-            tx.execute(
+            // When the caller supplies no raw_json (None), preserve whatever is
+            // already stored rather than overwriting with an empty placeholder.
+            // This is resolved in Rust so the SQL layer carries no sentinel knowledge.
+            let raw_json: String = match &ticket.raw_json {
+                Some(v) => v.clone(),
+                None => existing_raw_json
+                    .get(&(ticket.source_type.clone(), ticket.source_id.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| "{}".to_string()),
+            };
+            let ticket_id: String = tx.query_row(
                 "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(repo_id, source_type, source_id) DO UPDATE SET
@@ -140,7 +277,8 @@ impl<'a> TicketSyncer<'a> {
                      priority = excluded.priority,
                      url = excluded.url,
                      synced_at = excluded.synced_at,
-                     raw_json = excluded.raw_json",
+                     raw_json = excluded.raw_json
+                 RETURNING id",
                 params![
                     id,
                     repo_id,
@@ -154,13 +292,8 @@ impl<'a> TicketSyncer<'a> {
                     ticket.priority,
                     ticket.url,
                     now,
-                    ticket.raw_json,
+                    raw_json,
                 ],
-            )?;
-
-            let ticket_id: String = tx.query_row(
-                "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                params![repo_id, ticket.source_type, ticket.source_id],
                 |row| row.get(0),
             )?;
             tx.execute(
@@ -172,6 +305,98 @@ impl<'a> TicketSyncer<'a> {
                     "INSERT OR REPLACE INTO ticket_labels (ticket_id, label, color) VALUES (?1, ?2, ?3)",
                     params![ticket_id, ld.name, ld.color],
                 )?;
+            }
+            ticket_ids.push((ticket, ticket_id));
+        }
+
+        // Build a source_id → internal ULID map from the first pass for O(1) lookups.
+        let id_map: HashMap<&str, &str> = ticket_ids
+            .iter()
+            .map(|(t, id)| (t.source_id.as_str(), id.as_str()))
+            .collect();
+
+        // Second pass: write ticket_dependencies. All tickets are already upserted above,
+        // so forward references within the same batch resolve correctly.
+        for (ticket, ticket_id) in &ticket_ids {
+            // Clear stale dependency rows owned by this ticket before re-inserting,
+            // but only per-field when the TicketInput actually declares that field.
+            // An empty value (e.g. from a GitHub sync that doesn't parse body text)
+            // is treated as "no opinion" and must not overwrite deps set by another
+            // source. Each dep type is guarded independently so that setting only
+            // `parent` does not accidentally wipe existing `blocked_by` or `children`.
+            if !ticket.blocked_by.is_empty() {
+                tx.execute(
+                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'blocks'",
+                    params![ticket_id],
+                )?;
+            }
+            if !ticket.children.is_empty() {
+                tx.execute(
+                    "DELETE FROM ticket_dependencies WHERE from_ticket_id = ?1 AND dep_type = 'parent_of'",
+                    params![ticket_id],
+                )?;
+            }
+
+            // blocked_by: another ticket blocks this one → (blocker_id, ticket_id, 'blocks')
+            for src in &ticket.blocked_by {
+                let blocker_id = resolve_dep_ticket_id(
+                    &id_map,
+                    &tx,
+                    repo_id,
+                    &ticket.source_type,
+                    src,
+                    &ticket.source_id,
+                    "blocked_by",
+                )?;
+                if let Some(id) = blocker_id {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
+                        params![id, ticket_id],
+                    )?;
+                }
+            }
+
+            // children: this ticket is parent of another → (ticket_id, child_id, 'parent_of')
+            for src in &ticket.children {
+                let child_id = resolve_dep_ticket_id(
+                    &id_map,
+                    &tx,
+                    repo_id,
+                    &ticket.source_type,
+                    src,
+                    &ticket.source_id,
+                    "children",
+                )?;
+                if let Some(id) = child_id {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+                        params![ticket_id, id],
+                    )?;
+                }
+            }
+
+            // parent: another ticket is parent of this one → (parent_id, ticket_id, 'parent_of')
+            if let Some(src) = &ticket.parent {
+                // Replace any existing parent for this ticket
+                tx.execute(
+                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'parent_of'",
+                    params![ticket_id],
+                )?;
+                let parent_id = resolve_dep_ticket_id(
+                    &id_map,
+                    &tx,
+                    repo_id,
+                    &ticket.source_type,
+                    src,
+                    &ticket.source_id,
+                    "parent",
+                )?;
+                if let Some(id) = parent_id {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+                        params![id, ticket_id],
+                    )?;
+                }
             }
         }
 
@@ -195,27 +420,19 @@ impl<'a> TicketSyncer<'a> {
         }
 
         let now = Utc::now().to_rfc3339();
-        let placeholders = crate::db::sql_placeholders_from(synced_source_ids.len(), 4);
-        let sql = format!(
-            "UPDATE tickets SET state = 'closed', synced_at = ?1
-             WHERE repo_id = ?2 AND source_type = ?3
-             AND state != 'closed'
-             AND source_id NOT IN ({placeholders})"
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        param_values.push(Box::new(now));
-        param_values.push(Box::new(repo_id.to_string()));
-        param_values.push(Box::new(source_type.to_string()));
-        for id in synced_source_ids {
-            param_values.push(Box::new(id.to_string()));
-        }
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-        let count = stmt.execute(params.as_slice())?;
-
-        Ok(count)
+        let ids: Vec<String> = synced_source_ids.iter().map(|s| s.to_string()).collect();
+        crate::db::with_in_clause(
+            "UPDATE tickets SET state = 'closed', synced_at = ?1 \
+             WHERE repo_id = ?2 AND source_type = ?3 AND state != 'closed' \
+             AND source_id NOT IN",
+            &[
+                &now as &dyn rusqlite::types::ToSql,
+                &repo_id as &dyn rusqlite::types::ToSql,
+                &source_type as &dyn rusqlite::types::ToSql,
+            ],
+            &ids,
+            |sql, params| Ok(self.conn.prepare(sql)?.execute(params)?),
+        )
     }
 
     /// Return the most recent `synced_at` timestamp for tickets in a repo.
@@ -230,15 +447,19 @@ impl<'a> TicketSyncer<'a> {
     }
 
     /// List tickets, optionally filtered by repo.
+    ///
+    /// Results are sorted by issue number descending (highest first).
+    /// Non-numeric `source_id` values (e.g. Jira keys like `PROJ-123`) cast to 0
+    /// and sort after all numeric IDs, ordered among themselves by string comparison.
     pub fn list(&self, repo_id: Option<&str>) -> Result<Vec<Ticket>> {
         let query = match repo_id {
             Some(_) => {
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
-                 FROM tickets WHERE repo_id = ?1 ORDER BY synced_at DESC"
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
+                 FROM tickets WHERE repo_id = ?1 ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
             None => {
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
-                 FROM tickets ORDER BY synced_at DESC"
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
+                 FROM tickets ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
         };
 
@@ -248,6 +469,31 @@ impl<'a> TicketSyncer<'a> {
             query_collect(self.conn, query, [], map_ticket_row)?
         };
         Ok(tickets)
+    }
+
+    /// Shared SELECT clause for ticket queries.
+    fn ticket_select() -> &'static str {
+        "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
+         t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
+         FROM tickets t"
+    }
+
+    /// Shared label EXISTS subquery fragment (requires one `?` param bound to the label value).
+    fn label_exists_subquery() -> &'static str {
+        "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
+    }
+
+    /// Execute a ticket SELECT query with the given SQL and boxed parameters.
+    fn execute_ticket_query(
+        &self,
+        sql: &str,
+        param_values: Vec<Box<dyn rusqlite::types::ToSql>>,
+    ) -> Result<Vec<Ticket>> {
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// List tickets with optional filtering. Open-only by default.
@@ -262,9 +508,7 @@ impl<'a> TicketSyncer<'a> {
         repo_id: Option<&str>,
         filter: &TicketFilter,
     ) -> Result<Vec<Ticket>> {
-        let select = "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
-                      t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json \
-                      FROM tickets t";
+        let select = Self::ticket_select();
 
         let mut conditions: Vec<String> = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -279,10 +523,7 @@ impl<'a> TicketSyncer<'a> {
         }
 
         for label in &filter.labels {
-            conditions.push(
-                "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
-                    .to_string(),
-            );
+            conditions.push(Self::label_exists_subquery().to_string());
             param_values.push(Box::new(label.clone()));
         }
 
@@ -294,19 +535,15 @@ impl<'a> TicketSyncer<'a> {
         }
 
         let sql = if conditions.is_empty() {
-            format!("{select} ORDER BY t.synced_at DESC")
+            format!("{select} ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC")
         } else {
             format!(
-                "{select} WHERE {} ORDER BY t.synced_at DESC",
+                "{select} WHERE {} ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC",
                 conditions.join(" AND ")
             )
         };
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        self.execute_ticket_query(&sql, param_values)
     }
 
     /// Link a ticket to a worktree.
@@ -332,34 +569,87 @@ impl<'a> TicketSyncer<'a> {
     pub fn get_by_source_id(&self, repo_id: &str, source_id: &str) -> Result<Ticket> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
                  FROM tickets WHERE repo_id = ?1 AND source_id = ?2",
                 params![repo_id, source_id],
                 map_ticket_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound {
-                    id: source_id.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(ticket_not_found(source_id))
+    }
+
+    /// Fetch a single ticket by source_id across all repos.
+    /// Returns the first match. Use when the caller does not know the repo_id.
+    pub fn get_by_source_id_any_repo(&self, source_id: &str) -> Result<Ticket> {
+        self.conn
+            .query_row(
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
+                 FROM tickets WHERE source_id = ?1 LIMIT 1",
+                params![source_id],
+                map_ticket_row,
+            )
+            .map_err(ticket_not_found(source_id))
     }
 
     /// Fetch a single ticket by its internal (ULID) ID.
     pub fn get_by_id(&self, ticket_id: &str) -> Result<Ticket> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
                  FROM tickets WHERE id = ?1",
                 params![ticket_id],
                 map_ticket_row,
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound {
-                    id: ticket_id.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(ticket_not_found(ticket_id))
+    }
+
+    /// Update the `state`, `workflow`, and/or `agent_map` columns on a ticket.
+    ///
+    /// For `workflow` and `agent_map`:
+    /// - `Some("")` clears the column to NULL.
+    /// - `Some(value)` sets the column to `value`.
+    /// - `None` leaves the column unchanged.
+    ///
+    /// For `state`:
+    /// - `Some(value)` sets the state (must be one of: open, in_progress, closed).
+    /// - `None` leaves the state unchanged.
+    /// - Empty string is NOT valid for state (state is NOT NULL).
+    pub fn update_ticket(
+        &self,
+        ticket_id: &str,
+        state: Option<&str>,
+        workflow: Option<&str>,
+        agent_map: Option<&str>,
+    ) -> Result<()> {
+        // Verify ticket exists
+        let _ = self.get_by_id(ticket_id)?;
+
+        if let Some(s) = state {
+            if !VALID_TICKET_STATES.contains(&s) {
+                return Err(crate::error::ConductorError::InvalidInput(format!(
+                    "Invalid ticket state '{}'. Must be one of: open, in_progress, closed.",
+                    s
+                )));
+            }
+            self.conn.execute(
+                "UPDATE tickets SET state = ?1 WHERE id = ?2",
+                rusqlite::params![s, ticket_id],
+            )?;
+        }
+        if let Some(w) = workflow {
+            let val: Option<&str> = if w.is_empty() { None } else { Some(w) };
+            self.conn.execute(
+                "UPDATE tickets SET workflow = ?1 WHERE id = ?2",
+                rusqlite::params![val, ticket_id],
+            )?;
+        }
+        if let Some(a) = agent_map {
+            let val: Option<&str> = if a.is_empty() { None } else { Some(a) };
+            self.conn.execute(
+                "UPDATE tickets SET agent_map = ?1 WHERE id = ?2",
+                rusqlite::params![val, ticket_id],
+            )?;
+        }
+        Ok(())
     }
 
     /// Delete a ticket by its `(repo_id, source_type, source_id)` key.
@@ -375,12 +665,7 @@ impl<'a> TicketSyncer<'a> {
                 params![repo_id, source_type, source_id],
                 |row| row.get(0),
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound {
-                    id: format!("{source_type}#{source_id}"),
-                },
-                _ => ConductorError::Database(e),
-            })?;
+            .map_err(ticket_not_found(format!("{source_type}#{source_id}")))?;
 
         // NULL out workflow_runs.ticket_id (FK lacks ON DELETE SET NULL).
         tx.execute(
@@ -464,6 +749,117 @@ impl<'a> TicketSyncer<'a> {
         Ok(map)
     }
 
+    /// Returns dependency relationships for a single ticket.
+    pub fn get_dependencies(&self, ticket_id: &str) -> Result<TicketDependencies> {
+        // Tickets that block this one (from_ticket_id = blocker, to_ticket_id = this)
+        let blocked_by = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {TICKET_COLS} FROM tickets t
+                 JOIN ticket_dependencies d ON d.from_ticket_id = t.id
+                 WHERE d.to_ticket_id = ?1 AND d.dep_type = 'blocks'"
+            ),
+            params![ticket_id],
+            map_ticket_row,
+        )?;
+
+        // Tickets this one blocks (from_ticket_id = this, to_ticket_id = blocked)
+        let blocks = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {TICKET_COLS} FROM tickets t
+                 JOIN ticket_dependencies d ON d.to_ticket_id = t.id
+                 WHERE d.from_ticket_id = ?1 AND d.dep_type = 'blocks'"
+            ),
+            params![ticket_id],
+            map_ticket_row,
+        )?;
+
+        // Parent ticket (from_ticket_id = parent, to_ticket_id = this)
+        let parent = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {TICKET_COLS} FROM tickets t
+                 JOIN ticket_dependencies d ON d.from_ticket_id = t.id
+                 WHERE d.to_ticket_id = ?1 AND d.dep_type = 'parent_of'"
+            ),
+            params![ticket_id],
+            map_ticket_row,
+        )?
+        .into_iter()
+        .next();
+
+        // Child tickets (from_ticket_id = this, to_ticket_id = child)
+        let children = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {TICKET_COLS} FROM tickets t
+                 JOIN ticket_dependencies d ON d.to_ticket_id = t.id
+                 WHERE d.from_ticket_id = ?1 AND d.dep_type = 'parent_of'"
+            ),
+            params![ticket_id],
+            map_ticket_row,
+        )?;
+
+        Ok(TicketDependencies {
+            blocked_by,
+            blocks,
+            parent,
+            children,
+        })
+    }
+
+    /// Batch-loads dependencies for tickets belonging to a single repo.
+    /// Returns `ticket_id → TicketDependencies`. Used by per-repo API endpoints
+    /// to avoid loading the entire dependency graph for every API call.
+    pub fn get_all_dependencies_for_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<HashMap<String, TicketDependencies>> {
+        let blocks_rows = query_dep_pairs_for_repo(self.conn, "blocks", repo_id)?;
+        let parent_rows = query_dep_pairs_for_repo(self.conn, "parent_of", repo_id)?;
+
+        let mut map: HashMap<String, TicketDependencies> = HashMap::new();
+
+        for (from_id, to_id, from_ticket, to_ticket) in blocks_rows {
+            map.entry(to_id).or_default().blocked_by.push(from_ticket);
+            map.entry(from_id).or_default().blocks.push(to_ticket);
+        }
+
+        for (from_id, to_id, from_ticket, to_ticket) in parent_rows {
+            map.entry(to_id).or_default().parent = Some(from_ticket);
+            map.entry(from_id).or_default().children.push(to_ticket);
+        }
+
+        Ok(map)
+    }
+
+    /// Batch-loads dependencies for all tickets in two queries (one per dep_type).
+    /// Returns `ticket_id → TicketDependencies`. Used by the TUI background
+    /// poller to avoid N+1 queries.
+    pub fn get_all_dependencies(&self) -> Result<HashMap<String, TicketDependencies>> {
+        let blocks_rows = query_dep_pairs(self.conn, "blocks")?;
+        let parent_rows = query_dep_pairs(self.conn, "parent_of")?;
+
+        let mut map: HashMap<String, TicketDependencies> = HashMap::new();
+
+        // blocks_rows: (from_id=blocker, to_id=blocked, from_ticket=blocker, to_ticket=blocked)
+        // → to_id's blocked_by list gets the blocker; from_id's blocks list gets the blocked
+        for (from_id, to_id, from_ticket, to_ticket) in blocks_rows {
+            map.entry(to_id).or_default().blocked_by.push(from_ticket);
+            map.entry(from_id).or_default().blocks.push(to_ticket);
+        }
+
+        // parent_rows: (from_id=parent, to_id=child, from_ticket=parent, to_ticket=child)
+        // → to_id's parent gets the parent ticket; from_id's children list gets the child
+        for (from_id, to_id, from_ticket, to_ticket) in parent_rows {
+            map.entry(to_id).or_default().parent = Some(from_ticket);
+            map.entry(from_id).or_default().children.push(to_ticket);
+        }
+
+        Ok(map)
+    }
+
     /// After syncing tickets, mark any linked worktrees whose ticket is now
     /// closed by setting their status to `'merged'`. Also removes the git
     /// worktree directory and branch for each affected worktree (best-effort).
@@ -507,6 +903,84 @@ impl<'a> TicketSyncer<'a> {
         }
 
         Ok(count)
+    }
+
+    /// Return tickets that are ready to be worked on for `repo_id`.
+    ///
+    /// A ticket is ready when:
+    /// - Its state is not `'closed'`
+    /// - It has no unresolved `'blocks'` blocker (blocker is open OR its workflow run is not
+    ///   completed)
+    /// - It is not already linked to an active workflow run
+    ///
+    /// Optional filters:
+    /// - `root_ticket_id`: restrict to direct children of this ticket (parent_of edges)
+    /// - `label`: restrict to tickets with this label in `ticket_labels`
+    /// - `limit`: cap result count (default caller-supplied; must be > 0)
+    pub fn get_ready_tickets(
+        &self,
+        repo_id: &str,
+        root_ticket_id: Option<&str>,
+        label: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ReadyTicket>> {
+        let mut sql = String::from(
+            "SELECT t.id, t.source_id, t.title, t.url, \
+             (SELECT dep.dep_type FROM ticket_dependencies dep \
+              WHERE dep.to_ticket_id = t.id AND dep.dep_type = 'parent_of' LIMIT 1) AS dep_type \
+             FROM tickets t \
+             WHERE t.state != 'closed' \
+               AND t.repo_id = ? \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM ticket_dependencies dep \
+                   JOIN tickets blocker ON blocker.id = dep.from_ticket_id \
+                   LEFT JOIN workflow_runs wr ON wr.ticket_id = blocker.id \
+                   WHERE dep.to_ticket_id = t.id \
+                     AND dep.dep_type = 'blocks' \
+                     AND (blocker.state != 'closed' OR COALESCE(wr.status, 'completed') != 'completed') \
+               ) \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM workflow_runs wr \
+                   WHERE wr.ticket_id = t.id \
+                     AND wr.status IN ('running', 'waiting_for_feedback', 'paused') \
+               )",
+        );
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(repo_id.to_string())];
+
+        if let Some(root_id) = root_ticket_id {
+            sql.push_str(
+                " AND EXISTS ( \
+                   SELECT 1 FROM ticket_dependencies pof \
+                   WHERE pof.from_ticket_id = ? AND pof.to_ticket_id = t.id \
+                     AND pof.dep_type = 'parent_of' \
+                 )",
+            );
+            param_values.push(Box::new(root_id.to_string()));
+        }
+
+        if let Some(lbl) = label {
+            sql.push_str(&format!(" AND {}", Self::label_exists_subquery()));
+            param_values.push(Box::new(lbl.to_string()));
+        }
+
+        sql.push_str(" ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC LIMIT ?");
+        param_values.push(Box::new(limit as i64));
+
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(ReadyTicket {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                title: row.get(2)?,
+                url: row.get(3)?,
+                dep_type: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Resolve a user-supplied ticket identifier to `(source_type, source_id)`.
@@ -592,20 +1066,140 @@ pub fn build_agent_prompt(ticket: &Ticket) -> String {
 }
 
 fn map_ticket_row(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
+    map_ticket_row_at(row, 0)
+}
+
+/// Runs the shared double-join query for a single `dep_type` and returns
+/// `(from_ticket_id, to_ticket_id, from_ticket, to_ticket)` for every row.
+/// Used by `get_all_dependencies` to eliminate query/mapper duplication.
+fn query_dep_pairs(
+    conn: &Connection,
+    dep_type: &str,
+) -> Result<Vec<(String, String, Ticket, Ticket)>> {
+    const FROM_OFFSET: usize = 2;
+    const TO_OFFSET: usize = 17;
+
+    // Use LEFT JOIN so orphaned edges (referencing deleted tickets) still
+    // produce rows — we detect them via a NULL tf.id / tt.id and return
+    // TicketNotFound instead of silently dropping the edge.
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.from_ticket_id, d.to_ticket_id,
+             tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+             tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+             tf.workflow, tf.agent_map,
+             tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+             tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+             tt.workflow, tt.agent_map
+             FROM ticket_dependencies d
+             LEFT JOIN tickets tf ON tf.id = d.from_ticket_id
+             LEFT JOIN tickets tt ON tt.id = d.to_ticket_id
+             WHERE d.dep_type = ?1",
+        )
+        .map_err(ConductorError::Database)?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![dep_type], |row| {
+            let from_id: String = row.get(0)?;
+            let to_id: String = row.get(1)?;
+            let from_exists: Option<String> = row.get(FROM_OFFSET)?;
+            let to_exists: Option<String> = row.get(TO_OFFSET)?;
+            Ok((from_id, to_id, from_exists, to_exists))
+        })
+        .map_err(ConductorError::Database)?;
+
+    // First pass: check for orphaned references.
+    let mut checked = Vec::new();
+    for row in rows {
+        let (from_id, to_id, from_exists, to_exists) = row.map_err(ConductorError::Database)?;
+        if from_exists.is_none() {
+            return Err(ConductorError::TicketNotFound { id: from_id });
+        }
+        if to_exists.is_none() {
+            return Err(ConductorError::TicketNotFound { id: to_id });
+        }
+        checked.push((from_id, to_id));
+    }
+
+    // All tickets exist — re-query with INNER JOIN to map full Ticket objects.
+    query_collect(
+        conn,
+        "SELECT d.from_ticket_id, d.to_ticket_id,
+         tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+         tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+         tf.workflow, tf.agent_map,
+         tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+         tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+         tt.workflow, tt.agent_map
+         FROM ticket_dependencies d
+         JOIN tickets tf ON tf.id = d.from_ticket_id
+         JOIN tickets tt ON tt.id = d.to_ticket_id
+         WHERE d.dep_type = ?1",
+        rusqlite::params![dep_type],
+        |row| {
+            let from_id: String = row.get(0)?;
+            let to_id: String = row.get(1)?;
+            let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
+            let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+            Ok((from_id, to_id, from_ticket, to_ticket))
+        },
+    )
+}
+
+/// Like `query_dep_pairs` but scoped to a single repo (edges where at least one
+/// endpoint belongs to `repo_id`). Uses INNER JOIN so orphaned edges are silently
+/// excluded rather than returning an error — acceptable for display-only paths.
+fn query_dep_pairs_for_repo(
+    conn: &Connection,
+    dep_type: &str,
+    repo_id: &str,
+) -> Result<Vec<(String, String, Ticket, Ticket)>> {
+    const FROM_OFFSET: usize = 2;
+    const TO_OFFSET: usize = 17;
+
+    query_collect(
+        conn,
+        "SELECT d.from_ticket_id, d.to_ticket_id,
+         tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+         tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+         tf.workflow, tf.agent_map,
+         tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+         tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+         tt.workflow, tt.agent_map
+         FROM ticket_dependencies d
+         JOIN tickets tf ON tf.id = d.from_ticket_id
+         JOIN tickets tt ON tt.id = d.to_ticket_id
+         WHERE d.dep_type = ?1 AND (tf.repo_id = ?2 OR tt.repo_id = ?2)",
+        rusqlite::params![dep_type, repo_id],
+        |row| {
+            let from_id: String = row.get(0)?;
+            let to_id: String = row.get(1)?;
+            let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
+            let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+            Ok((from_id, to_id, from_ticket, to_ticket))
+        },
+    )
+}
+
+/// Like `map_ticket_row` but reads ticket fields starting at the given column `offset`.
+/// Used when ticket columns are preceded by other fields (e.g. join key columns).
+fn map_ticket_row_at(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<Ticket> {
     Ok(Ticket {
-        id: row.get(0)?,
-        repo_id: row.get(1)?,
-        source_type: row.get(2)?,
-        source_id: row.get(3)?,
-        title: row.get(4)?,
-        body: row.get(5)?,
-        state: row.get(6)?,
-        labels: row.get(7)?,
-        assignee: row.get(8)?,
-        priority: row.get(9)?,
-        url: row.get(10)?,
-        synced_at: row.get(11)?,
-        raw_json: row.get(12)?,
+        id: row.get(offset)?,
+        repo_id: row.get(offset + 1)?,
+        source_type: row.get(offset + 2)?,
+        source_id: row.get(offset + 3)?,
+        title: row.get(offset + 4)?,
+        body: row.get(offset + 5)?,
+        state: row.get(offset + 6)?,
+        labels: row.get(offset + 7)?,
+        assignee: row.get(offset + 8)?,
+        priority: row.get(offset + 9)?,
+        url: row.get(offset + 10)?,
+        synced_at: row.get(offset + 11)?,
+        raw_json: row.get(offset + 12)?,
+        workflow: row.get(offset + 13)?,
+        agent_map: row.get(offset + 14)?,
     })
 }
 
@@ -629,8 +1223,11 @@ mod tests {
             assignee: None,
             priority: None,
             url: String::new(),
-            raw_json: "{}".to_string(),
+            raw_json: None,
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
         }
     }
 
@@ -641,6 +1238,80 @@ mod tests {
             |row| row.get(0),
         )
         .unwrap()
+    }
+
+    fn make_ticket_stub(state: &str) -> Ticket {
+        Ticket {
+            id: "stub".to_string(),
+            repo_id: "repo".to_string(),
+            source_type: "github".to_string(),
+            source_id: "1".to_string(),
+            title: "stub".to_string(),
+            body: String::new(),
+            state: state.to_string(),
+            labels: String::new(),
+            assignee: None,
+            priority: None,
+            url: String::new(),
+            synced_at: String::new(),
+            raw_json: "{}".to_string(),
+            workflow: None,
+            agent_map: None,
+        }
+    }
+
+    #[test]
+    fn test_is_actively_blocked_empty() {
+        let deps = TicketDependencies::default();
+        assert!(!deps.is_actively_blocked());
+    }
+
+    #[test]
+    fn test_is_actively_blocked_all_closed() {
+        let deps = TicketDependencies {
+            blocked_by: vec![make_ticket_stub("closed"), make_ticket_stub("closed")],
+            ..Default::default()
+        };
+        assert!(!deps.is_actively_blocked());
+    }
+
+    #[test]
+    fn test_is_actively_blocked_one_open() {
+        let deps = TicketDependencies {
+            blocked_by: vec![make_ticket_stub("closed"), make_ticket_stub("open")],
+            ..Default::default()
+        };
+        assert!(deps.is_actively_blocked());
+    }
+
+    #[test]
+    fn test_active_blockers_empty() {
+        let deps = TicketDependencies::default();
+        assert_eq!(deps.active_blockers().count(), 0);
+    }
+
+    #[test]
+    fn test_active_blockers_filters_closed() {
+        let deps = TicketDependencies {
+            blocked_by: vec![
+                make_ticket_stub("closed"),
+                make_ticket_stub("open"),
+                make_ticket_stub("open"),
+            ],
+            ..Default::default()
+        };
+        let active: Vec<_> = deps.active_blockers().collect();
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|b| b.state == "open"));
+    }
+
+    #[test]
+    fn test_active_blockers_all_closed() {
+        let deps = TicketDependencies {
+            blocked_by: vec![make_ticket_stub("closed")],
+            ..Default::default()
+        };
+        assert_eq!(deps.active_blockers().count(), 0);
     }
 
     #[test]
@@ -1407,6 +2078,8 @@ mod tests {
             url: "https://github.com/org/repo/issues/42".to_string(),
             synced_at: "2026-01-01T00:00:00Z".to_string(),
             raw_json: "{}".to_string(),
+            workflow: None,
+            agent_map: None,
         };
 
         let prompt = build_agent_prompt(&ticket);
@@ -1433,6 +2106,8 @@ mod tests {
             url: String::new(),
             synced_at: "2026-01-01T00:00:00Z".to_string(),
             raw_json: "{}".to_string(),
+            workflow: None,
+            agent_map: None,
         };
 
         let prompt = build_agent_prompt(&ticket);
@@ -1568,8 +2243,11 @@ mod tests {
             assignee: None,
             priority: None,
             url: String::new(),
-            raw_json: "{}".to_string(),
+            raw_json: None,
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
         }
     }
 
@@ -1851,5 +2529,1056 @@ mod tests {
             result.unwrap_err(),
             ConductorError::TicketNotFound { .. }
         ));
+    }
+
+    #[test]
+    fn test_list_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert tickets with numeric source_ids in non-sequential order
+        let tickets = vec![
+            make_ticket("5", "Issue 5"),
+            make_ticket("123", "Issue 123"),
+            make_ticket("1", "Issue 1"),
+            make_ticket("42", "Issue 42"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let result = syncer.list(Some("r1")).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["123", "42", "5", "1"]);
+    }
+
+    #[test]
+    fn test_list_filtered_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("10", "Issue 10"),
+            make_ticket("200", "Issue 200"),
+            make_ticket("3", "Issue 3"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: None,
+            include_closed: false,
+        };
+        let result = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["200", "10", "3"]);
+    }
+
+    #[test]
+    fn test_list_all_repos_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        // Register a second repo so we can test cross-repo listing
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'test-repo-2', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert tickets across two different repos with interleaved source_ids
+        let repo1_tickets = vec![
+            make_ticket("10", "Repo1 Issue 10"),
+            make_ticket("50", "Repo1 Issue 50"),
+        ];
+        let repo2_tickets = vec![
+            make_ticket("25", "Repo2 Issue 25"),
+            make_ticket("100", "Repo2 Issue 100"),
+        ];
+        syncer.upsert_tickets("r1", &repo1_tickets).unwrap();
+        syncer.upsert_tickets("r2", &repo2_tickets).unwrap();
+
+        // list(None) should return all tickets sorted by issue number descending
+        let result = syncer.list(None).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["100", "50", "25", "10"]);
+    }
+
+    #[test]
+    fn test_list_sorts_non_numeric_source_ids_to_end() {
+        // Non-numeric source_ids (e.g. Jira keys) CAST to 0, so they sort
+        // after all numeric IDs. Among themselves, they fall back to the
+        // secondary `source_id DESC` (string) sort.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("PROJ-10", "Jira ticket 10"),
+            make_ticket("5", "GitHub issue 5"),
+            make_ticket("PROJ-3", "Jira ticket 3"),
+            make_ticket("100", "GitHub issue 100"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let result = syncer.list(Some("r1")).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        // Numeric IDs first (descending), then non-numeric (string descending)
+        assert_eq!(ids, vec!["100", "5", "PROJ-3", "PROJ-10"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // ticket_dependencies tests
+    // -----------------------------------------------------------------------
+
+    fn dep_row(conn: &Connection) -> Option<(String, String, String)> {
+        conn.query_row(
+            "SELECT from_ticket_id, to_ticket_id, dep_type FROM ticket_dependencies LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .ok()
+    }
+
+    fn dep_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM ticket_dependencies", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn test_upsert_blocked_by_writes_dependency() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "2" blocks ticket "1"
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        let id1: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let id2: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let row = dep_row(&conn).expect("expected one dependency row");
+        assert_eq!(row.0, id2, "from_ticket_id should be the blocker (2)");
+        assert_eq!(row.1, id1, "to_ticket_id should be the blocked ticket (1)");
+        assert_eq!(row.2, "blocks");
+    }
+
+    #[test]
+    fn test_upsert_children_writes_dependency() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "1" is parent of ticket "2"
+        let t2 = make_ticket("2", "Child");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        let id1: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let id2: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let row = dep_row(&conn).expect("expected one dependency row");
+        assert_eq!(row.0, id1, "from_ticket_id should be the parent (1)");
+        assert_eq!(row.1, id2, "to_ticket_id should be the child (2)");
+        assert_eq!(row.2, "parent_of");
+    }
+
+    #[test]
+    fn test_upsert_empty_blocked_by_preserves_existing_deps() {
+        // Empty blocked_by is treated as "no opinion" — it must NOT clear deps
+        // written by a previous upsert or by another source (e.g. MCP).
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is blocked by ticket "2"
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1);
+
+        // Re-upsert ticket "1" with empty blocked_by (e.g. from a GitHub sync
+        // that doesn't parse body text) — existing dep row must be preserved.
+        let t1_no_opinion = make_ticket("1", "Blocked");
+        syncer.upsert_tickets("r1", &[t1_no_opinion]).unwrap();
+        assert_eq!(
+            dep_count(&conn),
+            1,
+            "empty blocked_by should not remove existing dependency rows"
+        );
+    }
+
+    #[test]
+    fn test_upsert_unknown_source_id_skipped() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let mut t1 = make_ticket("1", "Ticket");
+        t1.blocked_by = vec!["nonexistent".to_string()];
+
+        // Should not panic; unresolvable source IDs are silently skipped
+        syncer.upsert_tickets("r1", &[t1]).unwrap();
+        assert_eq!(
+            dep_count(&conn),
+            0,
+            "unresolvable source_id should produce no row"
+        );
+    }
+
+    #[test]
+    fn test_upsert_dependency_idempotent() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Upsert the same batch twice — each time re-construct the inputs
+        for _ in 0..2 {
+            let t2 = make_ticket("2", "Blocker");
+            let mut t1 = make_ticket("1", "Blocked");
+            t1.blocked_by = vec!["2".to_string()];
+            syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        }
+
+        assert_eq!(
+            dep_count(&conn),
+            1,
+            "second upsert should not duplicate the dependency row"
+        );
+    }
+
+    #[test]
+    fn test_upsert_empty_children_preserves_existing_deps() {
+        // Empty children is treated as "no opinion" — it must NOT clear deps
+        // written by a previous upsert or by another source (e.g. MCP).
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is parent of ticket "2"
+        let t2 = make_ticket("2", "Child");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1);
+
+        // Re-upsert ticket "1" with empty children (e.g. from a GitHub sync
+        // that doesn't parse body text) — existing dep row must be preserved.
+        let t1_no_opinion = make_ticket("1", "Parent");
+        syncer.upsert_tickets("r1", &[t1_no_opinion]).unwrap();
+        assert_eq!(
+            dep_count(&conn),
+            1,
+            "empty children should not remove existing dependency rows"
+        );
+    }
+
+    #[test]
+    fn test_upsert_only_parent_preserves_blocked_by_and_children() {
+        // Setting only `parent` must not clear existing `blocked_by` or `children`
+        // relationships — the guard must be per-field, not shared.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is blocked by "2" and is parent of "3"
+        let t2 = make_ticket("2", "Blocker");
+        let t3 = make_ticket("3", "Child");
+        let mut t1 = make_ticket("1", "Middle");
+        t1.blocked_by = vec!["2".to_string()];
+        t1.children = vec!["3".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t3, t1]).unwrap();
+        // 1 blocks row + 1 parent_of row
+        assert_eq!(dep_count(&conn), 2);
+
+        // Insert a parent ticket "0"
+        let t0 = make_ticket("0", "GrandParent");
+        syncer.upsert_tickets("r1", &[t0]).unwrap();
+
+        // Second upsert: ticket "1" with only parent set, blocked_by and children are empty
+        let mut t1_parent_only = make_ticket("1", "Middle");
+        t1_parent_only.parent = Some("0".to_string());
+        syncer.upsert_tickets("r1", &[t1_parent_only]).unwrap();
+
+        // Should now have 3 rows: the original blocks + parent_of(1→3) + new parent_of(0→1)
+        assert_eq!(
+            dep_count(&conn),
+            3,
+            "setting only parent must not wipe existing blocked_by or children rows"
+        );
+    }
+
+    #[test]
+    fn test_upsert_only_blocked_by_preserves_parent_of() {
+        // Setting only `blocked_by` must not clear existing `children` (parent_of) rows.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is parent of ticket "2"
+        let t2 = make_ticket("2", "Child");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1, "should have 1 parent_of row");
+
+        // Insert a blocker ticket "3"
+        let t3 = make_ticket("3", "Blocker");
+        syncer.upsert_tickets("r1", &[t3]).unwrap();
+
+        // Re-upsert ticket "1" with only blocked_by set, children empty
+        let mut t1_blocked_only = make_ticket("1", "Parent");
+        t1_blocked_only.blocked_by = vec!["3".to_string()];
+        syncer.upsert_tickets("r1", &[t1_blocked_only]).unwrap();
+
+        // Should now have 2 rows: original parent_of(1→2) + new blocks(1←3)
+        assert_eq!(
+            dep_count(&conn),
+            2,
+            "setting only blocked_by must not wipe existing parent_of (children) rows"
+        );
+    }
+
+    #[test]
+    fn test_upsert_only_children_preserves_blocked_by() {
+        // Setting only `children` must not clear existing `blocked_by` (blocks) rows.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First upsert: ticket "1" is blocked by ticket "2"
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+        assert_eq!(dep_count(&conn), 1, "should have 1 blocks row");
+
+        // Insert a child ticket "3"
+        let t3 = make_ticket("3", "Child");
+        syncer.upsert_tickets("r1", &[t3]).unwrap();
+
+        // Re-upsert ticket "1" with only children set, blocked_by empty
+        let mut t1_children_only = make_ticket("1", "Blocked");
+        t1_children_only.children = vec!["3".to_string()];
+        syncer.upsert_tickets("r1", &[t1_children_only]).unwrap();
+
+        // Should now have 2 rows: original blocks(1←2) + new parent_of(1→3)
+        assert_eq!(
+            dep_count(&conn),
+            2,
+            "setting only children must not wipe existing blocked_by (blocks) rows"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // get_ready_tickets tests
+    // -----------------------------------------------------------------------
+
+    fn insert_workflow_run_for_ticket(
+        conn: &Connection,
+        wf_id: &str,
+        ticket_id: &str,
+        status: &str,
+    ) {
+        // Insert a minimal agent_run first (parent_run_id FK)
+        let ar_id = format!("ar-{wf_id}");
+        conn.execute(
+            "INSERT OR IGNORE INTO worktrees (id, repo_id, slug, branch, path, created_at) \
+             VALUES ('wt-sys', 'r1', 'sys', 'sys', '/tmp/sys', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_runs (id, worktree_id, prompt, status, started_at) \
+             VALUES (?1, 'wt-sys', 'test', 'completed', '2024-01-01T00:00:00Z')",
+            params![ar_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, parent_run_id, status, started_at, ticket_id, repo_id) \
+             VALUES (?1, 'wf', ?2, ?3, '2024-01-01T00:00:00Z', ?4, 'r1')",
+            params![wf_id, ar_id, status, ticket_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_get_ready_tickets_no_deps_all_open_ready() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "A"), make_ticket("2", "B")])
+            .unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        assert_eq!(ready.len(), 2);
+        assert!(ready.iter().all(|t| t.dep_type.is_none()));
+    }
+
+    #[test]
+    fn test_get_ready_tickets_blocked_ticket_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "2" blocks ticket "1"; blocker is still open → ticket "1" is not ready
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].source_id, "2"); // only the blocker itself is ready
+    }
+
+    #[test]
+    fn test_get_ready_tickets_blocker_closed_makes_blocked_ready() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        // Close the blocker
+        syncer
+            .close_missing_tickets("r1", "github", &["1"])
+            .unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"1"),
+            "blocked ticket should be ready once blocker is closed"
+        );
+    }
+
+    #[test]
+    fn test_get_ready_tickets_active_run_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "A")])
+            .unwrap();
+        let tid: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // Link an active workflow run to the ticket
+        insert_workflow_run_for_ticket(&conn, "wr1", &tid, "running");
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        assert_eq!(ready.len(), 0, "ticket with active run must be excluded");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_completed_run_not_excluded() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "A")])
+            .unwrap();
+        let tid: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // Completed run — should not block the ticket from being ready
+        insert_workflow_run_for_ticket(&conn, "wr1", &tid, "completed");
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        assert_eq!(ready.len(), 1);
+    }
+
+    #[test]
+    fn test_get_ready_tickets_root_ticket_id_scope() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Ticket "1" is parent of "2"; ticket "3" is unrelated
+        let t2 = make_ticket("2", "Child");
+        let t3 = make_ticket("3", "Unrelated");
+        let mut t1 = make_ticket("1", "Parent");
+        t1.children = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t3, t1]).unwrap();
+
+        let parent_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let ready = syncer
+            .get_ready_tickets("r1", Some(&parent_id), None, 50)
+            .unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].source_id, "2");
+        assert_eq!(ready[0].dep_type.as_deref(), Some("parent_of"));
+    }
+
+    #[test]
+    fn test_get_ready_tickets_label_scope() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let mut t1 = make_ticket("1", "With label");
+        t1.label_details = vec![TicketLabelInput {
+            name: "backend".to_string(),
+            color: None,
+        }];
+        let t2 = make_ticket("2", "No label");
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        let ready = syncer
+            .get_ready_tickets("r1", None, Some("backend"), 50)
+            .unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_limit_respected() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets: Vec<_> = (1..=5)
+            .map(|i| make_ticket(&i.to_string(), &format!("Issue {i}")))
+            .collect();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 3).unwrap();
+        assert_eq!(ready.len(), 3);
+    }
+
+    #[test]
+    fn test_get_ready_tickets_coalesce_no_run_as_completed() {
+        // A blocker with state='closed' and NO workflow run must be treated as
+        // resolved (COALESCE(wr.status, 'completed') = 'completed').
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let t2 = make_ticket("2", "Blocker");
+        let mut t1 = make_ticket("1", "Blocked");
+        t1.blocked_by = vec!["2".to_string()];
+        syncer.upsert_tickets("r1", &[t2, t1]).unwrap();
+
+        // Close the blocker (no workflow run created)
+        syncer
+            .close_missing_tickets("r1", "github", &["1"])
+            .unwrap();
+
+        let ready = syncer.get_ready_tickets("r1", None, None, 50).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"1"),
+            "blocked ticket should be ready when closed blocker has no run (COALESCE = completed)"
+        );
+    }
+
+    #[test]
+    fn test_blocks_delete_does_not_contaminate_parent_of() {
+        // Regression test: stale-clear DELETE for dep_type='blocks' must not remove
+        // parent_of rows written by a different ticket during an incremental sync.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Batch 1: ticket "B" is the parent of ticket "A" → writes parent_of(B→A)
+        let ta = make_ticket("A", "Child");
+        let mut tb = make_ticket("B", "Parent");
+        tb.children = vec!["A".to_string()];
+        syncer.upsert_tickets("r1", &[ta, tb]).unwrap();
+        assert_eq!(dep_count(&conn), 1, "setup: one parent_of row expected");
+
+        // Batch 2: re-upsert ticket "A" alone with empty blocked_by.
+        // The stale-clear for blocks scoped to to_ticket_id=A should NOT remove
+        // the parent_of row where A is the child (from_ticket_id=B, to_ticket_id=A).
+        let ta_clear = make_ticket("A", "Child");
+        syncer.upsert_tickets("r1", &[ta_clear]).unwrap();
+        assert_eq!(
+            dep_count(&conn),
+            1,
+            "parent_of row must survive a separate blocked_by clear for the child ticket"
+        );
+    }
+
+    // ── get_dependencies / get_all_dependencies tests ───────────────────────
+
+    /// Returns the source_ids of a ticket slice for readable assertions.
+    fn source_ids(tickets: &[Ticket]) -> Vec<&str> {
+        tickets.iter().map(|t| t.source_id.as_str()).collect()
+    }
+
+    fn get_ticket_id(conn: &Connection, source_id: &str) -> String {
+        conn.query_row(
+            "SELECT id FROM tickets WHERE source_id = ?1",
+            params![source_id],
+            |row| row.get(0),
+        )
+        .expect("ticket not found")
+    }
+
+    #[test]
+    fn test_get_dependencies_blocked_by_and_blocks() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "1" blocks ticket "2"
+        let t1 = make_ticket("1", "Blocker");
+        // no special fields needed — relationship is written via t2.blocked_by
+        let mut t2 = make_ticket("2", "Blocked");
+        t2.blocked_by = vec!["1".to_string()];
+
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        let deps = syncer
+            .get_dependencies_by_source_id("r1", "1")
+            .expect("get_dependencies for ticket 1");
+
+        // Ticket 1 blocks ticket 2
+        assert_eq!(
+            source_ids(&deps.blocks),
+            vec!["2"],
+            "ticket 1 should block ticket 2"
+        );
+        assert!(
+            deps.blocked_by.is_empty(),
+            "ticket 1 should not be blocked by anything"
+        );
+
+        let deps2 = syncer
+            .get_dependencies_by_source_id("r1", "2")
+            .expect("get_dependencies for ticket 2");
+
+        // Ticket 2 is blocked by ticket 1
+        assert_eq!(
+            source_ids(&deps2.blocked_by),
+            vec!["1"],
+            "ticket 2 should be blocked by ticket 1"
+        );
+        assert!(
+            deps2.blocks.is_empty(),
+            "ticket 2 should not block anything"
+        );
+    }
+
+    #[test]
+    fn test_get_dependencies_parent_and_children() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "10" is parent of "11" and "12"
+        let child1 = make_ticket("11", "Child 1");
+        let child2 = make_ticket("12", "Child 2");
+        let mut parent = make_ticket("10", "Parent");
+        parent.children = vec!["11".to_string(), "12".to_string()];
+
+        syncer
+            .upsert_tickets("r1", &[child1, child2, parent])
+            .unwrap();
+
+        let parent_deps = syncer
+            .get_dependencies_by_source_id("r1", "10")
+            .expect("get_dependencies for parent ticket");
+
+        let mut child_ids = source_ids(&parent_deps.children);
+        child_ids.sort();
+        assert_eq!(
+            child_ids,
+            vec!["11", "12"],
+            "parent should list both children"
+        );
+        assert!(
+            parent_deps.parent.is_none(),
+            "parent ticket has no parent itself"
+        );
+
+        let child1_deps = syncer
+            .get_dependencies_by_source_id("r1", "11")
+            .expect("get_dependencies for child 1");
+
+        assert_eq!(
+            child1_deps.parent.as_ref().map(|t| t.source_id.as_str()),
+            Some("10"),
+            "child 1 should know its parent"
+        );
+        assert!(child1_deps.children.is_empty(), "child has no children");
+    }
+
+    #[test]
+    fn test_get_dependencies_empty_when_no_deps() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[make_ticket("99", "Standalone")])
+            .unwrap();
+
+        let deps = syncer
+            .get_dependencies_by_source_id("r1", "99")
+            .expect("get_dependencies for standalone ticket");
+
+        assert!(deps.blocked_by.is_empty());
+        assert!(deps.blocks.is_empty());
+        assert!(deps.parent.is_none());
+        assert!(deps.children.is_empty());
+    }
+
+    #[test]
+    fn test_get_all_dependencies_maps_both_directions() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "A" blocks ticket "B"
+        let ta = make_ticket("A", "Blocker");
+        let mut tb = make_ticket("B", "Blocked");
+        tb.blocked_by = vec!["A".to_string()];
+
+        // ticket "P" is parent of "C"
+        let tc = make_ticket("C", "Child");
+        let mut tp = make_ticket("P", "Parent");
+        tp.children = vec!["C".to_string()];
+
+        syncer.upsert_tickets("r1", &[ta, tb, tc, tp]).unwrap();
+
+        let all = syncer.get_all_dependencies().expect("get_all_dependencies");
+
+        // Look up internal IDs via source_id
+        let id_a = ticket_id_for_source(&conn, "A");
+        let id_b = ticket_id_for_source(&conn, "B");
+        let id_p = ticket_id_for_source(&conn, "P");
+        let id_c = ticket_id_for_source(&conn, "C");
+
+        let deps_b = all.get(&id_b).expect("entry for ticket B");
+        assert_eq!(source_ids(&deps_b.blocked_by), vec!["A"], "B blocked_by A");
+        assert!(deps_b.blocks.is_empty(), "B blocks nothing");
+
+        let deps_a = all.get(&id_a).expect("entry for ticket A");
+        assert_eq!(source_ids(&deps_a.blocks), vec!["B"], "A blocks B");
+        assert!(deps_a.blocked_by.is_empty(), "A is not blocked");
+
+        let deps_c = all.get(&id_c).expect("entry for ticket C");
+        assert_eq!(
+            deps_c.parent.as_ref().map(|t| t.source_id.as_str()),
+            Some("P"),
+            "C parent is P"
+        );
+        assert!(deps_c.children.is_empty());
+
+        let deps_p = all.get(&id_p).expect("entry for ticket P");
+        assert_eq!(source_ids(&deps_p.children), vec!["C"], "P children: C");
+        assert!(deps_p.parent.is_none());
+    }
+
+    /// Helper for dependency tests: look up the internal ULID for a ticket by source_id.
+    fn ticket_id_for_source(conn: &Connection, source_id: &str) -> String {
+        conn.query_row(
+            "SELECT id FROM tickets WHERE source_id = ?1",
+            params![source_id],
+            |row| row.get(0),
+        )
+        .expect("ticket not found")
+    }
+
+    /// Helper: call get_dependencies by source_id (resolves ULID internally).
+    impl TicketSyncer<'_> {
+        fn get_dependencies_by_source_id(
+            &self,
+            _repo_id: &str,
+            source_id: &str,
+        ) -> Result<TicketDependencies> {
+            let ticket_id: String = self
+                .conn
+                .query_row(
+                    "SELECT id FROM tickets WHERE source_id = ?1",
+                    params![source_id],
+                    |row| row.get(0),
+                )
+                .map_err(ConductorError::Database)?;
+            self.get_dependencies(&ticket_id)
+        }
+    }
+
+    /// If a ticket_dependencies row references a ticket ID that no longer exists in the
+    /// tickets table (e.g. deleted after FK was written with constraints off), query_dep_pairs
+    /// must return TicketNotFound rather than silently dropping the edge.
+    #[test]
+    fn test_query_dep_pairs_orphaned_ticket_returns_error() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert one real ticket to act as the "from" side.
+        syncer
+            .upsert_tickets("r1", &[make_ticket("orphan-from", "From Ticket")])
+            .unwrap();
+        let from_id = get_ticket_id(&conn, "orphan-from");
+
+        // Bypass FK constraints to insert an edge referencing a non-existent to_ticket_id.
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) \
+             VALUES (?1, 'nonexistent-ticket-id', 'blocks')",
+            rusqlite::params![from_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let result = query_dep_pairs(&conn, "blocks");
+        assert!(
+            result.is_err(),
+            "query_dep_pairs must return Err when a referenced ticket is missing"
+        );
+        match result.unwrap_err() {
+            ConductorError::TicketNotFound { id } => {
+                assert_eq!(id, "nonexistent-ticket-id");
+            }
+            e => panic!("expected TicketNotFound, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn test_upsert_preserves_raw_json_on_cli_re_upsert() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Simulate a sync with real raw_json from a source (e.g. GitHub).
+        let mut synced = make_ticket("42", "Real Issue");
+        synced.raw_json = Some(r#"{"id":42,"number":42,"title":"Real Issue"}"#.to_string());
+        syncer.upsert_tickets("r1", &[synced]).unwrap();
+
+        // Verify the raw_json was stored correctly.
+        let stored: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, r#"{"id":42,"number":42,"title":"Real Issue"}"#);
+
+        // Simulate a CLI re-upsert (passes None — no raw_json available).
+        let mut cli_upsert = make_ticket("42", "Real Issue Updated");
+        cli_upsert.raw_json = None;
+        syncer.upsert_tickets("r1", &[cli_upsert]).unwrap();
+
+        // raw_json must be unchanged — None must not clobber synced data.
+        let after: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after, r#"{"id":42,"number":42,"title":"Real Issue"}"#,
+            "CLI re-upsert with None must not overwrite existing raw_json"
+        );
+
+        // Title update from CLI upsert should still be applied.
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM tickets WHERE source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "Real Issue Updated");
+    }
+
+    #[test]
+    fn test_batch_upsert_mixed_raw_json_preservation() {
+        // Ticket A has existing raw_json; re-upserted with None → should be preserved.
+        // Ticket B is re-upserted with Some → should be overwritten.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let initial = vec![
+            TicketInput {
+                raw_json: Some(r#"{"keep":"me"}"#.to_string()),
+                ..make_ticket("A", "Ticket A")
+            },
+            TicketInput {
+                raw_json: Some(r#"{"old":"value"}"#.to_string()),
+                ..make_ticket("B", "Ticket B")
+            },
+        ];
+        syncer.upsert_tickets("r1", &initial).unwrap();
+
+        let update = vec![
+            make_ticket("A", "Ticket A updated"), // raw_json = None → preserve
+            TicketInput {
+                raw_json: Some(r#"{"new":"value"}"#.to_string()),
+                ..make_ticket("B", "Ticket B updated")
+            },
+        ];
+        syncer.upsert_tickets("r1", &update).unwrap();
+
+        let raw_a: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = 'A'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            raw_a, r#"{"keep":"me"}"#,
+            "None raw_json must preserve existing value"
+        );
+
+        let raw_b: String = conn
+            .query_row(
+                "SELECT raw_json FROM tickets WHERE source_id = 'B'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            raw_b, r#"{"new":"value"}"#,
+            "Some raw_json must overwrite existing value"
+        );
+    }
+
+    #[test]
+    fn test_batch_upsert_new_tickets_none_raw_json_defaults_to_empty() {
+        // New tickets with raw_json = None should get '{}' as the default.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("X", "New ticket X"),
+            make_ticket("Y", "New ticket Y"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        for source_id in &["X", "Y"] {
+            let raw: String = conn
+                .query_row(
+                    "SELECT raw_json FROM tickets WHERE source_id = ?1",
+                    params![source_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                raw, "{}",
+                "new ticket with None raw_json should default to '{{}}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_all_dependencies_for_repo_maps_both_directions() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "A" blocks ticket "B", both in "r1"
+        let ta = make_ticket("A", "Blocker");
+        let mut tb = make_ticket("B", "Blocked");
+        tb.blocked_by = vec!["A".to_string()];
+
+        // ticket "P" is parent of "C", both in "r1"
+        let tc = make_ticket("C", "Child");
+        let mut tp = make_ticket("P", "Parent");
+        tp.children = vec!["C".to_string()];
+
+        syncer.upsert_tickets("r1", &[ta, tb, tc, tp]).unwrap();
+
+        let all = syncer
+            .get_all_dependencies_for_repo("r1")
+            .expect("get_all_dependencies_for_repo");
+
+        let id_a = ticket_id_for_source(&conn, "A");
+        let id_b = ticket_id_for_source(&conn, "B");
+        let id_p = ticket_id_for_source(&conn, "P");
+        let id_c = ticket_id_for_source(&conn, "C");
+
+        let deps_b = all.get(&id_b).expect("entry for ticket B");
+        assert_eq!(source_ids(&deps_b.blocked_by), vec!["A"], "B blocked_by A");
+        assert!(deps_b.blocks.is_empty(), "B blocks nothing");
+
+        let deps_a = all.get(&id_a).expect("entry for ticket A");
+        assert_eq!(source_ids(&deps_a.blocks), vec!["B"], "A blocks B");
+        assert!(deps_a.blocked_by.is_empty(), "A is not blocked");
+
+        let deps_c = all.get(&id_c).expect("entry for ticket C");
+        assert_eq!(
+            deps_c.parent.as_ref().map(|t| t.source_id.as_str()),
+            Some("P"),
+            "C parent is P"
+        );
+        assert!(deps_c.children.is_empty());
+
+        let deps_p = all.get(&id_p).expect("entry for ticket P");
+        assert_eq!(source_ids(&deps_p.children), vec!["C"], "P children: C");
+        assert!(deps_p.parent.is_none());
+    }
+
+    #[test]
+    fn test_get_all_dependencies_for_repo_empty_when_no_deps() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Tickets with no dependency edges — map should be empty.
+        syncer
+            .upsert_tickets("r1", &[make_ticket("X", "Solo")])
+            .unwrap();
+
+        let result = syncer
+            .get_all_dependencies_for_repo("r1")
+            .expect("get_all_dependencies_for_repo");
+        assert!(result.is_empty(), "no deps means empty map");
+
+        // Unknown repo also returns empty map without error.
+        let empty = syncer
+            .get_all_dependencies_for_repo("nonexistent-repo")
+            .expect("nonexistent repo returns Ok");
+        assert!(empty.is_empty(), "unknown repo returns empty map");
+    }
+
+    #[test]
+    fn test_returning_id_stable_on_conflict_update() {
+        // Re-upserting an existing ticket must return the same ULID, not a new one.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("99", "Original")])
+            .unwrap();
+        let id_first: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '99'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("99", "Updated title")])
+            .unwrap();
+        let id_second: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '99'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(
+            id_first, id_second,
+            "ULID must be stable across conflict updates"
+        );
     }
 }

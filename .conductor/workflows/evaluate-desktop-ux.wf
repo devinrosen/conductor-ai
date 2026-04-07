@@ -1,0 +1,20 @@
+workflow evaluate-desktop-ux {
+  meta {
+    title       = "Evaluate Desktop UX"
+    description = "Evaluate the current desktop UI and produce a prioritized improvement plan"
+    trigger     = "manual"
+    targets     = ["worktree", "repo"]
+  }
+
+  parallel {
+    fail_fast = false
+
+    call eval-ux-layout      { retries = 1 }
+    call eval-ux-visual       { retries = 1 }
+    call eval-ux-interaction  { retries = 1 }
+  }
+
+  call eval-ux-synthesizer {
+    retries = 1
+  }
+}

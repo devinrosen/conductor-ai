@@ -15,19 +15,22 @@ pub use log_parsing::{
     parse_result_event,
 };
 
+pub use manager::feedback::normalize_feedback_response;
+pub use manager::tmux::{capture_and_kill_tmux_window, capture_tmux_scrollback, kill_tmux_window};
 pub use manager::AgentManager;
 
 pub use status::{
-    parse_feedback_marker, AgentRunStatus, FeedbackStatus, StepStatus, DEFAULT_AGENT_ERROR_MSG,
-    FEEDBACK_MARKER, FEEDBACK_MAX_LEN,
+    parse_feedback_marker, parse_feedback_marker_structured, AgentRunStatus, FeedbackStatus,
+    FeedbackType, ParsedFeedbackMarker, StepStatus, DEFAULT_AGENT_ERROR_MSG, FEEDBACK_MARKER,
+    FEEDBACK_MAX_LEN,
 };
 
 pub(crate) use tmux::list_live_tmux_windows;
 
 pub use types::{
     ActiveAgentCounts, AgentCreatedIssue, AgentEvent, AgentRun, AgentRunEvent, ClaudeJsonResult,
-    CostPhase, FeedbackRequest, LogResult, PlanStep, RunTreeTotals, TicketAgentTotals,
-    EVENT_KIND_TOOL_ERROR, META_KEY_ERROR_TEXT,
+    CostPhase, FeedbackOption, FeedbackRequest, FeedbackRequestParams, LogResult, PlanStep,
+    RunTreeTotals, TicketAgentTotals, EVENT_KIND_TOOL_ERROR, META_KEY_ERROR_TEXT,
 };
 
 #[cfg(test)]

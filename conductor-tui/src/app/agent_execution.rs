@@ -3,7 +3,7 @@ use std::sync::Arc;
 use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
 use conductor_core::config::AutoStartAgent;
 use conductor_core::tickets::build_agent_prompt;
-use conductor_core::worktree::WorktreeManager;
+use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
 use crate::action::Action;
 use crate::state::{InputAction, Modal, WorkflowPickerItem};
@@ -149,10 +149,10 @@ impl App {
         );
     }
 
+    /// Stop the running worktree agent.
+    /// Runs blocking subprocess calls on a background thread per the TUI threading rule.
     pub(super) fn handle_stop_agent(&mut self) {
-        use std::process::Command;
-
-        let run = self.selected_worktree_run();
+        let run = self.selected_worktree_run().cloned();
 
         let Some(run) = run else {
             return;
@@ -162,28 +162,44 @@ impl App {
             return;
         }
 
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
         let run_id = run.id.clone();
         let tmux_window = run.tmux_window.clone();
 
-        let mgr = AgentManager::new(&self.conn);
+        self.state.modal = crate::state::Modal::Progress {
+            message: "Stopping agent…".into(),
+        };
 
-        // Best-effort: capture tmux scrollback before killing
-        if let Some(ref window) = tmux_window {
-            mgr.capture_agent_log(&run_id, window);
-        }
+        std::thread::spawn(move || {
+            use std::process::Command;
 
-        // Kill the tmux window
-        if let Some(ref window) = tmux_window {
-            let _ = Command::new("tmux")
-                .args(["kill-window", "-t", &format!(":{window}")])
-                .output();
-        }
+            let db = conductor_core::config::db_path();
+            let conn = match conductor_core::db::open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Action::AgentStopComplete {
+                        result: Err(format!("Failed to open database: {e}")),
+                    });
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
 
-        // Update DB record to cancelled
-        let _ = mgr.update_run_cancelled(&run_id);
+            if let Some(ref window) = tmux_window {
+                mgr.capture_agent_log(&run_id, window);
+                let _ = Command::new("tmux")
+                    .args(["kill-window", "-t", &format!(":{window}")])
+                    .output();
+            }
 
-        self.state.status_message = Some("Agent cancelled".to_string());
-        self.refresh_data();
+            let result = mgr
+                .update_run_cancelled(&run_id)
+                .map(|()| "Agent cancelled".to_string())
+                .map_err(|e| format!("Failed to cancel agent: {e}"));
+
+            let _ = tx.send(Action::AgentStopComplete { result });
+        });
     }
 
     pub(super) fn require_pending_feedback(&mut self) -> Option<FeedbackRequest> {
@@ -200,13 +216,39 @@ impl App {
         let Some(fb) = self.require_pending_feedback() else {
             return;
         };
+        self.open_feedback_modal(&fb, "Agent Feedback");
+    }
 
-        // Open a text area modal for the user to type their response
+    /// Open the feedback modal for a given request, with a configurable title prefix.
+    fn open_feedback_modal(&mut self, fb: &FeedbackRequest, title_prefix: &str) {
+        use conductor_core::agent::FeedbackType;
+
+        let format_opts = |opts: &[conductor_core::agent::FeedbackOption]| -> String {
+            opts.iter()
+                .enumerate()
+                .map(|(i, o)| format!("{}. {}", i + 1, o.label))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let placeholder = match fb.feedback_type {
+            FeedbackType::Confirm => "Type y or n...".to_string(),
+            FeedbackType::SingleSelect => {
+                let opts_text = fb.options.as_deref().map(format_opts).unwrap_or_default();
+                format!("Type the number of your choice:\n{opts_text}")
+            }
+            FeedbackType::MultiSelect => {
+                let opts_text = fb.options.as_deref().map(format_opts).unwrap_or_default();
+                format!("Type numbers separated by commas (e.g. 1,3):\n{opts_text}")
+            }
+            FeedbackType::Text => "Type your feedback response...".to_string(),
+        };
+
         let mut textarea = tui_textarea::TextArea::default();
-        textarea.set_placeholder_text("Type your feedback response...");
+        textarea.set_placeholder_text(&placeholder);
 
         self.state.modal = Modal::AgentPrompt {
-            title: format!("Agent Feedback: {}", &fb.prompt),
+            title: format!("{title_prefix}: {}", &fb.prompt),
             prompt: fb.prompt.clone(),
             textarea: Box::new(textarea),
             on_submit: InputAction::FeedbackResponse {
@@ -294,56 +336,58 @@ impl App {
         worktree_path: String,
         worktree_slug: String,
     ) {
-        // Resolve model: per-worktree → per-repo → global config
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+
+        // Resolve model on main thread (pure in-memory lookup)
         let (model, _) = self.resolve_model_for_worktree(&worktree_id);
 
-        // Create DB record with tmux window name
-        let mgr = AgentManager::new(&self.conn);
-        let run = match mgr.create_run(
-            Some(&worktree_id),
-            &prompt,
-            Some(&worktree_slug),
-            model.as_deref(),
-        ) {
-            Ok(run) => run,
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to create agent run: {e}"),
-                };
-                return;
-            }
+        self.state.modal = Modal::Progress {
+            message: "Launching orchestrator…".into(),
         };
 
-        // Build the conductor agent orchestrate command
-        let args = conductor_core::agent_runtime::build_orchestrate_args(
-            &run.id,
-            &worktree_path,
-            model.as_deref(),
-            false,
-            None,
-        );
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<String, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                let mgr = AgentManager::new(&conn);
 
-        match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
-            Ok(()) => {
-                self.state.status_message = Some(format!(
+                let run = mgr
+                    .create_run(
+                        Some(&worktree_id),
+                        &prompt,
+                        Some(&worktree_slug),
+                        model.as_deref(),
+                    )
+                    .map_err(|e| format!("Failed to create agent run: {e}"))?;
+
+                let args = conductor_core::agent_runtime::build_orchestrate_args(
+                    &run.id,
+                    &worktree_path,
+                    model.as_deref(),
+                    false,
+                    None,
+                );
+
+                conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug)
+                    .inspect_err(|e| {
+                        let _ = mgr.update_run_failed(&run.id, e);
+                    })?;
+
+                Ok(format!(
                     "Orchestrator launched in tmux window: {worktree_slug}"
-                ));
-                self.refresh_data();
-            }
-            Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                self.state.modal = Modal::Error { message: e };
-            }
-        }
+                ))
+            })();
+
+            let _ = tx.send(Action::OrchestrateLaunchComplete { result });
+        });
     }
 
     pub(super) fn spawn_worktree_create(
         &mut self,
         repo_slug: String,
         name: String,
-        ticket_id: Option<String>,
-        from_pr: Option<u32>,
-        from_branch: Option<String>,
+        opts: WorktreeCreateOptions,
     ) {
         // Guard before setting the non-dismissable Progress modal: if bg_tx is
         // None (only possible before init() completes), skip rather than
@@ -352,25 +396,20 @@ impl App {
             return;
         };
         self.state.modal = Modal::Progress {
-            message: if from_pr.is_some() {
+            message: if opts.from_pr.is_some() {
                 "Fetching PR branch…".to_string()
             } else {
                 "Creating worktree…".to_string()
             },
         };
+        let ticket_id = opts.ticket_id.clone();
         let config = self.config.clone();
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<_> {
                 let db = conductor_core::config::db_path();
                 let conn = conductor_core::db::open_database(&db)?;
                 let wt_mgr = WorktreeManager::new(&conn, &config);
-                let (wt, warnings) = wt_mgr.create(
-                    &repo_slug,
-                    &name,
-                    from_branch.as_deref(),
-                    ticket_id.as_deref(),
-                    from_pr,
-                )?;
+                let (wt, warnings) = wt_mgr.create(&repo_slug, &name, opts)?;
 
                 Ok((wt, warnings))
             })();
@@ -465,9 +504,9 @@ impl App {
             };
 
             let mut items = vec![WorkflowPickerItem::StartAgent];
-            for def in manual_defs {
-                items.push(WorkflowPickerItem::Workflow(def));
-            }
+            items.extend(crate::app::workflow_management::insert_group_headers(
+                manual_defs,
+            ));
             items.push(WorkflowPickerItem::Skip);
 
             if let Some(ref tx) = bg_tx {
@@ -556,51 +595,351 @@ impl App {
         resume_session_id: Option<String>,
         model: Option<String>,
     ) {
-        // Create DB record with tmux window name
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+
+        self.state.modal = Modal::Progress {
+            message: "Launching agent…".into(),
+        };
+
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<String, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                let mgr = AgentManager::new(&conn);
+
+                let run = mgr
+                    .create_run(
+                        Some(&worktree_id),
+                        &prompt,
+                        Some(&worktree_slug),
+                        model.as_deref(),
+                    )
+                    .map_err(|e| format!("Failed to create agent run: {e}"))?;
+
+                let args = conductor_core::agent_runtime::build_agent_args(
+                    &run.id,
+                    &worktree_path,
+                    &prompt,
+                    resume_session_id.as_deref(),
+                    model.as_deref(),
+                    None,
+                    &[],
+                )
+                .inspect_err(|e| {
+                    let _ = mgr.update_run_failed(&run.id, e);
+                })?;
+
+                conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug)
+                    .inspect_err(|e| {
+                        let _ = mgr.update_run_failed(&run.id, e);
+                    })?;
+
+                Ok(format!("Agent launched in tmux window: {worktree_slug}"))
+            })();
+
+            let _ = tx.send(Action::AgentLaunchComplete { result });
+        });
+    }
+
+    pub(super) fn handle_prompt_repo_agent(&mut self) {
+        let repo = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+            .cloned();
+
+        let Some(repo) = repo else {
+            self.state.status_message = Some("No repo selected".to_string());
+            return;
+        };
+
+        // Look up the latest repo-scoped run for session resume
+        let resume_session_id = self
+            .state
+            .data
+            .latest_repo_agent_runs
+            .get(&repo.id)
+            .and_then(|run| run.claude_session_id.clone());
+
+        let title = if resume_session_id.is_some() {
+            "Repo Agent (Resume)".to_string()
+        } else {
+            "Repo Agent (read-only)".to_string()
+        };
+
+        let lines = vec![String::new()];
+        let mut textarea = tui_textarea::TextArea::new(lines);
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
+        textarea.set_placeholder_text("Ask the repo agent a question (read-only)...");
+
+        self.state.modal = Modal::AgentPrompt {
+            title,
+            prompt: "Enter prompt for Claude:".to_string(),
+            textarea: Box::new(textarea),
+            on_submit: InputAction::RepoAgentPrompt {
+                repo_id: repo.id.clone(),
+                repo_path: repo.local_path.clone(),
+                repo_slug: repo.slug.clone(),
+                resume_session_id,
+            },
+        };
+    }
+
+    pub(super) fn start_repo_agent_tmux(
+        &mut self,
+        prompt: String,
+        repo_id: String,
+        repo_path: String,
+        repo_slug: String,
+        resume_session_id: Option<String>,
+    ) {
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+
+        self.state.modal = Modal::Progress {
+            message: "Launching repo agent…".into(),
+        };
+
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<String, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                let mgr = AgentManager::new(&conn);
+
+                let run_id_preview = conductor_core::new_id();
+                let window_name = conductor_core::agent_runtime::repo_agent_window_name(
+                    &repo_slug,
+                    &run_id_preview,
+                );
+
+                let run = mgr
+                    .create_repo_run(&repo_id, &prompt, Some(&window_name), None)
+                    .map_err(|e| format!("Failed to create repo agent run: {e}"))?;
+
+                let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
+                let args = conductor_core::agent_runtime::build_agent_args_with_mode(
+                    &run.id,
+                    &repo_path,
+                    &prompt,
+                    resume_session_id.as_deref(),
+                    None,
+                    None,
+                    Some(&plan_mode),
+                    &[],
+                )
+                .inspect_err(|e| {
+                    let _ = mgr.update_run_failed(&run.id, e);
+                })?;
+
+                conductor_core::agent_runtime::spawn_tmux_window(&args, &window_name).inspect_err(
+                    |e| {
+                        let _ = mgr.update_run_failed(&run.id, e);
+                    },
+                )?;
+
+                Ok(format!("Repo agent launched in tmux window: {window_name}"))
+            })();
+
+            let _ = tx.send(Action::RepoAgentLaunched { result });
+        });
+    }
+
+    /// Restart a failed/cancelled agent run by creating a new run with the same
+    /// config and re-spawning a tmux window.
+    /// Runs on a background thread per the TUI threading rule.
+    pub(super) fn handle_restart_agent(&mut self) {
+        let run = self.selected_worktree_run().cloned();
+
+        let Some(run) = run else {
+            self.state.status_message = Some("No agent run to restart".to_string());
+            return;
+        };
+
+        if run.is_active() {
+            self.state.status_message = Some("Agent is still active — stop it first".to_string());
+            return;
+        }
+
+        // Resolve worktree path on the main thread (from cached data)
+        let worktree_path = run.worktree_id.as_ref().and_then(|wt_id| {
+            self.state
+                .data
+                .worktrees
+                .iter()
+                .find(|w| &w.id == wt_id)
+                .map(|w| w.path.clone())
+        });
+
+        let Some(worktree_path) = worktree_path else {
+            self.state.status_message =
+                Some("Cannot restart: no worktree found for this run".to_string());
+            return;
+        };
+
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+        let run_id = run.id.clone();
+        let worktree_slug = run.tmux_window.clone().unwrap_or_default();
+
+        self.state.modal = crate::state::Modal::Progress {
+            message: "Restarting agent…".into(),
+        };
+
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<String, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                let mgr = AgentManager::new(&conn);
+
+                let new_run = mgr
+                    .restart_run(&run_id)
+                    .map_err(|e| format!("Failed to restart agent run: {e}"))?;
+
+                let window_name = new_run.tmux_window.as_deref().unwrap_or(&worktree_slug);
+
+                let args = conductor_core::agent_runtime::build_agent_args(
+                    &new_run.id,
+                    &worktree_path,
+                    &new_run.prompt,
+                    None,
+                    new_run.model.as_deref(),
+                    new_run.bot_name.as_deref(),
+                    &[],
+                )
+                .inspect_err(|e| {
+                    let _ = mgr.update_run_failed(&new_run.id, e);
+                })?;
+
+                conductor_core::agent_runtime::spawn_tmux_window(&args, window_name).inspect_err(
+                    |e| {
+                        let _ = mgr.update_run_failed(&new_run.id, e);
+                    },
+                )?;
+
+                Ok(format!("Agent restarted in tmux window: {window_name}"))
+            })();
+
+            let _ = tx.send(Action::AgentRestartComplete { result });
+        });
+    }
+
+    /// Returns true if the current context is the repo agent pane in RepoDetail.
+    pub(super) fn is_repo_agent_context(&self) -> bool {
+        self.state.view == crate::state::View::RepoDetail
+            && self.state.repo_detail_focus == crate::state::RepoDetailFocus::RepoAgent
+    }
+
+    /// Stop the running repo-scoped agent for the currently selected repo.
+    /// Runs blocking subprocess calls on a background thread per the TUI threading rule.
+    pub(super) fn handle_stop_repo_agent(&mut self) {
+        let run = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.latest_repo_agent_runs.get(id))
+            .cloned();
+
+        let Some(run) = run else { return };
+        if !run.is_active() {
+            return;
+        }
+
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+        let run_id = run.id.clone();
+        let tmux_window = run.tmux_window.clone();
+
+        self.state.modal = crate::state::Modal::Progress {
+            message: "Stopping repo agent…".into(),
+        };
+
+        std::thread::spawn(move || {
+            use std::process::Command;
+
+            let db = conductor_core::config::db_path();
+            let conn = match conductor_core::db::open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Action::RepoAgentStopComplete {
+                        result: Err(format!("Failed to open database: {e}")),
+                    });
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
+
+            if let Some(ref window) = tmux_window {
+                mgr.capture_agent_log(&run_id, window);
+                let _ = Command::new("tmux")
+                    .args(["kill-window", "-t", &format!(":{window}")])
+                    .output();
+            }
+
+            let result = mgr
+                .update_run_cancelled(&run_id)
+                .map(|()| "Repo agent cancelled".to_string())
+                .map_err(|e| format!("Failed to cancel repo agent: {e}"));
+
+            let _ = tx.send(Action::RepoAgentStopComplete { result });
+        });
+    }
+
+    /// Submit feedback for the repo-scoped agent.
+    pub(super) fn handle_submit_repo_feedback(&mut self) {
+        let Some(fb) = self.state.data.pending_repo_feedback.clone() else {
+            self.state.status_message = Some("No pending feedback request".to_string());
+            return;
+        };
+        self.open_feedback_modal(&fb, "Repo Agent Feedback");
+    }
+
+    /// Dismiss feedback for the repo-scoped agent.
+    pub(super) fn handle_dismiss_repo_feedback(&mut self) {
+        let Some(fb) = self.state.data.pending_repo_feedback.clone() else {
+            self.state.status_message = Some("No pending feedback request".to_string());
+            return;
+        };
+
         let mgr = AgentManager::new(&self.conn);
-        let run = match mgr.create_run(
-            Some(&worktree_id),
-            &prompt,
-            Some(&worktree_slug),
-            model.as_deref(),
-        ) {
-            Ok(run) => run,
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to create agent run: {e}"),
-                };
-                return;
-            }
-        };
-
-        // Build the conductor agent run command
-        let args = match conductor_core::agent_runtime::build_agent_args(
-            &run.id,
-            &worktree_path,
-            &prompt,
-            resume_session_id.as_deref(),
-            model.as_deref(),
-            None,
-        ) {
-            Ok(a) => a,
-            Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                self.state.modal = Modal::Error { message: e };
-                return;
-            }
-        };
-
-        match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
+        match mgr.dismiss_feedback(&fb.id) {
             Ok(()) => {
                 self.state.status_message =
-                    Some(format!("Agent launched in tmux window: {worktree_slug}"));
+                    Some("Feedback dismissed — repo agent resumed".to_string());
+                self.state.data.pending_repo_feedback = None;
                 self.refresh_data();
+                self.reload_repo_agent_events();
             }
             Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                self.state.modal = Modal::Error { message: e };
+                self.state.status_message = Some(format!("Failed to dismiss feedback: {e}"));
             }
         }
+    }
+
+    /// Expand a repo agent event detail modal.
+    pub(super) fn handle_expand_repo_agent_event(&mut self) {
+        let idx = self
+            .state
+            .repo_agent_list_state
+            .borrow()
+            .selected()
+            .unwrap_or(0);
+        let Some(ev) = self.state.data.repo_agent_event_at_visual_index(idx) else {
+            return;
+        };
+
+        let title = format!("[{}] {}", ev.kind, ev.started_at);
+        let body = ev.summary.clone();
+        let line_count = body.lines().count();
+
+        self.state.modal = Modal::EventDetail {
+            title,
+            body,
+            line_count,
+            scroll_offset: 0,
+            horizontal_offset: 0,
+        };
     }
 }
 

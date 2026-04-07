@@ -1,10 +1,42 @@
-use crate::db::query_collect;
+use std::time::{Duration, SystemTime};
+
+use crate::db::{active_workflow_parent_run_ids, query_collect};
 use crate::error::Result;
 
 use super::super::db::{row_to_agent_run, AGENT_RUN_SELECT};
 use super::super::log_parsing::try_recover_from_log;
 use super::super::tmux::list_live_tmux_windows;
 use super::AgentManager;
+
+/// Remove stale `/tmp/conductor-agent-*.err` files older than 1 hour.
+///
+/// Best-effort: silently ignores any I/O errors (permissions, concurrent delete, etc.).
+fn cleanup_stale_stderr_files() {
+    let one_hour = Duration::from_secs(3600);
+    let Ok(entries) = std::fs::read_dir("/tmp") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("conductor-agent-") || !name_str.ends_with(".err") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or(Duration::ZERO)
+            > one_hour
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
 
 impl<'a> AgentManager<'a> {
     /// Reap orphaned agent runs whose tmux windows have disappeared.
@@ -15,6 +47,8 @@ impl<'a> AgentManager<'a> {
     ///    have completed but the handler didn't fire).
     /// 2. If no result is found in the log, marks the run as `failed`.
     ///
+    /// Also cleans up stale stderr capture files older than 1 hour.
+    ///
     /// Returns the number of orphaned runs that were reaped.
     pub fn reap_orphaned_runs(&self) -> Result<usize> {
         let active_runs = query_collect(
@@ -24,28 +58,79 @@ impl<'a> AgentManager<'a> {
             row_to_agent_run,
         )?;
 
+        if active_runs.is_empty() {
+            return Ok(0);
+        }
+
+        tracing::debug!(
+            "reap_orphaned_runs: checking {} active agent run(s)",
+            active_runs.len()
+        );
+
+        // Fetch parent_run_ids of active (non-terminal) workflow runs.
+        // Workflow parent runs are created with tmux_window = None by design
+        // and must not be reaped while their workflow is still active.
+        let active_wf_parent_ids = active_workflow_parent_run_ids(self.conn)?;
+
         // Fetch all live tmux window names once (avoids N+1 subprocess spawns).
         let live_windows = list_live_tmux_windows();
+        tracing::debug!(
+            "reap_orphaned_runs: {} live tmux window(s)",
+            live_windows.len()
+        );
 
         let mut reaped = 0;
         for run in &active_runs {
+            // Skip runs that are parent runs of active workflows.
+            if active_wf_parent_ids.contains(&run.id) {
+                continue;
+            }
             if let Some(ref name) = run.tmux_window {
                 if live_windows.contains(name.as_str()) {
                     continue;
                 }
+                tracing::warn!(
+                    "reap_orphaned_runs: tmux window {name:?} gone for run {} (started_at={}, worktree={:?})",
+                    run.id,
+                    run.started_at,
+                    run.worktree_id,
+                );
+            } else {
+                tracing::warn!(
+                    "reap_orphaned_runs: run {} has no tmux_window (started_at={}, worktree={:?})",
+                    run.id,
+                    run.started_at,
+                    run.worktree_id,
+                );
             }
             // Window is gone — try to recover result from log file
             if try_recover_from_log(self, &run.id).is_some() {
+                tracing::info!(
+                    "reap_orphaned_runs: recovered result from log for run {}",
+                    run.id
+                );
                 reaped += 1;
                 continue;
             }
             // No result in log — mark as failed
+            tracing::warn!(
+                "reap_orphaned_runs: no log recovery possible for run {}, marking as failed",
+                run.id
+            );
             self.update_run_failed(
                 &run.id,
                 "tmux session lost — agent may have completed but result was not captured",
             )?;
             reaped += 1;
         }
+
+        if reaped > 0 {
+            tracing::info!("reap_orphaned_runs: reaped {reaped} orphaned run(s)");
+        }
+
+        // Best-effort cleanup of stale stderr capture files (older than 1 hour).
+        cleanup_stale_stderr_files();
+
         Ok(reaped)
     }
 }
@@ -55,6 +140,7 @@ mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
     use crate::agent::status::AgentRunStatus;
+    use rusqlite::params;
 
     #[test]
     fn test_reap_orphaned_runs_no_tmux_window() {
@@ -125,6 +211,43 @@ mod tests {
 
         let reaped = mgr.reap_orphaned_runs().unwrap();
         assert_eq!(reaped, 0);
+    }
+
+    /// A run that is the parent_run_id of an active workflow run must NOT be
+    /// reaped, even if it has no tmux_window. Workflow parent runs are created
+    /// without a tmux window by design and are long-lived while the workflow
+    /// executes.
+    #[test]
+    fn test_reap_orphaned_runs_skips_active_workflow_parent() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create an agent run with no tmux window (would normally be reaped).
+        let parent_run = mgr
+            .create_run(Some("w1"), "workflow parent", None, None)
+            .unwrap();
+        assert_eq!(parent_run.status, AgentRunStatus::Running);
+
+        // Insert an active workflow run referencing this agent run as its parent.
+        let wf_run_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
+             VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
+            params![wf_run_id, parent_run.id],
+        )
+        .unwrap();
+
+        // The parent run should be skipped by the reaper.
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 0, "active workflow parent run must not be reaped");
+
+        let after = mgr.get_run(&parent_run.id).unwrap().unwrap();
+        assert_eq!(
+            after.status,
+            AgentRunStatus::Running,
+            "status must remain running"
+        );
     }
 
     #[test]

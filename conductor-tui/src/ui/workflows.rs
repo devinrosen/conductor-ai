@@ -13,7 +13,7 @@ use conductor_core::workflow::{
 };
 
 use super::common::{gate_type_icon, truncate};
-use super::helpers::{format_condition, shorten_paths, visual_idx_with_headers};
+use super::helpers::{format_condition, shorten_paths};
 use crate::state::AppState;
 use crate::state::ColumnFocus;
 use crate::state::TargetType;
@@ -118,9 +118,43 @@ pub(super) fn render_defs_row_count(state: &AppState) -> usize {
             .iter()
             .collect::<std::collections::HashSet<_>>()
             .len();
-        state.data.workflow_defs.len() + sep_count
+        // Also count distinct named group headers per repo.
+        let mut group_header_count = 0usize;
+        let mut prev_repo = "";
+        let mut prev_group: Option<&str> = None;
+        let fallback = String::from("?");
+        for (i, def) in state.data.workflow_defs.iter().enumerate() {
+            let slug = state
+                .data
+                .workflow_def_slugs
+                .get(i)
+                .unwrap_or(&fallback)
+                .as_str();
+            if slug != prev_repo {
+                prev_repo = slug;
+                prev_group = None;
+            }
+            if let Some(g) = def.group.as_deref() {
+                if Some(g) != prev_group {
+                    group_header_count += 1;
+                    prev_group = Some(g);
+                }
+            }
+        }
+        state.data.workflow_defs.len() + sep_count + group_header_count
     } else {
-        state.data.workflow_defs.len()
+        // Count distinct named group headers.
+        let mut prev_group: Option<&str> = None;
+        let mut header_count = 0usize;
+        for def in &state.data.workflow_defs {
+            if let Some(g) = def.group.as_deref() {
+                if Some(g) != prev_group {
+                    header_count += 1;
+                    prev_group = Some(g);
+                }
+            }
+        }
+        state.data.workflow_defs.len() + header_count
     }
 }
 
@@ -172,6 +206,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
 
         let mut items: Vec<ListItem> = Vec::new();
         let mut prev_repo = "";
+        let mut prev_group: Option<&str> = None;
         for (repo_slug, def) in &defs_with_slug {
             if *repo_slug != prev_repo {
                 let fill = format!("{:─<30}", "");
@@ -182,27 +217,31 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                         .add_modifier(Modifier::BOLD),
                 )])));
                 prev_repo = repo_slug;
+                prev_group = None;
+            }
+            if let Some(g) = def.group.as_deref() {
+                if Some(g) != prev_group {
+                    items.push(ListItem::new(Line::from(vec![Span::styled(
+                        format!("  ─ {g} "),
+                        Style::default()
+                            .fg(state.theme.group_header)
+                            .add_modifier(Modifier::BOLD),
+                    )])));
+                    prev_group = Some(g);
+                }
             }
             let node_count = def.body.len();
             let input_count = def.inputs.len();
-            let (badge_sym, badge_label, badge_color) =
-                last_run_badge(&def.name, &state.data.workflow_runs, &state.theme);
-            let badge_text = if badge_label.is_empty() {
-                format!("  {badge_sym}")
-            } else {
-                format!("  {badge_sym} {badge_label}")
-            };
             let mut spans = vec![
                 Span::raw("  \u{2514} "),
                 Span::styled(
-                    format!("{:<20}", def.name),
+                    format!("{:<20}", def.display_name()),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("  {node_count} steps"),
+                    format!("  \u{25b8}{node_count}"),
                     Style::default().fg(state.theme.label_warning),
                 ),
-                Span::styled(badge_text, Style::default().fg(badge_color)),
             ];
             if !def.targets.is_empty() {
                 let badge = format!("  [{}]", def.targets.join(", "));
@@ -213,7 +252,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             }
             if input_count > 0 {
                 spans.push(Span::styled(
-                    format!("  {input_count} inputs"),
+                    format!("  \u{25be}{input_count}"),
                     Style::default().fg(state.theme.status_waiting),
                 ));
             }
@@ -224,7 +263,24 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             let logical_idx = state
                 .workflow_def_index
                 .min(defs_with_slug.len().saturating_sub(1));
-            visual_idx_with_headers(&defs_with_slug, |(slug, _)| slug.to_string(), logical_idx)
+            // Count both repo-slug headers and named-group headers up to logical_idx.
+            let mut headers = 0usize;
+            let mut prev_r = "";
+            let mut prev_g: Option<&str> = None;
+            for (slug, def) in defs_with_slug.iter().take(logical_idx + 1) {
+                if *slug != prev_r {
+                    headers += 1; // repo header
+                    prev_r = slug;
+                    prev_g = None;
+                }
+                if let Some(g) = def.group.as_deref() {
+                    if Some(g) != prev_g {
+                        headers += 1; // named-group header
+                        prev_g = Some(g);
+                    }
+                }
+            }
+            logical_idx + headers
         } else {
             0
         };
@@ -253,52 +309,68 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         frame.render_stateful_widget(list, area, &mut list_state);
     } else {
-        // Worktree-scoped or repo-scoped: flat list with description and target badges.
-        let items: Vec<ListItem> = state
-            .data
-            .workflow_defs
-            .iter()
-            .map(|def| {
-                let node_count = def.body.len();
-                let input_count = def.inputs.len();
-                let (badge_sym, badge_label, badge_color) =
-                    last_run_badge(&def.name, &state.data.workflow_runs, &state.theme);
-                let badge_text = if badge_label.is_empty() {
-                    format!("  {badge_sym}")
-                } else {
-                    format!("  {badge_sym} {badge_label}")
-                };
-                let mut spans = vec![
-                    Span::styled(
-                        format!("{:<20}", def.name),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("  {}", truncate(&def.description, 30)),
-                        Style::default().fg(state.theme.label_secondary),
-                    ),
-                    Span::styled(
-                        format!("  {node_count} steps"),
-                        Style::default().fg(state.theme.label_warning),
-                    ),
-                    Span::styled(badge_text, Style::default().fg(badge_color)),
-                ];
-                if !def.targets.is_empty() {
-                    let badge = format!("  [{}]", def.targets.join(", "));
-                    spans.push(Span::styled(
-                        badge,
-                        Style::default().fg(state.theme.label_accent),
-                    ));
+        // Worktree-scoped or repo-scoped: list with group header rows for named groups.
+        let mut items: Vec<ListItem> = Vec::new();
+        let mut prev_group: Option<&str> = None;
+        for def in &state.data.workflow_defs {
+            if let Some(g) = def.group.as_deref() {
+                if Some(g) != prev_group {
+                    items.push(ListItem::new(Line::from(vec![Span::styled(
+                        format!("─ {g} "),
+                        Style::default()
+                            .fg(state.theme.group_header)
+                            .add_modifier(Modifier::BOLD),
+                    )])));
+                    prev_group = Some(g);
                 }
-                if input_count > 0 {
-                    spans.push(Span::styled(
-                        format!("  {input_count} inputs"),
-                        Style::default().fg(state.theme.status_waiting),
-                    ));
+            }
+            let node_count = def.body.len();
+            let input_count = def.inputs.len();
+            let mut spans = vec![
+                Span::styled(
+                    format!("{:<20}", def.name),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  \u{25b8}{node_count}"),
+                    Style::default().fg(state.theme.label_warning),
+                ),
+            ];
+            if !def.targets.is_empty() {
+                let badge = format!("  [{}]", def.targets.join(", "));
+                spans.push(Span::styled(
+                    badge,
+                    Style::default().fg(state.theme.label_accent),
+                ));
+            }
+            if input_count > 0 {
+                spans.push(Span::styled(
+                    format!("  \u{25be}{input_count}"),
+                    Style::default().fg(state.theme.status_waiting),
+                ));
+            }
+            items.push(ListItem::new(Line::from(spans)));
+        }
+
+        // Compute visual_idx: logical_idx + number of named-group headers that precede it.
+        let visual_idx = if !state.data.workflow_defs.is_empty() {
+            let logical_idx = state
+                .workflow_def_index
+                .min(state.data.workflow_defs.len().saturating_sub(1));
+            let mut prev_seen_group: Option<&str> = None;
+            let mut header_count = 0usize;
+            for def in state.data.workflow_defs.iter().take(logical_idx + 1) {
+                if let Some(g) = def.group.as_deref() {
+                    if Some(g) != prev_seen_group {
+                        header_count += 1;
+                        prev_seen_group = Some(g);
+                    }
                 }
-                ListItem::new(Line::from(spans))
-            })
-            .collect();
+            }
+            logical_idx + header_count
+        } else {
+            0
+        };
 
         let defs_title = if focused {
             match &context {
@@ -327,7 +399,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
 
         let mut list_state = ListState::default();
         if !state.data.workflow_defs.is_empty() {
-            list_state.select(Some(state.workflow_def_index));
+            list_state.select(Some(visual_idx));
         }
         frame.render_stateful_widget(list, area, &mut list_state);
     }
@@ -1071,7 +1143,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{:<20}", truncate(&run.workflow_name, 20)),
+                            format!("{:<20}", truncate(run.display_name(), 20)),
                             Style::default().add_modifier(Modifier::BOLD),
                         ),
                     ];
@@ -1145,7 +1217,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
-                            format!("{:<20}", truncate(&run.workflow_name, 20)),
+                            format!("{:<20}", truncate(run.display_name(), 20)),
                             Style::default()
                                 .fg(state.theme.label_secondary)
                                 .add_modifier(Modifier::BOLD),
@@ -1353,7 +1425,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             Line::from(vec![
                 Span::styled(" Workflow: ", label_style),
                 Span::styled(
-                    run.workflow_name.clone(),
+                    run.display_name(),
                     Style::default()
                         .fg(state.theme.label_accent)
                         .add_modifier(Modifier::BOLD),
@@ -1558,7 +1630,7 @@ fn render_step_list(
             Span::styled(root_symbol, Style::default().fg(root_color)),
             Span::raw("  "),
             Span::styled(
-                format!("{:<20}", root.workflow_name),
+                format!("{:<20}", root.display_name()),
                 Style::default()
                     .fg(state.theme.label_primary)
                     .add_modifier(Modifier::BOLD),
@@ -1569,6 +1641,18 @@ fn render_step_list(
             ),
         ])));
     }
+
+    // Find the index of the step with the highest combined token usage
+    let max_token_idx: Option<usize> = {
+        let mut best: Option<(usize, i64)> = None;
+        for (i, step) in state.data.workflow_steps.iter().enumerate() {
+            let total = step.input_tokens.unwrap_or(0) + step.output_tokens.unwrap_or(0);
+            if total > 0 && best.is_none_or(|(_, b)| total > b) {
+                best = Some((i, total));
+            }
+        }
+        best.map(|(i, _)| i)
+    };
 
     items.extend(
         state
@@ -1594,7 +1678,13 @@ fn render_step_list(
                     Span::raw("  "),
                     Span::styled(
                         format!("{:<20}", step.step_name),
-                        Style::default().add_modifier(Modifier::BOLD),
+                        if max_token_idx == Some(i) {
+                            Style::default()
+                                .add_modifier(Modifier::BOLD)
+                                .fg(state.theme.label_accent)
+                        } else {
+                            Style::default().add_modifier(Modifier::BOLD)
+                        },
                     ),
                     Span::styled(
                         format!("  [{:<5}]", step.role),
@@ -1605,6 +1695,23 @@ fn render_step_list(
                         Style::default().fg(state.theme.label_accent),
                     ),
                 ];
+
+                // Token columns: show compact ↑/↓ counts when present
+                if let (Some(inp), Some(out)) = (step.input_tokens, step.output_tokens) {
+                    let fmt_k = |n: i64| -> String {
+                        if n >= 1_000_000 {
+                            format!("{:.1}M", n as f64 / 1_000_000.0)
+                        } else if n >= 1_000 {
+                            format!("{:.1}k", n as f64 / 1_000.0)
+                        } else {
+                            format!("{n}")
+                        }
+                    };
+                    spans.push(Span::styled(
+                        format!("  ↑{} ↓{}", fmt_k(inp), fmt_k(out)),
+                        Style::default().fg(state.theme.label_secondary),
+                    ));
+                }
 
                 if step.iteration > 0 {
                     spans.push(Span::styled(
@@ -1881,26 +1988,6 @@ fn format_duration(start: &str, end: &str) -> String {
     }
 }
 
-/// Returns a human-readable relative time string, e.g. "5m ago", "2h ago", "1d ago".
-fn time_ago(ts: &str) -> String {
-    let Ok(t) = chrono::DateTime::parse_from_rfc3339(ts) else {
-        return "?".to_string();
-    };
-    let secs = chrono::Utc::now()
-        .signed_duration_since(t)
-        .num_seconds()
-        .max(0);
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
-    } else {
-        format!("{}d ago", secs / 86400)
-    }
-}
-
 fn ordinal_suffix(n: i64) -> &'static str {
     let m100 = n % 100;
     if m100 == 11 || m100 == 12 || m100 == 13 {
@@ -1925,30 +2012,6 @@ fn push_iteration_badge(spans: &mut Vec<Span<'static>>, max_iteration: i64, acce
     }
 }
 
-fn last_run_badge(
-    def_name: &str,
-    runs: &[WorkflowRun],
-    theme: &Theme,
-) -> (&'static str, String, Color) {
-    let latest = runs
-        .iter()
-        .filter(|r| r.workflow_name == def_name)
-        .max_by(|a, b| a.started_at.cmp(&b.started_at));
-
-    match latest {
-        None => ("—", String::new(), theme.label_secondary),
-        Some(run) => {
-            let label = time_ago(&run.started_at);
-            match run.status {
-                WorkflowRunStatus::Completed => ("✓", label, theme.status_completed),
-                WorkflowRunStatus::Failed => ("✗", label, theme.status_failed),
-                WorkflowRunStatus::Running => ("▶", label, theme.label_accent),
-                _ => ("—", label, theme.label_secondary),
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1969,6 +2032,7 @@ mod tests {
             output: None,
             with: vec![],
             bot_name: None,
+            plugin_dirs: vec![],
         })
     }
 
@@ -1996,9 +2060,11 @@ mod tests {
     fn empty_workflow_def(name: &str, body: Vec<WorkflowNode>) -> WorkflowDef {
         WorkflowDef {
             name: name.to_string(),
+            title: None,
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![],
             body,
             always: vec![],

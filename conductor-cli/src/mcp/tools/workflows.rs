@@ -273,6 +273,9 @@ pub(super) fn tool_run_workflow(
         run_id_notify: Some(Arc::clone(&notify_pair)),
         triggered_by_hook: false,
         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+        force: false,
+        extra_plugin_dirs: vec![],
+        db_path: None,
     };
 
     // Slot receives the error message if execute_workflow_standalone fails before
@@ -324,6 +327,96 @@ pub(super) fn tool_run_workflow(
 
     tool_ok(format!(
         "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nPoll progress with conductor_get_run."
+    ))
+}
+
+pub(super) fn tool_list_templates(
+    _db_path: &Path,
+    _args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::workflow_template::list_embedded_templates;
+
+    let templates = list_embedded_templates();
+    if templates.is_empty() {
+        return tool_ok("No workflow templates available.");
+    }
+
+    let mut out = String::new();
+    for t in &templates {
+        let targets = if t.metadata.target_types.is_empty() {
+            "any".to_string()
+        } else {
+            t.metadata.target_types.join(", ")
+        };
+        out.push_str(&format!(
+            "name: {}\nversion: {}\ndescription: {}\ntargets: {}\n",
+            t.metadata.name, t.metadata.version, t.metadata.description, targets
+        ));
+        if !t.metadata.hints.is_empty() {
+            out.push_str("hints:\n");
+            for h in &t.metadata.hints {
+                out.push_str(&format!("  - {h}\n"));
+            }
+        }
+        out.push('\n');
+    }
+    tool_ok(out)
+}
+
+pub(super) fn tool_instantiate_template(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::workflow_template::{
+        build_instantiation_prompt, collect_existing_workflow_names, get_embedded_template,
+    };
+    use conductor_core::worktree::WorktreeManager;
+
+    let template_name = require_arg!(args, "template");
+    let repo_slug = require_arg!(args, "repo");
+    let worktree_slug = get_arg(args, "worktree");
+
+    let tmpl = match get_embedded_template(template_name) {
+        Some(t) => t,
+        None => {
+            return tool_err(format!(
+                "Template '{template_name}' not found. Use conductor_list_templates to see available templates."
+            ))
+        }
+    };
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    let working_dir = if let Some(wt_slug) = worktree_slug {
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
+            Ok(wt) => wt.path,
+            Err(e) => return tool_err(e),
+        }
+    } else {
+        repo.local_path.clone()
+    };
+
+    let existing_names = collect_existing_workflow_names(&working_dir, &repo.local_path);
+
+    let prompt_result = build_instantiation_prompt(&tmpl, &working_dir, &existing_names);
+
+    tool_ok(format!(
+        "template: {} v{}\nsuggested_filename: {}\nprompt_length: {}\n\n--- Agent Prompt ---\n\n{}",
+        tmpl.metadata.name,
+        tmpl.metadata.version,
+        prompt_result.suggested_filename,
+        prompt_result.prompt.len(),
+        prompt_result.prompt,
     ))
 }
 
@@ -452,7 +545,62 @@ workflow deploy {
             text.contains("default: false"),
             "missing default; got: {text}"
         );
+        assert!(
+            text.contains("type: string"),
+            "inputs should show type: string; got: {text}"
+        );
         // Drop wf_dir after assertions so tempdir lives long enough.
+        drop(wf_dir);
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_boolean_inputs_show_type() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow ticket-to-pr {
+    meta { description = "Turn a ticket into a PR" trigger = "manual" targets = ["worktree"] }
+    inputs {
+        ticket_id required description = "Ticket to process"
+        qualify boolean default = "false" description = "Run qualify step"
+        auto_merge boolean default = "false" description = "Auto-merge when ready"
+    }
+    call agent
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("ticket-to-pr", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .register("my-repo2", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
+        }
+
+        let result = tool_list_workflows(&db, &args_with("repo", "my-repo2"));
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        assert!(
+            text.contains("type: boolean"),
+            "boolean inputs should show type: boolean; got: {text}"
+        );
+        assert!(
+            text.contains("type: string"),
+            "string inputs should show type: string; got: {text}"
+        );
         drop(wf_dir);
     }
 
@@ -498,6 +646,90 @@ workflow w {
         assert!(
             text.contains("required: true"),
             "input with only a description must be required; got: {text}"
+        );
+        drop(wf_dir);
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_includes_targets() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow deploy {
+    meta { description = "Deploy" trigger = "manual" targets = ["worktree"] }
+    call deployer
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("deploy", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .register("my-repo-tgt", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
+        }
+
+        let result = tool_list_workflows(&db, &args_with("repo", "my-repo-tgt"));
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        assert!(
+            text.contains("targets: [worktree]"),
+            "missing targets field; got: {text}"
+        );
+        drop(wf_dir);
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_includes_group() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow review {
+    meta { description = "Review PR" trigger = "manual" group = "MyGroup" }
+    call reviewer
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("review", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .register("my-repo-grp", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
+        }
+
+        let result = tool_list_workflows(&db, &args_with("repo", "my-repo-grp"));
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        assert!(
+            text.contains("group: MyGroup"),
+            "missing group field; got: {text}"
         );
         drop(wf_dir);
     }
@@ -843,5 +1075,65 @@ workflow w {
         assert!(text.contains("missing agent 'deployer'"), "got: {text}");
         assert!(text.contains("Warnings"), "got: {text}");
         assert!(text.contains("unknown bot name 'foo-bot'"), "got: {text}");
+    }
+
+    // ── Template tool tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_tool_list_templates_returns_content() {
+        let (_f, db) = make_test_db();
+        let result = tool_list_templates(&db, &empty_args());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // Should either list templates or report none available
+        assert!(
+            text.contains("name:") || text.contains("No workflow templates"),
+            "unexpected output: {text}"
+        );
+    }
+
+    #[test]
+    fn test_tool_instantiate_template_unknown_template() {
+        let (_f, db) = make_test_db();
+        let args = args_with("template", "nonexistent-xyz");
+        let mut args = args;
+        args.insert("repo".to_string(), Value::String("my-repo".to_string()));
+        let result = tool_instantiate_template(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("not found"),
+            "expected 'not found'; got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_tool_instantiate_template_unknown_repo() {
+        let (_f, db) = make_test_db();
+        // Use the first embedded template name if available, else a placeholder
+        let template_name = {
+            use conductor_core::workflow_template::list_embedded_templates;
+            let ts = list_embedded_templates();
+            if ts.is_empty() {
+                "any-template".to_string()
+            } else {
+                ts[0].metadata.name.clone()
+            }
+        };
+        let mut args = serde_json::Map::new();
+        args.insert("template".to_string(), Value::String(template_name));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        let result = tool_instantiate_template(&db, &args);
+        assert_eq!(result.is_error, Some(true));
     }
 }

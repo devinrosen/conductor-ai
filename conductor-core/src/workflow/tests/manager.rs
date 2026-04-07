@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::agent::AgentManager;
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
 
 #[test]
@@ -1057,6 +1057,7 @@ fn test_cancel_run_waiting_status() {
         &BlockedOn::HumanApproval {
             gate_name: "human-gate".to_string(),
             prompt: None,
+            options: vec![],
         },
     )
     .unwrap();
@@ -1382,6 +1383,51 @@ fn test_reap_orphaned_workflow_runs_purged_parent() {
         )
         .unwrap();
     assert_eq!(status, "cancelled");
+}
+
+#[test]
+fn test_reap_orphaned_workflow_runs_multiple_dead_parents() {
+    // 3 waiting runs with dead (failed) parents + 1 with an active parent.
+    // Only the 3 dead-parent runs should be reaped.
+    let conn = setup_db();
+
+    insert_waiting_run_with_gate(&conn, "run-dead-1", "failed", Some("86400s"), None);
+    insert_waiting_run_with_gate(&conn, "run-dead-2", "failed", Some("86400s"), None);
+    insert_waiting_run_with_gate(&conn, "run-dead-3", "cancelled", Some("86400s"), None);
+    insert_waiting_run_with_gate(
+        &conn,
+        "run-active",
+        "running",
+        Some("999999999s"),
+        Some("2099-01-01T00:00:00Z"),
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+    assert_eq!(reaped, 3, "exactly the 3 dead-parent runs should be reaped");
+
+    for dead_id in &["run-dead-1", "run-dead-2", "run-dead-3"] {
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                params![dead_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "cancelled", "{dead_id} should be cancelled");
+    }
+
+    let active_status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params!["run-active"],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        active_status, "waiting",
+        "active-parent run must remain waiting"
+    );
 }
 
 #[test]
@@ -1755,6 +1801,7 @@ fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
     let blocked = BlockedOn::HumanApproval {
         gate_name: "deploy-gate".to_string(),
         prompt: Some("Approve deploy?".to_string()),
+        options: vec![],
     };
 
     mgr.set_waiting_blocked_on(&run.id, &blocked).unwrap();
@@ -1968,4 +2015,352 @@ fn test_backfill_migration_leaves_null_when_worktree_deleted() {
         repo_id.is_none(),
         "repo_id should remain NULL when worktree row is deleted"
     );
+}
+
+// ---------------------------------------------------------------------------
+// set_step_output_file
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_step_output_file() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "script-step", "actor", false, 0, 0)
+        .unwrap();
+
+    mgr.set_step_output_file(&step_id, "/tmp/output.txt")
+        .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.output_file.as_deref(), Some("/tmp/output.txt"));
+}
+
+// ---------------------------------------------------------------------------
+// set_step_gate_info
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_step_gate_info_with_prompt() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
+        .unwrap();
+
+    mgr.set_step_gate_info(
+        &step_id,
+        GateType::PrApproval,
+        Some("Need 2 approvals"),
+        "24h",
+    )
+    .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.gate_type, Some(GateType::PrApproval));
+    assert_eq!(step.gate_prompt.as_deref(), Some("Need 2 approvals"));
+    assert_eq!(step.gate_timeout.as_deref(), Some("24h"));
+}
+
+#[test]
+fn test_set_step_gate_info_no_prompt() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
+        .unwrap();
+
+    mgr.set_step_gate_info(&step_id, GateType::PrChecks, None, "1h")
+        .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.gate_type, Some(GateType::PrChecks));
+    assert!(step.gate_prompt.is_none());
+    assert_eq!(step.gate_timeout.as_deref(), Some("1h"));
+}
+
+// ---------------------------------------------------------------------------
+// set_step_parallel_group
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_step_parallel_group() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "parallel-step", "actor", false, 0, 0)
+        .unwrap();
+
+    mgr.set_step_parallel_group(&step_id, "group-abc").unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.parallel_group_id.as_deref(), Some("group-abc"));
+}
+
+// ---------------------------------------------------------------------------
+// get_steps_for_runs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_get_steps_for_runs_empty_ids() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let result = mgr.get_steps_for_runs(&[]).unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_get_steps_for_runs_multiple_runs() {
+    let conn = setup_db();
+    let (mgr, _p1, run1) = make_workflow_run(&conn);
+
+    let agent_mgr = AgentManager::new(&conn);
+    let p2 = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let run2 = mgr
+        .create_workflow_run("wf2", Some("w1"), &p2.id, false, "manual", None)
+        .unwrap();
+
+    // Add steps to each run
+    mgr.insert_step(&run1.id, "s1", "actor", false, 0, 0)
+        .unwrap();
+    mgr.insert_step(&run1.id, "s2", "actor", false, 1, 0)
+        .unwrap();
+    mgr.insert_step(&run2.id, "s3", "actor", false, 0, 0)
+        .unwrap();
+
+    let result = mgr.get_steps_for_runs(&[&run1.id, &run2.id]).unwrap();
+    assert_eq!(result.get(&run1.id).unwrap().len(), 2);
+    assert_eq!(result.get(&run2.id).unwrap().len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// get_active_steps_for_runs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_get_active_steps_for_runs_filters_by_status() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    let s1 = mgr
+        .insert_step(&run.id, "completed-step", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &s1, WorkflowStepStatus::Completed);
+
+    let s2 = mgr
+        .insert_step(&run.id, "running-step", "actor", false, 1, 0)
+        .unwrap();
+    set_step_status(&mgr, &s2, WorkflowStepStatus::Running);
+
+    let s3 = mgr
+        .insert_step(&run.id, "waiting-step", "gate", false, 2, 0)
+        .unwrap();
+    set_step_status(&mgr, &s3, WorkflowStepStatus::Waiting);
+
+    let s4 = mgr
+        .insert_step(&run.id, "failed-step", "actor", false, 3, 0)
+        .unwrap();
+    set_step_status(&mgr, &s4, WorkflowStepStatus::Failed);
+
+    let result = mgr.get_active_steps_for_runs(&[&run.id]).unwrap();
+    let steps = result.get(&run.id).unwrap();
+    // Only running and waiting should be returned
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].step_name, "running-step");
+    assert_eq!(steps[1].step_name, "waiting-step");
+}
+
+#[test]
+fn test_get_active_steps_for_runs_empty_ids() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let result = mgr.get_active_steps_for_runs(&[]).unwrap();
+    assert!(result.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// detect_stuck_workflow_run_ids — detection logic tests
+// ---------------------------------------------------------------------------
+
+/// Insert a workflow run in 'running' status with no parent_workflow_run_id.
+fn insert_running_root_run(conn: &Connection, run_id: &str) {
+    let agent_mgr = AgentManager::new(conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL)",
+        params![run_id, parent.id],
+    )
+    .unwrap();
+}
+
+/// Insert a non-terminal step (pending/running/waiting) with no ended_at.
+fn insert_non_terminal_step(conn: &Connection, step_id: &str, run_id: &str, status: &str) {
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration) \
+         VALUES (?1, ?2, 'step-a', 'actor', 0, ?3, 0)",
+        params![step_id, run_id, status],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_detects_stale_run() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "stuck-run");
+    // Step completed with an old ended_at — well past any reasonable threshold.
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "stuck-run",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    // threshold_secs = 60: elapsed >> 60 → detected
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert_eq!(ids.len(), 1, "stale run should be detected");
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_skips_fresh_run() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "fresh-run");
+    // Step completed just now — store ended_at as the current UTC time.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, ended_at) \
+         VALUES ('s1', 'fresh-run', 'step-a', 'actor', 0, 'completed', 0, \
+                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        [],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    // Very large threshold — a just-completed step should not be detected.
+    let ids = mgr.detect_stuck_workflow_run_ids(999_999).unwrap();
+    assert_eq!(ids.len(), 0, "fresh run must not be detected");
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_skips_pending_step() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "pending-run");
+    insert_non_terminal_step(&conn, "s1", "pending-run", "pending");
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "run with pending step must not be detected");
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_skips_running_step() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "running-step-run");
+    insert_non_terminal_step(&conn, "s1", "running-step-run", "running");
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "run with running step must not be detected");
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_skips_waiting_step() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "waiting-step-run");
+    insert_non_terminal_step(&conn, "s1", "waiting-step-run", "waiting");
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "run with waiting step must not be detected");
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
+    let conn = setup_db();
+    // Insert a root run first to satisfy the FK for parent_workflow_run_id.
+    insert_running_root_run(&conn, "root-run");
+    // Insert a sub-workflow with parent_workflow_run_id set.
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES ('sub-run', 'child-wf', NULL, ?1, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', 'root-run')",
+        params![parent.id],
+    )
+    .unwrap();
+    insert_terminal_step_with_id(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "sub-workflow must not be detected");
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_skips_non_running_status() {
+    let conn = setup_db();
+    insert_workflow_run(&conn, "completed-run", "test-wf", "completed", None);
+    insert_workflow_run(&conn, "failed-run", "test-wf", "failed", None);
+    insert_workflow_run(&conn, "waiting-run", "test-wf", "waiting", None);
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "completed-run",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+    insert_terminal_step_with_id(
+        &conn,
+        "s2",
+        "failed-run",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+    insert_terminal_step_with_id(
+        &conn,
+        "s3",
+        "waiting-run",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "non-running status runs must not be detected");
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_skips_no_steps() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "no-steps-run");
+    // No steps inserted → last_step_ended IS NULL → skipped by SQL guard.
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    assert_eq!(ids.len(), 0, "run with no steps must not be detected");
+}
+
+#[test]
+fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "stuck-1");
+    insert_running_root_run(&conn, "stuck-2");
+    insert_running_root_run(&conn, "stuck-3");
+    insert_terminal_step_with_id(&conn, "s1", "stuck-1", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s2", "stuck-2", "failed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert_eq!(ids.len(), 3, "all 3 stuck runs should be detected");
 }

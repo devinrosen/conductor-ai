@@ -52,6 +52,16 @@ pub(super) struct ResumeContext {
     pub child_runs: HashMap<String, crate::agent::AgentRun>,
 }
 
+/// If the workflow's ticket is a Vantage deliverable, resolve the lifecycle hooks.
+fn resolve_vantage_lifecycle(
+    conn: &Connection,
+    state: &ExecutionState<'_>,
+) -> Option<crate::vantage::VantageLifecycle> {
+    let ticket_id = state.ticket_id.as_deref()?;
+    let repo_id = state.repo_id.as_deref()?;
+    crate::vantage::VantageLifecycle::resolve(conn, ticket_id, repo_id)
+}
+
 /// Mutable runtime state for a workflow execution.
 pub(super) struct ExecutionState<'a> {
     pub conn: &'a Connection,
@@ -82,6 +92,10 @@ pub(super) struct ExecutionState<'a> {
     pub total_cost: f64,
     pub total_turns: i64,
     pub total_duration_ms: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cache_read_input_tokens: i64,
+    pub total_cache_creation_input_tokens: i64,
     pub last_gate_feedback: Option<String>,
     /// Block-level output schema name inherited from an enclosing `do {}` block.
     pub block_output: Option<String>,
@@ -98,6 +112,69 @@ pub(super) struct ExecutionState<'a> {
     /// Directory containing the conductor binary, injected into script step PATH.
     /// Resolved by the caller (binary crate) so the library doesn't call `current_exe()`.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// Additional plugin directories to pass to agent sessions.
+    pub extra_plugin_dirs: Vec<String>,
+}
+
+impl ExecutionState<'_> {
+    /// Returns the prefix used for tmux window names: the worktree slug when
+    /// available, or the first 8 characters of the workflow run ID otherwise.
+    pub(super) fn window_prefix(&self) -> &str {
+        if self.worktree_slug.is_empty() {
+            self.workflow_run_id
+                .get(..8)
+                .unwrap_or(&self.workflow_run_id)
+        } else {
+            self.worktree_slug.as_str()
+        }
+    }
+
+    /// Accumulate metrics from a completed agent run into this execution state.
+    ///
+    /// Centralises the per-field `if let Some` pattern so parallel.rs and any
+    /// other executor that processes agent runs call this instead of duplicating
+    /// the loop.
+    pub(super) fn accumulate_agent_run(&mut self, run: &crate::agent::AgentRun) {
+        if let Some(cost) = run.cost_usd {
+            self.total_cost += cost;
+        }
+        if let Some(turns) = run.num_turns {
+            self.total_turns += turns;
+        }
+        if let Some(dur) = run.duration_ms {
+            self.total_duration_ms += dur;
+        }
+        if let Some(t) = run.input_tokens {
+            self.total_input_tokens += t;
+        }
+        if let Some(t) = run.output_tokens {
+            self.total_output_tokens += t;
+        }
+        if let Some(t) = run.cache_read_input_tokens {
+            self.total_cache_read_input_tokens += t;
+        }
+        if let Some(t) = run.cache_creation_input_tokens {
+            self.total_cache_creation_input_tokens += t;
+        }
+    }
+
+    /// Persist the current accumulated metrics to the workflow run row.
+    ///
+    /// Call sites that need best-effort (non-fatal) flushing should wrap this
+    /// in `if let Err(e) = state.flush_metrics()`.  Fatal call sites use `?`.
+    pub(super) fn flush_metrics(&self) -> crate::error::Result<()> {
+        self.wf_mgr.persist_workflow_metrics(
+            &self.workflow_run_id,
+            self.total_input_tokens,
+            self.total_output_tokens,
+            self.total_cache_read_input_tokens,
+            self.total_cache_creation_input_tokens,
+            self.total_turns,
+            self.total_cost,
+            self.total_duration_ms,
+            self.model.as_deref(),
+        )
+    }
 }
 
 /// Resolve a schema by name using the standard search order.
@@ -203,11 +280,19 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     all_agents.dedup();
 
     let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
+    // Combine CLI extra_plugin_dirs with per-call plugin_dirs from the .wf file.
+    let mut all_plugin_dirs = input.extra_plugin_dirs.clone();
+    for dir in workflow.collect_all_plugin_dirs() {
+        if !all_plugin_dirs.contains(&dir) {
+            all_plugin_dirs.push(dir);
+        }
+    }
     let missing_agents = crate::agent_config::find_missing_agents(
         input.working_dir,
         input.repo_path,
         &specs,
         Some(&workflow.name),
+        &all_plugin_dirs,
     );
     if !missing_agents.is_empty() {
         return Err(ConductorError::Workflow(format!(
@@ -267,12 +352,22 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     // Guard: prevent multiple concurrent top-level runs on the same worktree
     // (skipped for ephemeral PR runs which have no registered worktree).
+    // When force=true, cancel the existing run instead of rejecting.
+    // Part of: process-escape-hatch@1.0.0
     if input.depth == 0 {
         if let Some(wt_id) = input.worktree_id {
             if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
-                return Err(ConductorError::WorkflowRunAlreadyActive {
-                    name: active.workflow_name,
-                });
+                if input.force {
+                    tracing::info!(
+                        "Force override: cancelling active run {} to start new run",
+                        active.id
+                    );
+                    wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
+                } else {
+                    return Err(ConductorError::WorkflowRunAlreadyActive {
+                        name: active.workflow_name,
+                    });
+                }
             }
         }
     }
@@ -294,11 +389,25 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     } else {
         workflow.trigger.to_string()
     };
+
+    // Derive repo_id from worktree if not provided (#1539)
+    let derived_repo_id = match (&input.repo_id, &input.worktree_id) {
+        (None, Some(wt_id)) => match WorktreeManager::new(conn, config).get_by_id(wt_id) {
+            Ok(wt) => Some(wt.repo_id),
+            Err(e) => {
+                tracing::warn!("Failed to look up worktree '{wt_id}' for repo_id derivation: {e}");
+                None
+            }
+        },
+        _ => None,
+    };
+    let effective_repo_id = input.repo_id.or(derived_repo_id.as_deref());
+
     let wf_run = wf_mgr.create_workflow_run_with_targets(
         &workflow.name,
         input.worktree_id,
         input.ticket_id,
-        input.repo_id,
+        effective_repo_id,
         &parent_run.id,
         input.exec_config.dry_run,
         &trigger_str,
@@ -355,7 +464,16 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             .or_insert_with(|| repo.slug.clone());
     }
 
-    // Inject feature metadata when a feature is provided.
+    // Worktree's base_branch is the authoritative PR target. Insert it first so
+    // inject_feature_variables (which uses or_insert_with) cannot overwrite it.
+    if let Some(wt_id) = input.worktree_id {
+        let wt = crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id)?;
+        let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&wt.repo_id)?;
+        let base = wt.effective_base(&repo.default_branch);
+        merged_inputs
+            .entry("feature_base_branch".to_string())
+            .or_insert_with(|| base.to_string());
+    }
     if let Some(ref f) = feature {
         inject_feature_variables(f, &mut merged_inputs);
     }
@@ -394,6 +512,10 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         total_cost: 0.0,
         total_turns: 0,
         total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
         last_gate_feedback: None,
         block_output: None,
         block_with: Vec::new(),
@@ -402,6 +524,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         feature_id: input.feature_id.map(String::from),
         triggered_by_hook: input.triggered_by_hook,
         conductor_bin_dir: input.conductor_bin_dir.clone(),
+        extra_plugin_dirs: input.extra_plugin_dirs.clone(),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -415,9 +538,17 @@ pub(super) fn run_workflow_engine(
     state: &mut ExecutionState<'_>,
     workflow: &WorkflowDef,
 ) -> Result<WorkflowResult> {
+    // Notify Vantage on dispatch (best-effort — don't fail the workflow)
+    let vantage_lc = resolve_vantage_lifecycle(state.conn, state);
+    if let Some(ref lc) = vantage_lc {
+        if let Err(e) = lc.on_dispatched(&state.workflow_run_id) {
+            tracing::warn!("Vantage dispatch notification failed: {e}");
+        }
+    }
+
     // Execute main body
     let mut body_error: Option<String> = None;
-    let body_result = execute_nodes(state, &workflow.body);
+    let body_result = execute_nodes(state, &workflow.body, true);
     if let Err(ref e) = body_result {
         let msg = e.to_string();
         tracing::error!("Body execution error: {msg}");
@@ -435,7 +566,7 @@ pub(super) fn run_workflow_engine(
         state
             .inputs
             .insert("workflow_status".to_string(), workflow_status.to_string());
-        let always_result = execute_nodes(state, &workflow.always);
+        let always_result = execute_nodes(state, &workflow.always, false);
         if let Err(ref e) = always_result {
             tracing::warn!("Always block error (non-fatal): {e}");
         }
@@ -458,10 +589,10 @@ pub(super) fn run_workflow_engine(
             Some(state.total_cost),
             Some(state.total_turns),
             Some(state.total_duration_ms),
-            None,
-            None,
-            None,
-            None,
+            Some(state.total_input_tokens),
+            Some(state.total_output_tokens),
+            Some(state.total_cache_read_input_tokens),
+            Some(state.total_cache_creation_input_tokens),
         )?;
         state.wf_mgr.update_workflow_status(
             &wf_run_id,
@@ -469,6 +600,19 @@ pub(super) fn run_workflow_engine(
             Some(&summary),
         )?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
+
+        // Notify Vantage of completion (best-effort)
+        if let Some(ref lc) = vantage_lc {
+            let pr_url = state.inputs.get("pr_url").map(|s| s.as_str());
+            let wt_slug = if state.worktree_slug.is_empty() {
+                None
+            } else {
+                Some(state.worktree_slug.as_str())
+            };
+            if let Err(e) = lc.on_completed(pr_url, wt_slug) {
+                tracing::warn!("Vantage completion notification failed: {e}");
+            }
+        }
     } else {
         state
             .agent_mgr
@@ -479,6 +623,20 @@ pub(super) fn run_workflow_engine(
             Some(&summary),
         )?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
+
+        // Notify Vantage of failure (best-effort)
+        if let Some(ref lc) = vantage_lc {
+            if let Err(e) = lc.on_failed(&summary) {
+                tracing::warn!("Vantage failure notification failed: {e}");
+            }
+        }
+    }
+
+    if let Err(e) = state.flush_metrics() {
+        tracing::warn!(
+            workflow_run_id = %wf_run_id,
+            "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
+        );
     }
 
     tracing::info!(
@@ -507,6 +665,10 @@ pub(super) fn run_workflow_engine(
         total_cost: state.total_cost,
         total_turns: state.total_turns,
         total_duration_ms: state.total_duration_ms,
+        total_input_tokens: state.total_input_tokens,
+        total_output_tokens: state.total_output_tokens,
+        total_cache_read_input_tokens: state.total_cache_read_input_tokens,
+        total_cache_creation_input_tokens: state.total_cache_creation_input_tokens,
     })
 }
 
@@ -593,6 +755,8 @@ fn evaluate_hooks(
             run_id_notify: None,
             triggered_by_hook: true,
             conductor_bin_dir: state.conductor_bin_dir.clone(),
+            force: false,
+            extra_plugin_dirs: state.extra_plugin_dirs.clone(),
         };
 
         match execute_workflow(&hook_input) {
@@ -614,7 +778,10 @@ fn evaluate_hooks(
 /// connection and resolves the conductor binary path. Designed for use in
 /// background threads where the caller cannot share a `&Connection`.
 pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<WorkflowResult> {
-    let db = crate::config::db_path();
+    let db = params
+        .db_path
+        .clone()
+        .unwrap_or_else(crate::config::db_path);
     let conn = crate::db::open_database(&db)?;
 
     let input = WorkflowExecInput {
@@ -638,6 +805,8 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         run_id_notify: params.run_id_notify.clone(),
         triggered_by_hook: params.triggered_by_hook,
         conductor_bin_dir: params.conductor_bin_dir.clone(),
+        force: params.force,
+        extra_plugin_dirs: params.extra_plugin_dirs.clone(),
     };
 
     execute_workflow(&input)
@@ -902,6 +1071,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         total_cost: 0.0,
         total_turns: 0,
         total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
         last_gate_feedback: None,
         block_output: None,
         block_with: Vec::new(),
@@ -910,6 +1083,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         feature_id: wf_run.feature_id.clone(),
         triggered_by_hook: wf_run.is_triggered_by_hook(),
         conductor_bin_dir: input.conductor_bin_dir.clone(),
+        extra_plugin_dirs: vec![],
     };
 
     run_workflow_engine(&mut state, &workflow)
@@ -936,16 +1110,41 @@ pub(super) fn execute_single_node(
         WorkflowNode::Script(n) => super::executors::execute_script(state, n, iteration)?,
         WorkflowNode::Always(n) => {
             // Nested always — just execute body
-            execute_nodes(state, &n.body)?;
+            execute_nodes(state, &n.body, false)?;
         }
     }
     Ok(())
 }
 
-pub(super) fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNode]) -> Result<()> {
+pub(super) fn execute_nodes(
+    state: &mut ExecutionState<'_>,
+    nodes: &[WorkflowNode],
+    respect_fail_fast: bool,
+) -> Result<()> {
     for node in nodes {
-        if !state.all_succeeded && state.exec_config.fail_fast {
+        if respect_fail_fast && !state.all_succeeded && state.exec_config.fail_fast {
             break;
+        }
+        // Lightweight cancellation check — only reads the status column.
+        match state.wf_mgr.is_workflow_cancelled(&state.workflow_run_id) {
+            Ok(true) => {
+                tracing::info!(
+                    "Workflow run {} cancelled externally, stopping execution",
+                    state.workflow_run_id
+                );
+                return Err(ConductorError::Workflow(
+                    "Workflow run cancelled".to_string(),
+                ));
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Database error during cancellation check for workflow run {}: {}",
+                    state.workflow_run_id,
+                    e
+                );
+                // Continue execution - don't fail the workflow due to a transient DB error
+            }
         }
         execute_single_node(state, node, 0)?;
     }
@@ -996,6 +1195,10 @@ pub(super) fn record_step_success(
     cost_usd: Option<f64>,
     num_turns: Option<i64>,
     duration_ms: Option<i64>,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    cache_read_input_tokens: Option<i64>,
+    cache_creation_input_tokens: Option<i64>,
     markers: Vec<String>,
     context: String,
     child_run_id: Option<String>,
@@ -1011,6 +1214,23 @@ pub(super) fn record_step_success(
     }
     if let Some(dur) = duration_ms {
         state.total_duration_ms += dur;
+    }
+    if let Some(t) = input_tokens {
+        state.total_input_tokens += t;
+    }
+    if let Some(t) = output_tokens {
+        state.total_output_tokens += t;
+    }
+    if let Some(t) = cache_read_input_tokens {
+        state.total_cache_read_input_tokens += t;
+    }
+    if let Some(t) = cache_creation_input_tokens {
+        state.total_cache_creation_input_tokens += t;
+    }
+
+    // Best-effort mid-run metrics flush — non-fatal
+    if let Err(e) = state.flush_metrics() {
+        tracing::warn!("Failed to flush mid-run metrics: {e}");
     }
 
     let markers_for_ctx = markers.clone();
@@ -1111,6 +1331,7 @@ pub(super) fn run_on_fail_agent(
         output: None,
         with: Vec::new(),
         bot_name: None,
+        plugin_dirs: Vec::new(),
     };
     if let Err(e) = super::executors::execute_call(state, &on_fail_node, iteration) {
         tracing::warn!("on_fail agent '{}' also failed: {e}", on_fail_agent.label(),);
@@ -1188,6 +1409,18 @@ pub(super) fn restore_completed_step(
             }
             if let Some(dur) = run.duration_ms {
                 state.total_duration_ms += dur;
+            }
+            if let Some(t) = run.input_tokens {
+                state.total_input_tokens += t;
+            }
+            if let Some(t) = run.output_tokens {
+                state.total_output_tokens += t;
+            }
+            if let Some(t) = run.cache_read_input_tokens {
+                state.total_cache_read_input_tokens += t;
+            }
+            if let Some(t) = run.cache_creation_input_tokens {
+                state.total_cache_creation_input_tokens += t;
             }
         } else {
             tracing::warn!(
@@ -1488,9 +1721,11 @@ mod tests {
     ) -> WorkflowDef {
         WorkflowDef {
             name: name.to_string(),
+            title: None,
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![InputDecl {
                 name: input_name.to_string(),
                 input_type: InputType::Boolean,

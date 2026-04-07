@@ -5,6 +5,7 @@ import type { WorkflowDefSummary } from "../../api/types";
 interface RunWorkflowModalProps {
   def: WorkflowDefSummary;
   worktreeId: string;
+  ticketId?: string;
   onClose: () => void;
   onStarted: () => void;
 }
@@ -12,6 +13,7 @@ interface RunWorkflowModalProps {
 export function RunWorkflowModal({
   def,
   worktreeId,
+  ticketId,
   onClose,
   onStarted,
 }: RunWorkflowModalProps) {
@@ -20,8 +22,10 @@ export function RunWorkflowModal({
   const [inputs, setInputs] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const input of def.inputs) {
-      if (input.input_type === "boolean") {
-        initial[input.name] = input.default ?? "false";
+      if (input.type === "boolean") {
+        initial[input.name] = input.defaultValue ?? "false";
+      } else if (input.name === "ticket_id" && ticketId) {
+        initial[input.name] = ticketId;
       }
     }
     return initial;
@@ -51,7 +55,7 @@ export function RunWorkflowModal({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md border border-gray-600">
         <h3 className="text-lg font-semibold text-gray-200 mb-4">
-          Run: {def.name}
+          Run: {def.title ?? def.name}
         </h3>
 
         <div className="space-y-4">
@@ -81,7 +85,7 @@ export function RunWorkflowModal({
 
           {def.inputs.map((input) => (
             <div key={input.name}>
-              {input.input_type === "boolean" ? (
+              {input.type === "boolean" ? (
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"

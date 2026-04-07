@@ -4,10 +4,11 @@ use std::sync::Arc;
 use rmcp::model::{CallToolResult, Tool, ToolAnnotations};
 use serde_json::{json, Value};
 
-use crate::mcp::helpers::{schema, tool_err};
+use crate::mcp::helpers::{schema, schema_typed, tool_err};
 
 mod agents;
 mod gates;
+mod issues;
 mod prs;
 mod repos;
 mod runs;
@@ -214,11 +215,24 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_approve_gate",
-            "Approve a waiting gate in a workflow run.",
-            schema(&[
-                ("run_id", "Workflow run ID", true),
-                ("feedback", "Optional feedback or approval message", false),
-            ]),
+            "Approve a waiting gate in a workflow run. \
+             When the gate has multi-select options, pass the chosen values as `selections`. \
+             An empty selections array means 'approve with nothing selected' (skip).",
+            Arc::new({
+                let mut m = serde_json::Map::new();
+                m.insert("type".into(), json!("object"));
+                m.insert("properties".into(), json!({
+                    "run_id": { "type": "string", "description": "Workflow run ID" },
+                    "feedback": { "type": "string", "description": "Optional feedback or approval message" },
+                    "selections": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional list of selected option values for multi-select gates"
+                    }
+                }));
+                m.insert("required".into(), json!(["run_id"]));
+                m
+            }),
         ),
         Tool::new(
             "conductor_reject_gate",
@@ -242,7 +256,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_workflows",
-            "List available workflow definitions for a repo. Returns workflow names, descriptions, trigger types, and input schemas (name, required, default, description for each input). \
+            "List available workflow definitions for a repo. Returns workflow names, descriptions, trigger types, targets, group, and input schemas (name, required, default, description for each input). \
              Full workflow definitions also available at `conductor://workflows/{repo}`.",
             schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
         ),
@@ -354,20 +368,76 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         )
         .with_annotations(ToolAnnotations::new().destructive(true).read_only(false)),
         Tool::new(
+            "conductor_list_templates",
+            "List available workflow templates (built-in scaffolding). Returns template name, \
+             description, version, target types, and hints for each embedded template.",
+            schema(&[]),
+        ),
+        Tool::new(
+            "conductor_instantiate_template",
+            "Generate an agent prompt to instantiate a workflow template for a repo. \
+             Returns the full prompt that an agent should use to customize and write \
+             the workflow file. Use conductor_list_templates first to see available templates.",
+            schema(&[
+                ("template", "Template name (from conductor_list_templates)", true),
+                ("repo", "Repo slug", true),
+                (
+                    "worktree",
+                    "Worktree slug (optional; uses repo root if omitted)",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
+            "conductor_create_gh_issue",
+            "Create a GitHub issue in a registered repo. Returns the issue number and URL. \
+             Optionally links the created issue to an agent run for tracking.",
+            schema(&[
+                ("repo", "Repo slug (registered conductor repo)", true),
+                ("title", "Issue title", true),
+                ("body", "Issue body (markdown)", true),
+                ("labels", "Comma-separated label names (optional)", false),
+                ("run_id", "Agent run ID for tracking (optional)", false),
+            ]),
+        ),
+        Tool::new(
             "conductor_upsert_ticket",
             "Upsert a ticket from any external source into conductor. Idempotent on (repo, source_type, source_id). \
-             Use this from a sync workflow to keep tickets current without modifying conductor-ai source code.",
+             Use this from a sync workflow to keep tickets current without modifying conductor-ai source code. \
+             Dependency fields use replace semantics: `children` replaces all child relationships on every call \
+             (omit children to leave existing children unchanged); `parent` replaces any existing parent relationship.",
             schema(&[
-                ("repo",        "Repo slug",                                           true),
-                ("source_type", "Free-form source identifier, e.g. 'sdlc', 'linear'", true),
-                ("source_id",   "Unique ID in the source system",                      true),
-                ("title",       "Ticket title",                                        true),
-                ("state",       "open | in_progress | closed",                         true),
-                ("body",        "Ticket body/description",                             false),
-                ("url",         "URL to the ticket in the source system",              false),
-                ("labels",      "Comma-separated label names",                         false),
-                ("assignee",    "Assignee username or name",                           false),
-                ("priority",    "Priority string",                                     false),
+                ("repo",        "Repo slug",                                                                                                                           true),
+                ("source_type", "Free-form source identifier, e.g. 'sdlc', 'linear'",                                                                                 true),
+                ("source_id",   "Unique ID in the source system",                                                                                                      true),
+                ("title",       "Ticket title",                                                                                                                        true),
+                ("state",       "open | in_progress | closed",                                                                                                         true),
+                ("body",        "Ticket body/description",                                                                                                             false),
+                ("url",         "URL to the ticket in the source system",                                                                                              false),
+                ("labels",      "Comma-separated label names",                                                                                                         false),
+                ("assignee",    "Assignee username or name",                                                                                                           false),
+                ("priority",    "Priority string",                                                                                                                     false),
+                ("blocked_by",  "Comma-separated source IDs of tickets that block this one",                                                                           false),
+                ("children",    "Comma-separated source IDs of child tickets (this ticket is parent). REPLACES existing children on every call — include all children or previously set ones will be removed.", false),
+                ("parent",      "Source ID of the parent ticket within the same source_type. Sets this ticket as a child of that parent. REPLACES any existing parent — last write wins.", false),
+            ]),
+        ),
+        Tool::new(
+            "conductor_get_ready_tickets",
+            "Return open tickets that have no unresolved blockers and no active workflow run. \
+             A ticket is ready when all tickets that block it are closed (and their workflow runs, if any, \
+             are completed), and the ticket itself has no running or waiting workflow run. \
+             Optionally scope to direct children of a parent ticket, filter by label, or cap results with limit.",
+            schema_typed(&[
+                ("repo", "string", "Repo slug (e.g. my-repo)", true),
+                (
+                    "root_ticket_id",
+                    "string",
+                    "Scope to direct children of this ticket ULID (optional)",
+                    false,
+                ),
+                ("label", "string", "Filter by label name (optional)", false),
+                ("limit", "integer", "Max tickets to return (optional)", false),
             ]),
         ),
     ]
@@ -404,6 +474,10 @@ pub(super) fn dispatch_tool(
         "conductor_unregister_repo" => repos::tool_unregister_repo(db_path, args),
         "conductor_delete_ticket" => tickets::tool_delete_ticket(db_path, args),
         "conductor_upsert_ticket" => tickets::tool_upsert_ticket(db_path, args),
+        "conductor_get_ready_tickets" => tickets::tool_get_ready_tickets(db_path, args),
+        "conductor_list_templates" => workflows::tool_list_templates(db_path, args),
+        "conductor_instantiate_template" => workflows::tool_instantiate_template(db_path, args),
+        "conductor_create_gh_issue" => issues::tool_create_gh_issue(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }

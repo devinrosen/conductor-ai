@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
+import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
 import type { AgentRun, AgentEvent, AgentCreatedIssue, Ticket } from "../api/types";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
@@ -35,17 +36,14 @@ export function WorktreeDetailPage() {
     refetch: refetchWorktrees,
   } = useApi(() => api.listWorktrees(repoId!), [repoId]);
 
-  const { data: tickets, refetch: refetchTickets } = useApi(
+  const { data: ticketList, refetch: refetchTickets } = useApi(
     () => api.listTickets(repoId!),
     [repoId],
   );
+  const tickets = ticketList?.tickets ?? null;
 
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
-  const [pushing, setPushing] = useState(false);
-  const [pushResult, setPushResult] = useState<string | null>(null);
-  const [creatingPr, setCreatingPr] = useState(false);
-  const [prResult, setPrResult] = useState<string | null>(null);
   const [linkingTicket, setLinkingTicket] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState("");
   const [editingModel, setEditingModel] = useState(false);
@@ -64,6 +62,7 @@ export function WorktreeDetailPage() {
   });
   const [agentLoading, setAgentLoading] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [orchestrateModalOpen, setOrchestrateModalOpen] = useState(false);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
 
@@ -194,7 +193,7 @@ export function WorktreeDetailPage() {
       await api.startAgent(worktreeId, prompt, resumeSessionId);
       await refreshAgent();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to start agent");
+      setActionError(e instanceof Error ? e.message : "Failed to start agent");
     } finally {
       setAgentLoading(false);
     }
@@ -220,7 +219,7 @@ export function WorktreeDetailPage() {
       await api.orchestrateAgent(worktreeId, prompt);
       await refreshAgent();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to start orchestration");
+      setActionError(e instanceof Error ? e.message : "Failed to start orchestration");
     } finally {
       setAgentLoading(false);
     }
@@ -234,7 +233,7 @@ export function WorktreeDetailPage() {
       await api.stopAgent(worktreeId);
       await refreshAgent();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to stop agent");
+      setActionError(e instanceof Error ? e.message : "Failed to stop agent");
     } finally {
       setAgentLoading(false);
     }
@@ -245,32 +244,6 @@ export function WorktreeDetailPage() {
     navigate(`/repos/${repoId}`);
   }
 
-  async function handlePush() {
-    setPushing(true);
-    setPushResult(null);
-    try {
-      const result = await api.pushWorktree(worktreeId!);
-      setPushResult(result.message);
-    } catch (err) {
-      setPushResult(err instanceof Error ? err.message : "Push failed");
-    } finally {
-      setPushing(false);
-    }
-  }
-
-  async function handleCreatePr(draft: boolean) {
-    setCreatingPr(true);
-    setPrResult(null);
-    try {
-      const result = await api.createPr(worktreeId!, draft);
-      setPrResult(result.url);
-    } catch (err) {
-      setPrResult(err instanceof Error ? err.message : "PR creation failed");
-    } finally {
-      setCreatingPr(false);
-    }
-  }
-
   async function handleLinkTicket() {
     if (!selectedTicketId) return;
     setLinkingTicket(true);
@@ -279,7 +252,7 @@ export function WorktreeDetailPage() {
       setSelectedTicketId("");
       refetchWorktrees();
     } catch (err) {
-      setPushResult(err instanceof Error ? err.message : "Link failed");
+      setActionError(err instanceof Error ? err.message : "Link failed");
     } finally {
       setLinkingTicket(false);
     }
@@ -290,7 +263,7 @@ export function WorktreeDetailPage() {
       await api.setWorktreeModel(worktreeId!, model);
       refetchWorktrees();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save model");
+      setActionError(err instanceof Error ? err.message : "Failed to save model");
     }
   }
 
@@ -312,14 +285,18 @@ export function WorktreeDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          to={`/repos/${repoId}`}
-          className="text-sm text-indigo-600 hover:underline"
-        >
-          Back to repo
-        </Link>
-      </div>
+      <TransitBreadcrumb stops={[
+        { label: "Home", href: "/" },
+        { label: "Repo", href: `/repos/${repoId}` },
+        { label: worktree.branch, current: true },
+      ]} />
+
+      {actionError && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-600 ml-2">&times;</button>
+        </div>
+      )}
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -328,12 +305,6 @@ export function WorktreeDetailPage() {
           </h2>
           <p className="text-sm text-gray-500 mt-1">{worktree.slug}</p>
         </div>
-        <button
-          onClick={() => setDeleteConfirm(true)}
-          className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50 sm:self-auto"
-        >
-          Delete Worktree
-        </button>
       </div>
 
       <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -413,60 +384,6 @@ export function WorktreeDetailPage() {
           </div>
         </dl>
       </div>
-
-      {/* Actions — only for active worktrees */}
-      {isActive && (
-        <section>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-            Actions
-          </h3>
-          <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={handlePush}
-                disabled={pushing}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                {pushing ? "Pushing..." : "Push Branch"}
-              </button>
-              <button
-                onClick={() => handleCreatePr(false)}
-                disabled={creatingPr}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                {creatingPr ? "Creating..." : "Create PR"}
-              </button>
-              <button
-                onClick={() => handleCreatePr(true)}
-                disabled={creatingPr}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                Draft PR
-              </button>
-            </div>
-            {(pushResult || prResult) && (
-              <p className="text-xs text-gray-500">
-                {prResult ? (
-                  prResult.startsWith("http") ? (
-                    <a
-                      href={prResult}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-600 hover:underline"
-                    >
-                      {prResult}
-                    </a>
-                  ) : (
-                    prResult
-                  )
-                ) : (
-                  pushResult
-                )}
-              </p>
-            )}
-          </div>
-        </section>
-      )}
 
       {/* Linked Ticket */}
       {linkedTicket && (
@@ -553,7 +470,7 @@ export function WorktreeDetailPage() {
       </div>
 
       {activeTab === "workflows" && worktreeId && repoId && (
-        <WorkflowPanel repoId={repoId} worktreeId={worktreeId} />
+        <WorkflowPanel repoId={repoId} worktreeId={worktreeId} ticketId={worktree.ticket_id ?? undefined} />
       )}
 
       {/* Agent Section */}
@@ -649,6 +566,25 @@ export function WorktreeDetailPage() {
           )}
         </>
       )}
+
+      {/* Danger Zone */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-red-400 mb-3">
+          Danger Zone
+        </h3>
+        <div className="rounded-lg border border-red-200 bg-white p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Delete this worktree</p>
+            <p className="text-xs text-gray-500 mt-0.5">Remove the worktree and its git branch. This cannot be undone.</p>
+          </div>
+          <button
+            onClick={() => setDeleteConfirm(true)}
+            className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+          >
+            Delete Worktree
+          </button>
+        </div>
+      </section>
 
       <AgentPromptModal
         open={promptModalOpen}

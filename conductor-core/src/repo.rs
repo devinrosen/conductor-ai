@@ -24,6 +24,14 @@ pub struct Repo {
     pub allow_agent_issue_creation: bool,
 }
 
+fn repo_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
+    let slug = slug.into();
+    move |e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ConductorError::RepoNotFound { slug },
+        _ => ConductorError::Database(e),
+    }
+}
+
 pub struct RepoManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -162,12 +170,7 @@ impl<'a> RepoManager<'a> {
                 },
             )
             .map(|r| r.enrich(self.config))
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::RepoNotFound {
-                    slug: id.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(repo_not_found(id))
     }
 
     pub fn get_by_slug(&self, slug: &str) -> Result<Repo> {
@@ -193,12 +196,7 @@ impl<'a> RepoManager<'a> {
                 },
             )
             .map(|r| r.enrich(self.config))
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::RepoNotFound {
-                    slug: slug.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })
+            .map_err(repo_not_found(slug))
     }
 
     /// Set whether agents can create issues for this repo.
@@ -314,5 +312,315 @@ mod tests {
 
         let result = mgr.set_model("nonexistent", Some("opus"));
         assert!(result.is_err());
+    }
+
+    // ── register ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_register_happy_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let repo = mgr
+            .register(
+                "my-repo",
+                dir.path().to_str().unwrap(),
+                "https://github.com/org/my-repo.git",
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(repo.slug, "my-repo");
+        assert_eq!(repo.local_path, dir.path().to_str().unwrap());
+        assert_eq!(repo.remote_url, "https://github.com/org/my-repo.git");
+        assert!(!repo.id.is_empty());
+        assert!(!repo.created_at.is_empty());
+    }
+
+    #[test]
+    fn test_register_duplicate_slug_error() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        mgr.register("dup-repo", "/tmp/a", "https://github.com/org/a.git", None)
+            .unwrap();
+        let err = mgr
+            .register("dup-repo", "/tmp/b", "https://github.com/org/b.git", None)
+            .unwrap_err();
+        assert!(matches!(err, ConductorError::RepoAlreadyExists { slug } if slug == "dup-repo"));
+    }
+
+    #[test]
+    fn test_register_default_workspace_dir() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let repo = mgr
+            .register("ws-repo", "/tmp/ws", "https://github.com/org/ws.git", None)
+            .unwrap();
+
+        let expected = config
+            .general
+            .workspace_root
+            .join("ws-repo")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(repo.workspace_dir, expected);
+    }
+
+    #[test]
+    fn test_register_explicit_workspace_dir() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let repo = mgr
+            .register(
+                "custom-repo",
+                "/tmp/custom",
+                "https://github.com/org/custom.git",
+                Some("/custom/workspace"),
+            )
+            .unwrap();
+
+        assert_eq!(repo.workspace_dir, "/custom/workspace");
+    }
+
+    // ── list ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_list_empty() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let repos = mgr.list().unwrap();
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn test_list_returns_repos_sorted_by_slug() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        mgr.register("b-repo", "/tmp/b", "https://github.com/org/b.git", None)
+            .unwrap();
+        mgr.register("a-repo", "/tmp/a", "https://github.com/org/a.git", None)
+            .unwrap();
+
+        let repos = mgr.list().unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].slug, "a-repo");
+        assert_eq!(repos[1].slug, "b-repo");
+    }
+
+    // ── get_by_id ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_by_id_happy_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let registered = mgr
+            .register(
+                "id-repo",
+                dir.path().to_str().unwrap(),
+                "https://github.com/org/id-repo.git",
+                None,
+            )
+            .unwrap();
+
+        let fetched = mgr.get_by_id(&registered.id).unwrap();
+        assert_eq!(fetched.id, registered.id);
+        assert_eq!(fetched.slug, "id-repo");
+    }
+
+    #[test]
+    fn test_get_by_id_not_found() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let err = mgr.get_by_id("nonexistent-id").unwrap_err();
+        assert!(matches!(err, ConductorError::RepoNotFound { .. }));
+    }
+
+    // ── get_by_slug ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_by_slug_happy_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let registered = mgr
+            .register(
+                "slug-repo",
+                dir.path().to_str().unwrap(),
+                "https://github.com/org/slug-repo.git",
+                None,
+            )
+            .unwrap();
+
+        let fetched = mgr.get_by_slug("slug-repo").unwrap();
+        assert_eq!(fetched.id, registered.id);
+        assert_eq!(fetched.slug, "slug-repo");
+    }
+
+    #[test]
+    fn test_get_by_slug_not_found() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let err = mgr.get_by_slug("no-such-slug").unwrap_err();
+        assert!(matches!(err, ConductorError::RepoNotFound { .. }));
+    }
+
+    // ── unregister ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_unregister_happy_path() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        mgr.register(
+            "del-repo",
+            "/tmp/del",
+            "https://github.com/org/del.git",
+            None,
+        )
+        .unwrap();
+
+        mgr.unregister("del-repo").unwrap();
+        let err = mgr.get_by_slug("del-repo").unwrap_err();
+        assert!(matches!(err, ConductorError::RepoNotFound { .. }));
+    }
+
+    #[test]
+    fn test_unregister_not_found() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let err = mgr.unregister("ghost").unwrap_err();
+        assert!(matches!(err, ConductorError::RepoNotFound { .. }));
+    }
+
+    // ── unregister_by_id ──────────────────────────────────────────────
+
+    #[test]
+    fn test_unregister_by_id_happy_path() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let repo = mgr
+            .register(
+                "del-id-repo",
+                "/tmp/del-id",
+                "https://github.com/org/del-id.git",
+                None,
+            )
+            .unwrap();
+
+        mgr.unregister_by_id(&repo.id).unwrap();
+        let err = mgr.get_by_id(&repo.id).unwrap_err();
+        assert!(matches!(err, ConductorError::RepoNotFound { .. }));
+    }
+
+    #[test]
+    fn test_unregister_by_id_not_found() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let err = mgr.unregister_by_id("fake-id").unwrap_err();
+        assert!(matches!(err, ConductorError::RepoNotFound { .. }));
+    }
+
+    // ── set_allow_agent_issue_creation ─────────────────────────────────
+
+    #[test]
+    fn test_set_allow_agent_issue_creation_toggle() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let repo = mgr
+            .register(
+                "issue-repo",
+                dir.path().to_str().unwrap(),
+                "https://github.com/org/issue-repo.git",
+                None,
+            )
+            .unwrap();
+
+        // Default is false
+        assert!(!repo.allow_agent_issue_creation);
+
+        // Set to true
+        mgr.set_allow_agent_issue_creation(&repo.id, true).unwrap();
+        let updated = mgr.get_by_id(&repo.id).unwrap();
+        assert!(updated.allow_agent_issue_creation);
+
+        // Set back to false
+        mgr.set_allow_agent_issue_creation(&repo.id, false).unwrap();
+        let updated = mgr.get_by_id(&repo.id).unwrap();
+        assert!(!updated.allow_agent_issue_creation);
+    }
+
+    #[test]
+    fn test_set_allow_agent_issue_creation_not_found() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let err = mgr
+            .set_allow_agent_issue_creation("fake-repo-id", true)
+            .unwrap_err();
+        assert!(matches!(err, ConductorError::RepoNotFound { .. }));
+    }
+
+    // ── derive_slug_from_url ──────────────────────────────────────────
+
+    #[test]
+    fn test_derive_slug_from_url_various_formats() {
+        assert_eq!(
+            derive_slug_from_url("https://github.com/org/repo.git"),
+            "repo"
+        );
+        assert_eq!(derive_slug_from_url("https://github.com/org/repo"), "repo");
+        assert_eq!(derive_slug_from_url("git@github.com:org/repo.git"), "repo");
+        // No slash — returns the whole string stripped of .git
+        assert_eq!(derive_slug_from_url("repo.git"), "repo");
+        // Empty string
+        assert_eq!(derive_slug_from_url(""), "");
+    }
+
+    // ── derive_local_path ─────────────────────────────────────────────
+
+    #[test]
+    fn test_derive_local_path() {
+        let config = Config::default();
+        let result = derive_local_path(&config, "my-repo");
+        let expected = config
+            .general
+            .workspace_root
+            .join("my-repo")
+            .join("main")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(result, expected);
     }
 }

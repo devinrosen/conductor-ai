@@ -1,8 +1,10 @@
 workflow lint-fix {
   meta {
+    title       = "Lint & Fix"
     description = "Analyze lint errors and apply fixes, re-verifying until clean"
     trigger     = "manual"
     targets     = ["worktree"]
+    group       = "Development"
   }
 
   do {

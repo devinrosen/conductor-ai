@@ -15,7 +15,38 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(worktree_id, prompt, tmux_window, model, None, None)
+        self.create_run_with_parent(
+            worktree_id,
+            None,
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// Create a run scoped to a repo (no worktree). Used for read-only repo agents.
+    pub fn create_repo_run(
+        &self,
+        repo_id: &str,
+        prompt: &str,
+        tmux_window: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<AgentRun> {
+        self.create_run_with_parent(
+            None,
+            Some(repo_id),
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn create_child_run(
@@ -29,22 +60,73 @@ impl<'a> AgentManager<'a> {
     ) -> Result<AgentRun> {
         self.create_run_with_parent(
             worktree_id,
+            None,
             prompt,
             tmux_window,
             model,
             Some(parent_run_id),
             bot_name,
+            None,
+            None,
         )
     }
 
+    /// Create a worktree-scoped run linked to a conversation.
+    pub fn create_run_for_conversation(
+        &self,
+        worktree_id: &str,
+        prompt: &str,
+        tmux_window: Option<&str>,
+        model: Option<&str>,
+        conversation_id: &str,
+    ) -> Result<AgentRun> {
+        self.create_run_with_parent(
+            Some(worktree_id),
+            None,
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+            Some(conversation_id),
+        )
+    }
+
+    /// Create a repo-scoped run linked to a conversation.
+    pub fn create_repo_run_for_conversation(
+        &self,
+        repo_id: &str,
+        prompt: &str,
+        tmux_window: Option<&str>,
+        model: Option<&str>,
+        conversation_id: &str,
+    ) -> Result<AgentRun> {
+        self.create_run_with_parent(
+            None,
+            Some(repo_id),
+            prompt,
+            tmux_window,
+            model,
+            None,
+            None,
+            None,
+            Some(conversation_id),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn create_run_with_parent(
         &self,
         worktree_id: Option<&str>,
+        repo_id: Option<&str>,
         prompt: &str,
         tmux_window: Option<&str>,
         model: Option<&str>,
         parent_run_id: Option<&str>,
         bot_name: Option<&str>,
+        log_file: Option<&str>,
+        conversation_id: Option<&str>,
     ) -> Result<AgentRun> {
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
@@ -52,6 +134,7 @@ impl<'a> AgentManager<'a> {
         let run = AgentRun {
             id: id.clone(),
             worktree_id: worktree_id.map(String::from),
+            repo_id: repo_id.map(String::from),
             claude_session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,
@@ -62,7 +145,7 @@ impl<'a> AgentManager<'a> {
             started_at: now.clone(),
             ended_at: None,
             tmux_window: tmux_window.map(String::from),
-            log_file: None,
+            log_file: log_file.map(String::from),
             model: model.map(String::from),
             plan: None,
             parent_run_id: parent_run_id.map(String::from),
@@ -71,21 +154,27 @@ impl<'a> AgentManager<'a> {
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
             bot_name: bot_name.map(String::from),
+            conversation_id: conversation_id.map(String::from),
         };
 
         self.conn.execute(
-            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, tmux_window, model, parent_run_id, bot_name) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO agent_runs \
+             (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, \
+              parent_run_id, bot_name, log_file, conversation_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 run.id,
                 run.worktree_id,
+                run.repo_id,
                 run.prompt,
                 run.status,
                 run.started_at,
                 run.tmux_window,
                 run.model,
                 run.parent_run_id,
-                run.bot_name
+                run.bot_name,
+                run.log_file,
+                run.conversation_id,
             ],
         )?;
 
@@ -151,6 +240,32 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Mark a run as failed only if it is currently `running`.
+    /// Used by background reapers to avoid overwriting a run that has already
+    /// been finalized by another path.
+    pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE agent_runs SET status = 'failed', result_text = ?1, ended_at = ?2 \
+             WHERE id = ?3 AND status = 'running'",
+            params![error, now, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a run as completed (with a summary) only if it is currently `running`.
+    /// Used by background reapers to avoid overwriting a run that has already
+    /// been finalized by another path.
+    pub fn update_run_completed_if_running(&self, run_id: &str, result_text: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE agent_runs SET status = 'completed', result_text = ?1, ended_at = ?2 \
+             WHERE id = ?3 AND status = 'running'",
+            params![result_text, now, run_id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_run_cancelled(&self, run_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
@@ -170,12 +285,86 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Update token counts for a running agent run (best-effort, idempotent).
+    ///
+    /// Uses assignment (`=`) semantics — not increment — so repeated calls are
+    /// safe.  Each call provides cumulative totals read from the log file, so
+    /// using `+=` would multiply-count tokens.  The final [`update_run_completed`]
+    /// call overwrites these columns with the authoritative values from the
+    /// `result` event.
+    pub fn update_run_tokens_partial(
+        &self,
+        run_id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_input_tokens: i64,
+        cache_creation_input_tokens: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs \
+             SET input_tokens = ?1, output_tokens = ?2, \
+                 cache_read_input_tokens = ?3, cache_creation_input_tokens = ?4 \
+             WHERE id = ?5",
+            rusqlite::params![
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                run_id,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn update_run_log_file(&self, run_id: &str, path: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
             params![path, run_id],
         )?;
         Ok(())
+    }
+
+    /// Delete all agent runs for a conversation.
+    ///
+    /// Child tables (`agent_run_events`, `agent_run_steps`, etc.) are removed
+    /// automatically via their `ON DELETE CASCADE` FK constraints.
+    pub fn delete_runs_for_conversation(&self, conversation_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM agent_runs WHERE conversation_id = ?1",
+            params![conversation_id],
+        )?;
+        Ok(())
+    }
+
+    /// Create a new run by cloning the prompt/config from a failed run.
+    ///
+    /// The original run must be in a terminal state (failed or cancelled).
+    /// The new run gets `parent_run_id` set to the original run's ID to
+    /// preserve the restart lineage.
+    ///
+    /// Returns the newly created `AgentRun` record (status = Running).
+    pub fn restart_run(&self, run_id: &str) -> Result<AgentRun> {
+        let original = self.get_run(run_id)?.ok_or_else(|| {
+            crate::error::ConductorError::Agent(format!("Run {run_id} not found"))
+        })?;
+
+        if original.is_active() {
+            return Err(crate::error::ConductorError::Agent(
+                "Cannot restart an active run".to_string(),
+            ));
+        }
+
+        self.create_run_with_parent(
+            original.worktree_id.as_deref(),
+            original.repo_id.as_deref(),
+            &original.prompt,
+            original.tmux_window.as_deref(),
+            original.model.as_deref(),
+            Some(run_id),
+            original.bot_name.as_deref(),
+            None,
+            None,
+        )
     }
 }
 
@@ -360,6 +549,86 @@ mod tests {
     }
 
     #[test]
+    fn test_update_run_tokens_partial_writes_values() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        assert!(run.input_tokens.is_none());
+
+        mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.input_tokens, Some(100));
+        assert_eq!(fetched.output_tokens, Some(50));
+        assert_eq!(fetched.cache_read_input_tokens, Some(20));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(10));
+        // Status must remain Running — partial update must not touch status
+        assert_eq!(
+            fetched.status,
+            crate::agent::status::AgentRunStatus::Running
+        );
+    }
+
+    #[test]
+    fn test_update_run_tokens_partial_overwrites_not_accumulates() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+
+        mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
+            .unwrap();
+        // Second call with larger cumulative totals — must overwrite, not add
+        mgr.update_run_tokens_partial(&run.id, 200, 80, 30, 15)
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.input_tokens, Some(200));
+        assert_eq!(fetched.output_tokens, Some(80));
+        assert_eq!(fetched.cache_read_input_tokens, Some(30));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(15));
+    }
+
+    #[test]
+    fn test_update_run_completed_overwrites_partial_tokens() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
+            .unwrap();
+
+        // Authoritative final values from result event
+        mgr.update_run_completed(
+            &run.id,
+            None,
+            Some("Done"),
+            Some(0.01),
+            Some(3),
+            Some(5000),
+            Some(999),
+            Some(888),
+            Some(777),
+            Some(666),
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.input_tokens, Some(999));
+        assert_eq!(fetched.output_tokens, Some(888));
+        assert_eq!(fetched.cache_read_input_tokens, Some(777));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(666));
+    }
+
+    #[test]
     fn test_create_run_without_model() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
@@ -371,5 +640,188 @@ mod tests {
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert!(fetched.model.is_none());
+    }
+
+    #[test]
+    fn test_restart_run_creates_new_run_with_same_config() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(
+                Some("w1"),
+                "Fix the bug",
+                Some("feat-test"),
+                Some("claude-sonnet-4-6"),
+            )
+            .unwrap();
+        mgr.update_run_failed(&run.id, "Crashed").unwrap();
+
+        let restarted = mgr.restart_run(&run.id).unwrap();
+        assert_eq!(restarted.status, AgentRunStatus::Running);
+        assert_eq!(restarted.prompt, "Fix the bug");
+        assert_eq!(restarted.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(restarted.tmux_window.as_deref(), Some("feat-test"));
+        assert_eq!(restarted.parent_run_id.as_deref(), Some(run.id.as_str()));
+        assert_ne!(restarted.id, run.id);
+
+        // Original run stays failed
+        let original = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(original.status, AgentRunStatus::Failed);
+    }
+
+    #[test]
+    fn test_restart_run_from_cancelled() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(
+                Some("w1"),
+                "Fix the bug",
+                Some("feat-test"),
+                Some("claude-sonnet-4-6"),
+            )
+            .unwrap();
+        mgr.update_run_cancelled(&run.id).unwrap();
+
+        let restarted = mgr.restart_run(&run.id).unwrap();
+        assert_eq!(restarted.status, AgentRunStatus::Running);
+        assert_eq!(restarted.prompt, "Fix the bug");
+        assert_eq!(restarted.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(restarted.parent_run_id.as_deref(), Some(run.id.as_str()));
+
+        // Original run stays cancelled
+        let original = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(original.status, AgentRunStatus::Cancelled);
+    }
+
+    #[test]
+    fn test_restart_run_rejects_active_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        // Run is still Running — restart should fail
+        let result = mgr.restart_run(&run.id);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restart_run_not_found() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let result = mgr.restart_run("nonexistent-id");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restart_run_preserves_repo_scope() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_repo_run("r1", "Analyse the repo", Some("repo-test-abc"), None)
+            .unwrap();
+        mgr.update_run_failed(&run.id, "Crashed").unwrap();
+
+        let restarted = mgr.restart_run(&run.id).unwrap();
+        assert_eq!(restarted.repo_id.as_deref(), Some("r1"));
+        assert!(restarted.worktree_id.is_none());
+        assert_eq!(restarted.prompt, "Analyse the repo");
+        assert_eq!(restarted.parent_run_id.as_deref(), Some(run.id.as_str()));
+    }
+
+    #[test]
+    fn test_create_repo_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_repo_run("r1", "Analyse the repo", Some("repo-test-abc"), None)
+            .unwrap();
+
+        assert_eq!(run.repo_id.as_deref(), Some("r1"));
+        assert!(run.worktree_id.is_none());
+        assert_eq!(run.prompt, "Analyse the repo");
+        assert_eq!(run.tmux_window.as_deref(), Some("repo-test-abc"));
+        assert_eq!(run.status, AgentRunStatus::Running);
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.repo_id.as_deref(), Some("r1"));
+        assert!(fetched.worktree_id.is_none());
+    }
+
+    #[test]
+    fn test_create_run_with_parent_log_file() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run_with_parent(
+                Some("w1"),
+                None,
+                "Fix the bug",
+                Some("feat-test"),
+                None,
+                None,
+                None,
+                Some("/tmp/agent-logs/run.log"),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(run.log_file.as_deref(), Some("/tmp/agent-logs/run.log"));
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.log_file.as_deref(), Some("/tmp/agent-logs/run.log"));
+    }
+
+    #[test]
+    fn test_update_run_failed_if_running_noop_when_already_failed() {
+        // The `AND status = 'running'` guard must prevent overwriting a run that
+        // has already been finalized (e.g. by another reaper path).
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_failed(&run.id, "original error").unwrap();
+
+        // Calling the if_running variant on an already-failed run must be a no-op.
+        mgr.update_run_failed_if_running(&run.id, "overwritten error")
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Failed);
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("original error"),
+            "result_text must not be overwritten when run is not running"
+        );
+    }
+
+    #[test]
+    fn test_update_run_completed_if_running_noop_when_already_failed() {
+        // The `AND status = 'running'` guard must prevent overwriting a run that
+        // has already been finalized (e.g. by another reaper path).
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_failed(&run.id, "original error").unwrap();
+
+        // Calling the if_running variant on an already-failed run must be a no-op.
+        mgr.update_run_completed_if_running(&run.id, "overwritten result")
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Failed);
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("original error"),
+            "result_text must not be overwritten when run is not running"
+        );
     }
 }

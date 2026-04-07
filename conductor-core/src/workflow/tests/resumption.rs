@@ -520,6 +520,7 @@ fn test_default_bot_name_persists_through_suspend_and_resume() {
             &BlockedOn::HumanApproval {
                 gate_name: "deploy-gate".to_string(),
                 prompt: None,
+                options: vec![],
             },
         )
         .unwrap();
@@ -946,6 +947,8 @@ fn test_resume_workflow_repo_target() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -1004,6 +1007,8 @@ fn test_resume_workflow_ticket_target() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -1068,6 +1073,8 @@ fn test_resume_workflow_preserves_feature_id() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
     };
     let result = execute_workflow(&input).unwrap();
 

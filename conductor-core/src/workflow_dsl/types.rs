@@ -11,10 +11,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDef {
     pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
     pub description: String,
     pub trigger: WorkflowTrigger,
     #[serde(default)]
     pub targets: Vec<String>,
+    #[serde(default)]
+    pub group: Option<String>,
     pub inputs: Vec<InputDecl>,
     pub body: Vec<WorkflowNode>,
     pub always: Vec<WorkflowNode>,
@@ -22,6 +26,12 @@ pub struct WorkflowDef {
 }
 
 impl WorkflowDef {
+    /// Returns the human-readable display name for this workflow.
+    /// Falls back to `name` if no `title` is set.
+    pub fn display_name(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.name)
+    }
+
     /// Total number of nodes across body and always blocks.
     pub fn total_nodes(&self) -> usize {
         count_nodes(&self.body) + count_nodes(&self.always)
@@ -61,6 +71,15 @@ impl WorkflowDef {
         names.sort();
         names.dedup();
         names
+    }
+
+    /// Collect all plugin_dirs from call nodes across body and always blocks, sorted and deduplicated.
+    pub fn collect_all_plugin_dirs(&self) -> Vec<String> {
+        let mut dirs = collect_plugin_dirs(&self.body);
+        dirs.extend(collect_plugin_dirs(&self.always));
+        dirs.sort();
+        dirs.dedup();
+        dirs
     }
 }
 
@@ -223,6 +242,11 @@ pub struct CallNode {
     pub with: Vec<String>,
     /// Named GitHub App bot identity to use for this call (matches `[github.apps.<name>]`).
     pub bot_name: Option<String>,
+    /// Per-step plugin directories from the `.wf` file. Merged with repo-level
+    /// `extra_plugin_dirs` at execution time to give this agent access to
+    /// specialist plugins (e.g. `/usr/local/bsg/agent-architecture/planner`).
+    #[serde(default)]
+    pub plugin_dirs: Vec<String>,
 }
 
 /// A sub-workflow invocation node.
@@ -361,6 +385,19 @@ fn default_on_fail() -> OnFailAction {
     OnFailAction::Fail
 }
 
+/// Specifies the set of options for a multi-select gate.
+///
+/// - `Static`: a literal list of option strings defined in the workflow file.
+/// - `StepRef`: a `"step.field"` reference resolved at runtime from a prior step's
+///   structured output (the field must be a JSON array of strings).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GateOptions {
+    Static(Vec<String>),
+    /// Raw `"step.field"` dotted reference — resolved at execution time.
+    StepRef(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateNode {
     pub name: String,
@@ -377,6 +414,8 @@ pub struct GateNode {
     /// Quality gate-specific configuration. Present only when `gate_type == QualityGate`.
     #[serde(flatten)]
     pub quality_gate: Option<QualityGateConfig>,
+    /// Optional multi-select options for human_approval / human_review gates.
+    pub options: Option<GateOptions>,
 }
 
 fn default_one() -> u32 {
@@ -607,4 +646,25 @@ pub(crate) fn collect_bot_names(nodes: &[WorkflowNode]) -> Vec<String> {
         }
     }
     names
+}
+
+/// Collect all per-step plugin_dirs from call nodes in a node tree.
+pub(crate) fn collect_plugin_dirs(nodes: &[WorkflowNode]) -> Vec<String> {
+    let mut dirs = Vec::new();
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => dirs.extend(n.plugin_dirs.iter().cloned()),
+            WorkflowNode::If(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::Unless(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::While(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::DoWhile(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::Do(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::Always(n) => dirs.extend(collect_plugin_dirs(&n.body)),
+            WorkflowNode::CallWorkflow(_)
+            | WorkflowNode::Gate(_)
+            | WorkflowNode::Parallel(_)
+            | WorkflowNode::Script(_) => {}
+        }
+    }
+    dirs
 }

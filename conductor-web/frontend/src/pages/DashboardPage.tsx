@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
-import type { Worktree, AgentRun } from "../api/types";
+import type { WorktreeWithStatus } from "../api/types";
 import { RepoCard } from "../components/repos/RepoCard";
 import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
@@ -10,6 +10,8 @@ import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
+import { ErrorBanner } from "../components/shared/ErrorBanner";
+import { WelcomeAboard } from "../components/shared/WelcomeAboard";
 import { agentStatusColor } from "../utils/agentStats";
 import {
   useConductorEvents,
@@ -26,40 +28,37 @@ export function DashboardPage() {
     {},
   );
   const [activeWorktrees, setActiveWorktrees] = useState<
-    (Worktree & { repoSlug: string })[]
+    (WorktreeWithStatus & { repoSlug: string })[]
   >([]);
-  const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
   const [wtTick, setWtTick] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [registerRepoOpen, setRegisterRepoOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
 
   const refreshWorktrees = useCallback(() => setWtTick((n) => n + 1), []);
 
   useEffect(() => {
-    if (repos.length === 0) return;
-    Promise.all([
-      Promise.all(
-        repos.map((r) =>
-          api
-            .listWorktrees(r.id)
-            .then((wts) => ({ repoId: r.id, slug: r.slug, wts })),
-        ),
-      ),
-      api.latestRunsByWorktree(),
-    ]).then(([results, runs]) => {
+    const fetchData = async () => {
+      const repoSlugById: Record<string, string> = {};
+      for (const r of repos) repoSlugById[r.id] = r.slug;
+
+      const allWorktrees = await api.listAllWorktrees();
+
       const counts: Record<string, number> = {};
-      const active: (Worktree & { repoSlug: string })[] = [];
-      for (const { repoId, slug, wts } of results) {
-        counts[repoId] = wts.length;
-        for (const wt of wts) {
-          if (wt.status === "active") {
-            active.push({ ...wt, repoSlug: slug });
-          }
+      const active: (WorktreeWithStatus & { repoSlug: string })[] = [];
+      for (const wt of allWorktrees) {
+        counts[wt.repo_id] = (counts[wt.repo_id] ?? 0) + 1;
+        if (wt.status === "active") {
+          active.push({ ...wt, repoSlug: repoSlugById[wt.repo_id] ?? "" });
         }
       }
       setWorktreeCounts(counts);
       setActiveWorktrees(active);
-      setLatestRuns(runs);
+      setLoadError(null);
+    };
+
+    fetchData().catch((err: unknown) => {
+      setLoadError(err instanceof Error ? err.message : "Failed to load dashboard data");
     });
   }, [repos, wtTick]);
 
@@ -104,10 +103,14 @@ export function DashboardPage() {
 
   if (reposLoading) return <LoadingSpinner />;
 
+  if (repos.length === 0) {
+    return <WelcomeAboard onRepoCreated={refreshRepos} />;
+  }
+
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <h2 className="text-lg font-bold text-gray-900">Dashboard</h2>
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setDiscoverOpen(true)}
@@ -124,15 +127,17 @@ export function DashboardPage() {
         onImported={refreshRepos}
       />
 
+      <ErrorBanner error={loadError} />
+
       {/* Repos */}
       <section>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-2">
           Repos
         </h3>
         {repos.length === 0 ? (
-          <EmptyState message="No repos registered yet. Register one to get started." />
+          <EmptyState message="The station is quiet. Register a repo to get the trains running." />
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {repos.map((repo) => (
               <RepoCard
                 key={repo.id}
@@ -146,29 +151,28 @@ export function DashboardPage() {
 
       {/* Active Worktrees */}
       <section>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-2">
           Active Worktrees
         </h3>
         {activeWorktrees.length === 0 ? (
-          <EmptyState message="No active worktrees" />
+          <EmptyState message="No platforms active. Create a worktree to lay some track." />
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
                 <tr>
-                  <th className="px-4 py-2">Branch</th>
-                  <th className="px-4 py-2">Repo</th>
-                  <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2">Agent</th>
-                  <th className="px-4 py-2">Created</th>
+                  <th className="px-3 py-1.5">Branch</th>
+                  <th className="px-3 py-1.5">Repo</th>
+                  <th className="px-3 py-1.5">Status</th>
+                  <th className="px-3 py-1.5">Agent</th>
+                  <th className="px-3 py-1.5">Created</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {activeWorktrees.map((wt, index) => {
-                  const run = latestRuns[wt.id];
                   return (
                     <tr key={wt.id} data-list-index={index} className={selectedIndex === index ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}>
-                      <td className="px-4 py-2">
+                      <td className="px-3 py-1.5">
                         <Link
                           to={`/repos/${wt.repo_id}/worktrees/${wt.id}`}
                           className="text-indigo-600 hover:underline"
@@ -176,24 +180,24 @@ export function DashboardPage() {
                           {wt.branch}
                         </Link>
                       </td>
-                      <td className="px-4 py-2 text-gray-600">
+                      <td className="px-3 py-1.5 text-gray-600">
                         {wt.repoSlug}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="px-3 py-1.5">
                         <StatusBadge status={wt.status} />
                       </td>
-                      <td className="px-4 py-2">
-                        {run ? (
+                      <td className="px-3 py-1.5">
+                        {wt.agent_status ? (
                           <span
-                            className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(run.status)}`}
+                            className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(wt.agent_status)}`}
                           >
-                            {run.status}
+                            {wt.agent_status}
                           </span>
                         ) : (
                           <span className="text-xs text-gray-400">-</span>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-gray-500">
+                      <td className="px-3 py-1.5 text-gray-500">
                         <TimeAgo date={wt.created_at} />
                       </td>
                     </tr>

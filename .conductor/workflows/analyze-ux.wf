@@ -1,8 +1,10 @@
 workflow analyze-ux {
   meta {
+    title       = "Analyze UX"
     description = "Run a per-persona UX analysis across all Mermaid diagrams and write a dated report"
     trigger     = "manual"
     targets     = ["repo"]
+    group       = "Analysis"
   }
 
   inputs {

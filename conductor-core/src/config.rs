@@ -6,6 +6,86 @@ use std::sync::OnceLock;
 
 use crate::error::{ConductorError, Result};
 
+/// Controls which permission flag is passed to Claude Code when launching agent runs.
+///
+/// ```toml
+/// [general]
+/// agent_permission_mode = "skip-permissions" # default — uses --dangerously-skip-permissions
+/// agent_permission_mode = "auto-mode"        # uses --enable-auto-mode (may prompt in headless agents)
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPermissionMode {
+    /// Use `--enable-auto-mode` (may prompt for permissions in headless agents).
+    AutoMode,
+    /// Use `--dangerously-skip-permissions` (default for headless agent runs).
+    #[default]
+    SkipPermissions,
+    /// Use `--permission-mode plan` (read-only mode for repo-scoped agents).
+    Plan,
+    /// Use `--dangerously-skip-permissions` + `--allowedTools` read-safe pattern.
+    /// Excludes file-writing tools (Edit, Write, MultiEdit, NotebookEdit) at the
+    /// Claude tool level without locking into plan-mode's "propose before acting"
+    /// flow, so Bash/gh remain fully executable.
+    RepoSafe,
+}
+
+impl AgentPermissionMode {
+    /// Returns the conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
+    pub fn cli_flag(&self) -> &str {
+        match self {
+            Self::AutoMode => "--enable-auto-mode",
+            Self::SkipPermissions => "--dangerously-skip-permissions",
+            Self::Plan => "--permission-mode",
+            Self::RepoSafe => "--permission-mode",
+        }
+    }
+
+    /// Returns the optional value argument that follows the conductor CLI flag.
+    pub fn cli_flag_value(&self) -> Option<&str> {
+        match self {
+            Self::Plan => Some("plan"),
+            Self::RepoSafe => Some("repo-safe"),
+            _ => None,
+        }
+    }
+
+    /// Returns the actual permission flag to pass to the `claude` subprocess.
+    ///
+    /// This differs from `cli_flag()` for `RepoSafe`: conductor receives
+    /// `--permission-mode repo-safe`, but claude receives `--dangerously-skip-permissions`.
+    pub fn claude_permission_flag(&self) -> &str {
+        match self {
+            Self::AutoMode => "--enable-auto-mode",
+            Self::SkipPermissions => "--dangerously-skip-permissions",
+            Self::Plan => "--permission-mode",
+            Self::RepoSafe => "--dangerously-skip-permissions",
+        }
+    }
+
+    /// Returns the optional value argument that follows the claude permission flag.
+    pub fn claude_permission_flag_value(&self) -> Option<&str> {
+        match self {
+            Self::Plan => Some("plan"),
+            _ => None,
+        }
+    }
+
+    /// Returns the `--allowedTools` pattern for this mode, if any.
+    ///
+    /// Plan and RepoSafe modes allow read-only and shell tools (Bash, Glob, Grep, Read,
+    /// WebFetch, WebSearch) plus all MCP tools, while excluding file-writing tools
+    /// (Edit, Write, MultiEdit, NotebookEdit).
+    pub fn allowed_tools(&self) -> Option<&'static str> {
+        match self {
+            Self::Plan | Self::RepoSafe => {
+                Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Controls whether an agent is auto-started after creating a worktree from a ticket.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -33,6 +113,9 @@ pub struct NotificationConfig {
 pub struct SlackConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
+    /// Slack app signing secret for verifying slash command request signatures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +145,19 @@ impl Default for WorkflowNotificationConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WebPushConfig {
+    /// VAPID public key (base64url encoded)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapid_public_key: Option<String>,
+    /// VAPID private key (base64url encoded)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapid_private_key: Option<String>,
+    /// Subject for VAPID (typically a mailto: or https: URL)
+    #[serde(default)]
+    pub vapid_subject: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -71,6 +167,8 @@ pub struct Config {
     pub github: GitHubSettings,
     #[serde(default)]
     pub notifications: NotificationConfig,
+    #[serde(default)]
+    pub web_push: WebPushConfig,
 }
 
 /// Top-level `[github]` section.
@@ -120,6 +218,10 @@ pub struct GeneralConfig {
     pub sync_interval_minutes: u32,
     #[serde(default)]
     pub auto_start_agent: AutoStartAgent,
+    /// Which permission flag to pass to Claude Code for agent runs.
+    /// Defaults to `auto-mode` (`--enable-auto-mode`).
+    #[serde(default)]
+    pub agent_permission_mode: AgentPermissionMode,
     /// Global default model for Claude agent runs (e.g. "sonnet", "claude-opus-4-6").
     /// Overridden by per-worktree and per-run model settings. Omit to use claude's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -132,6 +234,15 @@ pub struct GeneralConfig {
     /// or the stem of a file in `~/.conductor/themes/`. Omit to use the default conductor theme.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Automatically detect merged PRs and clean up worktrees (delete local/remote branch,
+    /// remove worktree directory, auto-close orphaned features). Defaults to true.
+    #[serde(default = "default_true")]
+    pub auto_cleanup_merged_branches: bool,
+    /// Custom Claude Code configuration directory (e.g. `~/.claude-personal`).
+    /// When set, conductor uses this directory for MCP server setup and passes
+    /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_config_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +253,10 @@ pub struct DefaultsConfig {
     pub worktree_prefix_feat: String,
     #[serde(default = "default_fix_prefix")]
     pub worktree_prefix_fix: String,
+    /// Number of days after which an active feature with no recent activity is
+    /// considered stale. Set to 0 to disable stale detection.
+    #[serde(default = "default_stale_feature_days")]
+    pub stale_feature_days: u32,
 }
 
 fn default_workspace_root() -> PathBuf {
@@ -164,6 +279,10 @@ fn default_fix_prefix() -> String {
     "fix-".to_string()
 }
 
+fn default_stale_feature_days() -> u32 {
+    14
+}
+
 fn default_true() -> bool {
     true
 }
@@ -174,9 +293,59 @@ impl Default for GeneralConfig {
             workspace_root: default_workspace_root(),
             sync_interval_minutes: default_sync_interval(),
             auto_start_agent: AutoStartAgent::default(),
+            agent_permission_mode: AgentPermissionMode::default(),
             model: None,
             inject_startup_context: true,
             theme: None,
+            auto_cleanup_merged_branches: true,
+            claude_config_dir: None,
+        }
+    }
+}
+
+impl GeneralConfig {
+    /// Returns the resolved Claude config directory as a `PathBuf`.
+    ///
+    /// If `claude_config_dir` is set, expands `~` and returns the result.
+    /// Otherwise falls back to `~/.claude`.
+    pub fn resolved_claude_config_dir(&self) -> Result<PathBuf> {
+        match self.custom_claude_config_dir() {
+            Some(result) => result,
+            None => dirs::home_dir()
+                .map(|h| h.join(".claude"))
+                .ok_or_else(|| ConductorError::Config("cannot determine home directory".into())),
+        }
+    }
+
+    /// Returns the custom Claude config directory only when explicitly configured.
+    ///
+    /// Returns `None` when `claude_config_dir` is not set (use the default `~/.claude`).
+    /// Returns `Some(Ok(path))` when configured and tilde-expansion succeeds.
+    /// Returns `Some(Err(...))` when configured but tilde-expansion fails.
+    ///
+    /// Prefer this over accessing `claude_config_dir` directly — callers should
+    /// never need to inspect the raw field to distinguish "not configured" from
+    /// "resolution error".
+    pub fn custom_claude_config_dir(&self) -> Option<Result<PathBuf>> {
+        self.claude_config_dir
+            .as_deref()
+            .map(|raw| crate::text_util::expand_tilde(raw).map_err(ConductorError::Config))
+    }
+
+    /// Resolves the custom Claude config directory, logging a warning and returning `None` on error.
+    ///
+    /// Returns `None` when no custom directory is configured or when resolution fails.
+    /// Callers that need to distinguish the error case should use [`custom_claude_config_dir`] instead.
+    pub fn resolve_optional_claude_dir(&self) -> Option<PathBuf> {
+        match self.custom_claude_config_dir() {
+            Some(Ok(dir)) => Some(dir),
+            Some(Err(e)) => {
+                tracing::warn!(
+                    "failed to resolve claude_config_dir — will use default ~/.claude: {e}"
+                );
+                None
+            }
+            None => None,
         }
     }
 }
@@ -187,6 +356,7 @@ impl Default for DefaultsConfig {
             default_branch: default_branch(),
             worktree_prefix_feat: default_feat_prefix(),
             worktree_prefix_fix: default_fix_prefix(),
+            stale_feature_days: default_stale_feature_days(),
         }
     }
 }
@@ -214,31 +384,27 @@ pub fn conductor_dir() -> &'static PathBuf {
 
 /// Returns the path to the SQLite database.
 ///
-/// If the current working directory is inside a conductor worktree
-/// (`<workspace_root>/<repo>/<worktree>/…`), returns a worktree-local
-/// database at `<workspace_root>/<repo>/<worktree>/.conductor.db`.
-/// Otherwise returns the global `~/.conductor/conductor.db`.
+/// When the `CONDUCTOR_DB_PATH` environment variable is set to a non-empty
+/// value, uses that path directly. Otherwise returns the global
+/// `~/.conductor/conductor.db`.
+///
+/// The default global path ensures that repos, tickets, and workflow runs
+/// are accessible regardless of the current working directory (including
+/// from within worktrees where workflow script steps execute).
+///
+/// Use `CONDUCTOR_DB_PATH` for isolated migration testing against a local
+/// database with seed data, without affecting the production DB:
+///
+/// ```sh
+/// CONDUCTOR_DB_PATH=/tmp/test.db conductor tickets list
+/// ```
 pub fn db_path() -> PathBuf {
-    if let Some(wt_db) = worktree_db_path() {
-        return wt_db;
+    if let Ok(custom) = std::env::var("CONDUCTOR_DB_PATH") {
+        if !custom.is_empty() {
+            return PathBuf::from(custom);
+        }
     }
     conductor_dir().join("conductor.db")
-}
-
-/// Detect whether the CWD is inside a conductor worktree and, if so,
-/// return the path to the worktree-local database file.
-fn worktree_db_path() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let ws_root = default_workspace_root();
-    let relative = cwd.strip_prefix(&ws_root).ok()?;
-
-    // We need at least two components: <repo-slug>/<worktree-slug>
-    let mut components = relative.components();
-    let repo = components.next()?;
-    let worktree = components.next()?;
-
-    let wt_dir = ws_root.join(repo.as_os_str()).join(worktree.as_os_str());
-    Some(wt_dir.join(".conductor.db"))
 }
 
 /// Returns the path to the config file.
@@ -464,6 +630,10 @@ impl RepoConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate CONDUCTOR_DB_PATH to prevent races.
+    static DB_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_auto_start_agent_default() {
@@ -493,6 +663,139 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.general.auto_start_agent, AutoStartAgent::Never);
+    }
+
+    #[test]
+    fn test_agent_permission_mode_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::SkipPermissions
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_auto_mode() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            agent_permission_mode = "auto-mode"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::AutoMode
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_skip_permissions() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            agent_permission_mode = "skip-permissions"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::SkipPermissions
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_auto() {
+        assert_eq!(
+            AgentPermissionMode::AutoMode.cli_flag(),
+            "--enable-auto-mode"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_skip() {
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.cli_flag(),
+            "--dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_plan() {
+        assert_eq!(AgentPermissionMode::Plan.cli_flag(), "--permission-mode");
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_repo_safe() {
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.cli_flag(),
+            "--permission-mode"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_value() {
+        assert_eq!(AgentPermissionMode::AutoMode.cli_flag_value(), None);
+        assert_eq!(AgentPermissionMode::SkipPermissions.cli_flag_value(), None);
+        assert_eq!(AgentPermissionMode::Plan.cli_flag_value(), Some("plan"));
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.cli_flag_value(),
+            Some("repo-safe")
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_claude_permission_flag() {
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag(),
+            "--enable-auto-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag(),
+            "--permission-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_claude_permission_flag_value() {
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag_value(),
+            Some("plan")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag_value(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_allowed_tools() {
+        assert_eq!(AgentPermissionMode::AutoMode.allowed_tools(), None);
+        assert_eq!(AgentPermissionMode::SkipPermissions.allowed_tools(), None);
+        assert_eq!(
+            AgentPermissionMode::Plan.allowed_tools(),
+            Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.allowed_tools(),
+            Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+        );
     }
 
     #[test]
@@ -529,6 +832,24 @@ mod tests {
     fn test_inject_startup_context_default_true() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.general.inject_startup_context);
+    }
+
+    #[test]
+    fn test_auto_cleanup_merged_branches_default_true() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.auto_cleanup_merged_branches);
+    }
+
+    #[test]
+    fn test_auto_cleanup_merged_branches_opt_out() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            auto_cleanup_merged_branches = false
+        "#,
+        )
+        .unwrap();
+        assert!(!config.general.auto_cleanup_merged_branches);
     }
 
     #[test]
@@ -960,5 +1281,137 @@ bot_name = "my-bot"
             "model should be cleared after saving with None"
         );
         assert_eq!(loaded2.defaults.default_branch.as_deref(), Some("develop"));
+    }
+
+    #[test]
+    fn test_db_path_env_override() {
+        let _guard = DB_PATH_ENV_LOCK.lock().unwrap();
+        let custom = "/tmp/conductor-test-db-path-override.db";
+        unsafe {
+            std::env::set_var("CONDUCTOR_DB_PATH", custom);
+        }
+        let result = db_path();
+        unsafe {
+            std::env::remove_var("CONDUCTOR_DB_PATH");
+        }
+        assert_eq!(result, PathBuf::from(custom));
+    }
+
+    // -----------------------------------------------------------------------
+    // resolved_claude_config_dir / custom_claude_config_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolved_claude_config_dir_none_falls_back_to_home_claude() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        // Should be <home>/.claude
+        let expected = dirs::home_dir().unwrap().join(".claude");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_resolved_claude_config_dir_absolute_path() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/my-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        assert_eq!(result, PathBuf::from("/tmp/my-claude"));
+    }
+
+    #[test]
+    fn test_resolved_claude_config_dir_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-personal".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        let expected = dirs::home_dir().unwrap().join(".claude-personal");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_none_when_not_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        assert!(config.custom_claude_config_dir().is_none());
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_some_ok_when_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/custom-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.custom_claude_config_dir();
+        assert!(result.is_some());
+        let path = result.unwrap().unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/custom-claude"));
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_some_ok_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-custom".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.custom_claude_config_dir().unwrap().unwrap();
+        let expected = dirs::home_dir().unwrap().join(".claude-custom");
+        assert_eq!(result, expected);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_optional_claude_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_optional_claude_dir_none_when_not_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        // Not configured → None (no fallback to ~/.claude)
+        assert!(config.resolve_optional_claude_dir().is_none());
+    }
+
+    #[test]
+    fn test_resolve_optional_claude_dir_some_for_absolute_path() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/my-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolve_optional_claude_dir();
+        assert_eq!(result, Some(PathBuf::from("/tmp/my-claude")));
+    }
+
+    #[test]
+    fn test_resolve_optional_claude_dir_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-personal".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolve_optional_claude_dir();
+        let expected = dirs::home_dir().unwrap().join(".claude-personal");
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn test_db_path_empty_env_falls_back_to_default() {
+        let _guard = DB_PATH_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("CONDUCTOR_DB_PATH", "");
+        }
+        let result = db_path();
+        unsafe {
+            std::env::remove_var("CONDUCTOR_DB_PATH");
+        }
+        // Should fall back to conductor_dir()/conductor.db
+        assert_eq!(result, conductor_dir().join("conductor.db"));
     }
 }

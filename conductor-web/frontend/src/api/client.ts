@@ -1,37 +1,53 @@
 import type {
   Repo,
   Worktree,
-  Ticket,
+  WorktreeWithStatus,
   TicketLabel,
   TicketAgentTotals,
+  TicketListResponse,
   TicketDetail,
   CreateRepoRequest,
   CreateWorktreeRequest,
+  GithubPr,
   SyncResult,
   AgentRun,
   AgentEvent,
   AgentPromptInfo,
   RunTreeTotals,
   AgentCreatedIssue,
-  PushResult,
-  CreatePrResult,
   IssueSource,
   CreateIssueSourceRequest,
   DiscoverableRepo,
   GlobalConfig,
   KnownModel,
+  WorkflowDef,
   WorkflowDefSummary,
   WorkflowRun,
   WorkflowRunStep,
   RunWorkflowRequest,
   FeedbackRequest,
   Notification,
+  ThemeUnlockStats,
+  PushSubscribeRequest,
+  VapidPublicKeyResponse,
+  PushSubscribeResponse,
+  WorkflowTokenAggregate,
+  WorkflowTokenTrendRow,
+  StepTokenHeatmapRow,
+  WorkflowRunMetricsRow,
+  WorkflowFailureRateTrendRow,
+  StepFailureHeatmapRow,
+  StepRetryAnalyticsRow,
+  WorkflowPercentiles,
+  WorkflowRegressionSignal,
+  GateAnalyticsRow,
+  PendingGateAnalyticsRow,
 } from "./types";
-
-const BASE = "/api";
+import { getApiBaseUrl } from "./transport";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const base = await getApiBaseUrl();
+  const res = await fetch(`${base}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -56,9 +72,16 @@ export const api = {
       body: JSON.stringify({ model }),
     }),
 
+  // PRs
+  listPrs: (repoId: string) => request<GithubPr[]>(`/repos/${repoId}/prs`),
+
   // Worktrees
+  listAllWorktrees: (showCompleted = false) =>
+    request<WorktreeWithStatus[]>(
+      showCompleted ? `/worktrees?show_completed=true` : `/worktrees`,
+    ),
   listWorktrees: (repoId: string, showCompleted = false) =>
-    request<Worktree[]>(
+    request<WorktreeWithStatus[]>(
       showCompleted
         ? `/repos/${repoId}/worktrees?show_completed=true`
         : `/repos/${repoId}/worktrees`,
@@ -69,17 +92,10 @@ export const api = {
       body: JSON.stringify(data),
     }),
   deleteWorktree: (id: string) =>
-    request<Worktree>(`/worktrees/${id}`, { method: "DELETE" }),
-  pushWorktree: (id: string) =>
-    request<PushResult>(`/worktrees/${id}/push`, { method: "POST" }),
-  createPr: (id: string, draft = false) =>
-    request<CreatePrResult>(`/worktrees/${id}/pr`, {
-      method: "POST",
-      body: JSON.stringify({ draft }),
-    }),
+    request<void>(`/worktrees/${id}`, { method: "DELETE" }),
   linkTicket: (id: string, ticketId: string) =>
-    request<Worktree>(`/worktrees/${id}/link-ticket`, {
-      method: "POST",
+    request<Worktree>(`/worktrees/${id}/ticket`, {
+      method: "PUT",
       body: JSON.stringify({ ticket_id: ticketId }),
     }),
   setWorktreeModel: (id: string, model: string | null) =>
@@ -91,9 +107,9 @@ export const api = {
   // Tickets
   ticketLabels: () => request<TicketLabel[]>("/ticket-labels"),
   listAllTickets: (showClosed = false) =>
-    request<Ticket[]>(showClosed ? "/tickets?show_closed=true" : "/tickets"),
+    request<TicketListResponse>(showClosed ? "/tickets?show_closed=true" : "/tickets"),
   listTickets: (repoId: string, showClosed = false) =>
-    request<Ticket[]>(
+    request<TicketListResponse>(
       showClosed
         ? `/repos/${repoId}/tickets?show_closed=true`
         : `/repos/${repoId}/tickets`,
@@ -101,13 +117,32 @@ export const api = {
   syncTickets: (repoId: string) =>
     request<SyncResult>(`/repos/${repoId}/tickets/sync`, { method: "POST" }),
   getTicketDetail: (ticketId: string) =>
-    request<TicketDetail>(`/tickets/${ticketId}/detail`),
+    request<TicketDetail>(`/tickets/${ticketId}`),
 
   // Agent stats (aggregates)
   latestRunsByWorktree: () =>
     request<Record<string, AgentRun>>("/agent/latest-runs"),
   ticketAgentTotals: () =>
     request<Record<string, TicketAgentTotals>>("/agent/ticket-totals"),
+  latestRunsByWorktreeForRepo: (repoId: string) =>
+    request<Record<string, AgentRun>>(`/repos/${repoId}/agent/latest-runs`),
+  ticketAgentTotalsForRepo: (repoId: string) =>
+    request<Record<string, TicketAgentTotals>>(`/repos/${repoId}/agent/ticket-totals`),
+
+  // Repo-scoped agents (read-only)
+  startRepoAgent: (repoId: string, prompt: string, newSession?: boolean) =>
+    request<AgentRun>(`/repos/${repoId}/agent/start`, {
+      method: "POST",
+      body: JSON.stringify({ prompt, new_session: newSession ?? false }),
+    }),
+  listRepoAgentRuns: (repoId: string) =>
+    request<AgentRun[]>(`/repos/${repoId}/agent/runs`),
+  stopRepoAgent: (repoId: string, runId: string) =>
+    request<AgentRun>(`/repos/${repoId}/agent/${runId}/stop`, {
+      method: "POST",
+    }),
+  getRepoAgentEvents: (repoId: string, runId: string) =>
+    request<AgentEvent[]>(`/repos/${repoId}/agent/${runId}/events`),
 
   // Agent orchestration
   listAgentRuns: (worktreeId: string) =>
@@ -134,6 +169,8 @@ export const api = {
     }),
   getAgentEvents: (worktreeId: string) =>
     request<AgentEvent[]>(`/worktrees/${worktreeId}/agent/events`),
+  getRunEvents: (worktreeId: string, runId: string) =>
+    request<AgentEvent[]>(`/worktrees/${worktreeId}/agent/runs/${runId}/events`),
   getAgentPrompt: (worktreeId: string) =>
     request<AgentPromptInfo>(`/worktrees/${worktreeId}/agent/prompt`),
   listChildRuns: (worktreeId: string, runId: string) =>
@@ -218,8 +255,10 @@ export const api = {
   // Workflows
   listWorkflowDefs: (worktreeId: string) =>
     request<WorkflowDefSummary[]>(`/worktrees/${worktreeId}/workflows/defs`),
+  getWorkflowDef: (worktreeId: string, name: string) =>
+    request<WorkflowDef>(`/worktrees/${worktreeId}/workflows/defs/${encodeURIComponent(name)}`),
   runWorkflow: (worktreeId: string, data: RunWorkflowRequest) =>
-    request<{ status: string; worktree_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
+    request<{ status: string; worktree_id: string; run_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -233,15 +272,62 @@ export const api = {
     request<WorkflowRun | null>(`/workflows/runs/${runId}`),
   getWorkflowSteps: (runId: string) =>
     request<WorkflowRunStep[]>(`/workflows/runs/${runId}/steps`),
+  getChildWorkflowRuns: (runId: string) =>
+    request<WorkflowRun[]>(`/workflows/runs/${runId}/children`),
   cancelWorkflow: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/cancel`, { method: "POST" }),
-  approveGate: (runId: string, feedback?: string) =>
+  approveGate: (runId: string, feedback?: string, selections?: string[]) =>
     request<void>(`/workflows/runs/${runId}/gate/approve`, {
       method: "POST",
-      body: JSON.stringify({ feedback: feedback ?? null }),
+      body: JSON.stringify({
+        feedback: feedback ?? null,
+        selections: selections ?? null,
+      }),
     }),
   rejectGate: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/gate/reject`, { method: "POST" }),
+
+  // Workflow token analytics
+  getWorkflowTokenAggregates: (repoId?: string) =>
+    request<WorkflowTokenAggregate[]>(
+      repoId ? `/workflows/analytics/aggregates?repo_id=${encodeURIComponent(repoId)}` : `/workflows/analytics/aggregates`,
+    ),
+  getWorkflowTokenTrend: (workflowName: string, granularity: "daily" | "weekly" = "daily") =>
+    request<WorkflowTokenTrendRow[]>(
+      `/workflows/analytics/trend?workflow_name=${encodeURIComponent(workflowName)}&granularity=${granularity}`,
+    ),
+  getStepTokenHeatmap: (workflowName: string, runs = 20) =>
+    request<StepTokenHeatmapRow[]>(
+      `/workflows/analytics/heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getRunMetrics: (workflowName: string, days = 30) =>
+    request<WorkflowRunMetricsRow[]>(
+      `/workflows/analytics/runs?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getWorkflowFailureRateTrend: (workflowName: string, granularity: "daily" | "weekly" = "daily") =>
+    request<WorkflowFailureRateTrendRow[]>(
+      `/workflows/analytics/failure-trend?workflow_name=${encodeURIComponent(workflowName)}&granularity=${granularity}`,
+    ),
+  getStepFailureHeatmap: (workflowName: string, runs = 20) =>
+    request<StepFailureHeatmapRow[]>(
+      `/workflows/analytics/failure-heatmap?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getStepRetryAnalytics: (workflowName: string, runs = 20) =>
+    request<StepRetryAnalyticsRow[]>(
+      `/workflows/analytics/step-retries?workflow_name=${encodeURIComponent(workflowName)}&runs=${runs}`,
+    ),
+  getWorkflowPercentiles: (workflowName: string, days = 30) =>
+    request<WorkflowPercentiles | null>(
+      `/workflows/analytics/percentiles?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getWorkflowRegressions: () =>
+    request<WorkflowRegressionSignal[]>("/workflows/analytics/regressions"),
+  getGateAnalytics: (workflowName: string, days = 30) =>
+    request<GateAnalyticsRow[]>(
+      `/workflows/analytics/gates?workflow_name=${encodeURIComponent(workflowName)}&days=${days}`,
+    ),
+  getPendingGates: () =>
+    request<PendingGateAnalyticsRow[]>("/workflows/analytics/gates/pending"),
 
   // Notifications
   listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>
@@ -253,5 +339,26 @@ export const api = {
   markNotificationRead: (id: string) =>
     request<void>(`/notifications/${id}/read`, { method: "POST" }),
   markAllNotificationsRead: () =>
-    request<void>("/notifications/read-all", { method: "POST" }),
+    request<void>("/notifications/read", { method: "POST" }),
+
+  // Stats
+  getThemeUnlockStats: () =>
+    request<ThemeUnlockStats>("/stats/theme-unlocks"),
+
+  // Push Notifications
+  getPushVapidKey: () =>
+    request<VapidPublicKeyResponse>("/push/vapid-public-key"),
+  subscribePush: (data: PushSubscribeRequest) =>
+    request<PushSubscribeResponse>("/push/subscribe", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  unsubscribePush: (data: PushSubscribeRequest) =>
+    request<void>("/push/subscribe", {
+      method: "DELETE",
+      body: JSON.stringify(data),
+    }),
 };
+
+// Export as apiClient for consistency with hook usage
+export const apiClient = api;

@@ -18,13 +18,22 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 rust-embed = "8"
 mime_guess = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
+web-push = "0.10"
+base64 = "0.22"
+p256 = { version = "0.13", features = ["ecdsa"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+chrono = { version = "0.4", features = ["serde"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+serde_urlencoded = "0.7"
 
 [dev-dependencies]
 conductor-core = { path = "../conductor-core", features = ["test-helpers", "test-notifications"] }
@@ -32,3 +41,5 @@ reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
+bytes = "1"
+http-body-util = "0.1"

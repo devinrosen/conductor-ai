@@ -9,9 +9,9 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::github;
 use conductor_core::github_app;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
-use conductor_core::jira_acli;
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
+use conductor_core::ticket_source::TicketSource;
 use conductor_core::tickets::{TicketInput, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
@@ -263,6 +263,33 @@ fn query_if_enabled<T>(enabled: bool, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
     }
 }
 
+/// Build fallback `AgentRunEvent`s by parsing log files for runs that lack DB event records.
+/// Called on the background thread so file I/O never blocks the TUI main thread.
+fn build_fallback_events(
+    runs: &[conductor_core::agent::AgentRun],
+) -> Vec<conductor_core::agent::AgentRunEvent> {
+    use conductor_core::agent::{parse_agent_log, AgentRunEvent};
+
+    let mut fallback = Vec::new();
+    for run in runs {
+        if let Some(ref path) = run.log_file {
+            let events = parse_agent_log(path);
+            for ev in events {
+                fallback.push(AgentRunEvent {
+                    id: conductor_core::new_id(),
+                    run_id: run.id.clone(),
+                    kind: ev.kind,
+                    summary: ev.summary,
+                    started_at: run.started_at.clone(),
+                    ended_at: None,
+                    metadata: None,
+                });
+            }
+        }
+    }
+    fallback
+}
+
 /// Poll all data from the database. Returns a DataRefreshed action, the loaded config, and the
 /// open DB connection so the caller can reuse it (e.g. for notification claims) without opening
 /// a second connection on the same tick.
@@ -292,7 +319,15 @@ pub fn poll_data() -> Option<PollResult> {
         if now - LAST_REAP.load(Ordering::Relaxed) >= 30 {
             LAST_REAP.store(now, Ordering::Relaxed);
             let _ = agent_mgr.reap_orphaned_runs();
+            let _ = agent_mgr.dismiss_expired_feedback_requests();
             let _ = wt_mgr.reap_stale_worktrees();
+            if config.general.auto_cleanup_merged_branches {
+                match wt_mgr.cleanup_merged_worktrees(None) {
+                    Ok(n) if n > 0 => tracing::info!("Auto-cleaned {n} merged worktree(s)"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
+                }
+            }
             let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
             match wf_mgr.recover_stuck_steps() {
                 Ok(n) if n > 0 => tracing::debug!("Recovered {n} stuck workflow step(s)"),
@@ -304,6 +339,45 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed: {e}"),
             }
+            match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+                Ok(n) if n > 0 => {
+                    tracing::info!("Reaper finalized {n} stuck workflow run(s)")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
+            }
+            match wf_mgr.detect_stuck_workflow_run_ids(60) {
+                Ok(ids) if !ids.is_empty() => {
+                    let n = ids.len();
+                    tracing::info!("Auto-resuming {n} stuck workflow run(s)");
+                    let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+                    for run_id in ids {
+                        let config_clone = config.clone();
+                        let bin_dir = conductor_bin_dir.clone();
+                        std::thread::spawn(move || {
+                            let params = conductor_core::workflow::WorkflowResumeStandalone {
+                                config: config_clone,
+                                workflow_run_id: run_id.clone(),
+                                model: None,
+                                from_step: None,
+                                restart: false,
+                                db_path: None,
+                                conductor_bin_dir: bin_dir,
+                            };
+                            if let Err(e) =
+                                conductor_core::workflow::resume_workflow_standalone(&params)
+                            {
+                                tracing::warn!(
+                                    run_id = %run_id,
+                                    "Auto-resume of stuck workflow run failed: {e}"
+                                );
+                            }
+                        });
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
+            }
         }
     }
 
@@ -311,8 +385,40 @@ pub fn poll_data() -> Option<PollResult> {
     let worktrees = wt_mgr.list(None, true).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
     let ticket_labels = ticket_syncer.get_all_labels().unwrap_or_default();
+    let ticket_dependencies = ticket_syncer.get_all_dependencies().unwrap_or_default();
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
+    let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
+
+    // Fetch all worktree-scoped agent events in a single batch query; fall back to log-file
+    // parsing for worktrees whose runs pre-date DB-backed event storage.
+    let mut worktree_agent_events = agent_mgr.list_all_events_by_worktree().unwrap_or_default();
+    for wt_id in latest_agent_runs.keys() {
+        if worktree_agent_events
+            .get(wt_id)
+            .is_none_or(|v| v.is_empty())
+        {
+            let mut runs = agent_mgr.list_for_worktree(wt_id).unwrap_or_default();
+            runs.reverse();
+            let fallback = build_fallback_events(&runs);
+            if !fallback.is_empty() {
+                worktree_agent_events.insert(wt_id.clone(), fallback);
+            }
+        }
+    }
+
+    // Same pattern for repo-scoped events.
+    let mut repo_agent_events = agent_mgr.list_all_repo_events_by_repo().unwrap_or_default();
+    for repo_id in latest_repo_agent_runs.keys() {
+        if repo_agent_events.get(repo_id).is_none_or(|v| v.is_empty()) {
+            let mut runs = agent_mgr.list_repo_scoped(repo_id).unwrap_or_default();
+            runs.reverse();
+            let fallback = build_fallback_events(&runs);
+            if !fallback.is_empty() {
+                repo_agent_events.insert(repo_id.clone(), fallback);
+            }
+        }
+    }
 
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     let wf_mgr = WorkflowManager::new(&conn);
@@ -385,6 +491,25 @@ pub fn poll_data() -> Option<PollResult> {
 
     // Load active features for all repos in a single query.
     let feat_mgr = FeatureManager::new(&conn, &config);
+
+    // Refresh last_commit_at cache at most once per 60 seconds.
+    {
+        static LAST_REFRESH: AtomicI64 = AtomicI64::new(0);
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if now_secs - LAST_REFRESH.load(Ordering::Relaxed) >= 60 {
+            LAST_REFRESH.store(now_secs, Ordering::Relaxed);
+            let repos_for_refresh = repo_mgr.list().unwrap_or_default();
+            for repo in &repos_for_refresh {
+                if let Err(e) = feat_mgr.refresh_last_commit_all(&repo.slug) {
+                    tracing::warn!("refresh_last_commit_all for {}: {e}", repo.slug);
+                }
+            }
+        }
+    }
+
     let features_by_repo = feat_mgr.list_all_active().unwrap_or_else(|e| {
         tracing::warn!("list_all_active features failed: {e}");
         std::collections::HashMap::new()
@@ -395,6 +520,7 @@ pub fn poll_data() -> Option<PollResult> {
         worktrees,
         tickets,
         ticket_labels,
+        ticket_dependencies,
         latest_agent_runs,
         ticket_agent_totals,
         latest_workflow_runs_by_worktree,
@@ -405,6 +531,9 @@ pub fn poll_data() -> Option<PollResult> {
         live_turns_by_worktree,
         features_by_repo,
         unread_notification_count,
+        latest_repo_agent_runs,
+        worktree_agent_events,
+        repo_agent_events,
     }));
     Some(PollResult {
         action,
@@ -529,36 +658,19 @@ fn sync_sources_for_repo(
         }
     } else {
         for source in sources {
-            match source.source_type.as_str() {
-                "github" => {
-                    let action = match serde_json::from_str::<GitHubConfig>(&source.config_json) {
-                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "github", || {
-                            github::sync_github_issues(&cfg.owner, &cfg.repo, token)
-                        }),
-                        Err(e) => Action::TicketSyncFailed {
-                            repo_slug: repo_slug.to_string(),
-                            error: format!("invalid github config: {e}"),
-                        },
-                    };
-                    if !tx.send(action) {
-                        return false;
-                    }
+            let action = match TicketSource::from_issue_source(&source) {
+                Ok(ts) => {
+                    let ts = ts.with_repo_slug(repo_slug);
+                    let source_type = ts.source_type_str();
+                    sync_repo(syncer, repo_id, repo_slug, source_type, || ts.sync(token))
                 }
-                "jira" => {
-                    let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
-                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "jira", || {
-                            jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-                        }),
-                        Err(e) => Action::TicketSyncFailed {
-                            repo_slug: repo_slug.to_string(),
-                            error: format!("invalid jira config: {e}"),
-                        },
-                    };
-                    if !tx.send(action) {
-                        return false;
-                    }
-                }
-                _ => {}
+                Err(e) => Action::TicketSyncFailed {
+                    repo_slug: repo_slug.to_string(),
+                    error: format!("unsupported source type {:?}: {e}", source.source_type),
+                },
+            };
+            if !tx.send(action) {
+                return false;
             }
         }
     }
@@ -573,6 +685,7 @@ pub fn spawn_ticket_sync_for_repo(
     repo_id: String,
     repo_slug: String,
     remote_url: String,
+    force: bool,
 ) {
     thread::spawn(move || {
         let db = db_path();
@@ -609,10 +722,10 @@ pub fn spawn_ticket_sync_for_repo(
                 })
                 .unwrap_or(true),
             Ok(None) => true,
-            Err(_) => false,
+            Err(_) => true,
         };
 
-        if !is_stale {
+        if !force && !is_stale {
             let _ = tx.send(Action::TicketSyncDone);
             return;
         }
@@ -687,8 +800,21 @@ fn poll_workflow_data(
         (None, None, Vec::new())
     } else if let Some(wt_path) = worktree_path {
         // Worktree-scoped: load defs from this worktree's filesystem path.
-        let (defs, warnings) =
+        let (mut defs, warnings) =
             WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default();
+        defs.sort_by(|a, b| {
+            let ka = (
+                if a.group.is_none() { 1u8 } else { 0u8 },
+                a.group.as_deref().unwrap_or(""),
+                a.name.as_str(),
+            );
+            let kb = (
+                if b.group.is_none() { 1u8 } else { 0u8 },
+                b.group.as_deref().unwrap_or(""),
+                b.name.as_str(),
+            );
+            ka.cmp(&kb)
+        });
         (Some(defs), Some(Vec::new()), warnings)
     } else if let Some(rid) = repo_id {
         // Repo-scoped: scan all active worktrees of this repo, deduplicate by name.
@@ -723,6 +849,19 @@ fn poll_workflow_data(
                 all_defs.extend(repo_defs);
             }
         }
+        all_defs.sort_by(|a, b| {
+            let ka = (
+                if a.group.is_none() { 1u8 } else { 0u8 },
+                a.group.as_deref().unwrap_or(""),
+                a.name.as_str(),
+            );
+            let kb = (
+                if b.group.is_none() { 1u8 } else { 0u8 },
+                b.group.as_deref().unwrap_or(""),
+                b.name.as_str(),
+            );
+            ka.cmp(&kb)
+        });
         // def_slugs empty: all defs belong to the same repo, no slug labels needed.
         (Some(all_defs), Some(Vec::new()), all_warnings)
     } else {
@@ -774,8 +913,18 @@ fn poll_workflow_data(
                     tagged.push((repo_id.clone(), repo_slug.clone(), d));
                 }
             }
-            // Sort by repo_id so defs are contiguous per repo for grouping in the renderer.
-            tagged.sort_by(|a, b| a.0.cmp(&b.0));
+            // Sort by repo_id, then group (named first, ungrouped last), then name.
+            tagged.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| {
+                        let ga = a.2.group.as_deref().unwrap_or("");
+                        let gb = b.2.group.as_deref().unwrap_or("");
+                        let ka: (u8, &str) = (if a.2.group.is_none() { 1 } else { 0 }, ga);
+                        let kb: (u8, &str) = (if b.2.group.is_none() { 1 } else { 0 }, gb);
+                        ka.cmp(&kb)
+                    })
+                    .then_with(|| a.2.name.cmp(&b.2.name))
+            });
             for (_, slug, d) in tagged {
                 all_slugs.push(slug);
                 all_defs.push(d);
@@ -958,4 +1107,157 @@ pub fn spawn_blocking(tx: BackgroundSender, f: impl FnOnce() -> Action + Send + 
         let action = f();
         let _ = tx.send(action);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    // ── query_if_enabled ──────────────────────────────────────────────
+
+    #[test]
+    fn query_if_enabled_returns_result_when_true() {
+        let result = query_if_enabled(true, || vec![1, 2, 3]);
+        assert_eq!(result, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn query_if_enabled_returns_empty_when_false() {
+        let result: Vec<i32> = query_if_enabled(false, || vec![1, 2, 3]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn query_if_enabled_closure_not_called_when_false() {
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called_clone = called.clone();
+        let _: Vec<i32> = query_if_enabled(false, move || {
+            called_clone.store(true, Ordering::SeqCst);
+            vec![1]
+        });
+        assert!(!called.load(Ordering::SeqCst));
+    }
+
+    // ── sync_repo ─────────────────────────────────────────────────────
+
+    #[test]
+    fn sync_repo_returns_ticket_sync_complete_on_success() {
+        let conn = conductor_core::test_helpers::setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let ticket = TicketInput {
+            source_type: "github".into(),
+            source_id: "42".into(),
+            title: "Test issue".into(),
+            body: "".into(),
+            state: "open".into(),
+            labels: vec![],
+            assignee: None,
+            priority: None,
+            url: "https://example.com".into(),
+            raw_json: None,
+            label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
+        };
+
+        let action = sync_repo(&syncer, "r1", "test-repo", "github", || Ok(vec![ticket]));
+        match action {
+            Action::TicketSyncComplete { repo_slug, count } => {
+                assert_eq!(repo_slug, "test-repo");
+                assert_eq!(count, 1);
+            }
+            other => panic!("expected TicketSyncComplete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_repo_returns_ticket_sync_failed_on_fetch_error() {
+        let conn = conductor_core::test_helpers::setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let action = sync_repo(&syncer, "r1", "test-repo", "github", || {
+            Err(ConductorError::TicketSync("fetch failed".into()))
+        });
+        match action {
+            Action::TicketSyncFailed { repo_slug, error } => {
+                assert_eq!(repo_slug, "test-repo");
+                assert!(error.contains("fetch failed"));
+            }
+            other => panic!("expected TicketSyncFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_repo_returns_ticket_sync_failed_on_upsert_error() {
+        // Use a connection with no repo registered — foreign key constraint will fail
+        let conn = conductor_core::test_helpers::create_test_conn();
+        let syncer = TicketSyncer::new(&conn);
+
+        let ticket = TicketInput {
+            source_type: "github".into(),
+            source_id: "1".into(),
+            title: "Test".into(),
+            body: "".into(),
+            state: "open".into(),
+            labels: vec![],
+            assignee: None,
+            priority: None,
+            url: "https://example.com".into(),
+            raw_json: None,
+            label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
+        };
+
+        let action = sync_repo(&syncer, "nonexistent-repo", "test-repo", "github", || {
+            Ok(vec![ticket])
+        });
+        match action {
+            Action::TicketSyncFailed { repo_slug, .. } => {
+                assert_eq!(repo_slug, "test-repo");
+            }
+            other => panic!("expected TicketSyncFailed, got {other:?}"),
+        }
+    }
+
+    // ── TICKET_SYNC_STALE_SECS ────────────────────────────────────────
+
+    #[test]
+    fn ticket_sync_stale_secs_is_five_minutes() {
+        assert_eq!(TICKET_SYNC_STALE_SECS, 300);
+    }
+
+    // ── PR_FETCH_IN_FLIGHT guard ──────────────────────────────────────
+
+    #[test]
+    fn pr_fetch_guard_drop_clears_flag() {
+        PR_FETCH_IN_FLIGHT.store(true, Ordering::SeqCst);
+        {
+            let _guard = PrFetchGuard;
+            assert!(PR_FETCH_IN_FLIGHT.load(Ordering::SeqCst));
+        }
+        // After guard is dropped, flag should be cleared
+        assert!(!PR_FETCH_IN_FLIGHT.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn pr_fetch_in_flight_swap_prevents_concurrent() {
+        // Reset first
+        PR_FETCH_IN_FLIGHT.store(false, Ordering::SeqCst);
+
+        // First swap returns false (was not in flight)
+        let was_in_flight = PR_FETCH_IN_FLIGHT.swap(true, Ordering::SeqCst);
+        assert!(!was_in_flight, "first swap should return false");
+
+        // Second swap returns true (already in flight → skip)
+        let was_in_flight = PR_FETCH_IN_FLIGHT.swap(true, Ordering::SeqCst);
+        assert!(was_in_flight, "second swap should return true");
+
+        // Clean up
+        PR_FETCH_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
 }

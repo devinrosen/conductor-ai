@@ -1,0 +1,34 @@
+---
+name: lint-fix
+description: Run the repo's linter, analyze errors, apply fixes, and re-verify until clean
+version: "1.0.0"
+target_types:
+  - worktree
+hints:
+  - Inspect the repo's toolchain to determine the correct lint command (cargo clippy, eslint, ruff, golangci-lint, etc.) and write the analyze-lint script accordingly
+  - Check package.json scripts, Makefile, or justfile for existing lint/fix targets the script can delegate to
+  - Look at CI config to find the exact lint flags used (e.g. -D warnings for Rust) so the script matches CI behavior exactly
+  - If the repo has auto-fixable lint rules (eslint --fix, ruff --fix, cargo clippy --fix), consider running auto-fix before calling the agent
+  - Consider whether max_iterations = 3 is sufficient — some repos with generated code may need more passes
+---
+workflow lint-fix {
+  meta {
+    description = "Analyze lint errors and apply fixes, re-verifying until clean"
+    trigger     = "manual"
+    targets     = ["worktree"]
+    group       = "Development"
+  }
+
+  do {
+    max_iterations = 3
+    on_max_iter    = fail
+
+    script analyze-lint {
+      run = ".conductor/scripts/analyze-lint.sh"
+    }
+
+    if analyze-lint.has_lint_errors {
+      call lint-fix-impl
+    }
+  } while analyze-lint.has_lint_errors
+}

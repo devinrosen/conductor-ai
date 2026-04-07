@@ -8,10 +8,20 @@ use tui_textarea::TextArea;
 use conductor_core::agent::TicketAgentTotals;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
-use conductor_core::tickets::{Ticket, TicketLabel};
+use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::worktree::Worktree;
 
 use crate::theme::Theme;
+
+/// Data bundle passed to [`render_ticket_info`], grouping the ticket and its
+/// associated metadata so the function signature stays within clippy's argument limit.
+pub struct TicketInfoData<'a> {
+    pub ticket: &'a Ticket,
+    pub agent_totals: Option<&'a TicketAgentTotals>,
+    pub worktrees: Option<&'a Vec<Worktree>>,
+    pub labels: Option<&'a [TicketLabel]>,
+    pub dependencies: Option<&'a TicketDependencies>,
+}
 
 pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str, theme: &Theme) {
     let popup = centered_rect(50, 30, area);
@@ -224,15 +234,13 @@ pub fn render_progress(frame: &mut Frame, area: Rect, message: &str, theme: &The
     frame.render_widget(content, popup);
 }
 
-pub fn render_ticket_info(
-    frame: &mut Frame,
-    area: Rect,
-    ticket: &Ticket,
-    agent_totals: Option<&TicketAgentTotals>,
-    worktrees: Option<&Vec<Worktree>>,
-    labels: Option<&[TicketLabel]>,
-    theme: &Theme,
-) {
+pub fn render_ticket_info(frame: &mut Frame, area: Rect, data: &TicketInfoData<'_>, theme: &Theme) {
+    let ticket = data.ticket;
+    let agent_totals = data.agent_totals;
+    let worktrees = data.worktrees;
+    let labels = data.labels;
+    let dependencies = data.dependencies;
+
     let popup = centered_rect(60, 70, area);
     frame.render_widget(Clear, popup);
 
@@ -382,6 +390,46 @@ pub fn render_ticket_info(
                     Span::styled(&wt.slug, value_style),
                     Span::styled(format!("  [{}]", wt.status), Style::default().fg(color)),
                     Span::styled(format!("  {}", wt.branch), dim_style),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
+    if let Some(deps) = dependencies {
+        let has_deps = !deps.blocked_by.is_empty()
+            || !deps.blocks.is_empty()
+            || deps.parent.is_some()
+            || !deps.children.is_empty();
+        if has_deps {
+            lines.push(Line::from(Span::styled("  Dependencies:", label_style)));
+            for t in &deps.blocked_by {
+                lines.push(Line::from(vec![
+                    Span::styled("    Blocked by:  ", label_style),
+                    Span::styled(format!("#{} {}", t.source_id, t.title), value_style),
+                ]));
+            }
+            for t in &deps.blocks {
+                lines.push(Line::from(vec![
+                    Span::styled("    Blocks:      ", label_style),
+                    Span::styled(format!("#{} {}", t.source_id, t.title), value_style),
+                ]));
+            }
+            if let Some(ref p) = deps.parent {
+                lines.push(Line::from(vec![
+                    Span::styled("    Parent:      ", label_style),
+                    Span::styled(format!("#{} {}", p.source_id, p.title), value_style),
+                ]));
+            }
+            for (i, t) in deps.children.iter().enumerate() {
+                let label = if i == 0 {
+                    "    Children:    "
+                } else {
+                    "                "
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(label, label_style),
+                    Span::styled(format!("#{} {}", t.source_id, t.title), value_style),
                 ]));
             }
             lines.push(Line::from(""));
@@ -644,6 +692,9 @@ pub fn render_branch_picker(
                             if item.ticket_count == 1 { "" } else { "s" }
                         ));
                     }
+                    if let Some(days) = item.stale_days {
+                        parts.push(format!("\u{26a0} stale {days}d"));
+                    }
                     let label = if parts.is_empty() {
                         branch.clone()
                     } else {
@@ -669,12 +720,14 @@ pub fn render_branch_picker(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_workflow_picker(
     frame: &mut Frame,
     area: Rect,
     target: &crate::state::WorkflowPickerTarget,
     items: &[crate::state::WorkflowPickerItem],
     selected: usize,
+    scroll_offset: u16,
     ticket_source_id: Option<&str>,
     theme: &Theme,
 ) {
@@ -727,7 +780,11 @@ pub fn render_workflow_picker(
         }
     };
 
-    let height = (items.len() as u16 + 7).min(25);
+    let header_count = items
+        .iter()
+        .filter(|i| matches!(i, crate::state::WorkflowPickerItem::Header(_)))
+        .count() as u16;
+    let height = (items.len() as u16 + header_count + 7).min(area.height.saturating_sub(4));
     let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
     let popup = centered_rect(60, percent_y.max(25), area);
     frame.render_widget(Clear, popup);
@@ -742,49 +799,60 @@ pub fn render_workflow_picker(
     ];
 
     for (i, item) in items.iter().enumerate() {
-        let is_selected = i == selected;
-        let prefix = if is_selected { "▸ " } else { "  " };
-        let num = if i < 9 {
-            format!("{} ", i + 1)
-        } else {
-            "  ".to_string()
-        };
+        use crate::state::WorkflowPickerItem;
+        match item {
+            WorkflowPickerItem::Header(label) => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("  {label}"),
+                    Style::default()
+                        .fg(theme.label_accent)
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
+            _ => {
+                let is_selected = i == selected;
+                let prefix = if is_selected { "▸ " } else { "  " };
 
-        let style = if is_selected {
-            Style::default()
-                .fg(theme.label_warning)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.label_primary)
-        };
+                let style = if is_selected {
+                    Style::default()
+                        .fg(theme.label_warning)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.label_primary)
+                };
 
-        let name = item.name();
-        let description = item.description();
-        let mut row = vec![
-            Span::styled(format!("  {prefix}{num}"), style),
-            Span::styled(name, style),
-        ];
-        if !description.is_empty() {
-            row.push(Span::styled(
-                format!("  — {description}"),
-                Style::default().fg(theme.label_secondary),
-            ));
+                let name = item.name();
+                let description = item.description();
+                let mut row = vec![
+                    Span::styled(format!("  {prefix}"), style),
+                    Span::styled(name, style),
+                ];
+                if !description.is_empty() {
+                    row.push(Span::styled(
+                        format!("  — {description}"),
+                        Style::default().fg(theme.label_secondary),
+                    ));
+                }
+                lines.push(Line::from(row));
+            }
         }
-        lines.push(Line::from(row));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  1-9 select  Enter confirm  Esc cancel",
+        "  j/k navigate  Enter confirm  Esc cancel",
         Style::default().fg(theme.label_secondary),
     )));
 
-    let content = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.border_focused))
-            .title(title),
-    );
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_focused))
+                .title(title),
+        )
+        .scroll((scroll_offset, 0));
 
     frame.render_widget(content, popup);
 }
@@ -1486,17 +1554,22 @@ fn format_source_config_lines(source: &IssueSource) -> Vec<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_gate_action(
     frame: &mut Frame,
     area: Rect,
     gate_prompt: &str,
     feedback: &str,
+    options: &[String],
+    selected: &[bool],
+    focused_option: usize,
     theme: &Theme,
 ) {
-    let popup = centered_rect(60, 40, area);
+    let height = if options.is_empty() { 40 } else { 60 };
+    let popup = centered_rect(60, height, area);
     frame.render_widget(Clear, popup);
 
-    let content = Paragraph::new(vec![
+    let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
             "Gate Prompt:",
@@ -1506,20 +1579,24 @@ pub fn render_gate_action(
         )),
         Line::from(Span::raw(gate_prompt)),
         Line::from(""),
-        Line::from(Span::styled(
+    ];
+
+    if options.is_empty() {
+        // Binary approve/reject mode — same as before.
+        lines.push(Line::from(Span::styled(
             "Feedback (optional):",
             Style::default().fg(theme.label_secondary),
-        )),
-        Line::from(vec![
+        )));
+        lines.push(Line::from(vec![
             Span::styled("> ", Style::default().fg(theme.border_focused)),
             Span::styled(
                 feedback,
                 Style::default().add_modifier(Modifier::UNDERLINED),
             ),
             Span::styled("_", Style::default().fg(theme.border_focused)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
             Span::styled(
                 "  y",
                 Style::default()
@@ -1536,14 +1613,57 @@ pub fn render_gate_action(
             Span::raw(" = reject    "),
             Span::styled("Esc", Style::default().fg(theme.label_secondary)),
             Span::raw(" = cancel"),
-        ]),
-    ])
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.label_warning))
-            .title(" Gate Action "),
-    );
+        ]));
+    } else {
+        // Checklist mode.
+        lines.push(Line::from(Span::styled(
+            "Select items (Space to toggle):",
+            Style::default().fg(theme.label_secondary),
+        )));
+        lines.push(Line::from(""));
+        for (i, (opt, &chk)) in options.iter().zip(selected.iter()).enumerate() {
+            let is_focused = i == focused_option;
+            let checkbox = if chk { "[x] " } else { "[ ] " };
+            let row_style = if is_focused {
+                Style::default()
+                    .fg(theme.border_focused)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {checkbox}{opt}"),
+                row_style,
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  j/k", Style::default().fg(theme.label_secondary)),
+            Span::raw(" = move  "),
+            Span::styled("Space", Style::default().fg(theme.label_secondary)),
+            Span::raw(" = toggle  "),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme.status_completed)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" = submit  "),
+            Span::styled("n", Style::default().fg(theme.status_failed)),
+            Span::raw(" = skip  "),
+            Span::styled("Esc", Style::default().fg(theme.label_secondary)),
+            Span::raw(" = cancel"),
+        ]));
+    }
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.label_warning))
+                .title(" Gate Action "),
+        )
+        .wrap(ratatui::widgets::Wrap { trim: false });
 
     frame.render_widget(content, popup);
 }
@@ -1708,6 +1828,81 @@ pub fn render_notifications(
                 .title(" Notifications "),
         )
         .scroll((scroll_offset, 0));
+
+    frame.render_widget(content, popup);
+}
+
+pub fn render_template_picker(
+    frame: &mut Frame,
+    area: Rect,
+    items: &[conductor_core::workflow_template::WorkflowTemplate],
+    selected: usize,
+    repo_slug: &str,
+    theme: &Theme,
+) {
+    let height = (items.len() as u16 + 7).min(25);
+    let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
+    let popup = centered_rect(60, percent_y.max(25), area);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Scaffold workflow from template for {repo_slug}"),
+            Style::default().fg(theme.label_accent),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, item) in items.iter().enumerate() {
+        let is_selected = i == selected;
+        let prefix = if is_selected { "▸ " } else { "  " };
+        let num = if i < 9 {
+            format!("{} ", i + 1)
+        } else {
+            "  ".to_string()
+        };
+
+        let style = if is_selected {
+            Style::default()
+                .fg(theme.label_warning)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.label_primary)
+        };
+
+        let name = &item.metadata.name;
+        let description = &item.metadata.description;
+        let version = &item.metadata.version;
+        let mut row = vec![
+            Span::styled(format!("  {prefix}{num}"), style),
+            Span::styled(name.as_str(), style),
+            Span::styled(
+                format!(" v{version}"),
+                Style::default().fg(theme.label_secondary),
+            ),
+        ];
+        if !description.is_empty() {
+            row.push(Span::styled(
+                format!("  — {description}"),
+                Style::default().fg(theme.label_secondary),
+            ));
+        }
+        lines.push(Line::from(row));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  1-9 select  Enter confirm  Esc cancel",
+        Style::default().fg(theme.label_secondary),
+    )));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border_focused))
+            .title(" From Template "),
+    );
 
     frame.render_widget(content, popup);
 }

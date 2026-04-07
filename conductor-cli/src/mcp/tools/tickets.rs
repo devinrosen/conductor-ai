@@ -3,7 +3,18 @@ use std::path::Path;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_arg_usize, open_db_and_config, tool_err, tool_ok};
+
+fn parse_comma_arg(args: &serde_json::Map<String, Value>, key: &str) -> Vec<String> {
+    get_arg(args, key)
+        .map(|s| {
+            s.split(',')
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 pub(super) fn tool_list_tickets(
     db_path: &Path,
@@ -14,14 +25,7 @@ pub(super) fn tool_list_tickets(
 
     let repo_slug = require_arg!(args, "repo");
 
-    let labels: Vec<String> = get_arg(args, "label")
-        .map(|s| {
-            s.split(',')
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+    let labels = parse_comma_arg(args, "label");
     let search = get_arg(args, "search").map(|s| s.to_string());
     let include_closed = get_arg(args, "include_closed") == Some("true");
 
@@ -61,10 +65,9 @@ pub(super) fn tool_sync_tickets(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::github;
     use conductor_core::issue_source::IssueSourceManager;
-    use conductor_core::jira_acli;
     use conductor_core::repo::RepoManager;
+    use conductor_core::ticket_source::TicketSource;
     use conductor_core::tickets::TicketSyncer;
     use conductor_core::worktree::WorktreeManager;
 
@@ -104,31 +107,11 @@ pub(super) fn tool_sync_tickets(
             if source.source_type != source_type {
                 continue;
             }
-            let fetch_result = match source.source_type.as_str() {
-                "github" => {
-                    let cfg: conductor_core::issue_source::GitHubConfig =
-                        match serde_json::from_str(&source.config_json) {
-                            Ok(c) => c,
-                            Err(e) => return tool_err(format!("github config parse error: {e}")),
-                        };
-                    let issue_number: i64 = match source_id.parse() {
-                        Ok(n) => n,
-                        Err(_) => {
-                            return tool_err(format!("invalid GitHub issue number: {source_id}"))
-                        }
-                    };
-                    github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
-                }
-                "jira" => {
-                    let cfg: conductor_core::issue_source::JiraConfig =
-                        match serde_json::from_str(&source.config_json) {
-                            Ok(c) => c,
-                            Err(e) => return tool_err(format!("jira config parse error: {e}")),
-                        };
-                    jira_acli::fetch_jira_issue(&source_id, &cfg.url)
-                }
-                other => return tool_err(format!("Unknown source type: {other}")),
+            let ts = match TicketSource::from_issue_source(source) {
+                Ok(t) => t,
+                Err(e) => return tool_err(e.to_string()),
             };
+            let fetch_result = ts.fetch_one(&source_id);
             match fetch_result {
                 Ok(ticket) => {
                     if let Err(e) = syncer.upsert_tickets(&repo.id, &[ticket]) {
@@ -155,34 +138,14 @@ pub(super) fn tool_sync_tickets(
     let mut errors = Vec::new();
 
     for source in sources {
-        let fetch_result = match source.source_type.as_str() {
-            "github" => {
-                let cfg: conductor_core::issue_source::GitHubConfig =
-                    match serde_json::from_str(&source.config_json) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            errors.push(format!("github config parse error: {e}"));
-                            continue;
-                        }
-                    };
-                github::sync_github_issues(&cfg.owner, &cfg.repo, None)
-            }
-            "jira" => {
-                let cfg: conductor_core::issue_source::JiraConfig =
-                    match serde_json::from_str(&source.config_json) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            errors.push(format!("jira config parse error: {e}"));
-                            continue;
-                        }
-                    };
-                jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-            }
-            other => {
-                errors.push(format!("Unknown source type: {other}"));
+        let ts = match TicketSource::from_issue_source(&source) {
+            Ok(t) => t,
+            Err(e) => {
+                errors.push(e.to_string());
                 continue;
             }
         };
+        let fetch_result = ts.with_repo_slug(&repo.slug).sync(None);
         match fetch_result {
             Ok(tickets) => {
                 let (synced, closed) =
@@ -222,14 +185,12 @@ pub(super) fn tool_upsert_ticket(
     let state = require_arg!(args, "state");
     let body = get_arg(args, "body").unwrap_or("").to_string();
     let url = get_arg(args, "url").unwrap_or("").to_string();
-    let labels_raw = get_arg(args, "labels").unwrap_or("");
-    let labels: Vec<String> = labels_raw
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let labels = parse_comma_arg(args, "labels");
     let assignee = get_arg(args, "assignee").map(|s| s.to_string());
     let priority = get_arg(args, "priority").map(|s| s.to_string());
+    let blocked_by = parse_comma_arg(args, "blocked_by");
+    let children = parse_comma_arg(args, "children");
+    let parent = get_arg(args, "parent").map(|s| s.to_string());
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
@@ -251,7 +212,10 @@ pub(super) fn tool_upsert_ticket(
         assignee,
         priority,
         url,
-        raw_json: "{}".to_string(),
+        raw_json: None,
+        blocked_by,
+        children,
+        parent,
     };
 
     let syncer = TicketSyncer::new(&conn);
@@ -261,6 +225,46 @@ pub(super) fn tool_upsert_ticket(
         )),
         Err(e) => tool_err(format!("upsert failed: {e}")),
     }
+}
+
+pub(super) fn tool_get_ready_tickets(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::tickets::TicketSyncer;
+
+    let repo_slug = require_arg!(args, "repo");
+    let root_ticket_id = get_arg(args, "root_ticket_id").map(|s| s.to_string());
+    let label = get_arg(args, "label").map(|s| s.to_string());
+    let limit = get_arg_usize(args, "limit").unwrap_or(50);
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+    let syncer = TicketSyncer::new(&conn);
+    let tickets = match syncer.get_ready_tickets(
+        &repo.id,
+        root_ticket_id.as_deref(),
+        label.as_deref(),
+        limit,
+    ) {
+        Ok(t) => t,
+        Err(e) => return tool_err(e),
+    };
+    if tickets.is_empty() {
+        return tool_ok(format!("No ready tickets for {repo_slug}."));
+    }
+    let mut out = String::new();
+    for t in tickets {
+        out.push_str(&format!("#{} — {} [{}]\n", t.source_id, t.title, t.url));
+    }
+    tool_ok(out)
 }
 
 pub(super) fn tool_delete_ticket(
@@ -444,8 +448,11 @@ mod tests {
             assignee: None,
             priority: None,
             url: "https://github.com/x/y/issues/42".to_string(),
-            raw_json: "{}".to_string(),
+            raw_json: None,
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
         };
         let syncer = TicketSyncer::new(&conn);
         syncer.sync_and_close_tickets(&repo.id, "github", &[ticket]);
@@ -680,6 +687,61 @@ mod tests {
         );
     }
 
+    // ---- get_ready_tickets tests ----
+
+    #[test]
+    fn test_get_ready_tickets_missing_repo() {
+        let (_f, db) = make_test_db();
+        let result = tool_get_ready_tickets(&db, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "ghost-repo"));
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_get_ready_tickets_empty_result() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "test-repo"));
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("No ready tickets"), "got: {text}");
+    }
+
+    #[test]
+    fn test_get_ready_tickets_happy_path() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        // Upsert a ticket
+        let args = full_ticket_args("test-repo");
+        let upsert = tool_upsert_ticket(&db, &args);
+        assert_ne!(upsert.is_error, Some(true));
+
+        let result = tool_get_ready_tickets(&db, &args_with("repo", "test-repo"));
+        assert_ne!(result.is_error, Some(true), "got: {:?}", result.content);
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("#42"),
+            "expected ticket source_id in output, got: {text}"
+        );
+    }
+
     // ---- delete ticket tests ----
 
     fn delete_args(
@@ -871,6 +933,184 @@ mod tests {
         assert!(
             after.is_none(),
             "workflow_run ticket_id should be NULL after ticket deletion, got: {after:?}"
+        );
+    }
+
+    // ---- parent field tests ----
+
+    fn upsert_ticket_with_args(db: &std::path::Path, extra: &[(&str, &str)]) -> CallToolResult {
+        let mut args = full_ticket_args("test-repo");
+        for (k, v) in extra {
+            args.insert(k.to_string(), Value::String(v.to_string()));
+        }
+        tool_upsert_ticket(db, &args)
+    }
+
+    fn count_parent_edges(db: &std::path::Path, child_source_id: &str) -> usize {
+        use conductor_core::db::open_database;
+        let conn = open_database(db).expect("open db");
+        conn.query_row(
+            "SELECT COUNT(*) FROM ticket_dependencies td \
+             JOIN tickets child ON child.id = td.to_ticket_id \
+             WHERE child.source_id = ?1 AND td.dep_type = 'parent_of'",
+            rusqlite::params![child_source_id],
+            |row| row.get::<_, usize>(0),
+        )
+        .unwrap_or(0)
+    }
+
+    fn get_parent_source_id(db: &std::path::Path, child_source_id: &str) -> Option<String> {
+        use conductor_core::db::open_database;
+        let conn = open_database(db).expect("open db");
+        conn.query_row(
+            "SELECT parent.source_id FROM ticket_dependencies td \
+             JOIN tickets child  ON child.id  = td.to_ticket_id \
+             JOIN tickets parent ON parent.id = td.from_ticket_id \
+             WHERE child.source_id = ?1 AND td.dep_type = 'parent_of'",
+            rusqlite::params![child_source_id],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    #[test]
+    fn test_upsert_ticket_parent_field_creates_relationship() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert parent ticket (source_id "10")
+        let mut parent_args = full_ticket_args("test-repo");
+        parent_args.insert("source_id".to_string(), Value::String("10".to_string()));
+        parent_args.insert(
+            "title".to_string(),
+            Value::String("Parent ticket".to_string()),
+        );
+        let r = tool_upsert_ticket(&db, &parent_args);
+        assert_ne!(
+            r.is_error,
+            Some(true),
+            "parent upsert failed: {:?}",
+            r.content
+        );
+
+        // Upsert child ticket (source_id "42") with parent="10"
+        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        assert_ne!(
+            r.is_error,
+            Some(true),
+            "child upsert failed: {:?}",
+            r.content
+        );
+
+        assert_eq!(
+            count_parent_edges(&db, "42"),
+            1,
+            "expected 1 parent_of edge for child"
+        );
+        assert_eq!(
+            get_parent_source_id(&db, "42").as_deref(),
+            Some("10"),
+            "parent source_id should be '10'"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_parent_replaces_existing() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert two parent tickets
+        for sid in ["10", "11"] {
+            let mut a = full_ticket_args("test-repo");
+            a.insert("source_id".to_string(), Value::String(sid.to_string()));
+            a.insert("title".to_string(), Value::String(format!("Parent {sid}")));
+            let r = tool_upsert_ticket(&db, &a);
+            assert_ne!(r.is_error, Some(true));
+        }
+
+        // Set parent to "10"
+        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        assert_ne!(r.is_error, Some(true));
+        assert_eq!(get_parent_source_id(&db, "42").as_deref(), Some("10"));
+
+        // Replace with parent "11"
+        let r = upsert_ticket_with_args(&db, &[("parent", "11")]);
+        assert_ne!(r.is_error, Some(true));
+        assert_eq!(
+            count_parent_edges(&db, "42"),
+            1,
+            "should have exactly 1 parent after replace"
+        );
+        assert_eq!(
+            get_parent_source_id(&db, "42").as_deref(),
+            Some("11"),
+            "parent should now be '11'"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_children_replaces_not_merges() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert two child tickets
+        for sid in ["10", "11"] {
+            let mut a = full_ticket_args("test-repo");
+            a.insert("source_id".to_string(), Value::String(sid.to_string()));
+            a.insert("title".to_string(), Value::String(format!("Child {sid}")));
+            let r = tool_upsert_ticket(&db, &a);
+            assert_ne!(r.is_error, Some(true));
+        }
+
+        // Upsert parent (source_id "42") with children=[10, 11]
+        let r = upsert_ticket_with_args(&db, &[("children", "10,11")]);
+        assert_ne!(r.is_error, Some(true));
+
+        // Re-upsert with only child [10] — 11 should be removed
+        let r = upsert_ticket_with_args(&db, &[("children", "10")]);
+        assert_ne!(r.is_error, Some(true));
+
+        use conductor_core::db::open_database;
+        let conn = open_database(&db).expect("open db");
+        let child_count: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_dependencies td \
+             JOIN tickets parent ON parent.id = td.from_ticket_id \
+             WHERE parent.source_id = '42' AND td.dep_type = 'parent_of'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            child_count, 1,
+            "children should be replaced (1 child remaining)"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_parent_no_opinion_when_absent() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert parent ticket
+        let mut parent_args = full_ticket_args("test-repo");
+        parent_args.insert("source_id".to_string(), Value::String("10".to_string()));
+        parent_args.insert("title".to_string(), Value::String("Parent".to_string()));
+        let r = tool_upsert_ticket(&db, &parent_args);
+        assert_ne!(r.is_error, Some(true));
+
+        // Set parent relationship via parent field
+        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        assert_ne!(r.is_error, Some(true));
+        assert_eq!(count_parent_edges(&db, "42"), 1);
+
+        // Re-upsert child without parent field — should leave relationship untouched
+        let r = upsert_ticket_with_args(&db, &[]);
+        assert_ne!(r.is_error, Some(true));
+        assert_eq!(
+            count_parent_edges(&db, "42"),
+            1,
+            "existing parent relationship should not be removed when parent field is absent"
         );
     }
 }

@@ -10,6 +10,38 @@ pub fn create_test_conn() -> Connection {
     conn
 }
 
+/// Insert a single repo row. `id`, `slug`, and `local_path` are the only values
+/// that differ across call sites; other fields use test defaults.
+pub fn insert_test_repo(conn: &Connection, id: &str, slug: &str, local_path: &str) {
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES (?1, ?2, ?3, 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+        rusqlite::params![id, slug, local_path],
+    )
+    .unwrap();
+}
+
+/// Insert a single worktree row. `id`, `repo_id`, `slug`, and `path` are parameterised;
+/// other fields use test defaults (`branch = 'feat/test'`, `status = 'active'`).
+pub fn insert_test_worktree(conn: &Connection, id: &str, repo_id: &str, slug: &str, path: &str) {
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES (?1, ?2, ?3, 'feat/test', ?4, 'active', '2024-01-01T00:00:00Z')",
+        rusqlite::params![id, repo_id, slug, path],
+    )
+    .unwrap();
+}
+
+/// Insert a single agent_run row with `status = 'running'`.
+pub fn insert_test_agent_run(conn: &Connection, id: &str, worktree_id: &str) {
+    conn.execute(
+        "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
+         VALUES (?1, ?2, 'test', 'running', '2024-01-01T00:00:00Z')",
+        rusqlite::params![id, worktree_id],
+    )
+    .unwrap();
+}
+
 /// Opens an in-memory SQLite database with migrations applied and a test repo + worktree inserted.
 ///
 /// Provides:
@@ -17,15 +49,17 @@ pub fn create_test_conn() -> Connection {
 /// - worktree `w1` (slug `feat-test`, branch `feat/test`, status `active`)
 pub fn setup_db() -> Connection {
     let conn = create_test_conn();
-    conn.execute(
-        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-         VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-        [],
-    ).unwrap();
-    conn.execute(
-        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
-        [],
-    ).unwrap();
+    insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+    insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp/ws/feat-test");
+    conn
+}
+
+/// `setup_db()` + an agent_run `ar1` attached to worktree `w1`.
+///
+/// Provides everything in `setup_db()` plus:
+/// - agent_run `ar1` (worktree `w1`, status `running`)
+pub fn setup_db_with_agent_run() -> Connection {
+    let conn = setup_db();
+    insert_test_agent_run(&conn, "ar1", "w1");
     conn
 }

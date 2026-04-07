@@ -25,6 +25,8 @@ fi
 # ---------------------------------------------------------------------------
 if [ "${DRY_RUN:-false}" = "true" ]; then
   echo "DRY_RUN=true — would submit formal GitHub review for PR #${PR_NUMBER}."
+  echo "TICKET_SOURCE_ID: ${TICKET_SOURCE_ID:-<not set>}"
+  echo "CONDUCTOR_REPO:   ${CONDUCTOR_REPO:-<not set>}"
   echo "reviewed_by:"
   echo "${PRIOR_OUTPUT}" | jq -r '.reviewed_by // ""'
   echo "blocking_findings:"
@@ -102,6 +104,14 @@ if [ "${FINDING_COUNT}" -gt 0 ]; then
       continue
     fi
 
+    # Extract finding-specific labels and ensure they exist
+    LABEL_ARGS=(--label "conductor-off-diff")
+    while IFS= read -r label; do
+      [ -z "${label}" ] && continue
+      gh label create "${label}" --color "ededed" 2>/dev/null || true
+      LABEL_ARGS+=(--label "${label}")
+    done < <(echo "${finding}" | jq -r '(.labels // []) | .[]')
+
     ISSUE_BODY="**Severity:** ${SEVERITY}
 **Location:** ${FILE_LINE_REF}
 **Found by:** ${REVIEWER}
@@ -110,7 +120,7 @@ ${MESSAGE}"
 
     ISSUE_URL=$(gh issue create \
       --title "${TITLE} (${FILE_LINE_REF})" \
-      --label "conductor-off-diff" \
+      "${LABEL_ARGS[@]}" \
       --body "${ISSUE_BODY}" \
       2>/dev/null)
 
@@ -118,6 +128,28 @@ ${MESSAGE}"
     echo "Filed off-diff issue: ${ISSUE_URL}"
     FILED_ISSUES="${FILED_ISSUES}- [#${ISSUE_NUMBER} — ${TITLE}](${ISSUE_URL}) — \`${FILE_LINE_REF}\` (${SEVERITY})
 "
+
+    # Upsert as a conductor ticket and link to source ticket (best-effort)
+    if [ -n "${TICKET_SOURCE_ID:-}" ] && [ -n "${CONDUCTOR_REPO:-}" ] \
+        && [[ "${TICKET_SOURCE_ID}" != *"{{"* ]] \
+        && [[ "${CONDUCTOR_REPO}" != *"{{"* ]]; then
+      UPSERT_LABELS="conductor-off-diff"
+      while IFS= read -r label; do
+        [ -z "${label}" ] && continue
+        UPSERT_LABELS="${UPSERT_LABELS},${label}"
+      done < <(echo "${finding}" | jq -r '(.labels // []) | .[]')
+
+      conductor tickets upsert "${CONDUCTOR_REPO}" \
+        --source-type github \
+        --source-id "${ISSUE_NUMBER}" \
+        --title "${TITLE} (${FILE_LINE_REF})" \
+        --state open \
+        --body "${ISSUE_BODY}" \
+        --url "${ISSUE_URL}" \
+        --labels "${UPSERT_LABELS}" \
+        --parent "${TICKET_SOURCE_ID}" \
+        2>/dev/null || echo "Warning: conductor ticket upsert failed for issue #${ISSUE_NUMBER} (non-fatal)"
+    fi
   done < <(echo "${OFF_DIFF_FINDINGS}" | jq -c '.[]')
 fi
 

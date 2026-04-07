@@ -158,30 +158,22 @@ For PR-targeted workflows using `--pr`, no registration is needed at all — con
 
 ## Claude Code integration
 
-Conductor can show live workflow run status directly in the Claude Code status bar.
+Conductor provides an MCP server that gives Claude Code access to repos, tickets, worktrees, and workflow runs.
 
 ```bash
-# Install (writes ~/.conductor/statusline.py and updates ~/.claude/settings.json):
-conductor statusline install
+# Register the MCP server in Claude Code's settings.json:
+conductor setup install
 
-# Uninstall (removes the statusLineTool entry from ~/.claude/settings.json):
-conductor statusline uninstall
+# Unregister:
+conductor setup uninstall
 ```
 
-After installing, restart Claude Code. The status bar will show active workflow runs:
-
-```
-⬡ conductor   2 running  ·  1 gate waiting
-⏳  gate:pr_checks       merge-when-ready     umbrella/feat-login     waiting 1h 23m
-▶   implement            ticket-to-pr         umbrella/fix-crash      running 4m 12s
-```
-
-Re-running `conductor statusline install` upgrades the script automatically.
+After installing, restart Claude Code. The conductor MCP server will be available for tool use.
 
 ## Tips
 
 - **Model override:** Pass `--model claude-opus-4-6` to any `workflow run` to use a specific model for all agent steps.
-- **Step timeout:** Default is 30 minutes per step. Override with `--step-timeout-secs 3600`.
+- **Step timeout:** Default is 12 hours per step. Override with `--step-timeout-secs 3600`.
 - **Continue on failure:** Use `--no-fail-fast` to run remaining steps even if one fails.
 - **Multiple inputs:** `--input` can be repeated: `--input ticket_id=123 --input skip_tests=true`
 - **Agent logs:** Agent output streams live to the tmux window. Attach with `tmux attach` to watch in real time.

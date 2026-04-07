@@ -407,6 +407,8 @@ modifying shared files.
 For the planned explicit-path and extended resolution features, see
 [agent-path-resolution.md](./agent-path-resolution.md).
 
+> **Agent resolution vs spawn**: Per-step `plugin_dirs` are used when spawning the Claude session (passing `--plugin-dir` flags) but the agent definition must be resolvable from `.conductor/agents/` or `.claude/agents/` at load time. If the agent .md file only exists in a plugin_dir, a symlink in `.conductor/agents/` is required. Fix in progress to make `load_agent()` search plugin_dirs.
+
 ---
 
 ## Structured output
@@ -452,6 +454,8 @@ Each step receives:
 
 Inside `while` loops, entries from all iterations are included. This lets
 agents detect repeated failures on the same issue.
+
+> **Warning — template syntax in agent instructions**: Never use `{{variable}}` inside instructional text (e.g., "If `{{gate_feedback}}` is present, do X"). After substitution, the instruction becomes semantically broken (e.g., "If `some value` is present, do X"). Instead, use plain English ("If gate feedback is present") and reference a dedicated section that contains the single `{{variable}}` reference. See the Gate Feedback section pattern in ship-milestone.md.
 
 ---
 

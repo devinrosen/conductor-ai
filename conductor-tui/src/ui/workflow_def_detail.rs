@@ -36,16 +36,22 @@ fn render_meta(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppStat
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Name
+    // Name (display name, with optional ID row when a title is set)
     lines.push(Line::from(vec![
         Span::styled("Name        ", Style::default().fg(theme.label_secondary)),
         Span::styled(
-            def.name.clone(),
+            def.display_name().to_string(),
             Style::default()
                 .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
+    if def.title.is_some() {
+        lines.push(Line::from(vec![
+            Span::styled("ID          ", Style::default().fg(theme.label_secondary)),
+            Span::styled(def.name.clone(), Style::default().fg(theme.label_info)),
+        ]));
+    }
     lines.push(Line::from(""));
 
     // Description

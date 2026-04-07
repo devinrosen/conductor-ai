@@ -1,8 +1,10 @@
 workflow label-ticket {
   meta {
+    title       = "Label Ticket"
     description = "Add appropriate labels to a single GitHub issue if it is missing labels"
     trigger     = "manual"
     targets     = ["ticket"]
+    group       = "Analysis"
   }
 
   call label-ticket

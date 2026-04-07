@@ -22,10 +22,12 @@ notify = "6"
 notify-rust = "4"
 tracing = "0.1"
 tempfile = "3"
+rust-embed = { version = "8", features = ["include-exclude"] }
 
 [features]
 test-helpers = []
 test-notifications = []
 
 [dev-dependencies]
+regex-lite = "0.1"
 tracing-test = "0.2"

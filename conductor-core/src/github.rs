@@ -298,8 +298,11 @@ pub fn sync_github_issues(
                 assignee,
                 priority: None,
                 url: issue["url"].as_str().unwrap_or("").to_string(),
-                raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
+                raw_json: serde_json::to_string(&issue).ok(),
                 label_details,
+                blocked_by: vec![],
+                children: vec![],
+                parent: None,
             }
         })
         .collect();
@@ -365,8 +368,11 @@ pub fn fetch_github_issue(
         assignee,
         priority: None,
         url: issue["url"].as_str().unwrap_or("").to_string(),
-        raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
+        raw_json: serde_json::to_string(&issue).ok(),
         label_details,
+        blocked_by: vec![],
+        children: vec![],
+        parent: None,
     })
 }
 
@@ -597,6 +603,54 @@ pub fn has_merged_pr(remote_url: &str, branch: &str) -> bool {
         return false;
     };
     !json.is_empty()
+}
+
+/// Given a remote URL and a list of branch names, return the subset of branches
+/// that have at least one merged PR. Makes a single `gh pr list` call per repo
+/// instead of one per branch, avoiding N+1 API calls.
+pub fn merged_branches_for_repo(
+    remote_url: &str,
+    branches: &[String],
+) -> std::collections::HashSet<String> {
+    let mut result = std::collections::HashSet::new();
+    if branches.is_empty() {
+        return result;
+    }
+    let Some((owner, repo)) = parse_github_remote(remote_url) else {
+        return result;
+    };
+    let slug = repo_slug(&owner, &repo);
+    let limit = branches.len().max(50).to_string();
+    let Ok(output) = run_gh(&[
+        "pr",
+        "list",
+        "--repo",
+        &slug,
+        "--state",
+        "merged",
+        "--json",
+        "headRefName",
+        "--limit",
+        &limit,
+    ]) else {
+        return result;
+    };
+    #[derive(serde::Deserialize)]
+    struct PrHead {
+        #[serde(rename = "headRefName")]
+        head_ref_name: String,
+    }
+    let Ok(prs) = serde_json::from_slice::<Vec<PrHead>>(&output.stdout) else {
+        return result;
+    };
+    let merged_set: std::collections::HashSet<&str> =
+        prs.iter().map(|p| p.head_ref_name.as_str()).collect();
+    for b in branches {
+        if merged_set.contains(b.as_str()) {
+            result.insert(b.clone());
+        }
+    }
+    result
 }
 
 /// Close a GitHub issue as completed via the `gh` CLI.

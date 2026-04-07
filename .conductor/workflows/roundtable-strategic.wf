@@ -1,8 +1,10 @@
 workflow roundtable-strategic {
   meta {
+    title       = "Strategic Architecture Roundtable"
     description = "Engineering and architecture roundtable review"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
+    group       = "Review"
   }
 
   parallel {

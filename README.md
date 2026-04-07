@@ -2,6 +2,26 @@
 
 A local-first orchestration tool for managing multiple git repos, worktrees, tickets, and AI agent runs — all backed by SQLite.
 
+## What is Conductor?
+
+Conductor is a local tool for managing AI-assisted development across multiple git worktrees. If you're already using Claude to write and review code, Conductor is the layer that keeps everything organized when you're running multiple agents in parallel.
+
+**The problem it solves:**
+
+When you let an agent work on a branch, you don't want to sit and watch it. You want to kick off the work and move on to something else. But the moment you have two or three agents running at once — each on its own worktree — the overhead of managing them adds up fast: tracking which terminal has which branch, knowing when something needs your attention, keeping your ticket tracker in sync with what's actually happening in git.
+
+Conductor handles that overhead. It gives you one place to see all your repos, worktrees, and in-flight work, and a workflow system for defining how agents should handle common tasks (fix-ci, review-pr, iterate-pr, etc.) so you're not copy-pasting prompts.
+
+**Key things it does:**
+- Manages git worktrees for you — create, push, PR, delete — with branch naming handled automatically
+- Runs agent workflows (pre-defined sequences of Claude tasks) against a worktree, PR, or ticket with a single keypress
+- Syncs GitHub issues so your tickets live next to your code, not in a separate browser tab
+- Lets multiple workflows run in parallel without you babysitting them
+
+**Interfaces:** The primary interface is a TUI (terminal UI), with a CLI for scripting. There's also a web app and a Mac app — both are usable today but still being refined, so if you're not a TUI person they're worth trying.
+
+**What it is:** Local-first, no cloud, no account. Runs on your machine, your Claude API key stays yours.
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable toolchain)
@@ -73,6 +93,27 @@ Opens a local web server with a React-based dashboard.
 ```bash
 conductor-web                        # After install
 cargo run --bin conductor-web        # Without installing
+```
+
+### Desktop (macOS)
+
+Native Mac app powered by Tauri, embedding the same web UI. Still being refined but usable today.
+
+```bash
+# Dev mode — builds Rust crates, starts Vite dev server, launches the app
+bun run desktop
+
+# Production build — outputs Conductor.app
+bun run desktop:build
+# App bundle: target/release/bundle/macos/Conductor.app
+```
+
+Other convenience scripts (run from the workspace root):
+
+```bash
+bun run web          # Start the standalone web server (cargo run --bin conductor-web)
+bun run cli:build    # Rebuild just the CLI binary
+bun run build        # Full build of all Rust crates + frontend
 ```
 
 ## Workflows

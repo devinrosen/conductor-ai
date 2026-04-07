@@ -1,8 +1,10 @@
 workflow roundtable-security {
   meta {
+    title       = "Security Roundtable"
     description = "Security roundtable review"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
+    group       = "Review"
   }
 
   parallel {

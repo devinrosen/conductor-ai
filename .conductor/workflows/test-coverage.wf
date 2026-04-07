@@ -1,8 +1,10 @@
 workflow test-coverage {
   meta {
+    title       = "Improve Test Coverage"
     description = "Validate PR has sufficient tests; write and commit missing ones"
     trigger     = "manual"
     targets     = ["worktree"]
+    group       = "Analysis"
   }
 
   inputs {

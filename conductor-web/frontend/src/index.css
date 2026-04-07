@@ -1,1 +1,429 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/playfair-display";
+@import "@fontsource/josefin-sans";
+@import "@fontsource-variable/libre-baskerville";
+@import "@fontsource-variable/overpass";
+@import "@fontsource-variable/raleway";
+
+/*
+ * Conductor — Railway-heritage theme system.
+ *
+ * Base colors set via @theme; runtime theme switching overrides CSS vars on :root.
+ * Typography, spacing, border-radius, and motion adapt per-theme via --cd-* vars.
+ */
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Conductor Classic defaults (overridden at runtime by theme engine) */
+  --color-gray-50:  #0A1628; --color-gray-100: #162440; --color-gray-200: #232D42;
+  --color-gray-300: #2A3550; --color-gray-400: #4A5568; --color-gray-500: #7B8494;
+  --color-gray-600: #7B8494; --color-gray-700: #9CA3B0; --color-gray-800: #C8CDD5;
+  --color-gray-900: #D8DCE2; --color-gray-950: #E8EBF0;
+  --color-white: #0F1D32;
+  --color-indigo-50: #0F1D32; --color-indigo-100: #1C2D4F; --color-indigo-200: #1C3A6A;
+  --color-indigo-300: #2B5EA7; --color-indigo-400: #3A74C4; --color-indigo-500: #2B5EA7;
+  --color-indigo-600: #EBC47F; --color-indigo-700: #EBC47F; --color-indigo-800: #CD853F;
+  --color-blue-50: #0F1D32; --color-blue-100: #162440; --color-blue-200: #1C3A6A;
+  --color-blue-300: #2B5EA7; --color-blue-400: #3A74C4; --color-blue-500: #2B5EA7;
+  --color-blue-600: #2B5EA7; --color-blue-700: #1E4A8A; --color-blue-800: #163670;
+  --color-blue-900: #0F2550;
+  --color-green-50: #0B1E14; --color-green-100: #0F2D1C; --color-green-300: #2A8C3E;
+  --color-green-400: #39B54A; --color-green-500: #39B54A; --color-green-600: #39B54A;
+  --color-green-700: #2A8C3E; --color-green-900: #0F2D1C;
+  --color-yellow-50: #1E1808; --color-yellow-100: #2D2410; --color-yellow-300: #CC7A00;
+  --color-yellow-400: #FF9500; --color-yellow-500: #FF9500; --color-yellow-600: #FF9500;
+  --color-yellow-700: #CC7A00; --color-yellow-800: #996000; --color-yellow-900: #2D2410;
+  --color-amber-50: #1E1808; --color-amber-200: #CC7A00; --color-amber-400: #FF9500;
+  --color-red-50: #1E0C0A; --color-red-100: #2D1210; --color-red-300: #C02A1A;
+  --color-red-400: #D73020; --color-red-500: #D73020; --color-red-600: #D73020;
+  --color-red-700: #B02818; --color-red-800: #8C2014; --color-red-900: #2D1210;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-gray-50);
+    color: var(--color-gray-800);
+    color-scheme: dark;
+  }
+
+  /* Headings use theme-driven typography */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--cd-heading-family, var(--font-sans));
+    font-weight: var(--cd-heading-weight, 600);
+    letter-spacing: var(--cd-heading-letter-spacing, 0);
+  }
+
+  /* Cards, panels, modals use theme-driven border-radius */
+  .rounded-lg { border-radius: var(--cd-radius-card, 8px); }
+  .rounded-md { border-radius: var(--cd-radius-button, 6px); }
+
+  /* Transitions use theme-driven duration and easing */
+  .transition-colors, .transition-all {
+    transition-duration: var(--cd-transition-duration, 200ms);
+    transition-timing-function: var(--cd-transition-easing, ease-out);
+  }
+}
+
+/* ── Locked theme swatch shimmer ── */
+.swatch-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.04) 40%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 60%,
+    transparent 100%
+  );
+  animation: swatch-shimmer 2s ease-in-out infinite;
+}
+@keyframes swatch-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ── Mind the Gap hazard stripe ── */
+.hazard-stripe {
+  background: repeating-linear-gradient(
+    -45deg,
+    #FF9500 0px, #FF9500 4px,
+    #1a1a1a 4px, #1a1a1a 8px
+  );
+  opacity: 0.3;
+}
+
+/* ── Destructive action border ── */
+.danger-border {
+  border-image: repeating-linear-gradient(
+    -45deg,
+    #D73020 0px, #D73020 3px,
+    transparent 3px, transparent 6px
+  ) 4;
+}
+
+/* ── Theme-aware label case for section headers ── */
+.uppercase.tracking-wider {
+  text-transform: var(--cd-label-case, uppercase);
+  letter-spacing: var(--cd-label-letter-spacing, 0.05em);
+}
+
+/* ── Theme-aware spacing ── */
+.space-y-8 > * + *, .space-y-6 > * + * {
+  --tw-space-y-reverse: 0;
+}
+
+/* ── Hazard stripe for destructive actions ── */
+.hazard-stripe {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 4px,
+    var(--color-red-500, #D73020) 4px,
+    var(--color-red-500, #D73020) 5px
+  );
+  background-size: 100% 3px;
+  background-position: bottom;
+  background-repeat: no-repeat;
+}
+
+/* ── Expand/collapse transition ── */
+.expand-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 150ms ease-out;
+}
+.expand-collapse[data-collapsed="true"] {
+  grid-template-rows: 0fr;
+}
+.expand-collapse > * {
+  overflow: hidden;
+}
+
+/* ── Focus ring ── */
+*:focus-visible { outline-color: var(--color-indigo-500, #2B5EA7); }
+
+/* WCAG 2.1 SC 2.3.3 — respect OS-level reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Railway track connector (dashed border that looks like railroad ties) ── */
+.track-connector {
+  border-left: 2px dashed var(--color-gray-600, #4A5568);
+  border-image: repeating-linear-gradient(
+    to bottom,
+    var(--color-gray-500, #4A5568) 0px,
+    var(--color-gray-500, #4A5568) 4px,
+    transparent 4px,
+    transparent 8px
+  ) 1;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--color-gray-50); }
+::-webkit-scrollbar-thumb { background: var(--color-gray-200); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-gray-400); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Per-Theme Surface Textures & Ornaments
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/* Conductor Classic — brass gradient header stripe */
+[data-theme="conductor-classic"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(to right, #8B6914, #CD853F, #EBC47F, #CD853F, #8B6914);
+  z-index: 9999;
+}
+
+/* London Underground — glazed ceramic tile grid */
+[data-theme="london-underground"] .bg-white,
+[data-theme="london-underground"] .rounded-lg {
+  background-image:
+    linear-gradient(to right, rgba(244,233,196,0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(244,233,196,0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+/* London Underground — red roundel stripe at top */
+[data-theme="london-underground"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 4px;
+  background: #E32017;
+  z-index: 9999;
+}
+
+/* Swiss Federal — everything sharp, no shadows */
+[data-theme="swiss-federal"] * { border-radius: 0 !important; }
+[data-theme="swiss-federal"] .rounded-full { border-radius: 9999px !important; }
+/* Swiss — red line at top */
+[data-theme="swiss-federal"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: #EC0000;
+  z-index: 9999;
+}
+
+/* Shinkansen — brushed aluminum grain */
+[data-theme="shinkansen"] .bg-white,
+[data-theme="shinkansen"] .rounded-lg {
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(255,255,255,0.01) 0px,
+    rgba(255,255,255,0.01) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+/* Shinkansen — teal-to-pink gradient stripe */
+[data-theme="shinkansen"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(to right, #00B5AD, #FF6B9D);
+  z-index: 9999;
+}
+
+/* Platform 9¾ — burgundy header stripe with gold sparkle */
+[data-theme="platform-9-three-quarters"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: #7C0A02;
+  z-index: 9999;
+  background-image:
+    radial-gradient(circle at 20%, #F5D98E 0%, transparent 2%),
+    radial-gradient(circle at 50%, #F5D98E 0%, transparent 2%),
+    radial-gradient(circle at 80%, #F5D98E 0%, transparent 2%);
+}
+
+/* Platform 9¾ — parchment vignette on cards */
+[data-theme="platform-9-three-quarters"] .rounded-lg {
+  box-shadow: inset 0 0 30px rgba(0,0,0,0.15);
+}
+/* Platform 9¾ — gold double borders on cards */
+[data-theme="platform-9-three-quarters"] .border {
+  border: 2px double rgba(201, 168, 76, 0.3);
+}
+/* Platform 9¾ — subtle twinkling stars */
+[data-theme="platform-9-three-quarters"] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    radial-gradient(1px 1px at 15% 25%, rgba(245,217,142,0.3) 0%, transparent 100%),
+    radial-gradient(1px 1px at 45% 65%, rgba(245,217,142,0.2) 0%, transparent 100%),
+    radial-gradient(1px 1px at 75% 15%, rgba(245,217,142,0.25) 0%, transparent 100%),
+    radial-gradient(1px 1px at 85% 75%, rgba(245,217,142,0.2) 0%, transparent 100%);
+  animation: twinkle 4s ease-in-out infinite alternate;
+}
+@keyframes twinkle {
+  0% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+/* Orient Express — gold header stripe with sunburst center */
+[data-theme="orient-express"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(to right,
+    transparent 0%, #D4A843 20%, #F0D68A 48%,
+    #FFFFFF 50%,
+    #F0D68A 52%, #D4A843 80%, transparent 100%
+  );
+  z-index: 9999;
+}
+
+/* Orient Express — wood marquetry grain */
+[data-theme="orient-express"] .bg-white,
+[data-theme="orient-express"] .rounded-lg {
+  background-image: repeating-linear-gradient(
+    85deg,
+    rgba(139,69,19,0.02) 0px,
+    transparent 2px,
+    transparent 6px
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(212,168,67,0.1),
+    inset 0 -1px 0 rgba(0,0,0,0.2);
+}
+/* Orient Express — Art Deco corner marks on cards */
+[data-theme="orient-express"] .rounded-lg {
+  position: relative;
+}
+[data-theme="orient-express"] .rounded-lg::before {
+  content: '';
+  position: absolute;
+  top: 6px; left: 6px;
+  width: 12px; height: 12px;
+  border-top: 1px solid rgba(212,168,67,0.3);
+  border-left: 1px solid rgba(212,168,67,0.3);
+  pointer-events: none;
+}
+[data-theme="orient-express"] .rounded-lg::after {
+  content: '';
+  position: absolute;
+  bottom: 6px; right: 6px;
+  width: 12px; height: 12px;
+  border-bottom: 1px solid rgba(212,168,67,0.3);
+  border-right: 1px solid rgba(212,168,67,0.3);
+  pointer-events: none;
+}
+
+/* NYC Subway — subway tile texture + heavy borders */
+[data-theme="nyc-subway"] * { border-radius: 0 !important; box-shadow: none !important; }
+[data-theme="nyc-subway"] .rounded-full { border-radius: 9999px !important; }
+[data-theme="nyc-subway"] .bg-white,
+[data-theme="nyc-subway"] aside {
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size: 32px 16px;
+}
+/* NYC — yellow header stripe */
+[data-theme="nyc-subway"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 6px;
+  background: #FCCC0A;
+  z-index: 9999;
+}
+
+/* Trans-Siberian — birch grain + frost */
+[data-theme="trans-siberian"] .bg-white,
+[data-theme="trans-siberian"] .rounded-lg {
+  background-image: repeating-linear-gradient(
+    2deg,
+    rgba(166,124,82,0.03) 0px,
+    transparent 1px,
+    transparent 4px
+  );
+}
+/* Trans-Siberian — slow transitions */
+[data-theme="trans-siberian"] * {
+  transition-duration: 300ms !important;
+}
+/* Trans-Siberian — subtle background drift */
+[data-theme="trans-siberian"] body {
+  background-size: 200% 100%;
+  animation: drift 120s linear infinite;
+}
+@keyframes drift {
+  0% { background-position: 0% 0%; }
+  100% { background-position: -100% 0%; }
+}
+
+/* Pullman Class — double brass header stripe */
+[data-theme="pullman-class"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 5px;
+  background:
+    linear-gradient(to bottom,
+      #CD853F 0px, #CD853F 1px,
+      transparent 1px, transparent 3px,
+      #CD853F 3px, #CD853F 4px,
+      transparent 4px
+    );
+  z-index: 9999;
+}
+
+/* Trans-Siberian — subtle dark green header line */
+[data-theme="trans-siberian"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: #263828;
+  z-index: 9999;
+}
+
+/* Pullman Class — mahogany grain + brass highlights */
+[data-theme="pullman-class"] .bg-white,
+[data-theme="pullman-class"] .rounded-lg {
+  background-image:
+    repeating-linear-gradient(178deg, rgba(139,105,20,0.02) 0px, transparent 1px, transparent 3px),
+    repeating-linear-gradient(175deg, rgba(139,69,19,0.015) 0px, transparent 1px, transparent 5px);
+  box-shadow:
+    inset 0 1px 0 rgba(205,133,63,0.15),
+    0 2px 4px rgba(0,0,0,0.3);
+}
+/* Pullman — double brass border on cards */
+[data-theme="pullman-class"] .rounded-lg.border {
+  border: 1px solid rgba(205,133,63,0.2);
+  outline: 1px solid rgba(205,133,63,0.08);
+  outline-offset: 2px;
+}

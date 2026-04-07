@@ -1,8 +1,10 @@
 workflow fix-ci {
   meta {
+    title       = "Fix CI Failures"
     description = "Read failing CI logs, fix the code, push, and verify CI goes green"
     trigger     = "manual"
     targets     = ["worktree"]
+    group       = "Development"
   }
 
   do {

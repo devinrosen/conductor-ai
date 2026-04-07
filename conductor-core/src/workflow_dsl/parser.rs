@@ -7,8 +7,8 @@ use crate::error::{ConductorError, Result};
 use super::lexer::{Lexer, Token};
 use super::types::{
     AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode,
-    GateType, IfNode, InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode,
-    QualityGateConfig, ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
+    GateOptions, GateType, IfNode, InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout,
+    ParallelNode, QualityGateConfig, ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
     WorkflowTrigger,
 };
 
@@ -155,7 +155,16 @@ impl Parser {
         match self.advance() {
             Token::StringLit(s) => Ok(KvValue::Quoted(s)),
             Token::Int(n) => Ok(KvValue::Bare(n.to_string())),
-            Token::Ident(s) => Ok(KvValue::Bare(s)),
+            Token::Ident(s) => {
+                // Consume an optional `.field` suffix to support `step.field` references.
+                if self.peek() == &Token::Dot {
+                    self.advance(); // consume dot
+                    let field = self.expect_ident()?;
+                    Ok(KvValue::Bare(format!("{s}.{field}")))
+                } else {
+                    Ok(KvValue::Bare(s))
+                }
+            }
             // Allow keyword tokens as values
             Token::Required => Ok(KvValue::Bare("required".to_string())),
             Token::Default => Ok(KvValue::Bare("default".to_string())),
@@ -255,9 +264,11 @@ impl Parser {
         let name = self.expect_ident()?;
         self.expect(&Token::LBrace)?;
 
+        let mut title: Option<String> = None;
         let mut description = String::new();
         let mut trigger = WorkflowTrigger::Manual;
         let mut targets: Vec<String> = Vec::new();
+        let mut group: Option<String> = None;
         let mut inputs = Vec::new();
         let mut body = Vec::new();
         let mut always = Vec::new();
@@ -271,6 +282,9 @@ impl Parser {
                     let kvs = self.parse_kvs()?;
                     self.expect(&Token::RBrace)?;
 
+                    if let Some(t) = kvs.get("title") {
+                        title = Some(t.as_str().to_string());
+                    }
                     if let Some(desc) = kvs.get("description") {
                         description = desc.as_str().to_string();
                     }
@@ -288,6 +302,9 @@ impl Parser {
                     }
                     if let Some(tgts) = kvs.get("targets") {
                         targets = tgts.clone().into_string_array();
+                    }
+                    if let Some(grp) = kvs.get("group") {
+                        group = Some(grp.as_str().to_string());
                     }
                 }
                 Token::Inputs => {
@@ -354,18 +371,13 @@ impl Parser {
 
         self.expect(&Token::RBrace)?;
 
-        if targets.is_empty() {
-            return Err(format!(
-                "workflow '{name}' is missing a required `targets` field in its meta block.\n\
-                 Add at least one target, e.g.: targets = [\"worktree\"]"
-            ));
-        }
-
         Ok(WorkflowDef {
             name,
+            title,
             description,
             trigger,
             targets,
+            group,
             inputs,
             body,
             always,
@@ -425,6 +437,7 @@ impl Parser {
         let mut output = None;
         let mut with = Vec::new();
         let mut bot_name = None;
+        let mut plugin_dirs = Vec::new();
 
         if self.peek() == &Token::LBrace {
             self.advance();
@@ -438,6 +451,9 @@ impl Parser {
             if let Some(w) = kvs.remove("with") {
                 with = w.into_string_array();
             }
+            if let Some(pd) = kvs.remove("plugin_dirs") {
+                plugin_dirs = pd.into_string_array();
+            }
         }
 
         Ok(CallNode {
@@ -447,6 +463,7 @@ impl Parser {
             output,
             with,
             bot_name,
+            plugin_dirs,
         })
     }
 
@@ -785,6 +802,7 @@ impl Parser {
                     threshold,
                     on_fail_action,
                 }),
+                options: None,
             });
         }
 
@@ -823,6 +841,39 @@ impl Parser {
 
         let bot_name = kvs.get("as").map(|v| v.as_str().to_string());
 
+        // Parse optional `options` key — only valid on human_approval / human_review.
+        let options = match kvs.get("options") {
+            None => None,
+            Some(v) => {
+                match gate_type {
+                    GateType::HumanApproval | GateType::HumanReview => {}
+                    _ => {
+                        return Err(format!(
+                            "`options` is only valid on human_approval / human_review gates, not '{gate_type}'"
+                        ));
+                    }
+                }
+                let parsed = match v {
+                    KvValue::Array(items) => GateOptions::Static(items.clone()),
+                    KvValue::Bare(s) | KvValue::Quoted(s) if s.contains('.') => {
+                        GateOptions::StepRef(s.clone())
+                    }
+                    KvValue::Bare(s) | KvValue::Quoted(s) => {
+                        return Err(format!(
+                            "Invalid `options` value '{s}': expected an array [\"...\"] or a step field reference like 'step.field'"
+                        ));
+                    }
+                    KvValue::Map(_) => {
+                        return Err(
+                            "`options` must be an array or step field reference, not a map"
+                                .to_string(),
+                        );
+                    }
+                };
+                Some(parsed)
+            }
+        };
+
         Ok(GateNode {
             name,
             gate_type,
@@ -833,6 +884,7 @@ impl Parser {
             on_timeout,
             bot_name,
             quality_gate: None,
+            options,
         })
     }
 

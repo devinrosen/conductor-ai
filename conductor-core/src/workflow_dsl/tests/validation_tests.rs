@@ -7,9 +7,11 @@ fn no_loader(name: &str) -> std::result::Result<WorkflowDef, String> {
 fn make_script_def(run: &str) -> WorkflowDef {
     WorkflowDef {
         name: "test-wf".to_string(),
+        title: None,
         description: String::new(),
         trigger: WorkflowTrigger::Manual,
         targets: vec![],
+        group: None,
         inputs: vec![],
         body: vec![WorkflowNode::Script(ScriptNode {
             name: "my-step".to_string(),
@@ -28,9 +30,11 @@ fn make_script_def(run: &str) -> WorkflowDef {
 fn make_always_script_def(run: &str) -> WorkflowDef {
     WorkflowDef {
         name: "test-wf".to_string(),
+        title: None,
         description: String::new(),
         trigger: WorkflowTrigger::Manual,
         targets: vec![],
+        group: None,
         inputs: vec![],
         body: vec![],
         always: vec![WorkflowNode::Script(ScriptNode {
@@ -498,9 +502,11 @@ fn test_validate_script_steps_nested_in_if_block() {
 
     let def = WorkflowDef {
         name: "test-wf".to_string(),
+        title: None,
         description: String::new(),
         trigger: WorkflowTrigger::Manual,
         targets: vec![],
+        group: None,
         inputs: vec![],
         body: vec![WorkflowNode::If(IfNode {
             condition: Condition::StepMarker {
@@ -908,9 +914,11 @@ workflow parent {
         if name == "child" {
             Ok(WorkflowDef {
                 name: "child".to_string(),
+                title: None,
                 description: String::new(),
                 trigger: WorkflowTrigger::Manual,
                 targets: vec![],
+                group: None,
                 inputs: vec![],
                 body: vec![WorkflowNode::Script(ScriptNode {
                     name: "run-checks".to_string(),

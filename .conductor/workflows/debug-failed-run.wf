@@ -1,8 +1,10 @@
 workflow debug-failed-run {
   meta {
+    title       = "Debug Failed Run"
     description = "Diagnose a failed workflow run and file GitHub issues for fixes"
     trigger     = "manual"
     targets     = ["workflow_run"]
+    group       = "Release"
   }
 
   inputs {

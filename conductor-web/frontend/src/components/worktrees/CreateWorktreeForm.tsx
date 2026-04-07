@@ -1,21 +1,26 @@
 import { useState } from "react";
 import { api } from "../../api/client";
+import { TrackSwitchIcon } from "../shared/RailwayIllustrations";
 
 export function CreateWorktreeForm({
   repoId,
   onCreated,
   open: controlledOpen,
   onOpenChange,
+  ticketId,
+  initialName,
 }: {
   repoId: string;
   onCreated: () => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  ticketId?: string;
+  initialName?: string;
 }) {
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName ?? "");
   const [fromBranch, setFromBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -28,8 +33,9 @@ export function CreateWorktreeForm({
       await api.createWorktree(repoId, {
         name,
         from_branch: fromBranch || undefined,
+        ticket_id: ticketId,
       });
-      setName("");
+      setName(initialName ?? "");
       setFromBranch("");
       setOpen(false);
       onCreated();
@@ -46,9 +52,10 @@ export function CreateWorktreeForm({
     return (
       <button
         onClick={() => setOpen(true)}
-        className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
       >
-        Create Worktree
+        <TrackSwitchIcon size={14} />
+        <span>Create Worktree</span>
       </button>
     );
   }

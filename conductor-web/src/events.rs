@@ -19,6 +19,16 @@ pub enum ConductorEvent {
     AgentStarted { run_id: String, worktree_id: String },
     #[serde(rename = "agent_stopped")]
     AgentStopped { run_id: String, worktree_id: String },
+    #[serde(rename = "repo_agent_started")]
+    RepoAgentStarted { run_id: String, repo_id: String },
+    #[serde(rename = "repo_agent_stopped")]
+    RepoAgentStopped { run_id: String, repo_id: String },
+    #[serde(rename = "agent_restarted")]
+    AgentRestarted {
+        run_id: String,
+        old_run_id: String,
+        worktree_id: String,
+    },
     #[serde(rename = "agent_event")]
     AgentEvent { run_id: String, worktree_id: String },
     #[serde(rename = "feedback_requested")]
@@ -57,6 +67,14 @@ pub enum ConductorEvent {
         title: String,
         body: String,
     },
+    #[serde(rename = "agent_step")]
+    AgentStep {
+        #[serde(rename = "agentRunId")]
+        agent_run_id: String,
+        description: String,
+        #[serde(rename = "stepIndex", skip_serializing_if = "Option::is_none")]
+        step_index: Option<i64>,
+    },
 }
 
 impl ConductorEvent {
@@ -70,6 +88,9 @@ impl ConductorEvent {
             Self::TicketsSynced { .. } => "tickets_synced",
             Self::AgentStarted { .. } => "agent_started",
             Self::AgentStopped { .. } => "agent_stopped",
+            Self::RepoAgentStarted { .. } => "repo_agent_started",
+            Self::RepoAgentStopped { .. } => "repo_agent_stopped",
+            Self::AgentRestarted { .. } => "agent_restarted",
             Self::AgentEvent { .. } => "agent_event",
             Self::FeedbackRequested { .. } => "feedback_requested",
             Self::FeedbackSubmitted { .. } => "feedback_submitted",
@@ -78,6 +99,7 @@ impl ConductorEvent {
             Self::WorkflowStepStatusChanged { .. } => "workflow_step_status_changed",
             Self::WorkflowGateWaiting { .. } => "workflow_gate_waiting",
             Self::NotificationCreated { .. } => "notification_created",
+            Self::AgentStep { .. } => "agent_step",
         }
     }
 }
@@ -182,6 +204,28 @@ mod tests {
                 "agent_stopped",
             ),
             (
+                ConductorEvent::RepoAgentStarted {
+                    run_id: "".into(),
+                    repo_id: "".into(),
+                },
+                "repo_agent_started",
+            ),
+            (
+                ConductorEvent::RepoAgentStopped {
+                    run_id: "".into(),
+                    repo_id: "".into(),
+                },
+                "repo_agent_stopped",
+            ),
+            (
+                ConductorEvent::AgentRestarted {
+                    run_id: "".into(),
+                    old_run_id: "".into(),
+                    worktree_id: "".into(),
+                },
+                "agent_restarted",
+            ),
+            (
                 ConductorEvent::AgentEvent {
                     run_id: "".into(),
                     worktree_id: "".into(),
@@ -240,6 +284,14 @@ mod tests {
                     body: "".into(),
                 },
                 "notification_created",
+            ),
+            (
+                ConductorEvent::AgentStep {
+                    agent_run_id: "".into(),
+                    description: "".into(),
+                    step_index: None,
+                },
+                "agent_step",
             ),
         ];
         for (event, expected) in cases {

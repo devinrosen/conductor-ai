@@ -156,6 +156,7 @@ pub fn orchestrate_run(
             model,
             &child_window,
             None,
+            &[],
         );
 
         if let Err(e) = spawn_result {
@@ -190,6 +191,7 @@ pub fn orchestrate_run(
             &child_run.id,
             orch_config.poll_interval,
             orch_config.child_timeout,
+            None,
             None,
         );
 
@@ -245,7 +247,12 @@ pub fn orchestrate_run(
                     let _ = mgr.update_step_status(step_id, StepStatus::Failed);
                 }
                 // Cancel the child run if it timed out
-                let _ = mgr.update_run_cancelled(&child_run.id);
+                if let Err(cancel_err) = mgr.update_run_cancelled(&child_run.id) {
+                    tracing::warn!(
+                        run_id = %child_run.id,
+                        "Failed to mark cancelled agent run: {cancel_err}"
+                    );
+                }
                 // Try to kill the tmux window
                 let _ = Command::new("tmux")
                     .args(["kill-window", "-t", &format!(":{child_window}")])
@@ -395,6 +402,7 @@ mod tests {
         AgentRun {
             id: "parent-1".to_string(),
             worktree_id: Some("w1".to_string()),
+            repo_id: None,
             claude_session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,
@@ -414,6 +422,7 @@ mod tests {
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
             bot_name: None,
+            conversation_id: None,
         }
     }
 
@@ -588,6 +597,7 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_secs(1),
             None,
+            None,
         );
         assert!(result.is_ok());
         let completed = result.unwrap();
@@ -609,6 +619,7 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_secs(1),
             None,
+            None,
         );
         assert!(result.is_ok());
         let failed = result.unwrap();
@@ -629,6 +640,7 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_secs(1),
             None,
+            None,
         );
         assert!(result.is_ok());
         let cancelled = result.unwrap();
@@ -644,6 +656,7 @@ mod tests {
             "nonexistent-id",
             Duration::from_millis(10),
             Duration::from_secs(1),
+            None,
             None,
         );
         assert!(result.is_err());
@@ -667,6 +680,7 @@ mod tests {
             &run.id,
             Duration::from_millis(10),
             Duration::from_millis(50), // very short timeout
+            None,
             None,
         );
         assert!(result.is_err());

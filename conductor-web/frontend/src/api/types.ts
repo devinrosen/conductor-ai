@@ -23,6 +23,13 @@ export interface Worktree {
   model: string | null;
 }
 
+export interface WorktreeWithStatus extends Worktree {
+  agent_status: AgentRun["status"] | null;
+  ticket_title: string | null;
+  ticket_number: string | null;
+  ticket_url: string | null;
+}
+
 export interface Ticket {
   id: string;
   repo_id: string;
@@ -62,6 +69,18 @@ export interface CreateRepoRequest {
   workspace_dir?: string;
 }
 
+export interface GithubPr {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  state: string;
+  head_ref_name: string;
+  is_draft: boolean;
+  review_decision: string | null;
+  ci_status: string;
+}
+
 export interface CreateWorktreeRequest {
   name: string;
   from_branch?: string;
@@ -85,7 +104,8 @@ export interface PlanStep {
 
 export interface AgentRun {
   id: string;
-  worktree_id: string;
+  worktree_id: string | null;
+  repo_id?: string | null;
   claude_session_id: string | null;
   prompt: string;
   status: "running" | "completed" | "failed" | "cancelled" | "waiting_for_feedback";
@@ -118,7 +138,7 @@ export interface RunTreeTotals {
 export interface AgentEvent {
   id: string;
   run_id: string;
-  kind: "text" | "tool" | "result" | "system" | "error" | "prompt";
+  kind: "text" | "tool" | "result" | "system" | "error" | "tool_error" | "prompt";
   summary: string;
   started_at: string;
   ended_at: string | null;
@@ -142,17 +162,22 @@ export interface AgentCreatedIssue {
   created_at: string;
 }
 
-export interface PushResult {
-  message: string;
+export interface TicketDependencies {
+  blocked_by: Ticket[];
+  blocks: Ticket[];
+  parent: Ticket | null;
+  children: Ticket[];
 }
 
-export interface CreatePrResult {
-  url: string;
+export interface TicketListResponse {
+  tickets: Ticket[];
+  dependencies: Record<string, TicketDependencies>;
 }
 
 export interface TicketDetail {
   agent_totals: TicketAgentTotals | null;
   worktrees: Worktree[];
+  dependencies: TicketDependencies;
 }
 
 export interface IssueSource {
@@ -194,15 +219,19 @@ export interface DiscoverableRepo {
 
 export interface WorkflowDefSummary {
   name: string;
+  title: string | null;
   description: string;
   trigger: string;
-  inputs: { name: string; required: boolean; input_type: string; default: string | null }[];
+  inputs: { name: string; required: boolean; type: string; defaultValue: string | null; description: string | null }[];
   node_count: number;
+  group: string | null;
+  targets: string[];
 }
 
 export interface WorkflowRun {
   id: string;
   workflow_name: string;
+  workflow_title?: string | null;
   worktree_id: string | null;
   parent_run_id: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "waiting";
@@ -215,6 +244,8 @@ export interface WorkflowRun {
   parent_workflow_run_id: string | null;
   target_label: string | null;
   active_steps?: WorkflowRunStep[];
+  repo_slug: string | null;
+  worktree_slug: string | null;
 }
 
 export interface WorkflowRunStep {
@@ -236,13 +267,202 @@ export interface WorkflowRunStep {
   gate_prompt: string | null;
   gate_approved_by: string | null;
   gate_feedback: string | null;
+  context_out: string | null;
+  gate_options: string | null;
+  gate_selections: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
 }
+
+export interface WorkflowTokenAggregate {
+  workflow_name: string;
+  workflow_title?: string | null;
+  avg_input: number;
+  avg_output: number;
+  avg_cache_read: number;
+  avg_cache_creation: number;
+  run_count: number;
+  /** Percentage of terminal runs that completed successfully. Range: 0–100. */
+  success_rate: number;
+}
+
+export interface WorkflowTokenTrendRow {
+  period: string;
+  total_input: number;
+  total_output: number;
+  total_cache_read: number;
+  total_cache_creation: number;
+}
+
+export interface StepTokenHeatmapRow {
+  step_name: string;
+  avg_input: number;
+  avg_output: number;
+  avg_cache_read: number;
+  run_count: number;
+}
+
+export interface WorkflowRunMetricsRow {
+  run_id: string;
+  started_at: string;
+  duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  worktree_id: string | null;
+  repo_id: string | null;
+}
+
+export interface WorkflowFailureRateTrendRow {
+  period: string;
+  total_runs: number;
+  failed_runs: number;
+  /** Percentage of runs that completed successfully. Range: 0–100. */
+  success_rate: number;
+}
+
+export interface StepFailureHeatmapRow {
+  step_name: string;
+  total_executions: number;
+  failed_executions: number;
+  /** Percentage of executions that failed. Range: 0–100. */
+  failure_rate: number;
+  avg_retry_count: number;
+}
+
+export interface StepRetryAnalyticsRow {
+  step_name: string;
+  total_executions: number;
+  executions_with_retries: number;
+  /** Percentage of executions needing at least one retry. Range: 0–100. */
+  retry_rate: number;
+  /** Average retry count among executions that had at least one retry. */
+  avg_retry_count: number;
+  /** Percentage of retried executions that completed. Range: 0–100. */
+  retry_success_rate: number;
+}
+
+export interface WorkflowPercentiles {
+  p50_duration_ms: number | null;
+  p75_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  p99_duration_ms: number | null;
+  p50_cost_usd: number | null;
+  p75_cost_usd: number | null;
+  p95_cost_usd: number | null;
+  p99_cost_usd: number | null;
+  p50_total_tokens: number | null;
+  p75_total_tokens: number | null;
+  p95_total_tokens: number | null;
+  p99_total_tokens: number | null;
+  run_count: number;
+}
+
+export interface WorkflowRegressionSignal {
+  workflow_name: string;
+  workflow_title: string | null;
+  recent_runs: number;
+  baseline_runs: number;
+  // Duration (ms) — P75
+  recent_p75_duration_ms: number | null;
+  baseline_p75_duration_ms: number | null;
+  duration_change_pct: number | null;
+  // Cost (USD) — P75
+  recent_p75_cost_usd: number | null;
+  baseline_p75_cost_usd: number | null;
+  cost_change_pct: number | null;
+  // Failure rate (0–100 %)
+  recent_failure_rate: number;
+  baseline_failure_rate: number;
+  failure_rate_change_pp: number;
+  // Regression flags
+  duration_regressed: boolean;
+  cost_regressed: boolean;
+  failure_rate_regressed: boolean;
+}
+
+export interface GateAnalyticsRow {
+  step_name: string;
+  total_gate_hits: number;
+  approved_count: number;
+  rejected_count: number;
+  approval_rate: number; // 0–100
+  avg_wait_ms: number | null;
+  p50_wait_ms: number | null;
+  p95_wait_ms: number | null;
+  avg_feedback_length: number | null;
+}
+
+export interface PendingGateAnalyticsRow {
+  step_id: string;
+  step_name: string;
+  gate_type: string;
+  gate_prompt: string | null;
+  workflow_name: string;
+  workflow_run_id: string;
+  started_at: string;
+  wait_ms_so_far: number;
+}
+
+// Workflow Definition AST types (matches Rust WorkflowDef serialization)
+
+export interface WorkflowInputDecl {
+  name: string;
+  required: boolean;
+  default: string | null;
+  description: string | null;
+  input_type: "string" | "boolean";
+}
+
+export interface WorkflowDef {
+  name: string;
+  description: string;
+  trigger: "manual" | "pr" | "scheduled";
+  targets: string[];
+  inputs: WorkflowInputDecl[];
+  body: WorkflowNode[];
+  always: WorkflowNode[];
+  source_path: string;
+}
+
+export interface AgentRef {
+  kind: "name" | "path";
+  value: string;
+}
+
+export interface Condition {
+  kind: "step_marker" | "bool_input";
+  step?: string;
+  marker?: string;
+  input?: string;
+}
+
+export type WorkflowNode =
+  | { type: "call"; agent: AgentRef; retries: number; on_fail: AgentRef | null; output: string | null; with: string[]; bot_name: string | null }
+  | { type: "call_workflow"; workflow: string; inputs: Record<string, string>; retries: number; on_fail: AgentRef | null; bot_name: string | null }
+  | { type: "if"; condition: Condition; body: WorkflowNode[] }
+  | { type: "unless"; condition: Condition; body: WorkflowNode[] }
+  | { type: "while"; step: string; marker: string; max_iterations: number; stuck_after: number | null; on_max_iter: "fail" | "continue"; body: WorkflowNode[] }
+  | { type: "do_while"; step: string; marker: string; max_iterations: number; stuck_after: number | null; on_max_iter: "fail" | "continue"; body: WorkflowNode[] }
+  | { type: "do"; output: string | null; with: string[]; body: WorkflowNode[] }
+  | { type: "parallel"; fail_fast: boolean; min_success: number | null; calls: AgentRef[]; output: string | null }
+  | { type: "gate"; name: string; gate_type: string; prompt: string | null; min_approvals: number; timeout_secs: number; on_timeout: "fail" | "continue" }
+  | { type: "always"; body: WorkflowNode[] }
+  | { type: "script"; name: string; run: string; timeout: number | null; retries: number };
 
 export interface RunWorkflowRequest {
   name: string;
   model?: string;
   dry_run?: boolean;
   inputs?: Record<string, string>;
+}
+
+export type FeedbackType = "text" | "confirm" | "single_select" | "multi_select";
+
+export interface FeedbackOption {
+  value: string;
+  label: string;
 }
 
 export interface FeedbackRequest {
@@ -252,6 +472,9 @@ export interface FeedbackRequest {
   response: string | null;
   status: "pending" | "responded" | "dismissed";
   created_at: string;
+  feedback_type: FeedbackType;
+  options?: FeedbackOption[];
+  timeout_secs?: number;
 }
 
 export interface Notification {
@@ -265,4 +488,33 @@ export interface Notification {
   read: boolean;
   created_at: string;
   read_at: string | null;
+}
+
+export interface ThemeUnlockStats {
+  repos_registered: number;
+  prs_merged: number;
+  workflow_streak: number;
+  max_workflow_steps: number;
+  max_parallel_agents: number;
+  usage_days: number;
+}
+
+// Push Notifications
+export interface PushSubscriptionKeys {
+  p256dh: string;
+  auth: string;
+}
+
+export interface PushSubscribeRequest {
+  endpoint: string;
+  keys: PushSubscriptionKeys;
+}
+
+export interface VapidPublicKeyResponse {
+  public_key: string;
+}
+
+export interface PushSubscribeResponse {
+  success: boolean;
+  message: string;
 }

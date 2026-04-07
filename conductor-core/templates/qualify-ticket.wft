@@ -1,0 +1,42 @@
+---
+name: qualify-ticket
+description: Critically assess a ticket for autonomous executability — surfaces open questions, ambiguities, and blockers before committing agent cycles
+version: "1.0.0"
+target_types:
+  - worktree
+hints:
+  - Check the issue tracker (GitHub Issues, Jira, Linear) to understand what fields are typically filled in and what are commonly left blank
+  - Look at the repo's CONTRIBUTING.md or ticket template to understand what information is expected before work begins
+  - Inspect recent closed tickets to understand what level of detail is typical for "ready to implement" issues in this repo
+  - Consider the repo's domain — a security-sensitive repo may require more qualification rigor than an internal tool
+  - If tickets routinely lack acceptance criteria, customize the assess-ticket-readiness prompt to always ask for them
+---
+workflow qualify-ticket {
+  meta {
+    description = "Critically assess a ticket for autonomous executability — surfaces open questions, ambiguities, and blockers before committing agent cycles"
+    trigger     = "manual"
+    targets     = ["worktree"]
+    group       = "Analysis"
+  }
+
+  inputs {
+    ticket_id required
+  }
+
+  call fetch-ticket-context
+
+  do {
+    max_iterations = 3
+    on_max_iter    = fail
+
+    call assess-ticket-readiness
+
+    if assess-ticket-readiness.has_open_questions {
+      gate human_review {
+        prompt     = "The ticket has open questions or ambiguities that must be resolved before autonomous execution is safe. Review the assessment above and provide answers or clarifications below."
+        timeout    = "72h"
+        on_timeout = fail
+      }
+    }
+  } while assess-ticket-readiness.has_open_questions
+}
