@@ -3484,6 +3484,75 @@ mod tests {
     }
 
     #[test]
+    fn test_get_all_dependencies_for_repo_maps_both_directions() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // ticket "A" blocks ticket "B", both in "r1"
+        let ta = make_ticket("A", "Blocker");
+        let mut tb = make_ticket("B", "Blocked");
+        tb.blocked_by = vec!["A".to_string()];
+
+        // ticket "P" is parent of "C", both in "r1"
+        let tc = make_ticket("C", "Child");
+        let mut tp = make_ticket("P", "Parent");
+        tp.children = vec!["C".to_string()];
+
+        syncer.upsert_tickets("r1", &[ta, tb, tc, tp]).unwrap();
+
+        let all = syncer
+            .get_all_dependencies_for_repo("r1")
+            .expect("get_all_dependencies_for_repo");
+
+        let id_a = ticket_id_for_source(&conn, "A");
+        let id_b = ticket_id_for_source(&conn, "B");
+        let id_p = ticket_id_for_source(&conn, "P");
+        let id_c = ticket_id_for_source(&conn, "C");
+
+        let deps_b = all.get(&id_b).expect("entry for ticket B");
+        assert_eq!(source_ids(&deps_b.blocked_by), vec!["A"], "B blocked_by A");
+        assert!(deps_b.blocks.is_empty(), "B blocks nothing");
+
+        let deps_a = all.get(&id_a).expect("entry for ticket A");
+        assert_eq!(source_ids(&deps_a.blocks), vec!["B"], "A blocks B");
+        assert!(deps_a.blocked_by.is_empty(), "A is not blocked");
+
+        let deps_c = all.get(&id_c).expect("entry for ticket C");
+        assert_eq!(
+            deps_c.parent.as_ref().map(|t| t.source_id.as_str()),
+            Some("P"),
+            "C parent is P"
+        );
+        assert!(deps_c.children.is_empty());
+
+        let deps_p = all.get(&id_p).expect("entry for ticket P");
+        assert_eq!(source_ids(&deps_p.children), vec!["C"], "P children: C");
+        assert!(deps_p.parent.is_none());
+    }
+
+    #[test]
+    fn test_get_all_dependencies_for_repo_empty_when_no_deps() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Tickets with no dependency edges — map should be empty.
+        syncer
+            .upsert_tickets("r1", &[make_ticket("X", "Solo")])
+            .unwrap();
+
+        let result = syncer
+            .get_all_dependencies_for_repo("r1")
+            .expect("get_all_dependencies_for_repo");
+        assert!(result.is_empty(), "no deps means empty map");
+
+        // Unknown repo also returns empty map without error.
+        let empty = syncer
+            .get_all_dependencies_for_repo("nonexistent-repo")
+            .expect("nonexistent repo returns Ok");
+        assert!(empty.is_empty(), "unknown repo returns empty map");
+    }
+
+    #[test]
     fn test_returning_id_stable_on_conflict_update() {
         // Re-upserting an existing ticket must return the same ULID, not a new one.
         let conn = setup_db();
