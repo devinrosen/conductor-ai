@@ -44,10 +44,12 @@ export function RepoDetailPage() {
   } = useApi(() => api.listWorktrees(repoId!, showCompletedWorktrees), [repoId, showCompletedWorktrees]);
 
   const {
-    data: tickets,
+    data: ticketList,
     loading: ticketsLoading,
     refetch: refetchTickets,
   } = useApi(() => api.listTickets(repoId!, showClosedTickets), [repoId, showClosedTickets]);
+  const tickets = ticketList?.tickets ?? null;
+  const ticketDependencies = ticketList?.dependencies ?? {};
 
   const { data: prs } = useApi(() => api.listPrs(repoId!), [repoId]);
 
@@ -221,10 +223,18 @@ export function RepoDetailPage() {
     [],
   );
 
-  // Build ticket dependency tree
+  // Build ticket dependency tree using API-provided deps (all source types)
   const ticketTree = useMemo(
-    () => (tickets ? buildTicketTree(tickets, worktrees ?? undefined, prs ?? undefined) : null),
-    [tickets, worktrees, prs],
+    () =>
+      tickets
+        ? buildTicketTree(
+            tickets,
+            worktrees ?? undefined,
+            prs ?? undefined,
+            Object.keys(ticketDependencies).length > 0 ? ticketDependencies : undefined,
+          )
+        : null,
+    [tickets, worktrees, prs, ticketDependencies],
   );
 
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display

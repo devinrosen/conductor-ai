@@ -429,8 +429,8 @@ async fn test_list_tickets_empty() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert!(body.is_empty());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["tickets"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -438,8 +438,8 @@ async fn test_list_all_tickets_empty() {
     let base = spawn_test_server().await;
     let resp = reqwest::get(format!("{base}/api/tickets")).await.unwrap();
     assert_eq!(resp.status(), 200);
-    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert!(body.is_empty());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["tickets"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

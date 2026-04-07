@@ -169,6 +169,11 @@ export interface TicketDependencies {
   children: Ticket[];
 }
 
+export interface TicketListResponse {
+  tickets: Ticket[];
+  dependencies: Record<string, TicketDependencies>;
+}
+
 export interface TicketDetail {
   agent_totals: TicketAgentTotals | null;
   worktrees: Worktree[];

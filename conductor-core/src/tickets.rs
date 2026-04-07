@@ -809,6 +809,31 @@ impl<'a> TicketSyncer<'a> {
         })
     }
 
+    /// Batch-loads dependencies for tickets belonging to a single repo.
+    /// Returns `ticket_id → TicketDependencies`. Used by per-repo API endpoints
+    /// to avoid loading the entire dependency graph for every API call.
+    pub fn get_all_dependencies_for_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<HashMap<String, TicketDependencies>> {
+        let blocks_rows = query_dep_pairs_for_repo(self.conn, "blocks", repo_id)?;
+        let parent_rows = query_dep_pairs_for_repo(self.conn, "parent_of", repo_id)?;
+
+        let mut map: HashMap<String, TicketDependencies> = HashMap::new();
+
+        for (from_id, to_id, from_ticket, to_ticket) in blocks_rows {
+            map.entry(to_id).or_default().blocked_by.push(from_ticket);
+            map.entry(from_id).or_default().blocks.push(to_ticket);
+        }
+
+        for (from_id, to_id, from_ticket, to_ticket) in parent_rows {
+            map.entry(to_id).or_default().parent = Some(from_ticket);
+            map.entry(from_id).or_default().children.push(to_ticket);
+        }
+
+        Ok(map)
+    }
+
     /// Batch-loads dependencies for all tickets in two queries (one per dep_type).
     /// Returns `ticket_id → TicketDependencies`. Used by the TUI background
     /// poller to avoid N+1 queries.
@@ -1111,6 +1136,41 @@ fn query_dep_pairs(
          JOIN tickets tt ON tt.id = d.to_ticket_id
          WHERE d.dep_type = ?1",
         rusqlite::params![dep_type],
+        |row| {
+            let from_id: String = row.get(0)?;
+            let to_id: String = row.get(1)?;
+            let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
+            let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+            Ok((from_id, to_id, from_ticket, to_ticket))
+        },
+    )
+}
+
+/// Like `query_dep_pairs` but scoped to a single repo (edges where at least one
+/// endpoint belongs to `repo_id`). Uses INNER JOIN so orphaned edges are silently
+/// excluded rather than returning an error — acceptable for display-only paths.
+fn query_dep_pairs_for_repo(
+    conn: &Connection,
+    dep_type: &str,
+    repo_id: &str,
+) -> Result<Vec<(String, String, Ticket, Ticket)>> {
+    const FROM_OFFSET: usize = 2;
+    const TO_OFFSET: usize = 17;
+
+    query_collect(
+        conn,
+        "SELECT d.from_ticket_id, d.to_ticket_id,
+         tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
+         tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
+         tf.workflow, tf.agent_map,
+         tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
+         tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
+         tt.workflow, tt.agent_map
+         FROM ticket_dependencies d
+         JOIN tickets tf ON tf.id = d.from_ticket_id
+         JOIN tickets tt ON tt.id = d.to_ticket_id
+         WHERE d.dep_type = ?1 AND (tf.repo_id = ?2 OR tt.repo_id = ?2)",
+        rusqlite::params![dep_type, repo_id],
         |row| {
             let from_id: String = row.get(0)?;
             let to_id: String = row.get(1)?;
