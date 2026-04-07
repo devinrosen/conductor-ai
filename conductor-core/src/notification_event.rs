@@ -562,4 +562,33 @@ mod tests {
         assert_eq!(v["step_name"], "review");
         assert_eq!(v["pending_ms"], 90_000u64);
     }
+
+    #[test]
+    fn to_json_feedback_requested_includes_preview() {
+        let event = NotificationEvent::FeedbackRequested {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            prompt_preview: "Is this right?".into(),
+        };
+        let v = event.to_json();
+        assert_eq!(v["event"], "feedback.requested");
+        assert_eq!(v["prompt_preview"], "Is this right?");
+        assert!(v.get("url").is_none());
+    }
+
+    #[test]
+    fn to_json_feedback_requested_with_url() {
+        let event = NotificationEvent::FeedbackRequested {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: Some("https://example.com".into()),
+            prompt_preview: "confirm?".into(),
+        };
+        let v = event.to_json();
+        assert_eq!(v["url"], "https://example.com");
+        assert_eq!(v["prompt_preview"], "confirm?");
+    }
 }
