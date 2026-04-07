@@ -8,6 +8,7 @@ import type {
   TicketDetail,
   CreateRepoRequest,
   CreateWorktreeRequest,
+  GithubPr,
   SyncResult,
   AgentRun,
   AgentEvent,
@@ -70,6 +71,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ model }),
     }),
+
+  // PRs
+  listPrs: (repoId: string) => request<GithubPr[]>(`/repos/${repoId}/prs`),
 
   // Worktrees
   listAllWorktrees: (showCompleted = false) =>
@@ -254,7 +258,7 @@ export const api = {
   getWorkflowDef: (worktreeId: string, name: string) =>
     request<WorkflowDef>(`/worktrees/${worktreeId}/workflows/defs/${encodeURIComponent(name)}`),
   runWorkflow: (worktreeId: string, data: RunWorkflowRequest) =>
-    request<{ status: string; worktree_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
+    request<{ status: string; worktree_id: string; run_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
       method: "POST",
       body: JSON.stringify(data),
     }),

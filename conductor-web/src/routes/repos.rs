@@ -3,7 +3,9 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use conductor_core::github::{discover_github_repos, list_github_orgs, DiscoveredRepo};
+use conductor_core::github::{
+    discover_github_repos, list_github_orgs, list_open_prs, DiscoveredRepo, GithubPr,
+};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, Repo, RepoManager};
 
 use crate::error::ApiError;
@@ -152,4 +154,29 @@ pub async fn discover_github_repos_handler(
         .collect();
 
     Ok(Json(result))
+}
+
+/// GET /api/repos/{id}/prs — list open PRs for the given repo.
+pub async fn list_prs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<GithubPr>>, ApiError> {
+    let remote_url = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
+        let mgr = RepoManager::new(&db, &config);
+        mgr.get_by_id(&id)?.remote_url
+    };
+    let prs = match tokio::task::spawn_blocking(move || list_open_prs(&remote_url)).await {
+        Ok(Ok(prs)) => prs,
+        Ok(Err(e)) => {
+            tracing::warn!("list_open_prs failed: {e}");
+            vec![]
+        }
+        Err(e) => {
+            tracing::warn!("list_open_prs task panicked: {e}");
+            vec![]
+        }
+    };
+    Ok(Json(prs))
 }

@@ -374,7 +374,8 @@ impl<'a> WorkflowManager<'a> {
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
              WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
                AND workflow_runs.status IN ({placeholders}) \
-             ORDER BY workflow_runs.started_at DESC"
+             ORDER BY workflow_runs.started_at DESC \
+             LIMIT 500"
         );
 
         let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();
@@ -588,7 +589,8 @@ impl<'a> WorkflowManager<'a> {
              WHERE (workflow_runs.repo_id = ?1 OR worktrees.repo_id = ?1) \
                AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
                AND workflow_runs.status IN ({placeholders}) \
-             ORDER BY workflow_runs.started_at DESC"
+             ORDER BY workflow_runs.started_at DESC \
+             LIMIT 500"
         );
 
         let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();

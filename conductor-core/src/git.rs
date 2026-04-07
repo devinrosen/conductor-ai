@@ -3,9 +3,13 @@ use std::process::Command;
 use crate::error::{ConductorError, Result, SubprocessFailure};
 
 /// Return a `Command` for `git` rooted at `dir`.
+///
+/// Sets `GIT_TERMINAL_PROMPT=0` so git fails fast instead of blocking on
+/// interactive credential prompts (which would hang workflow execution).
 pub(crate) fn git_in(dir: impl AsRef<std::path::Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(dir);
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd
 }
 

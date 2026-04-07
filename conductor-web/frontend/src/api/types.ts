@@ -69,6 +69,18 @@ export interface CreateRepoRequest {
   workspace_dir?: string;
 }
 
+export interface GithubPr {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  state: string;
+  head_ref_name: string;
+  is_draft: boolean;
+  review_decision: string | null;
+  ci_status: string;
+}
+
 export interface CreateWorktreeRequest {
   name: string;
   from_branch?: string;
