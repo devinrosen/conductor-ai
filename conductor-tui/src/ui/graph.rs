@@ -186,7 +186,9 @@ impl<N> GraphData<N> {
                 layer_nodes.sort_by(|a, b| {
                     let ba = barycenters.get(a).copied().unwrap_or(0.0);
                     let bb = barycenters.get(b).copied().unwrap_or(0.0);
-                    ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
+                    ba.partial_cmp(&bb)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.cmp(b))
                 });
             }
             for (pos, &node) in layer_nodes.iter().enumerate() {
