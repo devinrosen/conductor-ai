@@ -591,4 +591,32 @@ mod tests {
         assert_eq!(v["url"], "https://example.com");
         assert_eq!(v["prompt_preview"], "confirm?");
     }
+
+    #[test]
+    fn to_json_agent_run_failed_includes_error() {
+        let event = NotificationEvent::AgentRunFailed {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            error: Some("timeout".into()),
+        };
+        let v = event.to_json();
+        assert_eq!(v["event"], "agent_run.failed");
+        assert_eq!(v["error"], "timeout");
+    }
+
+    #[test]
+    fn to_json_agent_run_failed_no_error() {
+        let event = NotificationEvent::AgentRunFailed {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            error: None,
+        };
+        let v = event.to_json();
+        assert_eq!(v["event"], "agent_run.failed");
+        assert!(v.get("error").is_none());
+    }
 }
