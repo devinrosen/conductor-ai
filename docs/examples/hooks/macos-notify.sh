@@ -4,6 +4,9 @@
 # Displays a native macOS notification banner when a conductor event fires.
 # Uses osascript (AppleScript), which is built into macOS — no extra tools needed.
 #
+# NOTE: macOS Focus mode will suppress these notifications. There is no way
+# to bypass Focus mode from a CLI tool — this is a macOS system restriction.
+#
 # Conductor injects these automatically:
 #   CONDUCTOR_EVENT     — event name, e.g. "workflow_run.completed"
 #   CONDUCTOR_LABEL     — human-readable label, e.g. "deploy on main"
@@ -23,11 +26,20 @@ if [[ "$(uname)" != "Darwin" ]]; then
   exit 0
 fi
 
-# Pass shell variables as positional arguments to the AppleScript run handler
-# rather than interpolating them into the script text. This prevents injection
-# via label or event values that contain quotes or AppleScript metacharacters.
+case "$CONDUCTOR_EVENT" in
+  workflow_run.failed)
+    TITLE="Workflow Failed"
+    SOUND="Basso"
+    ;;
+  workflow_run.completed)
+    TITLE="Workflow Completed"
+    SOUND="Glass"
+    ;;
+  *)
+    TITLE="Conductor"
+    SOUND="default"
+    ;;
+esac
+
 osascript \
-  -e 'on run argv' \
-  -e '  display notification (item 1 of argv) with title (item 2 of argv) subtitle (item 3 of argv)' \
-  -e 'end run' \
-  -- "${CONDUCTOR_LABEL}" "Conductor" "${CONDUCTOR_EVENT}"
+  -e "display notification \"${CONDUCTOR_LABEL}\" with title \"${TITLE}\" sound name \"${SOUND}\""

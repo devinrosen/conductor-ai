@@ -10,7 +10,7 @@ Ready-to-use shell scripts for common notification destinations. Each script rea
 | `slack.sh` | Slack Incoming Webhook | `SLACK_WEBHOOK_URL` |
 | `discord.sh` | Discord Webhook | `DISCORD_WEBHOOK_URL` |
 | `ntfy.sh` | ntfy push notifications | `NTFY_TOPIC` |
-| `macos-notify.sh` | macOS desktop notification | macOS (uses `osascript`) |
+| `macos-notify.sh` | macOS desktop notification | macOS (uses `osascript`, built-in) |
 
 ## Environment Variables
 
@@ -44,7 +44,14 @@ Additional variables for specific events:
    chmod +x ~/.conductor/hooks/slack.sh
    ```
 
-2. Add a `[[notify.hooks]]` entry to `~/.conductor/config.toml`:
+2. Ensure notifications are enabled in `~/.conductor/config.toml`:
+
+   ```toml
+   [notifications]
+   enabled = true
+   ```
+
+3. Add a `[[notify.hooks]]` entry to `~/.conductor/config.toml`:
 
    ```toml
    # Fire on all workflow events
@@ -63,7 +70,7 @@ Additional variables for specific events:
    run = "~/.conductor/hooks/ntfy.sh"
    ```
 
-3. Test a hook from the CLI:
+4. Test a hook from the CLI:
 
    ```bash
    conductor notifications test workflow_run.completed
