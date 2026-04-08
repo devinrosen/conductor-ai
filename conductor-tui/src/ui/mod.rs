@@ -6,6 +6,7 @@ pub(crate) mod helpers;
 mod modal;
 mod pending_gates;
 mod repo_detail;
+pub(crate) mod settings;
 mod workflow_column;
 mod workflow_def_detail;
 pub(crate) mod workflows;
@@ -37,6 +38,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         View::WorktreeDetail => worktree_detail::render(frame, body_area, state),
         View::WorkflowRunDetail => workflows::render_run_detail(frame, body_area, state),
         View::WorkflowDefDetail => workflow_def_detail::render(frame, body_area, state),
+        View::Settings => settings::render(frame, body_area, state),
     }
 
     common::render_footer(frame, footer_area, state);

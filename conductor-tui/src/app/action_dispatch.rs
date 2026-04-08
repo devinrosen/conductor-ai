@@ -382,6 +382,16 @@ impl App {
                     scroll_offset: 0,
                 };
             }
+            // Settings view
+            Action::OpenSettings => self.handle_open_settings(),
+            Action::SettingsEditSetting => self.handle_settings_edit(),
+            Action::SettingsCycleValue => self.handle_settings_cycle_value(),
+            Action::SettingsToggleBool => self.handle_settings_cycle_value(),
+            Action::SettingsTestHook { hook_index } => self.handle_settings_test_hook(hook_index),
+            Action::SettingsHookTestComplete { hook_index, result } => {
+                self.handle_settings_hook_test_complete(hook_index, result);
+            }
+
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
             Action::IssueSourceDelete => self.handle_issue_source_delete(),

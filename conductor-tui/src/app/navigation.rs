@@ -155,6 +155,9 @@ impl App {
         }
         match self.state.view {
             View::Dashboard => self.show_confirm_quit(),
+            View::Settings => {
+                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+            }
             View::RepoDetail => {
                 self.state.view = View::Dashboard;
                 self.state.selected_repo_id = None;
@@ -204,6 +207,7 @@ impl App {
             }
             ColumnFocus::Content => match self.state.view {
                 View::Dashboard => {} // single panel — Tab is a no-op
+                View::Settings => self.settings_toggle_focus(),
                 View::RepoDetail => {
                     self.state.repo_detail_focus = self.state.repo_detail_focus.next();
                 }
@@ -234,6 +238,7 @@ impl App {
             }
             ColumnFocus::Content => match self.state.view {
                 View::Dashboard => {} // single panel — Tab is a no-op
+                View::Settings => self.settings_toggle_focus(),
                 View::RepoDetail => {
                     self.state.repo_detail_focus = self.state.repo_detail_focus.prev();
                 }
@@ -610,6 +615,9 @@ impl App {
                 self.state.workflow_def_detail_scroll =
                     self.state.workflow_def_detail_scroll.saturating_sub(1);
             }
+            View::Settings => {
+                self.settings_move_up();
+            }
             _ => {}
         }
     }
@@ -804,6 +812,9 @@ impl App {
             View::WorkflowDefDetail => {
                 self.state.workflow_def_detail_scroll =
                     self.state.workflow_def_detail_scroll.saturating_add(1);
+            }
+            View::Settings => {
+                self.settings_move_down();
             }
             _ => {}
         }
@@ -1019,6 +1030,7 @@ impl App {
             }
             View::WorktreeDetail => {}
             View::WorkflowDefDetail => {}
+            View::Settings => {}
         }
     }
 }

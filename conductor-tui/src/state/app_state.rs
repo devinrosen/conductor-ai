@@ -13,8 +13,8 @@ use super::workflow_rows::{count_children_rows, count_steps_for_run, max_iterati
 use super::{
     build_ticket_tree_indices, build_worktree_tree, build_worktree_tree_indices,
     parse_target_label, push_children, push_steps_for_run, ColumnFocus, DashboardRow, DataCache,
-    FilterState, Modal, RepoDetailFocus, TargetType, TreePosition, View, WorkflowDefFocus,
-    WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
+    FilterState, Modal, RepoDetailFocus, SettingsCategory, SettingsFocus, TargetType, TreePosition,
+    View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
 };
 use crate::theme::Theme;
 
@@ -148,6 +148,34 @@ pub struct AppState {
     /// Set of dot-path strings identifying expanded `CallWorkflow` nodes in the step tree.
     /// Cleared whenever `workflow_def_index` changes.
     pub workflow_def_expanded_calls: HashSet<String>,
+
+    // ── Settings view ────────────────────────────────────────────────────────
+    /// Which pane of the Settings view has keyboard focus.
+    pub settings_focus: SettingsFocus,
+    /// Which category is selected in the left pane.
+    pub settings_category: SettingsCategory,
+    /// Selected row in the left-pane category list.
+    pub settings_category_index: usize,
+    /// Selected row index in the right-pane settings list.
+    pub settings_row_index: usize,
+    /// Per-hook last test result: `Ok(())` = fired, `Err(msg)` = error.
+    pub settings_hook_test_results: HashMap<usize, Result<(), String>>,
+    /// Snapshot of config values for display in the Settings view.
+    /// Refreshed whenever Settings is opened or a value is changed.
+    pub settings_display: SettingsDisplayCache,
+}
+
+/// Displayable snapshot of conductor config values for the Settings view.
+#[derive(Debug, Clone, Default)]
+pub struct SettingsDisplayCache {
+    pub model: String,
+    pub permission_mode: String,
+    pub auto_start: String,
+    pub sync_interval: String,
+    pub auto_cleanup: String,
+    pub theme: String,
+    /// (on_pattern, run_or_url) pairs for each configured hook.
+    pub hooks: Vec<(String, String)>,
 }
 
 impl Default for AppState {
@@ -224,6 +252,12 @@ impl AppState {
             workflow_def_focus: WorkflowDefFocus::List,
             workflow_def_step_index: 0,
             workflow_def_expanded_calls: HashSet::new(),
+            settings_focus: SettingsFocus::CategoryList,
+            settings_category: SettingsCategory::General,
+            settings_category_index: 0,
+            settings_row_index: 0,
+            settings_hook_test_results: HashMap::new(),
+            settings_display: SettingsDisplayCache::default(),
         }
     }
 
@@ -448,6 +482,7 @@ impl AppState {
                 ),
             },
             View::WorkflowDefDetail => (self.workflow_def_detail_scroll, 0),
+            View::Settings => (self.settings_row_index, 0),
         }
     }
 
@@ -484,6 +519,9 @@ impl AppState {
             },
             View::WorkflowDefDetail => {
                 self.workflow_def_detail_scroll = index;
+            }
+            View::Settings => {
+                self.settings_row_index = index;
             }
         }
     }

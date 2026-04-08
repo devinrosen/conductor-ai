@@ -94,8 +94,13 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
             View::WorktreeDetail => "Worktree Detail",
             View::WorkflowRunDetail => "Workflow Run",
             View::WorkflowDefDetail => "Workflow Definition",
+            View::Settings => "Settings",
         };
-        format!("[{view_name}]  Tab:panel  [/]:column  \\:workflows  q:quit")
+        if state.view == View::Settings {
+            format!("[{view_name}]  Tab:pane  j/k:nav  Enter:edit  c:cycle  Esc:back")
+        } else {
+            format!("[{view_name}]  Tab:panel  [/]:column  \\:workflows  [S]:settings  q:quit")
+        }
     };
 
     let mut spans: Vec<Span<'static>> = Vec::new();
