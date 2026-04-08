@@ -665,7 +665,10 @@ mod tests {
         let result = run_shell_hook_capture(&hook, &event);
         assert!(result.is_err());
         let msg = result.unwrap_err();
-        assert!(msg.contains("exit") || msg.contains("status") || msg.contains('2'), "got: {msg}");
+        assert!(
+            msg.contains("exit") || msg.contains("status") || msg.contains('2'),
+            "got: {msg}"
+        );
     }
 
     // ── HookRunner::fire ─────────────────────────────────────────────────
