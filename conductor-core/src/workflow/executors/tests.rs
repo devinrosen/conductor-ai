@@ -208,6 +208,61 @@ echo "<<<END_CONDUCTOR_OUTPUT>>>"
     );
 }
 
+/// Regression test for #1936: env var template strings that contain an
+/// unresolvable `{{pattern}}` (no matching key in the variable map) must
+/// be preserved as-is, not stripped to empty string.
+#[test]
+fn test_execute_script_env_var_unresolved_pattern_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = write_script(
+        &dir.path().join("env_unresolved.sh"),
+        r#"#!/bin/sh
+echo "<<<CONDUCTOR_OUTPUT>>>"
+printf '{"markers":[],"context":"%s"}\n' "$TEMPLATE_VAR"
+echo "<<<END_CONDUCTOR_OUTPUT>>>"
+"#,
+    );
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+
+    // No inputs — so {{unknown_ref}} is unresolvable.
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let mut env = std::collections::HashMap::new();
+    env.insert(
+        "TEMPLATE_VAR".to_string(),
+        "prefix-{{unknown_ref}}-suffix".to_string(),
+    );
+
+    let node = crate::workflow_dsl::ScriptNode {
+        name: "env_unresolved".into(),
+        run: script_path,
+        env,
+        timeout: Some(10),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+    };
+
+    let result = execute_script(&mut state, &node, 0);
+    assert!(result.is_ok(), "execute_script should succeed: {result:?}");
+    let ctx = state
+        .contexts
+        .last()
+        .map(|c| c.context.as_str())
+        .unwrap_or("");
+    assert!(
+        ctx.contains("prefix-{{unknown_ref}}-suffix"),
+        "unresolved {{{{unknown_ref}}}} should be preserved verbatim, got context: {ctx}"
+    );
+}
+
 // -----------------------------------------------------------------------
 // poll_script_child unit tests — timeout and cancellation
 // -----------------------------------------------------------------------
