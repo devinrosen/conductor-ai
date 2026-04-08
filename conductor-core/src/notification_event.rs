@@ -208,6 +208,7 @@ impl NotificationEvent {
         let now = now.into();
         let run_id = "test-00000000000000000000000000".to_string();
         let url = Some("http://localhost".to_string());
+        let ticket_url = Some("https://github.com/example-org/example-repo/issues/42".to_string());
         let ev = match name {
             "workflow_run.completed" => Self::WorkflowRunCompleted {
                 run_id,
@@ -219,7 +220,7 @@ impl NotificationEvent {
                 repo_slug: "test-repo".to_string(),
                 branch: "main".to_string(),
                 duration_ms: Some(1000),
-                ticket_url: None,
+                ticket_url,
             },
             "workflow_run.failed" => Self::WorkflowRunFailed {
                 run_id,
@@ -231,8 +232,8 @@ impl NotificationEvent {
                 repo_slug: "test-repo".to_string(),
                 branch: "main".to_string(),
                 duration_ms: Some(1000),
-                ticket_url: None,
-                error: None,
+                ticket_url,
+                error: Some("Test error".to_string()),
             },
             "agent_run.completed" => Self::AgentRunCompleted {
                 run_id,
@@ -242,7 +243,7 @@ impl NotificationEvent {
                 repo_slug: "test-repo".to_string(),
                 branch: "main".to_string(),
                 duration_ms: Some(1000),
-                ticket_url: None,
+                ticket_url,
             },
             "agent_run.failed" => Self::AgentRunFailed {
                 run_id,
@@ -253,7 +254,7 @@ impl NotificationEvent {
                 repo_slug: "test-repo".to_string(),
                 branch: "main".to_string(),
                 duration_ms: Some(1000),
-                ticket_url: None,
+                ticket_url,
             },
             "gate.waiting" => Self::GateWaiting {
                 run_id,
@@ -264,7 +265,7 @@ impl NotificationEvent {
                 repo_slug: "test-repo".to_string(),
                 branch: "main".to_string(),
                 duration_ms: Some(1000),
-                ticket_url: None,
+                ticket_url,
             },
             "feedback.requested" => Self::FeedbackRequested {
                 run_id,
@@ -275,7 +276,7 @@ impl NotificationEvent {
                 repo_slug: "test-repo".to_string(),
                 branch: "main".to_string(),
                 duration_ms: Some(1000),
-                ticket_url: None,
+                ticket_url,
             },
             other => {
                 return Err(ConductorError::InvalidInput(format!(
@@ -1359,5 +1360,47 @@ mod tests {
     fn synthetic_for_pattern_unrecognized_falls_back_to_workflow_completed() {
         let ev = NotificationEvent::synthetic_for_pattern("unrecognized.event", "t");
         assert_eq!(ev.event_name(), "workflow_run.completed");
+    }
+
+    #[test]
+    fn synthetic_workflow_run_failed_has_error() {
+        let ev = NotificationEvent::synthetic("workflow_run.failed", "t").unwrap();
+        match ev {
+            NotificationEvent::WorkflowRunFailed { error, .. } => {
+                assert!(
+                    error.is_some(),
+                    "synthetic workflow_run.failed should have a non-None error"
+                );
+            }
+            _ => panic!("expected WorkflowRunFailed"),
+        }
+    }
+
+    #[test]
+    fn synthetic_events_have_ticket_url() {
+        let names = [
+            "workflow_run.completed",
+            "workflow_run.failed",
+            "agent_run.completed",
+            "agent_run.failed",
+            "gate.waiting",
+            "feedback.requested",
+        ];
+        for name in names {
+            let ev = NotificationEvent::synthetic(name, "t").unwrap();
+            let ticket_url = match &ev {
+                NotificationEvent::WorkflowRunCompleted { ticket_url, .. } => ticket_url,
+                NotificationEvent::WorkflowRunFailed { ticket_url, .. } => ticket_url,
+                NotificationEvent::AgentRunCompleted { ticket_url, .. } => ticket_url,
+                NotificationEvent::AgentRunFailed { ticket_url, .. } => ticket_url,
+                NotificationEvent::GateWaiting { ticket_url, .. } => ticket_url,
+                NotificationEvent::FeedbackRequested { ticket_url, .. } => ticket_url,
+                _ => panic!("unexpected variant for {name}"),
+            };
+            assert!(
+                ticket_url.is_some(),
+                "synthetic {name} should have a non-None ticket_url"
+            );
+        }
     }
 }
