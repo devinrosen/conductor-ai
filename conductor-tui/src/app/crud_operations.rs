@@ -540,6 +540,9 @@ impl App {
         from_branch: Option<String>,
     ) {
         let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: "Cannot check main health: background sender not ready.".into(),
+            };
             return;
         };
         self.state.modal = Modal::Progress {
@@ -880,6 +883,16 @@ mod tests {
         app.state.view = View::Dashboard;
         app.handle_delete();
         assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    // ── spawn_main_health_check ───────────────────────────────────────
+
+    #[test]
+    fn spawn_main_health_check_no_bg_tx_shows_error_modal() {
+        let mut app = make_test_app(); // bg_tx is None by default
+        app.state.data.repos = vec![make_test_repo("r1", "my-repo")];
+        app.spawn_main_health_check("my-repo".into(), "my-wt".into(), None, None, None);
+        assert!(matches!(app.state.modal, Modal::Error { .. }));
     }
 
     #[test]
