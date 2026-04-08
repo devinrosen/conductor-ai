@@ -271,11 +271,11 @@ async fn main() -> Result<()> {
                     let slug = wt_slugs.get(wt_id.as_str()).copied();
                     (slug, run)
                 });
-                let transitions = crate::notify::detect_agent_terminal_transitions(
+                let transitions = conductor_web::notify::detect_agent_terminal_transitions(
                     runs_iter, &mut seen, &mut init,
                 );
                 for t in &transitions {
-                    crate::notify::fire_agent_run_notification(
+                    conductor_web::notify::fire_agent_run_notification(
                         &conn,
                         &cfg.notifications,
                         &cfg.notify.hooks,
@@ -335,17 +335,17 @@ async fn main() -> Result<()> {
 
                 // Detect workflow run terminal transitions and fire notifications.
                 let workflow_runs = wf_mgr.list_all_workflow_runs(200)?;
-                let wf_transitions = crate::notify::detect_workflow_terminal_transitions(
+                let wf_transitions = conductor_web::notify::detect_workflow_terminal_transitions(
                     workflow_runs.iter(),
                     &mut wf_seen,
                     &mut wf_init,
                 );
                 for t in &wf_transitions {
-                    crate::notify::fire_workflow_notification(
+                    conductor_web::notify::fire_workflow_notification(
                         &conn,
                         &cfg.notifications,
                         &cfg.notify.hooks,
-                        &crate::notify::WorkflowNotificationArgs {
+                        &conductor_web::notify::WorkflowNotificationArgs {
                             run_id: &t.run_id,
                             workflow_name: &t.workflow_name,
                             target_label: t.target_label.as_deref(),
