@@ -10,7 +10,7 @@ use crate::workflow::engine::{
     ExecutionState,
 };
 use crate::workflow::output::parse_conductor_output;
-use crate::workflow::prompt_builder::{build_variable_map, substitute_variables};
+use crate::workflow::prompt_builder::{build_variable_map, substitute_variables, substitute_variables_keep_literal};
 use crate::workflow::status::WorkflowStepStatus;
 
 // ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ pub fn execute_script(
     let resolved_env: std::collections::HashMap<String, String> = node
         .env
         .iter()
-        .map(|(k, v)| (k.clone(), substitute_variables(v, &vars)))
+        .map(|(k, v)| (k.clone(), substitute_variables_keep_literal(v, &vars)))
         .collect();
 
     // Retry loop

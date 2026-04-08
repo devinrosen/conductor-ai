@@ -5,23 +5,35 @@ use crate::schema_config;
 use super::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
 use super::engine::ExecutionState;
 
-/// Replace `{{key}}` placeholders in a prompt with values from `vars`.
-pub(super) fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -> String {
-    let mut result = prompt.to_string();
+fn substitute_variables_impl(template: &str, vars: &HashMap<&str, String>, strip_unresolved: bool) -> String {
+    let mut result = template.to_string();
     for (key, value) in vars {
         let pattern = format!("{{{{{key}}}}}");
         result = result.replace(&pattern, value);
     }
-    // Strip any remaining unresolved {{…}} placeholders so they don't
-    // leak as literal text into prompts, env vars, or script paths.
-    while let Some(start) = result.find("{{") {
-        if let Some(end) = result[start..].find("}}") {
-            result.replace_range(start..start + end + 2, "");
-        } else {
-            break;
+    if strip_unresolved {
+        // Strip any remaining unresolved {{…}} placeholders so they don't
+        // leak as literal text into agent prompts.
+        while let Some(start) = result.find("{{") {
+            if let Some(end) = result[start..].find("}}") {
+                result.replace_range(start..start + end + 2, "");
+            } else {
+                break;
+            }
         }
     }
     result
+}
+
+/// For agent prompts: substitutes variables AND strips unresolved `{{…}}` placeholders.
+pub(super) fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -> String {
+    substitute_variables_impl(prompt, vars, true)
+}
+
+/// For data contexts (env vars, sub-workflow inputs): substitutes variables but
+/// preserves any `{{…}}` text that was not a template variable.
+pub(super) fn substitute_variables_keep_literal(template: &str, vars: &HashMap<&str, String>) -> String {
+    substitute_variables_impl(template, vars, false)
 }
 
 /// Build the variable map from execution state (used for substitution in sub-workflow inputs).
@@ -262,6 +274,31 @@ mod tests {
         let vars = HashMap::new();
         let result = substitute_variables("{{a}} middle {{b}} end {{c}}", &vars);
         assert_eq!(result, " middle  end ");
+    }
+
+    #[test]
+    fn test_substitute_variables_keep_literal_preserves_json_braces() {
+        let mut vars = HashMap::new();
+        vars.insert("name", "world".to_string());
+        let result = substitute_variables_keep_literal("hello {{name}} and {{unknown}}", &vars);
+        assert_eq!(result, "hello world and {{unknown}}");
+    }
+
+    #[test]
+    fn test_substitute_variables_keep_literal_preserves_embedded_json() {
+        let json_value = r#"{"risks":["{{deterministic-review.score}}","other"]}"#.to_string();
+        let mut vars = HashMap::new();
+        vars.insert("prior_output", json_value);
+        let result = substitute_variables_keep_literal("{{prior_output}}", &vars);
+        assert_eq!(result, r#"{"risks":["{{deterministic-review.score}}","other"]}"#);
+    }
+
+    #[test]
+    fn test_substitute_variables_strips_unresolved_for_prompts() {
+        let mut vars = HashMap::new();
+        vars.insert("name", "world".to_string());
+        let result = substitute_variables("hello {{name}} and {{unknown}}", &vars);
+        assert_eq!(result, "hello world and ");
     }
 
     #[test]

@@ -1274,7 +1274,7 @@ pub(super) fn resolve_child_inputs(
     for (k, v) in raw_inputs {
         child_inputs.insert(
             k.clone(),
-            super::prompt_builder::substitute_variables(v, vars),
+            super::prompt_builder::substitute_variables_keep_literal(v, vars),
         );
     }
     for decl in input_decls {
