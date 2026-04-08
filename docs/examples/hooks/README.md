@@ -9,8 +9,18 @@ Ready-to-use shell scripts for common notification destinations. Each script rea
 |---|---|---|
 | `slack.sh` | Slack Incoming Webhook | `SLACK_WEBHOOK_URL` |
 | `discord.sh` | Discord Webhook | `DISCORD_WEBHOOK_URL` |
-| `ntfy.sh` | ntfy push notifications | `NTFY_TOPIC` |
+| `ntfy.sh` | ntfy push notifications (minimal) | `NTFY_TOPIC` |
+| `notify-ntfy.sh` | ntfy push notifications (richer: event-aware priority, tags, auth) | `NTFY_TOPIC` |
+| `notify-ntfy.py` | ntfy push notifications (Python, stdlib-only) | `NTFY_TOPIC` |
 | `macos-notify.sh` | macOS desktop notification | macOS (uses `osascript`, built-in) |
+
+> **ntfy variants:** `ntfy.sh` is the minimal script — one `curl` call with a
+> title and a click link. `notify-ntfy.sh` (and its Python twin `notify-ntfy.py`)
+> add event-aware `Priority` headers (`urgent` for failures, `high` for gate and
+> feedback events), per-event emoji `Tags`, and optional `Authorization` bearer
+> token support for private/self-hosted ntfy servers. See
+> [docs/notify-ntfy-migration.md](../../notify-ntfy-migration.md) for the full
+> migration guide.
 
 ## Environment Variables
 
