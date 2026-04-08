@@ -388,6 +388,9 @@ impl App {
             Action::SettingsCycleValue => self.handle_settings_cycle_value(),
             Action::SettingsToggleBool => self.handle_settings_cycle_value(),
             Action::SettingsTestHook { hook_index } => self.handle_settings_test_hook(hook_index),
+            Action::SettingsOpenHookScript { hook_index } => {
+                self.handle_settings_open_hook_script(hook_index);
+            }
             Action::SettingsHookTestComplete { hook_index, result } => {
                 self.handle_settings_hook_test_complete(hook_index, result);
             }

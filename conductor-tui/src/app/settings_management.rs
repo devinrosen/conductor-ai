@@ -203,6 +203,56 @@ impl App {
         });
     }
 
+    /// Handle [o] — open the selected hook's local script file with `open`.
+    pub(super) fn handle_settings_open_hook_script(&mut self, hook_index: usize) {
+        let Some(hook) = self.config.notify.hooks.get(hook_index).cloned() else {
+            self.state.status_message = Some(format!("Hook index {hook_index} not found."));
+            self.state.status_message_at = Some(std::time::Instant::now());
+            return;
+        };
+
+        let run = match hook.run.as_deref() {
+            Some(r) => r.trim().to_string(),
+            None => {
+                self.state.status_message =
+                    Some("Not a local script — edit config.toml to modify".into());
+                self.state.status_message_at = Some(std::time::Instant::now());
+                return;
+            }
+        };
+
+        if !run.starts_with("~/") && !run.starts_with('/') && !run.starts_with("./") {
+            self.state.status_message =
+                Some("Not a local script — edit config.toml to modify".into());
+            self.state.status_message_at = Some(std::time::Instant::now());
+            return;
+        }
+
+        let resolved = if run.starts_with("~/") {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "~".into());
+            format!("{}{}", home, &run[1..])
+        } else {
+            run.clone()
+        };
+
+        if !std::path::Path::new(&resolved).exists() {
+            self.state.status_message = Some(format!("Script not found: {resolved}"));
+            self.state.status_message_at = Some(std::time::Instant::now());
+            return;
+        }
+
+        let resolved_for_spawn = resolved.clone();
+        std::thread::spawn(move || {
+            std::process::Command::new("open")
+                .arg(&resolved_for_spawn)
+                .status()
+                .ok();
+        });
+
+        self.state.status_message = Some(format!("Opening {resolved}…"));
+        self.state.status_message_at = Some(std::time::Instant::now());
+    }
+
     /// Handle the background result of a hook test.
     pub(super) fn handle_settings_hook_test_complete(
         &mut self,

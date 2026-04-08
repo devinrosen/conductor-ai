@@ -444,6 +444,18 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     Action::None
                 }
             }
+            KeyCode::Char('o') => {
+                use crate::state::SettingsCategory;
+                if state.settings_category == SettingsCategory::Notifications {
+                    if let Some(idx) = state.settings_selected_hook_index() {
+                        Action::SettingsOpenHookScript { hook_index: idx }
+                    } else {
+                        Action::None
+                    }
+                } else {
+                    Action::None
+                }
+            }
             _ => Action::None,
         };
     }

@@ -236,7 +236,7 @@ fn render_notifications(
 
     let hint_line = if focused {
         Line::from(Span::styled(
-            "  [t] test hook  [Esc] back",
+            "  [t] test hook  [o] open script  [Esc] back",
             Style::default().fg(theme.label_secondary),
         ))
     } else {
@@ -259,10 +259,29 @@ fn render_notifications(
             Style::default().fg(theme.label_secondary),
         )));
     } else {
+        // Compute dynamic column widths from content
+        let hook_count = d.hooks.len();
+        let idx_w = hook_count.saturating_sub(1).to_string().len().max(1);
+        let on_w = d
+            .hooks
+            .iter()
+            .map(|(on, _)| on.len())
+            .max()
+            .unwrap_or(0)
+            .max(12);
+        let cmd_w = d
+            .hooks
+            .iter()
+            .map(|(_, cmd)| cmd.len())
+            .max()
+            .unwrap_or(0)
+            .max(12);
+        let separator_len = idx_w + 1 + on_w + 1 + cmd_w + 1 + "Last test".len();
+
         // Column header
         lines.push(Line::from(Span::styled(
             format!(
-                "  {:<4} {:<20} {:<35} {}",
+                "  {:<idx_w$} {:<on_w$} {:<cmd_w$} {}",
                 "#", "on", "run / url", "Last test"
             ),
             Style::default()
@@ -270,7 +289,7 @@ fn render_notifications(
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
-            "  \u{2500}".repeat(72),
+            format!("  {}", "\u{2500}".repeat(separator_len)),
             Style::default().fg(theme.label_secondary),
         )));
 
@@ -297,13 +316,9 @@ fn render_notifications(
                 None => Span::styled("\u{2014}", Style::default().fg(theme.label_secondary)),
             };
 
-            // Truncate on/cmd for display
-            let on_display = truncate(on_pat, 18);
-            let cmd_display = truncate(cmd, 33);
-
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  {:<4} {:<20} {:<35} ", i, on_display, cmd_display),
+                    format!("  {i:<idx_w$} {on_pat:<on_w$} {cmd:<cmd_w$} ", cmd = cmd),
                     base_style,
                 ),
                 test_span,
@@ -318,11 +333,3 @@ fn render_notifications(
     frame.render_widget(para, inner);
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{}\u{2026}", truncated)
-    }
-}
