@@ -2107,7 +2107,11 @@ mod tests {
         let mut initialized = false;
 
         // Tick 1: non-worktree run is running (worktree_id = None, no parent_workflow_run_id)
-        let tick1 = [make_workflow_run("nw1", "label-all-tickets", WorkflowRunStatus::Running)];
+        let tick1 = [make_workflow_run(
+            "nw1",
+            "label-all-tickets",
+            WorkflowRunStatus::Running,
+        )];
         let t1 = detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
         assert!(t1.is_empty());
 
