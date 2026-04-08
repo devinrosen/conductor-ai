@@ -194,12 +194,8 @@ impl App {
             let now = chrono::Utc::now().to_rfc3339();
             let event = NotificationEvent::synthetic_for_pattern(&hook.on, now);
             let runner = HookRunner::new(&[hook]);
-            runner.fire(&event);
-            // fire() is fire-and-forget; we report "fired" immediately.
-            let _ = bg_tx.send(Action::SettingsHookTestComplete {
-                hook_index,
-                result: Ok(()),
-            });
+            let result = runner.run_test(&event);
+            let _ = bg_tx.send(Action::SettingsHookTestComplete { hook_index, result });
         });
     }
 

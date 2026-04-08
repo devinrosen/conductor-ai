@@ -1,3 +1,4 @@
+use std::process::Stdio;
 use std::time::Duration;
 
 use crate::config::HookConfig;
@@ -139,6 +140,9 @@ fn run_shell_hook(hook: &HookConfig, event: &NotificationEvent) {
         .arg("-c")
         .arg(cmd)
         .envs(&env_vars)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
     {
         Ok(c) => c,
@@ -176,6 +180,47 @@ fn run_shell_hook(hook: &HookConfig, event: &NotificationEvent) {
                 return;
             }
         }
+    }
+}
+
+/// Execute a shell hook synchronously and capture its output, for test/diagnostic use.
+///
+/// Unlike `run_shell_hook`, this function:
+/// - Pipes stdout and stderr so they do not leak into the caller's terminal.
+/// - Blocks until the child exits (no timeout polling; uses `wait_with_output()`).
+/// - Returns `Err(stderr_text)` on non-zero exit, falling back to `"exited with status N"`
+///   if stderr is empty.
+fn run_shell_hook_capture(hook: &HookConfig, event: &NotificationEvent) -> Result<(), String> {
+    let Some(ref cmd) = hook.run else {
+        return Ok(());
+    };
+
+    let env_vars = event.to_env_vars();
+
+    let child = match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .envs(&env_vars)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return Err(format!("spawn failed: {e}")),
+    };
+
+    match child.wait_with_output() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if stderr.is_empty() {
+                Err(format!("exited with status {}", output.status))
+            } else {
+                Err(stderr)
+            }
+        }
+        Err(e) => Err(format!("wait error: {e}")),
     }
 }
 
@@ -242,6 +287,36 @@ impl HookRunner {
         Self {
             hooks: hooks.to_vec(),
         }
+    }
+
+    /// Run the first matching hook synchronously and return the real exit result.
+    ///
+    /// Intended for the TUI "Test Hook" feature. Unlike `fire()`, this method:
+    /// - Blocks until the hook finishes (no background thread).
+    /// - Captures stdout/stderr so nothing leaks into the terminal.
+    /// - Returns `Ok(())` on success or `Err(message)` on failure.
+    ///
+    /// Only shell (`run`) hooks return a meaningful result. HTTP hooks return `Ok(())`
+    /// for now — they already swallow errors internally.
+    /// TODO: surface HTTP hook errors in run_test when needed.
+    pub fn run_test(&self, event: &NotificationEvent) -> Result<(), String> {
+        let event_name = event.event_name();
+        for hook in &self.hooks {
+            if !glob_matches(&hook.on, event_name) {
+                continue;
+            }
+            if !hook_event_passes_filters(hook, event) {
+                continue;
+            }
+            if hook.run.is_some() {
+                return run_shell_hook_capture(hook, event);
+            }
+            if hook.url.is_some() {
+                run_http_hook(hook, event);
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 
     /// Fire all hooks whose `on` pattern matches `event.event_name()` and whose
@@ -515,6 +590,82 @@ mod tests {
             ticket_url: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    // ── run_shell_hook_capture ───────────────────────────────────────────
+
+    #[test]
+    fn capture_success_returns_ok() {
+        let hook = HookConfig {
+            on: "*".into(),
+            run: Some("exit 0".into()),
+            timeout_ms: Some(5_000),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        assert!(run_shell_hook_capture(&hook, &event).is_ok());
+    }
+
+    #[test]
+    fn capture_nonzero_with_stderr_returns_err_with_stderr_text() {
+        let hook = HookConfig {
+            on: "*".into(),
+            run: Some("echo 'something went wrong' >&2; exit 1".into()),
+            timeout_ms: Some(5_000),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        let result = run_shell_hook_capture(&hook, &event);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("something went wrong"));
+    }
+
+    #[test]
+    fn capture_nonzero_no_stderr_returns_err_with_status() {
+        let hook = HookConfig {
+            on: "*".into(),
+            run: Some("exit 2".into()),
+            timeout_ms: Some(5_000),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        let result = run_shell_hook_capture(&hook, &event);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("exit") || msg.contains("status") || msg.contains('2'), "got: {msg}");
     }
 
     // ── HookRunner::fire ─────────────────────────────────────────────────
