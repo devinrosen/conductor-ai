@@ -168,6 +168,35 @@ fn test_resolve_child_inputs_preserves_unresolved_braces() {
 }
 
 #[test]
+fn test_resolve_child_inputs_keeps_unresolved_pattern() {
+    // Regression for #1907 / #1935: when a raw input template contains
+    // {{var}} and that variable is not in the vars map, the placeholder
+    // must survive intact rather than be stripped.
+    use crate::workflow_dsl::InputDecl;
+
+    let mut raw = HashMap::new();
+    raw.insert("query".to_string(), "Search for {{unknown_var}} results".to_string());
+
+    // vars map does NOT contain "unknown_var"
+    let vars: HashMap<&str, String> = HashMap::new();
+
+    let decls = vec![InputDecl {
+        name: "query".to_string(),
+        required: true,
+        default: None,
+        description: None,
+        input_type: Default::default(),
+    }];
+
+    let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+    // {{unknown_var}} must be preserved, not stripped
+    assert_eq!(
+        result.get("query").unwrap(),
+        "Search for {{unknown_var}} results"
+    );
+}
+
+#[test]
 fn test_resolve_child_inputs_applies_defaults() {
     use crate::workflow_dsl::InputDecl;
 
