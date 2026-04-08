@@ -20,7 +20,7 @@ use conductor_core::worktree::WorktreeManager;
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
-use crate::notify::fire_workflow_notification;
+use crate::notify::{fire_workflow_notification, WorkflowNotificationArgs};
 use crate::state::AppState;
 
 /// Resolve the run ID to use for error-path notifications.
@@ -86,20 +86,9 @@ fn notify_workflow(
     conn: &rusqlite::Connection,
     notifications: &conductor_core::config::NotificationConfig,
     notify_hooks: &[conductor_core::config::HookConfig],
-    run_id: &str,
-    workflow_name: &str,
-    label: Option<&str>,
-    succeeded: bool,
+    params: &WorkflowNotificationArgs<'_>,
 ) {
-    fire_workflow_notification(
-        conn,
-        notifications,
-        notify_hooks,
-        run_id,
-        workflow_name,
-        label,
-        succeeded,
-    );
+    fire_workflow_notification(conn, notifications, notify_hooks, params);
 }
 
 // ── Response types ────────────────────────────────────────────────────
@@ -406,10 +395,13 @@ pub async fn run_workflow(
                         conn,
                         &notifications,
                         &notify_hooks,
-                        &res.workflow_run_id,
-                        &workflow_name,
-                        Some(&wt_target_label),
-                        succeeded,
+                        &WorkflowNotificationArgs {
+                            run_id: &res.workflow_run_id,
+                            workflow_name: &workflow_name,
+                            target_label: Some(&wt_target_label),
+                            succeeded,
+                            parent_workflow_run_id: None, // workflows launched from web are always root runs
+                        },
                     );
                 } else if let Err(e) = &notification_conn {
                     tracing::error!("notify: DB open failed, skipping notification: {e}");
@@ -434,10 +426,13 @@ pub async fn run_workflow(
                         conn,
                         &notifications,
                         &notify_hooks,
-                        &error_run_id,
-                        &workflow_name,
-                        Some(&wt_target_label),
-                        false,
+                        &WorkflowNotificationArgs {
+                            run_id: &error_run_id,
+                            workflow_name: &workflow_name,
+                            target_label: Some(&wt_target_label),
+                            succeeded: false,
+                            parent_workflow_run_id: None, // workflows launched from web are always root runs
+                        },
                     );
                 } else if let Err(e) = &notification_conn {
                     tracing::error!("notify: DB open failed, skipping notification: {e}");
@@ -677,10 +672,13 @@ pub async fn post_workflow_run(
                     &conn,
                     &notifications,
                     &notify_hooks,
-                    &res.workflow_run_id,
-                    &workflow_name,
-                    Some(&target_label),
-                    succeeded,
+                    &WorkflowNotificationArgs {
+                        run_id: &res.workflow_run_id,
+                        workflow_name: &workflow_name,
+                        target_label: Some(&target_label),
+                        succeeded,
+                        parent_workflow_run_id: None, // workflows launched from web are always root runs
+                    },
                 );
 
                 state_clone
@@ -700,10 +698,13 @@ pub async fn post_workflow_run(
                     &conn,
                     &notifications,
                     &notify_hooks,
-                    &error_run_id,
-                    &workflow_name,
-                    Some(&target_label),
-                    false,
+                    &WorkflowNotificationArgs {
+                        run_id: &error_run_id,
+                        workflow_name: &workflow_name,
+                        target_label: Some(&target_label),
+                        succeeded: false,
+                        parent_workflow_run_id: None, // workflows launched from web are always root runs
+                    },
                 );
             }
         }
@@ -1189,10 +1190,13 @@ pub async fn resume_workflow_endpoint(
                     &conn,
                     &notifications,
                     &notify_hooks,
-                    &res.workflow_run_id,
-                    &workflow_name,
-                    target_label.as_deref(),
-                    succeeded,
+                    &WorkflowNotificationArgs {
+                        run_id: &res.workflow_run_id,
+                        workflow_name: &workflow_name,
+                        target_label: target_label.as_deref(),
+                        succeeded,
+                        parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                    },
                 );
 
                 state_clone
@@ -1209,10 +1213,13 @@ pub async fn resume_workflow_endpoint(
                     &conn,
                     &notifications,
                     &notify_hooks,
-                    &params.workflow_run_id,
-                    &workflow_name,
-                    target_label.as_deref(),
-                    false,
+                    &WorkflowNotificationArgs {
+                        run_id: &params.workflow_run_id,
+                        workflow_name: &workflow_name,
+                        target_label: target_label.as_deref(),
+                        succeeded: false,
+                        parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                    },
                 );
             }
         }
@@ -1637,10 +1644,13 @@ mod tests {
                 &conn,
                 &notifications,
                 &[],
-                "test-run-id",
-                "test-wf",
-                None,
-                false,
+                &WorkflowNotificationArgs {
+                    run_id: "test-run-id",
+                    workflow_name: "test-wf",
+                    target_label: None,
+                    succeeded: false,
+                    parent_workflow_run_id: None,
+                },
             );
         })
         .await
@@ -1684,10 +1694,13 @@ mod tests {
                 &conn,
                 &notifications1,
                 &[],
-                &key1,
-                "my-workflow",
-                Some("repo/wt"),
-                false,
+                &WorkflowNotificationArgs {
+                    run_id: &key1,
+                    workflow_name: "my-workflow",
+                    target_label: Some("repo/wt"),
+                    succeeded: false,
+                    parent_workflow_run_id: None,
+                },
             );
         })
         .await
@@ -1702,10 +1715,13 @@ mod tests {
                 &conn,
                 &notifications,
                 &[],
-                &key2,
-                "my-workflow",
-                Some("repo/wt"),
-                false,
+                &WorkflowNotificationArgs {
+                    run_id: &key2,
+                    workflow_name: "my-workflow",
+                    target_label: Some("repo/wt"),
+                    succeeded: false,
+                    parent_workflow_run_id: None,
+                },
             );
         })
         .await
@@ -1733,7 +1749,7 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, &[], "run-notify-1", "my-workflow", None, true);
+            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None });
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn
