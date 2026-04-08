@@ -114,23 +114,19 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
         params.push(dep_id);
     }
 
-    let results: Vec<(Option<String>, String)> = match query_collect(
-        conn,
-        &sql,
-        params.as_slice(),
-        |row| {
+    let results: Vec<(Option<String>, String)> =
+        match query_collect(conn, &sql, params.as_slice(), |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?, // branch (nullable if no active worktree)
-                row.get::<_, String>(1)?,        // source_id
+                row.get::<_, String>(1)?,         // source_id
             ))
-        },
-    ) {
-        Ok(results) => results,
-        Err(e) => {
-            tracing::warn!("resolve_parent_branch: batch query failed: {e}");
-            return None;
-        }
-    };
+        }) {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::warn!("resolve_parent_branch: batch query failed: {e}");
+                return None;
+            }
+        };
 
     // Return the first active worktree branch we find, respecting dependency order
     for dep_id in &dep_ids {
@@ -563,10 +559,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_id_enriched(&self, id: &str) -> Result<WorktreeWithStatus> {
         self.conn
             .query_row(
-                &format!(
-                    "{base} WHERE w.id = ?1",
-                    base = enriched_worktree_base(),
-                ),
+                &format!("{base} WHERE w.id = ?1", base = enriched_worktree_base(),),
                 params![id],
                 map_enriched_row,
             )

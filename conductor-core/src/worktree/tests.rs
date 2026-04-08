@@ -67,7 +67,11 @@ fn setup_second_clone(remote_path: &std::path::Path) -> (TempDir, std::path::Pat
     let tmp2 = TempDir::new().unwrap();
     let other = tmp2.path().join("other");
     git(
-        &["clone", &remote_path.to_string_lossy(), &other.to_string_lossy()],
+        &[
+            "clone",
+            &remote_path.to_string_lossy(),
+            &other.to_string_lossy(),
+        ],
         tmp2.path(),
     );
     git(&["config", "user.email", "test@test.com"], &other);
@@ -2181,9 +2185,16 @@ fn test_resolve_and_update_base_prefix_fallback() {
         false,
         false,
     );
-    assert!(result.is_ok(), "resolve_and_update_base should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "resolve_and_update_base should succeed: {:?}",
+        result.err()
+    );
     let (resolved_branch, _warnings) = result.unwrap();
-    assert_eq!(resolved_branch, "feat/user-auth", "should resolve to feat/ prefixed branch");
+    assert_eq!(
+        resolved_branch, "feat/user-auth",
+        "should resolve to feat/ prefixed branch"
+    );
 }
 
 #[test]
@@ -2199,7 +2210,10 @@ fn test_resolve_and_update_base_no_prefix_fallback_when_already_prefixed() {
         false,
         false,
     );
-    assert!(result.is_err(), "should fail when prefixed branch doesn't exist");
+    assert!(
+        result.is_err(),
+        "should fail when prefixed branch doesn't exist"
+    );
 }
 
 #[test]
@@ -2216,20 +2230,26 @@ fn test_ensure_base_up_to_date_creates_local_tracking_branch_from_remote_only() 
     git(&["push", "-u", "origin", "new-feature"], &other);
 
     // Verify the branch doesn't exist locally yet
-    assert!(!git_helpers::branch_exists(local.to_str().unwrap(), "new-feature"));
+    assert!(!git_helpers::branch_exists(
+        local.to_str().unwrap(),
+        "new-feature"
+    ));
 
     // Call ensure_base_up_to_date on the remote-only branch
     // This should create a local tracking branch
-    let result = git_helpers::ensure_base_up_to_date(
-        local.to_str().unwrap(),
-        "new-feature",
-        false,
-        false,
+    let result =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "new-feature", false, false);
+    assert!(
+        result.is_ok(),
+        "ensure_base_up_to_date should succeed: {:?}",
+        result.err()
     );
-    assert!(result.is_ok(), "ensure_base_up_to_date should succeed: {:?}", result.err());
 
     // Verify the local tracking branch was created
-    assert!(git_helpers::branch_exists(local.to_str().unwrap(), "new-feature"));
+    assert!(git_helpers::branch_exists(
+        local.to_str().unwrap(),
+        "new-feature"
+    ));
 
     // Verify the branch tracks the remote by checking git branch -vv output
     let track_output = std::process::Command::new("git")
@@ -2238,6 +2258,12 @@ fn test_ensure_base_up_to_date_creates_local_tracking_branch_from_remote_only() 
         .output()
         .unwrap();
     let track_info = String::from_utf8_lossy(&track_output.stdout);
-    assert!(track_info.contains("new-feature"), "branch should exist in branch list");
-    assert!(track_info.contains("origin/new-feature"), "branch should track origin/new-feature");
+    assert!(
+        track_info.contains("new-feature"),
+        "branch should exist in branch list"
+    );
+    assert!(
+        track_info.contains("origin/new-feature"),
+        "branch should track origin/new-feature"
+    );
 }

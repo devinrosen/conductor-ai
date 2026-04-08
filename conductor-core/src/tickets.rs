@@ -868,8 +868,16 @@ impl<'a> TicketSyncer<'a> {
     /// Called as part of the ticket sync flow, typically after
     /// [`TicketSyncer::close_missing_tickets`].
     /// Returns the number of worktrees updated.
-    pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str, worktree_mgr: Option<&crate::worktree::WorktreeManager>) -> Result<usize> {
-        self.mark_worktrees_for_closed_tickets_with_merge_check(repo_id, has_merged_pr, worktree_mgr)
+    pub fn mark_worktrees_for_closed_tickets(
+        &self,
+        repo_id: &str,
+        worktree_mgr: Option<&crate::worktree::WorktreeManager>,
+    ) -> Result<usize> {
+        self.mark_worktrees_for_closed_tickets_with_merge_check(
+            repo_id,
+            has_merged_pr,
+            worktree_mgr,
+        )
     }
 
     fn mark_worktrees_for_closed_tickets_with_merge_check(
@@ -1602,7 +1610,9 @@ mod tests {
 
         insert_worktree(&conn, "wt1", "r1", None, "active");
 
-        let count = syncer.mark_worktrees_for_closed_tickets("r1", None).unwrap();
+        let count = syncer
+            .mark_worktrees_for_closed_tickets("r1", None)
+            .unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
     }
@@ -1623,7 +1633,9 @@ mod tests {
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
 
         // Do NOT close the ticket — it stays open
-        let count = syncer.mark_worktrees_for_closed_tickets("r1", None).unwrap();
+        let count = syncer
+            .mark_worktrees_for_closed_tickets("r1", None)
+            .unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
     }
@@ -1786,7 +1798,9 @@ mod tests {
             .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("r1", None).unwrap();
+        let count = syncer
+            .mark_worktrees_for_closed_tickets("r1", None)
+            .unwrap();
         assert_eq!(count, 0);
     }
 

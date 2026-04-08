@@ -116,11 +116,17 @@ pub(super) fn resolve_and_update_base(
     }
 
     // Try exact name first (skip fetch since we already did it)
-    match ensure_base_up_to_date_with_fetch_control(repo_path, requested, force_dirty, pre_verified_clean, false) {
+    match ensure_base_up_to_date_with_fetch_control(
+        repo_path,
+        requested,
+        force_dirty,
+        pre_verified_clean,
+        false,
+    ) {
         Ok(mut warnings) => {
             warnings.extend(fetch_warnings);
             Ok((requested.to_string(), warnings))
-        },
+        }
         Err(_first_err) => {
             // If the name already has a known prefix, don't try alternatives
             if requested.starts_with("feat/") || requested.starts_with("fix/") {
@@ -130,9 +136,13 @@ pub(super) fn resolve_and_update_base(
             // Try feat/ and fix/ prefixes (skip fetch since we already did it)
             for prefix in &["feat/", "fix/"] {
                 let candidate = format!("{prefix}{requested}");
-                if let Ok(mut warnings) =
-                    ensure_base_up_to_date_with_fetch_control(repo_path, &candidate, force_dirty, pre_verified_clean, false)
-                {
+                if let Ok(mut warnings) = ensure_base_up_to_date_with_fetch_control(
+                    repo_path,
+                    &candidate,
+                    force_dirty,
+                    pre_verified_clean,
+                    false,
+                ) {
                     warnings.extend(fetch_warnings);
                     return Ok((candidate, warnings));
                 }
@@ -208,7 +218,13 @@ pub(super) fn ensure_base_up_to_date(
     force_dirty: bool,
     pre_verified_clean: bool,
 ) -> Result<Vec<String>> {
-    ensure_base_up_to_date_with_fetch_control(repo_path, base_branch, force_dirty, pre_verified_clean, true)
+    ensure_base_up_to_date_with_fetch_control(
+        repo_path,
+        base_branch,
+        force_dirty,
+        pre_verified_clean,
+        true,
+    )
 }
 
 fn ensure_base_up_to_date_with_fetch_control(
@@ -269,7 +285,8 @@ fn ensure_base_up_to_date_with_fetch_control(
     // 3b. If the branch exists on the remote but not locally, create a local tracking branch
     if has_remote && !has_local {
         // Validate branch name for security - prevent injection of git options
-        if base_branch.starts_with('-') || base_branch.contains('\0') || base_branch.contains('\n') {
+        if base_branch.starts_with('-') || base_branch.contains('\0') || base_branch.contains('\n')
+        {
             return Err(ConductorError::InvalidInput(format!(
                 "invalid branch name '{}': branch names cannot start with '-' or contain null/newline characters",
                 base_branch
@@ -557,7 +574,7 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
                             exit_code: output.status.code(),
                             stderr: stderr.to_string(),
                             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                        }
+                        },
                     ));
                 }
             }
@@ -565,8 +582,8 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
                 return Err(crate::error::ConductorError::Git(
                     crate::error::SubprocessFailure::from_message(
                         &format!("git remote add {} {}", fork_owner, fork_url),
-                        e.to_string()
-                    )
+                        e.to_string(),
+                    ),
                 ));
             }
             _ => {} // Success or already exists case
