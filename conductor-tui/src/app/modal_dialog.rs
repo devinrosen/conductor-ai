@@ -39,6 +39,9 @@ impl App {
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
                 let Some(bg_tx) = self.bg_tx.clone() else {
+                    self.state.modal = Modal::Error {
+                        message: "Cannot delete worktree: background sender not ready.".into(),
+                    };
                     return;
                 };
                 self.state.modal = Modal::Progress {
@@ -61,6 +64,9 @@ impl App {
             }
             ConfirmAction::UnregisterRepo { repo_slug } => {
                 let Some(bg_tx) = self.bg_tx.clone() else {
+                    self.state.modal = Modal::Error {
+                        message: "Cannot unregister repo: background sender not ready.".into(),
+                    };
                     return;
                 };
                 self.state.modal = Modal::Progress {

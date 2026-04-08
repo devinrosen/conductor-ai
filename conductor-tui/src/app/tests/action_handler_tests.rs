@@ -488,8 +488,8 @@ fn delete_worktree_no_bg_tx_no_crash() {
         repo_slug: "test".into(),
         wt_slug: "test-wt".into(),
     });
-    // No crash, modal should not change to Progress (because bg_tx is None → early return)
-    assert!(matches!(app.state.modal, Modal::None));
+    // No crash, modal should show error (bg_tx is None → user gets feedback)
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
 }
 
 #[test]
@@ -499,7 +499,7 @@ fn unregister_repo_no_bg_tx_no_crash() {
     app.execute_confirm_action(crate::state::ConfirmAction::UnregisterRepo {
         repo_slug: "test".into(),
     });
-    assert!(matches!(app.state.modal, Modal::None));
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
 }
 
 // ═══════════════════════════════════════════════════════════════════════
