@@ -36,7 +36,7 @@ hex = "0.4"
 serde_urlencoded = "0.7"
 
 [dev-dependencies]
-conductor-core = { path = "../conductor-core", features = ["test-helpers", "test-notifications"] }
+conductor-core = { path = "../conductor-core", features = ["test-helpers"] }
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }

@@ -55,7 +55,7 @@ pub fn handle_workflow(
     }
 
     match command {
-        WorkflowCommands::Active { slack } => {
+        WorkflowCommands::Active => {
             let wf_mgr = WorkflowManager::new(conn);
             let runs = wf_mgr.list_active_workflow_runs(&[])?;
 
@@ -72,12 +72,6 @@ pub fn handle_workflow(
                         run.status,
                     );
                 }
-            }
-
-            if slack {
-                let summary = format_active_runs_for_slack(&runs);
-                conductor_core::notify::send_slack_sync(&config.notifications, &summary)?;
-                println!("Posted to Slack.");
             }
         }
         WorkflowCommands::Runs { repo, worktree } => {
@@ -1016,25 +1010,3 @@ fn with_waiting_gate(
     }
 }
 
-/// Format active workflow runs as a Slack mrkdwn message for the `--slack` flag.
-fn format_active_runs_for_slack(runs: &[conductor_core::workflow::WorkflowRun]) -> String {
-    if runs.is_empty() {
-        return "No active workflow runs.".to_string();
-    }
-    let mut lines = vec![format!("*Active workflow runs ({}):*", runs.len())];
-    for run in runs {
-        let label = run.target_label.as_deref().unwrap_or("-");
-        let since = &run.started_at[..16.min(run.started_at.len())];
-        let status_emoji = match run.status {
-            conductor_core::workflow::WorkflowRunStatus::Running => ":arrows_counterclockwise:",
-            conductor_core::workflow::WorkflowRunStatus::Waiting => ":hourglass_flowing_sand:",
-            conductor_core::workflow::WorkflowRunStatus::Pending => ":clock3:",
-            _ => ":grey_question:",
-        };
-        lines.push(format!(
-            "{status_emoji} *{}* on `{label}` — {} (since {since})",
-            run.workflow_name, run.status,
-        ));
-    }
-    lines.join("\n")
-}

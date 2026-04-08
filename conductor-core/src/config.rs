@@ -117,8 +117,6 @@ pub struct NotificationConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SlackConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub webhook_url: Option<String>,
     /// Slack app signing secret for verifying slash command request signatures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing_secret: Option<String>,
@@ -513,6 +511,18 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
     // Parse raw TOML once for migration checks and github.app validation.
     let raw: toml::Value =
         toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
+
+    // Deprecation: warn if webhook_url is still present in config.toml.
+    if raw
+        .get("notifications")
+        .and_then(|n| n.get("slack"))
+        .and_then(|s| s.get("webhook_url"))
+        .is_some()
+    {
+        tracing::warn!(
+            "notifications.slack.webhook_url is deprecated and has no effect — migrate to [[notify.hooks]]"
+        );
+    }
 
     // Guard: if [github.app] is present in the raw TOML but deserialized to None,
     // serde silently swallowed a deserialization error. Re-attempt explicitly so
@@ -1173,25 +1183,6 @@ app_id = 123456
         assert!(config.notifications.workflows.on_gate_human);
         assert!(!config.notifications.workflows.on_gate_ci);
         assert!(config.notifications.workflows.on_gate_pr_review);
-        assert!(config.notifications.slack.webhook_url.is_none());
-    }
-
-    #[test]
-    fn test_notification_slack_config() {
-        let config: Config = toml::from_str(
-            r#"
-            [notifications]
-            enabled = true
-            [notifications.slack]
-            webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
-        "#,
-        )
-        .unwrap();
-        assert!(config.notifications.enabled);
-        assert_eq!(
-            config.notifications.slack.webhook_url.as_deref(),
-            Some("https://hooks.slack.com/services/T00/B00/xxx")
-        );
     }
 
     #[test]
