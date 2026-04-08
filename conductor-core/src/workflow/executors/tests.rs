@@ -144,6 +144,71 @@ fn test_execute_script_failure_captures_stdout() {
 }
 
 // -----------------------------------------------------------------------
+// execute_script — env var substitution preserves {{…}} in values
+// -----------------------------------------------------------------------
+
+/// Regression test for #1907: env var values that expand to JSON containing
+/// {{…}} text must not be stripped.  The script echoes PRIOR_OUTPUT back into
+/// the CONDUCTOR_OUTPUT context; the test asserts the {{…}} survived intact.
+#[test]
+fn test_execute_script_env_var_preserves_literal_braces() {
+    let dir = tempfile::tempdir().unwrap();
+    // Script: echo PRIOR_OUTPUT value into the conductor context field so we
+    // can assert it after execute_script returns.
+    let script_path = write_script(
+        &dir.path().join("env_check.sh"),
+        r#"#!/bin/sh
+echo "<<<CONDUCTOR_OUTPUT>>>"
+printf '{"markers":[],"context":"%s"}\n' "$PRIOR_OUTPUT"
+echo "<<<END_CONDUCTOR_OUTPUT>>>"
+"#,
+    );
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+
+    // Simulate prior_output holding text that itself contains {{…}} tokens.
+    // Use a value without JSON special characters so printf embeds it safely.
+    let literal_braces_value = "score:{{deterministic-score}}".to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
+    state
+        .inputs
+        .insert("prior_output".to_string(), literal_braces_value.clone());
+
+    let mut env = std::collections::HashMap::new();
+    env.insert("PRIOR_OUTPUT".to_string(), "{{prior_output}}".to_string());
+
+    let node = crate::workflow_dsl::ScriptNode {
+        name: "env_check".into(),
+        run: script_path,
+        env,
+        timeout: Some(10),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+    };
+
+    let result = execute_script(&mut state, &node, 0);
+    assert!(result.is_ok(), "execute_script should succeed: {result:?}");
+    // The context echoed back by the script should contain the {{…}} token
+    // exactly as it was in the original value — not stripped.
+    let ctx = state
+        .contexts
+        .last()
+        .map(|c| c.context.as_str())
+        .unwrap_or("");
+    assert!(
+        ctx.contains("{{deterministic-score}}"),
+        "{{{{deterministic-score}}}} should be preserved in env var value, got context: {ctx}"
+    );
+}
+
+// -----------------------------------------------------------------------
 // poll_script_child unit tests — timeout and cancellation
 // -----------------------------------------------------------------------
 
