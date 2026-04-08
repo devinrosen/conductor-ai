@@ -7,74 +7,6 @@ use crate::workflow::WorkflowRun;
 use crate::workflow::WorkflowRunStatus;
 use crate::workflow_dsl::GateType;
 
-/// Send a plain-text message to a Slack incoming webhook URL.
-///
-/// Fire-and-forget on a spawned thread — never blocks the caller, never
-/// panics, never propagates errors. Logs a warning on failure.
-fn send_slack_message(webhook_url: &str, text: &str) {
-    let url = webhook_url.to_string();
-    let body = serde_json::json!({ "text": text });
-    std::thread::spawn(move || {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(10))
-            .build();
-        if let Err(e) = agent.post(&url).send_json(&body) {
-            tracing::warn!("Slack webhook failed: {e}");
-        }
-    });
-}
-
-/// Escape Slack mrkdwn special characters in user-supplied content.
-///
-/// Slack treats `<…>` as link/mention markup, so we must escape all `<`
-/// characters — not just `<!`, `<@`, `<#` — to prevent hyperlink injection
-/// (e.g. `<http://evil.com|Click here>`) from LLM-sourced agent output.
-/// Also escapes `&` which Slack requires as `&amp;`.
-fn escape_slack_mrkdwn(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// If Slack is configured, dispatch `text` to the webhook.
-fn maybe_send_slack(config: &NotificationConfig, text: &str) {
-    if let Some(ref url) = config.slack.webhook_url {
-        if !url.is_empty() {
-            let escaped = escape_slack_mrkdwn(text);
-            send_slack_message(url, &escaped);
-        }
-    }
-}
-
-/// Send a message to the configured Slack webhook synchronously.
-///
-/// Returns `Ok(())` if sent, or an error if Slack is not configured or the
-/// request failed. Unlike `maybe_send_slack` this blocks until delivery
-/// completes, which is appropriate for CLI commands that exit immediately.
-pub fn send_slack_sync(config: &NotificationConfig, text: &str) -> crate::error::Result<()> {
-    let url = config
-        .slack
-        .webhook_url
-        .as_deref()
-        .filter(|u| !u.is_empty())
-        .ok_or_else(|| {
-            crate::error::ConductorError::Config(
-                "Slack webhook_url is not configured in ~/.conductor/config.toml".to_string(),
-            )
-        })?;
-    let escaped = escape_slack_mrkdwn(text);
-    let body = serde_json::json!({ "text": escaped });
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(10))
-        .build();
-    agent.post(url).send_json(&body).map_err(|e| {
-        crate::error::ConductorError::Notification(format!(
-            "Slack webhook POST to {url} failed: {e}"
-        ))
-    })?;
-    Ok(())
-}
-
 /// Persist an in-app notification record. Logs a warning on failure.
 fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
     let mgr = NotificationManager::new(conn);
@@ -91,7 +23,7 @@ fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification
 /// Returns `true` if a notification should fire given the config and run outcome.
 ///
 /// Pure function — no side effects — extracted so the three early-return guards
-/// can be unit-tested without touching `notify_rust`.
+/// can be unit-tested without side effects.
 pub fn should_notify(config: &NotificationConfig, succeeded: bool) -> bool {
     if !config.enabled {
         return false;
@@ -136,33 +68,23 @@ pub fn try_claim_notification(
     }
 }
 
-/// Parameters for the common 5-step notification dispatch pattern.
+/// Parameters for the common 3-step notification dispatch pattern.
 struct DispatchParams<'a> {
     dedup_entity_id: &'a str,
     dedup_event_type: &'a str,
     notification: &'a CreateNotification<'a>,
-    slack_text: &'a str,
     hooks: &'a [HookConfig],
     event: Option<&'a NotificationEvent>,
-    /// When `true`, steps 3 (desktop) and 4 (Slack) are executed.
-    /// Set to `false` when `[notifications] enabled = false` — hooks (step 5) still fire.
-    fire_desktop_and_slack: bool,
 }
 
-/// Dispatch a notification using the common 5-step pattern.
+/// Dispatch a notification using the common 3-step pattern.
 ///
 /// 1. Try to claim notification for deduplication
 /// 2. Persist in-app notification
-/// 3. Show desktop notification with error logging
-/// 4. Send Slack notification if configured
-/// 5. Fire user-configured notification hooks (shell/HTTP)
+/// 3. Fire user-configured notification hooks (shell/HTTP)
 ///
 /// Returns `true` if the notification was dispatched, `false` if deduplicated.
-fn dispatch_notification(
-    conn: &rusqlite::Connection,
-    config: &NotificationConfig,
-    params: &DispatchParams<'_>,
-) -> bool {
+fn dispatch_notification(conn: &rusqlite::Connection, params: &DispatchParams<'_>) -> bool {
     // Step 1: Try to claim notification for deduplication
     if !try_claim_notification(conn, params.dedup_entity_id, params.dedup_event_type) {
         return false;
@@ -171,25 +93,7 @@ fn dispatch_notification(
     // Step 2: Persist in-app notification
     persist_notification(conn, params.notification);
 
-    // Step 3: Show desktop notification with error logging (gated on fire_desktop_and_slack)
-    if params.fire_desktop_and_slack {
-        if let Err(e) =
-            show_desktop_notification(params.notification.title, params.notification.body)
-        {
-            tracing::warn!(
-                entity_id = params.notification.entity_id,
-                kind = params.notification.kind,
-                "desktop notification failed: {e}"
-            );
-        }
-    }
-
-    // Step 4: Send Slack notification if configured (gated on fire_desktop_and_slack)
-    if params.fire_desktop_and_slack {
-        maybe_send_slack(config, params.slack_text);
-    }
-
-    // Step 5: Fire user-configured notification hooks (fire-and-forget)
+    // Step 3: Fire user-configured notification hooks (fire-and-forget)
     if let Some(evt) = params.event {
         HookRunner::new(params.hooks).fire(evt);
     }
@@ -270,7 +174,7 @@ pub struct FeedbackNotificationParams<'a> {
 /// Filters are applied in order: master `enabled` flag, then per-event
 /// `on_success`/`on_failure` guards. A cross-process dedup check via
 /// `notification_log` prevents duplicate notifications when multiple TUI/web
-/// instances run concurrently. A `notify_rust` error is logged as a warning.
+/// instances run concurrently.
 /// Matching entries in `notify_hooks` are fired after the dedup claim succeeds.
 pub fn fire_workflow_notification(
     conn: &rusqlite::Connection,
@@ -278,9 +182,8 @@ pub fn fire_workflow_notification(
     notify_hooks: &[HookConfig],
     params: &WorkflowNotificationArgs<'_>,
 ) {
-    let fires_desktop_slack = should_notify(config, params.succeeded);
     let has_hooks = !notify_hooks.is_empty();
-    if !fires_desktop_slack && !has_hooks {
+    if !should_notify(config, params.succeeded) && !has_hooks {
         return;
     }
 
@@ -328,14 +231,6 @@ pub fn fire_workflow_notification(
         entity_type: Some("workflow_run"),
     };
 
-    let status_word = if succeeded { "completed" } else { "failed" };
-    let slack_text = match target_label {
-        Some(label) => {
-            format!("[conductor] workflow \"{workflow_name}\" {status_word} for {label}")
-        }
-        None => format!("[conductor] workflow \"{workflow_name}\" {status_word}"),
-    };
-
     let hook_event = if succeeded {
         NotificationEvent::WorkflowRunCompleted {
             run_id: run_id.to_string(),
@@ -367,20 +262,17 @@ pub fn fire_workflow_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: run_id,
             dedup_event_type: event_type,
             notification: &notification,
-            slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
-            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
 
-/// Fire a desktop notification for an agent feedback request.
+/// Fire a notification for an agent feedback request.
 ///
 /// Gated on `config.enabled`. Uses `(request_id, "feedback_requested")` as the
 /// dedup key so each feedback request fires at most one notification across all
@@ -392,9 +284,8 @@ pub fn fire_feedback_notification(
     notify_hooks: &[HookConfig],
     params: &FeedbackNotificationParams<'_>,
 ) {
-    let fires_desktop_slack = config.enabled;
     let has_hooks = !notify_hooks.is_empty();
-    if !fires_desktop_slack && !has_hooks {
+    if !config.enabled && !has_hooks {
         return;
     }
 
@@ -407,11 +298,6 @@ pub fn fire_feedback_notification(
         entity_id: Some(params.request_id),
         entity_type: Some("agent_run"),
     };
-
-    let slack_text = format!(
-        "[conductor] agent run waiting for feedback: {}",
-        params.prompt_preview
-    );
 
     let hook_event = NotificationEvent::FeedbackRequested {
         run_id: params.request_id.to_string(),
@@ -427,15 +313,12 @@ pub fn fire_feedback_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: params.request_id,
             dedup_event_type: "feedback_requested",
             notification: &notification,
-            slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
-            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -460,9 +343,8 @@ pub fn fire_agent_run_notification(
     let duration_ms = params.duration_ms;
     let ticket_url = params.ticket_url.clone();
 
-    let fires_desktop_slack = should_notify(config, succeeded);
     let has_hooks = !notify_hooks.is_empty();
-    if !fires_desktop_slack && !has_hooks {
+    if !should_notify(config, succeeded) && !has_hooks {
         return;
     }
 
@@ -506,12 +388,6 @@ pub fn fire_agent_run_notification(
         entity_type: Some("agent_run"),
     };
 
-    let status_word = if succeeded { "completed" } else { "failed" };
-    let slack_text = match worktree_slug {
-        Some(slug) => format!("[conductor] agent run {status_word} on {slug}"),
-        None => format!("[conductor] agent run {status_word}"),
-    };
-
     let label = worktree_slug.unwrap_or(run_id).to_string();
     let hook_event = if succeeded {
         NotificationEvent::AgentRunCompleted {
@@ -540,15 +416,12 @@ pub fn fire_agent_run_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: run_id,
             dedup_event_type: event_type,
             notification: &notification,
-            slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
-            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -556,7 +429,7 @@ pub fn fire_agent_run_notification(
 /// Build the notification title and body for a gate based on its type.
 ///
 /// Pure function — no side effects — extracted so the formatting logic is
-/// unit-testable without touching `notify_rust` or the dedup DB.
+/// unit-testable without touching the dedup DB.
 pub fn gate_notification_text(
     gate_type: Option<&GateType>,
     step_name: &str,
@@ -645,9 +518,8 @@ pub fn fire_gate_notification(
     notify_hooks: &[HookConfig],
     params: &GateNotificationParams<'_>,
 ) {
-    let fires_desktop_slack = should_notify_gate(config, params.gate_type);
     let has_hooks = !notify_hooks.is_empty();
-    if !fires_desktop_slack && !has_hooks {
+    if !should_notify_gate(config, params.gate_type) && !has_hooks {
         return;
     }
 
@@ -675,8 +547,6 @@ pub fn fire_gate_notification(
         entity_type: Some("workflow_step"),
     };
 
-    let slack_text = format!("[conductor] {title}: {body}");
-
     let wf_label = match params.target_label {
         Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
         None => params.workflow_name.to_string(),
@@ -695,15 +565,12 @@ pub fn fire_gate_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: params.step_id,
             dedup_event_type: "gate_waiting",
             notification: &notification,
-            slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
-            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -779,9 +646,8 @@ pub fn fire_grouped_gate_notification(
     notify_hooks: &[HookConfig],
     params: &GroupedGateNotificationParams<'_>,
 ) {
-    let fires_desktop_slack = config.enabled;
     let has_hooks = !notify_hooks.is_empty();
-    if !fires_desktop_slack && !has_hooks {
+    if !config.enabled && !has_hooks {
         return;
     }
 
@@ -801,8 +667,6 @@ pub fn fire_grouped_gate_notification(
         entity_type: Some("workflow_run"),
     };
 
-    let slack_text = format!("[conductor] {title}: {body}");
-
     let wf_label = match params.target_label {
         Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
         None => params.workflow_name.to_string(),
@@ -821,15 +685,12 @@ pub fn fire_grouped_gate_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: params.run_id,
             dedup_event_type: "gates_grouped",
             notification: &notification,
-            slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
-            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -978,21 +839,6 @@ pub fn detect_agent_terminal_transitions<'a>(
     seen.retain(|id, _| current_ids.contains(id.as_str()));
 
     transitions
-}
-
-fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
-    #[cfg(not(any(test, feature = "test-notifications")))]
-    {
-        notify_rust::Notification::new()
-            .summary(title)
-            .body(body)
-            .show()
-            .map(|_| ())
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(any(test, feature = "test-notifications"))]
-    let _ = (title, body);
-    Ok(())
 }
 
 #[cfg(test)]
@@ -2309,60 +2155,6 @@ mod tests {
         assert_eq!(count, 0);
     }
 
-    // --- Slack config deserialization ---
-
-    #[test]
-    fn slack_config_default_is_none() {
-        let cfg: NotificationConfig = toml::from_str("enabled = true").unwrap();
-        assert!(cfg.slack.webhook_url.is_none());
-    }
-
-    #[test]
-    fn slack_config_with_webhook_url() {
-        let cfg: NotificationConfig = toml::from_str(
-            r#"
-            enabled = true
-            [slack]
-            webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
-            "#,
-        )
-        .unwrap();
-        assert_eq!(
-            cfg.slack.webhook_url.as_deref(),
-            Some("https://hooks.slack.com/services/T00/B00/xxx")
-        );
-    }
-
-    #[test]
-    fn maybe_send_slack_does_nothing_when_unconfigured() {
-        // Just verify it doesn't panic — no Slack server to hit in tests.
-        let cfg = config(true, true, true);
-        maybe_send_slack(&cfg, "test message");
-    }
-
-    // --- escape_slack_mrkdwn ---
-
-    #[test]
-    fn escape_slack_mrkdwn_escapes_hyperlink_injection() {
-        let input = "<http://evil.com|Click here>";
-        let escaped = escape_slack_mrkdwn(input);
-        assert!(
-            !escaped.contains("<http"),
-            "hyperlinks must be escaped: {escaped}"
-        );
-        assert!(escaped.contains("&lt;http"));
-    }
-
-    #[test]
-    fn escape_slack_mrkdwn_escapes_ampersand() {
-        assert_eq!(escape_slack_mrkdwn("a & b"), "a &amp; b");
-    }
-
-    #[test]
-    fn escape_slack_mrkdwn_escapes_angle_brackets() {
-        assert_eq!(escape_slack_mrkdwn("<>"), "&lt;&gt;");
-    }
-
     // --- detect_workflow_terminal_transitions ---
 
     fn make_workflow_run(id: &str, name: &str, status: WorkflowRunStatus) -> WorkflowRun {
@@ -2868,52 +2660,6 @@ mod tests {
         assert!(title.contains("Quality Gate"), "title: {title}");
         assert!(body.contains("check-quality"), "body: {body}");
         assert!(body.contains("review-pr"), "body: {body}");
-    }
-
-    // --- send_slack_sync: missing webhook URL error path ---
-
-    #[test]
-    fn send_slack_sync_missing_url_returns_config_error() {
-        let cfg = NotificationConfig {
-            enabled: true,
-            workflows: WorkflowNotificationConfig {
-                on_success: true,
-                on_failure: true,
-                on_gate_human: true,
-                on_gate_ci: false,
-                on_gate_pr_review: true,
-            },
-            slack: SlackConfig::default(), // webhook_url = None
-            web_url: None,
-        };
-        let result = send_slack_sync(&cfg, "test message");
-        assert!(result.is_err(), "expected error when webhook_url is None");
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, crate::error::ConductorError::Config(_)),
-            "expected Config error, got: {err}"
-        );
-    }
-
-    #[test]
-    fn send_slack_sync_empty_url_returns_config_error() {
-        let cfg = NotificationConfig {
-            enabled: true,
-            workflows: WorkflowNotificationConfig {
-                on_success: true,
-                on_failure: true,
-                on_gate_human: true,
-                on_gate_ci: false,
-                on_gate_pr_review: true,
-            },
-            slack: SlackConfig {
-                webhook_url: Some("".to_string()),
-                signing_secret: None,
-            },
-            web_url: None,
-        };
-        let result = send_slack_sync(&cfg, "test message");
-        assert!(result.is_err(), "expected error when webhook_url is empty");
     }
 
     // --- hooks fire when [notifications] enabled = false ---

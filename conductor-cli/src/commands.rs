@@ -165,12 +165,8 @@ pub enum AgentCommands {
 
 #[derive(Subcommand)]
 pub enum WorkflowCommands {
-    /// List active workflow runs across all repos (optionally notify Slack)
-    Active {
-        /// Post the summary to the configured Slack webhook
-        #[arg(long)]
-        slack: bool,
-    },
+    /// List active workflow runs across all repos
+    Active,
     /// List workflow run history for a repository
     Runs {
         /// Repository slug
