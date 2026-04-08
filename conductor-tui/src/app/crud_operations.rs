@@ -891,13 +891,7 @@ mod tests {
     fn spawn_main_health_check_no_bg_tx_shows_error_modal() {
         let mut app = make_test_app(); // bg_tx is None by default
         app.state.data.repos = vec![make_test_repo("r1", "my-repo")];
-        app.spawn_main_health_check(
-            "my-repo".into(),
-            "my-wt".into(),
-            None,
-            None,
-            None,
-        );
+        app.spawn_main_health_check("my-repo".into(), "my-wt".into(), None, None, None);
         assert!(matches!(app.state.modal, Modal::Error { .. }));
     }
 
