@@ -541,7 +541,7 @@ impl App {
     ) {
         let Some(bg_tx) = self.bg_tx.clone() else {
             self.state.modal = Modal::Error {
-                message: "Cannot check main health: background sender not ready.".into(),
+                message: super::BG_TX_NOT_READY.into(),
             };
             return;
         };

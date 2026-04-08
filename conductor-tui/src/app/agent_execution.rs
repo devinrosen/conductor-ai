@@ -390,9 +390,12 @@ impl App {
         opts: WorktreeCreateOptions,
     ) {
         // Guard before setting the non-dismissable Progress modal: if bg_tx is
-        // None (only possible before init() completes), skip rather than
+        // None (only possible before init() completes), show an error rather than
         // permanently locking the UI with no recovery path.
         let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: super::BG_TX_NOT_READY.into(),
+            };
             return;
         };
         self.state.modal = Modal::Progress {
