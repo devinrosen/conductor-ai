@@ -75,7 +75,8 @@ impl<'a> WorkflowManager<'a> {
         structured_output: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let is_starting = status == WorkflowStepStatus::Running;
+        let is_starting = status == WorkflowStepStatus::Running
+            || status == WorkflowStepStatus::Waiting;
         let is_terminal = matches!(
             status,
             WorkflowStepStatus::Completed

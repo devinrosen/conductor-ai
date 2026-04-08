@@ -3255,8 +3255,6 @@ fn test_get_all_pending_gates_returns_waiting_gate() {
         "1h",
     )
     .unwrap();
-    // Transition through Running (sets started_at) then to Waiting.
-    set_step_status(&mgr, &step_id, WorkflowStepStatus::Running);
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
     let rows = mgr.get_all_pending_gates().unwrap();
@@ -3321,7 +3319,6 @@ fn test_get_all_pending_gates_cross_workflow() {
         .unwrap();
     mgr.set_step_gate_info(&step_a, GateType::HumanApproval, None, "1h")
         .unwrap();
-    set_step_status(&mgr, &step_a, WorkflowStepStatus::Running);
     set_step_status(&mgr, &step_a, WorkflowStepStatus::Waiting);
 
     let run_b = create_named_worktree_run(&conn, "w1", "wf-beta");
@@ -3330,7 +3327,6 @@ fn test_get_all_pending_gates_cross_workflow() {
         .unwrap();
     mgr.set_step_gate_info(&step_b, GateType::HumanApproval, None, "1h")
         .unwrap();
-    set_step_status(&mgr, &step_b, WorkflowStepStatus::Running);
     set_step_status(&mgr, &step_b, WorkflowStepStatus::Waiting);
 
     let rows = mgr.get_all_pending_gates().unwrap();
@@ -3338,6 +3334,39 @@ fn test_get_all_pending_gates_cross_workflow() {
     let wf_names: Vec<&str> = rows.iter().map(|r| r.workflow_name.as_str()).collect();
     assert!(wf_names.contains(&"wf-alpha"));
     assert!(wf_names.contains(&"wf-beta"));
+}
+
+#[test]
+fn test_get_all_pending_gates_null_started_at() {
+    // Simulate a legacy row where started_at is NULL (written before the fix).
+    // The COALESCE in the query must prevent a rusqlite mapping error.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_named_worktree_run(&conn, "w1", "legacy-wf");
+
+    let step_id = mgr
+        .insert_step(&run.id, "legacy-gate", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+        .unwrap();
+    // Force status to 'waiting' without going through update_step_status_full
+    // so that started_at stays NULL (simulating pre-fix rows).
+    conn.execute(
+        "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = ?1",
+        rusqlite::params![step_id],
+    )
+    .unwrap();
+
+    let rows = mgr.get_all_pending_gates().unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.step_id, step_id);
+    // With COALESCE(started_at, now), wait_ms_so_far should be ~0 for a NULL row.
+    assert!(
+        row.wait_ms_so_far >= 0,
+        "wait_ms_so_far={} must be non-negative for NULL started_at",
+        row.wait_ms_so_far
+    );
 }
 
 // ── get_workflow_regression_signals ──────────────────────────────────────────
