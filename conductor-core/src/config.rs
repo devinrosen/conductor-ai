@@ -199,6 +199,15 @@ pub struct HookConfig {
     /// `None` or `false` fires for all workflows (backwards compatible default).
     #[serde(default)]
     pub root_workflows_only: Option<bool>,
+    /// Only fire for events from this repo (exact match on repo_slug).
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Only fire for events from this branch (glob pattern, e.g. `"release/*"`).
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// For gate events: only fire for this step name (exact match).
+    #[serde(default)]
+    pub step: Option<String>,
 }
 
 /// Top-level `[notify]` section containing user-configured notification hooks.

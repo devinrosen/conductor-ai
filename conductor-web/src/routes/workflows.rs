@@ -401,6 +401,11 @@ pub async fn run_workflow(
                             target_label: Some(&wt_target_label),
                             succeeded,
                             parent_workflow_run_id: None, // workflows launched from web are always root runs
+                            repo_slug: "",
+                            branch: "",
+                            duration_ms: None,
+                            ticket_url: None,
+                            error: None,
                         },
                     );
                 } else if let Err(e) = &notification_conn {
@@ -432,6 +437,11 @@ pub async fn run_workflow(
                             target_label: Some(&wt_target_label),
                             succeeded: false,
                             parent_workflow_run_id: None, // workflows launched from web are always root runs
+                            repo_slug: "",
+                            branch: "",
+                            duration_ms: None,
+                            ticket_url: None,
+                            error: None,
                         },
                     );
                 } else if let Err(e) = &notification_conn {
@@ -678,6 +688,11 @@ pub async fn post_workflow_run(
                         target_label: Some(&target_label),
                         succeeded,
                         parent_workflow_run_id: None, // workflows launched from web are always root runs
+                        repo_slug: "",
+                        branch: "",
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
                     },
                 );
 
@@ -704,6 +719,11 @@ pub async fn post_workflow_run(
                         target_label: Some(&target_label),
                         succeeded: false,
                         parent_workflow_run_id: None, // workflows launched from web are always root runs
+                        repo_slug: "",
+                        branch: "",
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
                     },
                 );
             }
@@ -1196,6 +1216,11 @@ pub async fn resume_workflow_endpoint(
                         target_label: target_label.as_deref(),
                         succeeded,
                         parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                        repo_slug: "",
+                        branch: "",
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
                     },
                 );
 
@@ -1219,6 +1244,11 @@ pub async fn resume_workflow_endpoint(
                         target_label: target_label.as_deref(),
                         succeeded: false,
                         parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                        repo_slug: "",
+                        branch: "",
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
                     },
                 );
             }
@@ -1650,6 +1680,11 @@ mod tests {
                     target_label: None,
                     succeeded: false,
                     parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
                 },
             );
         })
@@ -1700,6 +1735,11 @@ mod tests {
                     target_label: Some("repo/wt"),
                     succeeded: false,
                     parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
                 },
             );
         })
@@ -1721,6 +1761,11 @@ mod tests {
                     target_label: Some("repo/wt"),
                     succeeded: false,
                     parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
                 },
             );
         })
@@ -1749,7 +1794,7 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None });
+            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None });
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn

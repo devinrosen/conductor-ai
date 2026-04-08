@@ -38,6 +38,14 @@ pub enum NotificationEvent {
         workflow_name: String,
         /// ID of the parent workflow run when this is a sub-workflow; `None` for root runs.
         parent_workflow_run_id: Option<String>,
+        /// Repository slug (e.g. `"conductor-ai"`).
+        repo_slug: String,
+        /// Branch name (e.g. `"main"`).
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
     },
     /// A workflow run finished with a failure.
     WorkflowRunFailed {
@@ -49,6 +57,16 @@ pub enum NotificationEvent {
         workflow_name: String,
         /// ID of the parent workflow run when this is a sub-workflow; `None` for root runs.
         parent_workflow_run_id: Option<String>,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
+        /// Optional error message from the failed run.
+        error: Option<String>,
     },
     /// A workflow run's cost exceeded the configured multiple over baseline.
     /// Not yet wired — defined for schema completeness.
@@ -63,6 +81,16 @@ pub enum NotificationEvent {
         workflow_name: String,
         /// ID of the parent workflow run when this is a sub-workflow; `None` for root runs.
         parent_workflow_run_id: Option<String>,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
+        /// Cost in USD for this run.
+        cost_usd: Option<f64>,
     },
     /// A workflow run's duration exceeded the configured multiple over baseline.
     /// Not yet wired — defined for schema completeness.
@@ -76,6 +104,14 @@ pub enum NotificationEvent {
         workflow_name: String,
         /// ID of the parent workflow run when this is a sub-workflow; `None` for root runs.
         parent_workflow_run_id: Option<String>,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
     },
     /// A standalone agent run finished successfully.
     AgentRunCompleted {
@@ -83,6 +119,14 @@ pub enum NotificationEvent {
         label: String,
         timestamp: String,
         url: Option<String>,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
     },
     /// A standalone agent run finished with a failure.
     AgentRunFailed {
@@ -92,6 +136,14 @@ pub enum NotificationEvent {
         url: Option<String>,
         /// Optional error message from the agent run.
         error: Option<String>,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
     },
     /// A workflow gate is waiting for external action.
     GateWaiting {
@@ -100,6 +152,14 @@ pub enum NotificationEvent {
         timestamp: String,
         url: Option<String>,
         step_name: String,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
     },
     /// A workflow gate has been waiting longer than the configured threshold.
     /// Not yet wired — follow-on PR.
@@ -110,6 +170,14 @@ pub enum NotificationEvent {
         url: Option<String>,
         step_name: String,
         pending_ms: u64,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
     },
     /// An agent run is waiting for human feedback input.
     FeedbackRequested {
@@ -118,6 +186,14 @@ pub enum NotificationEvent {
         timestamp: String,
         url: Option<String>,
         prompt_preview: String,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
     },
 }
 
@@ -140,6 +216,10 @@ impl NotificationEvent {
                 url,
                 workflow_name: "test-workflow".to_string(),
                 parent_workflow_run_id: None,
+                repo_slug: "test-repo".to_string(),
+                branch: "main".to_string(),
+                duration_ms: Some(1000),
+                ticket_url: None,
             },
             "workflow_run.failed" => Self::WorkflowRunFailed {
                 run_id,
@@ -148,12 +228,21 @@ impl NotificationEvent {
                 url,
                 workflow_name: "test-workflow".to_string(),
                 parent_workflow_run_id: None,
+                repo_slug: "test-repo".to_string(),
+                branch: "main".to_string(),
+                duration_ms: Some(1000),
+                ticket_url: None,
+                error: None,
             },
             "agent_run.completed" => Self::AgentRunCompleted {
                 run_id,
                 label: "Test Agent Run".to_string(),
                 timestamp: now,
                 url,
+                repo_slug: "test-repo".to_string(),
+                branch: "main".to_string(),
+                duration_ms: Some(1000),
+                ticket_url: None,
             },
             "agent_run.failed" => Self::AgentRunFailed {
                 run_id,
@@ -161,6 +250,10 @@ impl NotificationEvent {
                 timestamp: now,
                 url,
                 error: Some("Test error".to_string()),
+                repo_slug: "test-repo".to_string(),
+                branch: "main".to_string(),
+                duration_ms: Some(1000),
+                ticket_url: None,
             },
             "gate.waiting" => Self::GateWaiting {
                 run_id,
@@ -168,6 +261,10 @@ impl NotificationEvent {
                 timestamp: now,
                 url,
                 step_name: "test-gate".to_string(),
+                repo_slug: "test-repo".to_string(),
+                branch: "main".to_string(),
+                duration_ms: Some(1000),
+                ticket_url: None,
             },
             "feedback.requested" => Self::FeedbackRequested {
                 run_id,
@@ -175,6 +272,10 @@ impl NotificationEvent {
                 timestamp: now,
                 url,
                 prompt_preview: "Is this correct?".to_string(),
+                repo_slug: "test-repo".to_string(),
+                branch: "main".to_string(),
+                duration_ms: Some(1000),
+                ticket_url: None,
             },
             other => {
                 return Err(ConductorError::InvalidInput(format!(
@@ -239,6 +340,18 @@ impl NotificationEvent {
             "CONDUCTOR_URL".into(),
             self.url().map(|u| u.as_str()).unwrap_or("").into(),
         );
+        map.insert("CONDUCTOR_REPO_SLUG".into(), self.repo_slug().into());
+        map.insert("CONDUCTOR_BRANCH".into(), self.branch().into());
+        map.insert(
+            "CONDUCTOR_DURATION_MS".into(),
+            self.duration_ms_value()
+                .map(|ms| ms.to_string())
+                .unwrap_or_default(),
+        );
+        map.insert(
+            "CONDUCTOR_TICKET_URL".into(),
+            self.ticket_url_value().unwrap_or("").into(),
+        );
 
         // Pass 1: workflow hierarchy fields shared by all four workflow-run variants
         match self {
@@ -273,9 +386,22 @@ impl NotificationEvent {
 
         // Pass 2: spike-specific and remaining event-specific fields
         match self {
-            Self::WorkflowRunCostSpike { multiple, .. }
-            | Self::WorkflowRunDurationSpike { multiple, .. } => {
+            Self::WorkflowRunCostSpike {
+                multiple, cost_usd, ..
+            } => {
                 map.insert("CONDUCTOR_MULTIPLE".into(), multiple.to_string());
+                if let Some(cost) = cost_usd {
+                    map.insert("CONDUCTOR_COST_USD".into(), cost.to_string());
+                }
+            }
+            Self::WorkflowRunDurationSpike { multiple, .. } => {
+                map.insert("CONDUCTOR_MULTIPLE".into(), multiple.to_string());
+            }
+            Self::WorkflowRunFailed { error, .. } => {
+                map.insert(
+                    "CONDUCTOR_ERROR".into(),
+                    error.as_deref().unwrap_or("").into(),
+                );
             }
             Self::AgentRunFailed { error, .. } => {
                 map.insert(
@@ -313,10 +439,20 @@ impl NotificationEvent {
             "run_id": self.run_id(),
             "label": self.label(),
             "timestamp": self.timestamp(),
+            "repo_slug": self.repo_slug(),
+            "branch": self.branch(),
         });
 
         if let Some(u) = self.url() {
             obj["url"] = Value::String(u.clone());
+        }
+
+        if let Some(ms) = self.duration_ms_value() {
+            obj["duration_ms"] = json!(ms);
+        }
+
+        if let Some(ticket_url) = self.ticket_url_value() {
+            obj["ticket_url"] = Value::String(ticket_url.to_string());
         }
 
         // Pass 1: workflow hierarchy fields shared by all four workflow-run variants
@@ -351,9 +487,19 @@ impl NotificationEvent {
 
         // Pass 2: spike-specific and remaining event-specific fields
         match self {
-            Self::WorkflowRunCostSpike { multiple, .. }
-            | Self::WorkflowRunDurationSpike { multiple, .. } => {
+            Self::WorkflowRunCostSpike {
+                multiple, cost_usd, ..
+            } => {
                 obj["multiple"] = json!(multiple);
+                if let Some(cost) = cost_usd {
+                    obj["cost_usd"] = json!(cost);
+                }
+            }
+            Self::WorkflowRunDurationSpike { multiple, .. } => {
+                obj["multiple"] = json!(multiple);
+            }
+            Self::WorkflowRunFailed { error: Some(e), .. } => {
+                obj["error"] = Value::String(e.clone());
             }
             Self::AgentRunFailed { error: Some(e), .. } => {
                 obj["error"] = Value::String(e.clone());
@@ -435,6 +581,62 @@ impl NotificationEvent {
             | Self::FeedbackRequested { url, .. } => url.as_ref(),
         }
     }
+
+    pub(crate) fn repo_slug(&self) -> &str {
+        match self {
+            Self::WorkflowRunCompleted { repo_slug, .. }
+            | Self::WorkflowRunFailed { repo_slug, .. }
+            | Self::WorkflowRunCostSpike { repo_slug, .. }
+            | Self::WorkflowRunDurationSpike { repo_slug, .. }
+            | Self::AgentRunCompleted { repo_slug, .. }
+            | Self::AgentRunFailed { repo_slug, .. }
+            | Self::GateWaiting { repo_slug, .. }
+            | Self::GatePendingTooLong { repo_slug, .. }
+            | Self::FeedbackRequested { repo_slug, .. } => repo_slug,
+        }
+    }
+
+    pub(crate) fn branch(&self) -> &str {
+        match self {
+            Self::WorkflowRunCompleted { branch, .. }
+            | Self::WorkflowRunFailed { branch, .. }
+            | Self::WorkflowRunCostSpike { branch, .. }
+            | Self::WorkflowRunDurationSpike { branch, .. }
+            | Self::AgentRunCompleted { branch, .. }
+            | Self::AgentRunFailed { branch, .. }
+            | Self::GateWaiting { branch, .. }
+            | Self::GatePendingTooLong { branch, .. }
+            | Self::FeedbackRequested { branch, .. } => branch,
+        }
+    }
+
+    fn duration_ms_value(&self) -> Option<u64> {
+        match self {
+            Self::WorkflowRunCompleted { duration_ms, .. }
+            | Self::WorkflowRunFailed { duration_ms, .. }
+            | Self::WorkflowRunCostSpike { duration_ms, .. }
+            | Self::WorkflowRunDurationSpike { duration_ms, .. }
+            | Self::AgentRunCompleted { duration_ms, .. }
+            | Self::AgentRunFailed { duration_ms, .. }
+            | Self::GateWaiting { duration_ms, .. }
+            | Self::GatePendingTooLong { duration_ms, .. }
+            | Self::FeedbackRequested { duration_ms, .. } => *duration_ms,
+        }
+    }
+
+    fn ticket_url_value(&self) -> Option<&str> {
+        match self {
+            Self::WorkflowRunCompleted { ticket_url, .. }
+            | Self::WorkflowRunFailed { ticket_url, .. }
+            | Self::WorkflowRunCostSpike { ticket_url, .. }
+            | Self::WorkflowRunDurationSpike { ticket_url, .. }
+            | Self::AgentRunCompleted { ticket_url, .. }
+            | Self::AgentRunFailed { ticket_url, .. }
+            | Self::GateWaiting { ticket_url, .. }
+            | Self::GatePendingTooLong { ticket_url, .. }
+            | Self::FeedbackRequested { ticket_url, .. } => ticket_url.as_deref(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -451,6 +653,10 @@ mod tests {
                 url: None,
                 workflow_name: "wf".into(),
                 parent_workflow_run_id: None,
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
             }
             .event_name(),
             "workflow_run.completed"
@@ -463,6 +669,11 @@ mod tests {
                 url: None,
                 workflow_name: "wf".into(),
                 parent_workflow_run_id: None,
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
             }
             .event_name(),
             "workflow_run.failed"
@@ -473,6 +684,10 @@ mod tests {
                 label: "l".into(),
                 timestamp: "t".into(),
                 url: None,
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
             }
             .event_name(),
             "agent_run.completed"
@@ -484,6 +699,10 @@ mod tests {
                 timestamp: "t".into(),
                 url: None,
                 error: None,
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
             }
             .event_name(),
             "agent_run.failed"
@@ -495,6 +714,10 @@ mod tests {
                 timestamp: "t".into(),
                 url: None,
                 step_name: "s".into(),
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
             }
             .event_name(),
             "gate.waiting"
@@ -506,6 +729,10 @@ mod tests {
                 timestamp: "t".into(),
                 url: None,
                 prompt_preview: "p".into(),
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
             }
             .event_name(),
             "feedback.requested"
@@ -521,6 +748,10 @@ mod tests {
             url: Some("https://example.com".into()),
             workflow_name: "my-wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "my-repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_EVENT"], "workflow_run.completed");
@@ -539,6 +770,11 @@ mod tests {
             url: None,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            error: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_URL"], "");
@@ -552,6 +788,10 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             error: Some("timeout".into()),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_ERROR"], "timeout");
@@ -565,6 +805,10 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             error: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_ERROR"], "");
@@ -579,6 +823,10 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             step_name: "human-review".into(),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_STEP_NAME"], "human-review");
@@ -592,9 +840,73 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             prompt_preview: "Is this right?".into(),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_PROMPT_PREVIEW"], "Is this right?");
+    }
+
+    #[test]
+    fn to_env_vars_repo_slug_and_branch() {
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "my-repo".into(),
+            branch: "feature/foo".into(),
+            duration_ms: Some(5000),
+            ticket_url: Some("https://jira.example.com/ticket/1".into()),
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_REPO_SLUG"], "my-repo");
+        assert_eq!(vars["CONDUCTOR_BRANCH"], "feature/foo");
+        assert_eq!(vars["CONDUCTOR_DURATION_MS"], "5000");
+        assert_eq!(
+            vars["CONDUCTOR_TICKET_URL"],
+            "https://jira.example.com/ticket/1"
+        );
+    }
+
+    #[test]
+    fn to_env_vars_duration_ms_none_is_empty() {
+        let event = NotificationEvent::AgentRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_DURATION_MS"], "");
+        assert_eq!(vars["CONDUCTOR_TICKET_URL"], "");
+    }
+
+    #[test]
+    fn to_env_vars_workflow_run_failed_includes_error() {
+        let event = NotificationEvent::WorkflowRunFailed {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            error: Some("step failed: build error".into()),
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_ERROR"], "step failed: build error");
     }
 
     #[test]
@@ -606,12 +918,18 @@ mod tests {
             url: Some("https://localhost:3000".into()),
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "my-repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "workflow_run.completed");
         assert_eq!(v["run_id"], "run-999");
         assert_eq!(v["label"], "wf on branch");
         assert_eq!(v["url"], "https://localhost:3000");
+        assert_eq!(v["repo_slug"], "my-repo");
+        assert_eq!(v["branch"], "main");
     }
 
     #[test]
@@ -623,6 +941,11 @@ mod tests {
             url: None,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            error: None,
         };
         let v = event.to_json();
         assert!(v.get("url").is_none());
@@ -636,6 +959,10 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             step_name: "approve".into(),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["step_name"], "approve");
@@ -652,6 +979,11 @@ mod tests {
                 multiple: 3.0,
                 workflow_name: "wf".into(),
                 parent_workflow_run_id: None,
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
+                cost_usd: None,
             }
             .event_name(),
             "workflow_run.cost_spike"
@@ -665,6 +997,10 @@ mod tests {
                 multiple: 2.5,
                 workflow_name: "wf".into(),
                 parent_workflow_run_id: None,
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
             }
             .event_name(),
             "workflow_run.duration_spike"
@@ -677,6 +1013,10 @@ mod tests {
                 url: None,
                 step_name: "s".into(),
                 pending_ms: 60_000,
+                repo_slug: "repo".into(),
+                branch: "main".into(),
+                duration_ms: None,
+                ticket_url: None,
             }
             .event_name(),
             "gate.pending_too_long"
@@ -693,6 +1033,11 @@ mod tests {
             multiple: 4.2,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            cost_usd: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_EVENT"], "workflow_run.cost_spike");
@@ -709,6 +1054,10 @@ mod tests {
             multiple: 1.5,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_EVENT"], "workflow_run.duration_spike");
@@ -724,6 +1073,10 @@ mod tests {
             url: None,
             step_name: "review".into(),
             pending_ms: 90_000,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_EVENT"], "gate.pending_too_long");
@@ -741,6 +1094,11 @@ mod tests {
             multiple: 3.0,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            cost_usd: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "workflow_run.cost_spike");
@@ -757,6 +1115,10 @@ mod tests {
             multiple: 2.5,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "workflow_run.duration_spike");
@@ -772,6 +1134,10 @@ mod tests {
             url: None,
             step_name: "review".into(),
             pending_ms: 90_000,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "gate.pending_too_long");
@@ -787,6 +1153,10 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             prompt_preview: "Is this right?".into(),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "feedback.requested");
@@ -802,6 +1172,10 @@ mod tests {
             timestamp: "t".into(),
             url: Some("https://example.com".into()),
             prompt_preview: "confirm?".into(),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["url"], "https://example.com");
@@ -816,6 +1190,10 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             error: Some("timeout".into()),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "agent_run.failed");
@@ -830,6 +1208,10 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             error: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "agent_run.failed");
@@ -845,6 +1227,10 @@ mod tests {
             url: None,
             workflow_name: "deploy-staging".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_WORKFLOW_NAME"], "deploy-staging");
@@ -860,6 +1246,11 @@ mod tests {
             url: None,
             workflow_name: "child-wf".into(),
             parent_workflow_run_id: Some("parent-run-id".into()),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            error: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_WORKFLOW_NAME"], "child-wf");
@@ -875,6 +1266,10 @@ mod tests {
             url: None,
             workflow_name: "my-wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         let v = event.to_json();
         assert_eq!(v["workflow_name"], "my-wf");
@@ -890,6 +1285,11 @@ mod tests {
             url: None,
             workflow_name: "child-wf".into(),
             parent_workflow_run_id: Some("parent-run-id".into()),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            error: None,
         };
         let v = event.to_json();
         assert_eq!(v["workflow_name"], "child-wf");
