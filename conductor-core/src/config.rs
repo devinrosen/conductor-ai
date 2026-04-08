@@ -204,7 +204,7 @@ pub struct HookConfig {
 /// Top-level `[notify]` section containing user-configured notification hooks.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NotifyConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HookConfig>,
 }
 
@@ -1023,6 +1023,42 @@ installation_id = 789012
         assert!(
             raw.get("github").and_then(|g| g.get("app")).is_some(),
             "[github.app] should survive save when app is None in memory"
+        );
+    }
+
+    #[test]
+    fn test_save_config_preserves_notify_hooks_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Write a config with a [[notify.hooks]] entry
+        std::fs::write(
+            &path,
+            r#"
+[[notify.hooks]]
+on = "workflow_run.*"
+url = "https://example.com/hook"
+"#,
+        )
+        .unwrap();
+
+        // Load and verify hook is present
+        let config = load_config_from(&path).unwrap();
+        assert_eq!(config.notify.hooks.len(), 1);
+
+        // Simulate the bug: save with an in-memory config whose hooks vec is empty (default)
+        let empty_hooks_config = Config::default();
+        save_config_to(&empty_hooks_config, &path).unwrap();
+
+        // Re-read raw TOML and verify [[notify.hooks]] is still there
+        let raw_contents = std::fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&raw_contents).unwrap();
+        assert!(
+            raw.get("notify")
+                .and_then(|n| n.get("hooks"))
+                .and_then(|h| h.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false),
+            "[[notify.hooks]] should survive save when hooks vec is empty in memory"
         );
     }
 
