@@ -975,7 +975,18 @@ mod tests {
     fn fire_workflow_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_workflow_notification(&conn, &cfg, &[], &WorkflowNotificationArgs { run_id: "run-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None });
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-1",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-1'",
@@ -993,7 +1004,18 @@ mod tests {
     fn fire_workflow_notification_disabled_does_not_claim_on_failure() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_workflow_notification(&conn, &cfg, &[], &WorkflowNotificationArgs { run_id: "run-6", workflow_name: "my-workflow", target_label: None, succeeded: false, parent_workflow_run_id: None });
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-6",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: false,
+                parent_workflow_run_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-6'",
@@ -1011,7 +1033,18 @@ mod tests {
     fn fire_workflow_notification_on_success_false_does_not_claim_success() {
         let conn = in_memory_db();
         let cfg = config(true, false, true);
-        fire_workflow_notification(&conn, &cfg, &[], &WorkflowNotificationArgs { run_id: "run-2", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None });
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-2",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-2'",
@@ -1029,7 +1062,18 @@ mod tests {
     fn fire_workflow_notification_on_failure_false_does_not_claim_failure() {
         let conn = in_memory_db();
         let cfg = config(true, true, false); // enabled, on_success=true, on_failure=false
-        fire_workflow_notification(&conn, &cfg, &[], &WorkflowNotificationArgs { run_id: "run-5", workflow_name: "my-workflow", target_label: None, succeeded: false, parent_workflow_run_id: None });
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-5",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: false,
+                parent_workflow_run_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-5'",
@@ -1048,8 +1092,30 @@ mod tests {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
         // Fire twice — second call must be a no-op (claim already taken).
-        fire_workflow_notification(&conn, &cfg, &[], &WorkflowNotificationArgs { run_id: "run-3", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None });
-        fire_workflow_notification(&conn, &cfg, &[], &WorkflowNotificationArgs { run_id: "run-3", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None });
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-3",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+            },
+        );
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-3",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-3' AND event_type = 'completed'",
@@ -1074,8 +1140,30 @@ mod tests {
     fn fire_workflow_notification_enabled_claims_once_for_failure() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_workflow_notification(&conn, &cfg, &[], &WorkflowNotificationArgs { run_id: "run-4", workflow_name: "my-workflow", target_label: Some("main"), succeeded: false, parent_workflow_run_id: None });
-        fire_workflow_notification(&conn, &cfg, &[], &WorkflowNotificationArgs { run_id: "run-4", workflow_name: "my-workflow", target_label: Some("main"), succeeded: false, parent_workflow_run_id: None });
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-4",
+                workflow_name: "my-workflow",
+                target_label: Some("main"),
+                succeeded: false,
+                parent_workflow_run_id: None,
+            },
+        );
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-4",
+                workflow_name: "my-workflow",
+                target_label: Some("main"),
+                succeeded: false,
+                parent_workflow_run_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-4' AND event_type = 'failed'",
