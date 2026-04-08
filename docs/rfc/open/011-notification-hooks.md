@@ -423,7 +423,7 @@ A migration note in the changelog with copy-paste hook snippets covers the Slack
 
 3. **Sensitive data in payloads:** `gate_prompt` and `feedback.requested.prompt` may contain LLM output with sensitive content. Should hooks be opt-in for those fields, or is it the user's responsibility? The current Slack sender already uses `escape_slack_mrkdwn()` to sanitize — with hooks, that responsibility shifts to the user's script.
 
-4. **Test-fire from Settings page:** The API endpoint for this (`POST /api/hooks/test`) needs a synthetic event shape. Should it use a fixed example payload or reflect the most recent real event of that type?
+4. **Test-fire from Settings page:** The API endpoint for this (`POST /api/config/hooks/test`) needs a synthetic event shape. Should it use a fixed example payload or reflect the most recent real event of that type?
 
 5. **Hook script discoverability:** Should `conductor setup` emit a starter `config.toml` snippet with commented-out hook examples? This would address the "buried config" problem directly for new users.
 

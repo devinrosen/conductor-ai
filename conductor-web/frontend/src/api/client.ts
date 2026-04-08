@@ -363,7 +363,7 @@ export const api = {
   // Notification Hooks
   listHooks: () => request<HookSummary[]>("/config/hooks"),
   testHook: (hookIndex: number) =>
-    request<void>("/hooks/test", {
+    request<void>("/config/hooks/test", {
       method: "POST",
       body: JSON.stringify({ hook_index: hookIndex }),
     }),
