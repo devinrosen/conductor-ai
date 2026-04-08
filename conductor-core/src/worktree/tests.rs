@@ -61,6 +61,20 @@ fn setup_repo_with_remote() -> (TempDir, std::path::PathBuf, std::path::PathBuf)
     (tmp, remote_path, local_path)
 }
 
+/// Create a second clone of the remote for simulating remote changes.
+/// Returns (tmp_dir, clone_path). TempDir must be kept alive.
+fn setup_second_clone(remote_path: &std::path::Path) -> (TempDir, std::path::PathBuf) {
+    let tmp2 = TempDir::new().unwrap();
+    let other = tmp2.path().join("other");
+    git(
+        &["clone", &remote_path.to_string_lossy(), &other.to_string_lossy()],
+        tmp2.path(),
+    );
+    git(&["config", "user.email", "test@test.com"], &other);
+    git(&["config", "user.name", "Test"], &other);
+    (tmp2, other)
+}
+
 #[test]
 fn test_branch_exists() {
     let (_tmp, _, local) = setup_repo_with_remote();
@@ -108,14 +122,7 @@ fn test_ensure_base_up_to_date_clean_fast_forward() {
     let (_tmp, remote, local) = setup_repo_with_remote();
 
     // Simulate a new commit on remote by cloning elsewhere and pushing
-    let tmp2 = TempDir::new().unwrap();
-    let other = tmp2.path().join("other");
-    git(
-        &["clone", &remote.to_string_lossy(), &other.to_string_lossy()],
-        tmp2.path(),
-    );
-    git(&["config", "user.email", "test@test.com"], &other);
-    git(&["config", "user.name", "Test"], &other);
+    let (_tmp2, other) = setup_second_clone(&remote);
     let file = other.join("new_file.txt");
     fs::write(&file, "new content").unwrap();
     git(&["add", "new_file.txt"], &other);
@@ -152,14 +159,7 @@ fn test_ensure_base_up_to_date_diverged_branch() {
     let (_tmp, remote, local) = setup_repo_with_remote();
 
     // Push a commit from another clone
-    let tmp2 = TempDir::new().unwrap();
-    let other = tmp2.path().join("other");
-    git(
-        &["clone", &remote.to_string_lossy(), &other.to_string_lossy()],
-        tmp2.path(),
-    );
-    git(&["config", "user.email", "test@test.com"], &other);
-    git(&["config", "user.name", "Test"], &other);
+    let (_tmp2, other) = setup_second_clone(&remote);
     fs::write(other.join("remote.txt"), "from remote").unwrap();
     git(&["add", "remote.txt"], &other);
     git(&["commit", "-m", "remote diverge"], &other);
@@ -226,14 +226,7 @@ fn test_check_main_health_commits_behind_positive() {
     let (_tmp, remote, local) = setup_repo_with_remote();
 
     // Clone the remote to a second directory, commit a new file, and push
-    let tmp2 = TempDir::new().unwrap();
-    let other = tmp2.path().join("other");
-    git(
-        &["clone", &remote.to_string_lossy(), &other.to_string_lossy()],
-        tmp2.path(),
-    );
-    git(&["config", "user.email", "test@test.com"], &other);
-    git(&["config", "user.name", "Test"], &other);
+    let (_tmp2, other) = setup_second_clone(&remote);
     fs::write(other.join("behind.txt"), "behind").unwrap();
     git(&["add", "behind.txt"], &other);
     git(&["commit", "-m", "remote-only commit"], &other);
@@ -2162,4 +2155,89 @@ fn test_ticket_url_populated_in_enriched_response() {
         results[0].ticket_url.as_deref(),
         Some("https://github.com/owner/repo/issues/42")
     );
+}
+
+#[test]
+fn test_resolve_and_update_base_prefix_fallback() {
+    let (_tmp, remote, local) = setup_repo_with_remote();
+
+    // Create a branch with the feat/ prefix on the remote
+    let (_tmp2, other) = setup_second_clone(&remote);
+    git(&["checkout", "-b", "feat/user-auth"], &other);
+    let file = other.join("feature.txt");
+    fs::write(&file, "new feature").unwrap();
+    git(&["add", "feature.txt"], &other);
+    git(&["commit", "-m", "Add user auth feature"], &other);
+    git(&["push", "-u", "origin", "feat/user-auth"], &other);
+
+    // Fetch the new branch in local so it's available for tracking
+    git(&["fetch", "origin"], &local);
+
+    // Try to resolve "user-auth" (without prefix) - should find "feat/user-auth"
+    let result = git_helpers::resolve_and_update_base(
+        local.to_str().unwrap(),
+        Some("user-auth"),
+        "main",
+        false,
+        false,
+    );
+    assert!(result.is_ok(), "resolve_and_update_base should succeed: {:?}", result.err());
+    let (resolved_branch, _warnings) = result.unwrap();
+    assert_eq!(resolved_branch, "feat/user-auth", "should resolve to feat/ prefixed branch");
+}
+
+#[test]
+fn test_resolve_and_update_base_no_prefix_fallback_when_already_prefixed() {
+    let (_tmp, _remote, local) = setup_repo_with_remote();
+
+    // Request a branch that already has a prefix but doesn't exist
+    // Should NOT try alternatives and should fail
+    let result = git_helpers::resolve_and_update_base(
+        local.to_str().unwrap(),
+        Some("feat/nonexistent"),
+        "main",
+        false,
+        false,
+    );
+    assert!(result.is_err(), "should fail when prefixed branch doesn't exist");
+}
+
+#[test]
+fn test_ensure_base_up_to_date_creates_local_tracking_branch_from_remote_only() {
+    let (_tmp, remote, local) = setup_repo_with_remote();
+
+    // Create a new branch on the remote only
+    let (_tmp2, other) = setup_second_clone(&remote);
+    git(&["checkout", "-b", "new-feature"], &other);
+    let file = other.join("remote_only.txt");
+    fs::write(&file, "remote only content").unwrap();
+    git(&["add", "remote_only.txt"], &other);
+    git(&["commit", "-m", "remote only feature"], &other);
+    git(&["push", "-u", "origin", "new-feature"], &other);
+
+    // Verify the branch doesn't exist locally yet
+    assert!(!git_helpers::branch_exists(local.to_str().unwrap(), "new-feature"));
+
+    // Call ensure_base_up_to_date on the remote-only branch
+    // This should create a local tracking branch
+    let result = git_helpers::ensure_base_up_to_date(
+        local.to_str().unwrap(),
+        "new-feature",
+        false,
+        false,
+    );
+    assert!(result.is_ok(), "ensure_base_up_to_date should succeed: {:?}", result.err());
+
+    // Verify the local tracking branch was created
+    assert!(git_helpers::branch_exists(local.to_str().unwrap(), "new-feature"));
+
+    // Verify the branch tracks the remote by checking git branch -vv output
+    let track_output = std::process::Command::new("git")
+        .args(["branch", "-vv"])
+        .current_dir(&local)
+        .output()
+        .unwrap();
+    let track_info = String::from_utf8_lossy(&track_output.stdout);
+    assert!(track_info.contains("new-feature"), "branch should exist in branch list");
+    assert!(track_info.contains("origin/new-feature"), "branch should track origin/new-feature");
 }

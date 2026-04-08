@@ -704,7 +704,7 @@ impl<'a> TicketSyncer<'a> {
             "close_missing_tickets",
         );
         warn_and_default(
-            self.mark_worktrees_for_closed_tickets(repo_id),
+            self.mark_worktrees_for_closed_tickets(repo_id, None),
             "mark_worktrees_for_closed_tickets",
         );
         (synced, closed)
@@ -868,14 +868,15 @@ impl<'a> TicketSyncer<'a> {
     /// Called as part of the ticket sync flow, typically after
     /// [`TicketSyncer::close_missing_tickets`].
     /// Returns the number of worktrees updated.
-    pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str) -> Result<usize> {
-        self.mark_worktrees_for_closed_tickets_with_merge_check(repo_id, has_merged_pr)
+    pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str, worktree_mgr: Option<&crate::worktree::WorktreeManager>) -> Result<usize> {
+        self.mark_worktrees_for_closed_tickets_with_merge_check(repo_id, has_merged_pr, worktree_mgr)
     }
 
     fn mark_worktrees_for_closed_tickets_with_merge_check(
         &self,
         repo_id: &str,
         merge_check: impl Fn(&str, &str) -> bool,
+        worktree_mgr: Option<&crate::worktree::WorktreeManager>,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
         let artifacts: Vec<(String, String, String, String)> = query_collect(
@@ -899,7 +900,9 @@ impl<'a> TicketSyncer<'a> {
                 params![now, worktree_path],
             )?;
             count += 1;
-            WorktreeManager::remove_artifacts(repo_path, worktree_path, branch);
+            if let Some(mgr) = worktree_mgr {
+                mgr.remove_artifacts(repo_path, worktree_path, branch);
+            }
         }
 
         Ok(count)
@@ -1562,7 +1565,7 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true, None)
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
@@ -1586,7 +1589,7 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true, None)
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
@@ -1599,7 +1602,7 @@ mod tests {
 
         insert_worktree(&conn, "wt1", "r1", None, "active");
 
-        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("r1", None).unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
     }
@@ -1620,7 +1623,7 @@ mod tests {
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
 
         // Do NOT close the ticket — it stays open
-        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("r1", None).unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
     }
@@ -1716,7 +1719,7 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true, None)
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
@@ -1750,7 +1753,7 @@ mod tests {
             .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
         syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true, None)
             .unwrap();
 
         let after: Option<String> = conn
@@ -1783,7 +1786,7 @@ mod tests {
             .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("r1", None).unwrap();
         assert_eq!(count, 0);
     }
 
@@ -1827,7 +1830,7 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true, None)
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
@@ -1853,7 +1856,7 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| false)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| false, None)
             .unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
@@ -1878,7 +1881,7 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true, None)
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");

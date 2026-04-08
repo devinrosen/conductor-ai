@@ -117,7 +117,7 @@ pub(super) fn tool_sync_tickets(
                     if let Err(e) = syncer.upsert_tickets(&repo.id, &[ticket]) {
                         return tool_err(format!("upsert failed: {e}"));
                     }
-                    let warn = if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id) {
+                    let warn = if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id, Some(&worktree_mgr)) {
                         format!(" Warning: mark_worktrees_for_closed_tickets failed: {e}")
                     } else {
                         String::new()

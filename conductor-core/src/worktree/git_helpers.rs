@@ -102,21 +102,38 @@ pub(super) fn resolve_and_update_base(
         return Ok((base, warnings));
     };
 
-    // Try exact name first
-    match ensure_base_up_to_date(repo_path, requested, force_dirty, pre_verified_clean) {
-        Ok(warnings) => Ok((requested.to_string(), warnings)),
+    // Perform a single fetch upfront to avoid redundant network calls
+    // during prefix fallback attempts
+    let mut fetch_warnings = Vec::new();
+    let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
+    match fetch {
+        Ok(o) if o.status.success() => {}
+        _ => {
+            fetch_warnings.push(
+                "could not fetch from origin; creating worktree from local state".to_string(),
+            );
+        }
+    }
+
+    // Try exact name first (skip fetch since we already did it)
+    match ensure_base_up_to_date_with_fetch_control(repo_path, requested, force_dirty, pre_verified_clean, false) {
+        Ok(mut warnings) => {
+            warnings.extend(fetch_warnings);
+            Ok((requested.to_string(), warnings))
+        },
         Err(_first_err) => {
             // If the name already has a known prefix, don't try alternatives
             if requested.starts_with("feat/") || requested.starts_with("fix/") {
                 return Err(_first_err);
             }
 
-            // Try feat/ and fix/ prefixes
+            // Try feat/ and fix/ prefixes (skip fetch since we already did it)
             for prefix in &["feat/", "fix/"] {
                 let candidate = format!("{prefix}{requested}");
-                if let Ok(warnings) =
-                    ensure_base_up_to_date(repo_path, &candidate, force_dirty, pre_verified_clean)
+                if let Ok(mut warnings) =
+                    ensure_base_up_to_date_with_fetch_control(repo_path, &candidate, force_dirty, pre_verified_clean, false)
                 {
+                    warnings.extend(fetch_warnings);
                     return Ok((candidate, warnings));
                 }
             }
@@ -191,6 +208,16 @@ pub(super) fn ensure_base_up_to_date(
     force_dirty: bool,
     pre_verified_clean: bool,
 ) -> Result<Vec<String>> {
+    ensure_base_up_to_date_with_fetch_control(repo_path, base_branch, force_dirty, pre_verified_clean, true)
+}
+
+fn ensure_base_up_to_date_with_fetch_control(
+    repo_path: &str,
+    base_branch: &str,
+    force_dirty: bool,
+    pre_verified_clean: bool,
+    should_fetch: bool,
+) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
 
     // 1. Check for uncommitted changes in the repo working tree
@@ -204,14 +231,16 @@ pub(super) fn ensure_base_up_to_date(
     }
 
     // 2. Fetch from remote (soft failure — warn and allow local-only creation).
-    let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
-    match fetch {
-        Ok(o) if o.status.success() => {}
-        _ => {
-            warnings.push(
-                "could not fetch from origin; creating worktree from local state".to_string(),
-            );
-            return Ok(warnings);
+    if should_fetch {
+        let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
+        match fetch {
+            Ok(o) if o.status.success() => {}
+            _ => {
+                warnings.push(
+                    "could not fetch from origin; creating worktree from local state".to_string(),
+                );
+                return Ok(warnings);
+            }
         }
     }
 
@@ -239,10 +268,19 @@ pub(super) fn ensure_base_up_to_date(
 
     // 3b. If the branch exists on the remote but not locally, create a local tracking branch
     if has_remote && !has_local {
+        // Validate branch name for security - prevent injection of git options
+        if base_branch.starts_with('-') || base_branch.contains('\0') || base_branch.contains('\n') {
+            return Err(ConductorError::InvalidInput(format!(
+                "invalid branch name '{}': branch names cannot start with '-' or contain null/newline characters",
+                base_branch
+            )));
+        }
+
         let create = git_in(repo_path)
             .args([
                 "branch",
                 "--track",
+                "--", // Explicitly separate options from branch names
                 base_branch,
                 &format!("origin/{base_branch}"),
             ])
@@ -505,10 +543,34 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
             .trim()
             .to_string();
 
-        // Add the remote if it doesn't already exist (ignore failure if it does)
-        let _ = git_in(repo_path)
+        // Add the remote if it doesn't already exist (ignore failure only if remote already exists)
+        match git_in(repo_path)
             .args(["remote", "add", fork_owner, &fork_url])
-            .output();
+            .output()
+        {
+            Ok(output) if !output.status.success() => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.contains("already exists") {
+                    return Err(crate::error::ConductorError::Git(
+                        crate::error::SubprocessFailure {
+                            command: format!("git remote add {} {}", fork_owner, fork_url),
+                            exit_code: output.status.code(),
+                            stderr: stderr.to_string(),
+                            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                        }
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(crate::error::ConductorError::Git(
+                    crate::error::SubprocessFailure::from_message(
+                        &format!("git remote add {} {}", fork_owner, fork_url),
+                        e.to_string()
+                    )
+                ));
+            }
+            _ => {} // Success or already exists case
+        }
 
         // Fetch the branch from the fork remote
         check_output(git_in(repo_path).args([
@@ -690,7 +752,7 @@ mod tests {
 
     #[test]
     fn has_installable_deps_invalid_json() {
-        // Malformed JSON → treated as "has deps" (install proceeds, safer default).
+        // Malformed JSON → treated as "no deps" (install skipped).
         assert!(!has_installable_deps("not json"));
     }
 }

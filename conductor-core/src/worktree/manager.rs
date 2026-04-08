@@ -38,6 +38,21 @@ const AGENT_LATEST_JOIN: &str = "LEFT JOIN (\
         GROUP BY a.worktree_id\
     ) latest ON latest.worktree_id = w.id";
 
+/// Returns the base SELECT+FROM+JOIN fragment for enriched worktree queries.
+/// This includes all worktree columns plus ticket info and latest agent status.
+/// To be used with `map_enriched_row`.
+fn enriched_worktree_base() -> String {
+    format!(
+        "SELECT {cols}, latest.status AS agent_status, \
+         t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
+         FROM worktrees w \
+         {agent_join} \
+         LEFT JOIN tickets t ON t.id = w.ticket_id",
+        cols = &*WORKTREE_COLUMNS_W,
+        agent_join = AGENT_LATEST_JOIN,
+    )
+}
+
 /// Map a row that contains the standard worktree columns followed by
 /// `agent_status`, `ticket_title`, `ticket_number`, and `ticket_url` (in that order).
 ///
@@ -83,29 +98,49 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
         return None;
     }
 
+    // Query 1: Get all parent tickets and their worktrees in a single JOIN query
+    // This reduces N+1 queries to just 2 total: one to get the child ticket, one to get all relevant data
+    let placeholders = dep_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT w.branch, t.source_id \
+         FROM tickets t \
+         LEFT JOIN worktrees w ON w.ticket_id = t.id AND w.status = 'active' \
+         WHERE t.repo_id = ?1 AND t.source_id IN ({placeholders}) \
+         ORDER BY w.created_at DESC"
+    );
+
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&repo_id];
     for dep_id in &dep_ids {
-        let parent = match syncer.get_by_source_id(repo_id, dep_id) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        // Find an active worktree for this parent ticket
-        let worktrees: Vec<Worktree> = match query_collect(
-            conn,
-            &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
-            params![&parent.id],
-            map_worktree_row,
-        ) {
-            Ok(wts) => wts,
-            Err(e) => {
-                tracing::warn!("resolve_parent_branch: DB query failed for ticket {}: {e}", parent.id);
-                continue;
+        params.push(dep_id);
+    }
+
+    let results: Vec<(Option<String>, String)> = match query_collect(
+        conn,
+        &sql,
+        params.as_slice(),
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?, // branch (nullable if no active worktree)
+                row.get::<_, String>(1)?,        // source_id
+            ))
+        },
+    ) {
+        Ok(results) => results,
+        Err(e) => {
+            tracing::warn!("resolve_parent_branch: batch query failed: {e}");
+            return None;
+        }
+    };
+
+    // Return the first active worktree branch we find, respecting dependency order
+    for dep_id in &dep_ids {
+        for (branch_opt, source_id) in &results {
+            if source_id == dep_id {
+                if let Some(branch) = branch_opt {
+                    return Some(branch.clone());
+                }
+                break; // Found the ticket but no active worktree, move to next dependency
             }
-        };
-        if let Some(wt) = worktrees
-            .iter()
-            .find(|w| w.status == WorktreeStatus::Active)
-        {
-            return Some(wt.branch.clone());
         }
     }
 
@@ -515,15 +550,10 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let sql = format!(
-            "SELECT {cols}, latest.status AS agent_status, \
-             t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
-             FROM worktrees w \
-             {agent_join} \
-             LEFT JOIN tickets t ON t.id = w.ticket_id \
+            "{base} \
              WHERE 1=1{status_filter} \
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
-            cols = &*WORKTREE_COLUMNS_W,
-            agent_join = AGENT_LATEST_JOIN,
+            base = enriched_worktree_base(),
             status_filter = status_filter,
         );
         query_collect(self.conn, &sql, [], map_enriched_row)
@@ -534,14 +564,8 @@ impl<'a> WorktreeManager<'a> {
         self.conn
             .query_row(
                 &format!(
-                    "SELECT {cols}, latest.status AS agent_status, \
-                     t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
-                     FROM worktrees w \
-                     {agent_join} \
-                     LEFT JOIN tickets t ON t.id = w.ticket_id \
-                     WHERE w.id = ?1",
-                    cols = &*WORKTREE_COLUMNS_W,
-                    agent_join = AGENT_LATEST_JOIN,
+                    "{base} WHERE w.id = ?1",
+                    base = enriched_worktree_base(),
                 ),
                 params![id],
                 map_enriched_row,
@@ -559,14 +583,8 @@ impl<'a> WorktreeManager<'a> {
         self.conn
             .query_row(
                 &format!(
-                    "SELECT {cols}, latest.status AS agent_status, \
-                     t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
-                     FROM worktrees w \
-                     {agent_join} \
-                     LEFT JOIN tickets t ON t.id = w.ticket_id \
-                     WHERE w.id = ?1 AND w.repo_id = ?2",
-                    cols = &*WORKTREE_COLUMNS_W,
-                    agent_join = AGENT_LATEST_JOIN,
+                    "{base} WHERE w.id = ?1 AND w.repo_id = ?2",
+                    base = enriched_worktree_base(),
                 ),
                 params![id, repo_id],
                 map_enriched_row,
@@ -587,15 +605,10 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let sql = format!(
-            "SELECT {cols}, latest.status AS agent_status, \
-             t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
-             FROM worktrees w \
-             {agent_join} \
-             LEFT JOIN tickets t ON t.id = w.ticket_id \
+            "{base} \
              WHERE w.repo_id = ?1{status_filter} \
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
-            cols = &*WORKTREE_COLUMNS_W,
-            agent_join = AGENT_LATEST_JOIN,
+            base = enriched_worktree_base(),
             status_filter = status_filter,
         );
         query_collect(self.conn, &sql, params![repo_id], map_enriched_row)
@@ -719,7 +732,7 @@ impl<'a> WorktreeManager<'a> {
     /// Remove the git worktree directory and delete the associated branch (best-effort).
     /// Failures are logged but not propagated. Delegates to the module-private
     /// `remove_git_artifacts` to keep the implementation detail encapsulated.
-    pub fn remove_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
+    pub fn remove_artifacts(&self, repo_path: &str, worktree_path: &str, branch: &str) {
         remove_git_artifacts(repo_path, worktree_path, branch);
     }
 
