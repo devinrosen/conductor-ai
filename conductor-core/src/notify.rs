@@ -2092,6 +2092,47 @@ mod tests {
         assert_eq!(t2[0].workflow_name, "fast-job");
     }
 
+    /// Regression test for ticket/repo-targeted runs (worktree_id IS NULL).
+    ///
+    /// Previously, `list_active_non_worktree_workflow_runs` filtered to
+    /// `status IN ('running', 'waiting')`, so completed runs vanished from the query
+    /// before the detector could observe the transition.  After the fix the query also
+    /// returns recently-terminated runs, giving the detector at least one tick to fire.
+    ///
+    /// This test simulates the now-fixed scenario: a non-worktree run appears `running`
+    /// on tick 1 and `completed` on tick 2 (because the fixed query still returns it).
+    #[test]
+    fn wf_transitions_non_worktree_run_completed_fires_notification() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        // Tick 1: non-worktree run is running (worktree_id = None, no parent_workflow_run_id)
+        let tick1 = [make_workflow_run(
+            "nw1",
+            "label-all-tickets",
+            WorkflowRunStatus::Running,
+        )];
+        let t1 = detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+        assert!(t1.is_empty());
+
+        // Tick 2: same run is now completed — the fixed query keeps it visible via the
+        // 60-second recency window, so the detector can observe the transition.
+        let tick2 = [make_workflow_run(
+            "nw1",
+            "label-all-tickets",
+            WorkflowRunStatus::Completed,
+        )];
+        let t2 = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert_eq!(
+            t2.len(),
+            1,
+            "completed non-worktree run must fire exactly one notification"
+        );
+        assert_eq!(t2[0].run_id, "nw1");
+        assert_eq!(t2[0].workflow_name, "label-all-tickets");
+        assert!(t2[0].succeeded, "Completed → succeeded=true");
+    }
+
     // --- detect_agent_terminal_transitions ---
 
     fn make_agent_run(id: &str, status: AgentRunStatus) -> AgentRun {

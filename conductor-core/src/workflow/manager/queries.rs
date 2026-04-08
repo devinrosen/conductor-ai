@@ -481,10 +481,14 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
-    /// List active (running or waiting) root workflow runs that have no associated
-    /// worktree (`worktree_id IS NULL`).  These are repo- or ticket-targeted
+    /// List active (running or waiting) and recently-terminated root workflow runs that have no
+    /// associated worktree (`worktree_id IS NULL`).  These are repo- or ticket-targeted
     /// workflows (e.g. `label-all-tickets`) that the TUI status bar would otherwise
     /// never show.
+    ///
+    /// Recently-terminated runs (ended within the last 60 seconds) are included so that the
+    /// terminal-transition detector has at least one poll tick to observe the
+    /// `running → completed/failed` flip and fire the corresponding notification.
     pub fn list_active_non_worktree_workflow_runs(&self, limit: i64) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
@@ -492,7 +496,13 @@ impl<'a> WorkflowManager<'a> {
                 "SELECT {RUN_COLUMNS} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
                    AND worktree_id IS NULL \
-                   AND status IN ('running', 'waiting') \
+                   AND (\
+                       status IN ('running', 'waiting') \
+                       OR (\
+                           status IN ('completed', 'failed', 'cancelled') \
+                           AND ended_at >= datetime('now', '-60 seconds')\
+                       )\
+                   ) \
                  ORDER BY started_at DESC LIMIT ?1"
             ),
             params![limit],
@@ -1505,6 +1515,74 @@ impl<'a> WorkflowManager<'a> {
 #[cfg(test)]
 mod tests {
     use super::pct_change;
+    use crate::db::migrations;
+    use crate::workflow::manager::WorkflowManager;
+    use rusqlite::Connection;
+
+    fn setup_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        migrations::run(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn list_active_non_worktree_returns_running_run() {
+        let conn = setup_db();
+        // foreign_keys = OFF so the parent_run_id FK is not enforced; value just needs to be non-null
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+             VALUES ('run-active', 'test-workflow', NULL, 'dummy-ar', 'running', datetime('now', '-10 seconds'))",
+            [],
+        )
+        .unwrap();
+        let mgr = WorkflowManager::new(&conn);
+        let runs = mgr.list_active_non_worktree_workflow_runs(10).unwrap();
+        assert!(
+            runs.iter().any(|r| r.id == "run-active"),
+            "active running run should be returned"
+        );
+    }
+
+    #[test]
+    fn list_active_non_worktree_returns_recently_completed_run() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, started_at, ended_at) \
+             VALUES ('run-recent', 'test-workflow', NULL, 'dummy-ar', 'completed', \
+                     datetime('now', '-10 seconds'), datetime('now', '-5 seconds'))",
+            [],
+        )
+        .unwrap();
+        let mgr = WorkflowManager::new(&conn);
+        let runs = mgr.list_active_non_worktree_workflow_runs(10).unwrap();
+        assert!(
+            runs.iter().any(|r| r.id == "run-recent"),
+            "recently-completed run (ended 5s ago) should be returned"
+        );
+    }
+
+    #[test]
+    fn list_active_non_worktree_excludes_old_completed_run() {
+        let conn = setup_db();
+        // ended_at = 120 seconds ago → outside the 60 s window
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, started_at, ended_at) \
+             VALUES ('run-old', 'test-workflow', NULL, 'dummy-ar', 'completed', \
+                     datetime('now', '-200 seconds'), datetime('now', '-120 seconds'))",
+            [],
+        )
+        .unwrap();
+        let mgr = WorkflowManager::new(&conn);
+        let runs = mgr.list_active_non_worktree_workflow_runs(10).unwrap();
+        assert!(
+            !runs.iter().any(|r| r.id == "run-old"),
+            "completed run ended 120s ago should NOT be returned"
+        );
+    }
 
     #[test]
     fn test_pct_change_helper() {
