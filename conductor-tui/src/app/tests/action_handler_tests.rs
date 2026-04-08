@@ -608,6 +608,26 @@ fn import_repos_no_bg_tx_shows_error() {
     assert!(matches!(app.state.modal, Modal::Error { .. }));
 }
 
+#[test]
+fn spawn_worktree_create_no_bg_tx_shows_error() {
+    let mut app = make_app();
+    assert!(app.bg_tx.is_none());
+    app.spawn_worktree_create(
+        "my-repo".into(),
+        "feat-new".into(),
+        conductor_core::worktree::WorktreeCreateOptions::default(),
+    );
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn spawn_main_health_check_no_bg_tx_shows_error() {
+    let mut app = make_app();
+    assert!(app.bg_tx.is_none());
+    app.spawn_main_health_check("my-repo".into(), "feat-new".into(), None, None, None);
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Task 4: Git operations result handling tests
 // ═══════════════════════════════════════════════════════════════════════
