@@ -108,6 +108,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 &t.workflow_name,
                                 t.target_label.as_deref(),
                                 t.succeeded,
+                                t.parent_workflow_run_id.as_deref(),
                             );
                         }
 

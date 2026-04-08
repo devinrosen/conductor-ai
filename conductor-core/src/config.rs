@@ -195,6 +195,10 @@ pub struct HookConfig {
     /// Optional workflow name filter: only fire for events from this workflow.
     #[serde(default)]
     pub workflow: Option<String>,
+    /// When `true`, only fire for root workflow runs (`parent_workflow_run_id` is `None`).
+    /// `None` or `false` fires for all workflows (backwards compatible default).
+    #[serde(default)]
+    pub root_workflows_only: Option<bool>,
 }
 
 /// Top-level `[notify]` section containing user-configured notification hooks.

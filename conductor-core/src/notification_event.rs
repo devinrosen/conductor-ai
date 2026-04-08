@@ -18,6 +18,10 @@ pub enum NotificationEvent {
         timestamp: String,
         /// Optional deep link URL (empty in non-web contexts).
         url: Option<String>,
+        /// Raw workflow name, e.g. `"deploy-staging"`.
+        workflow_name: String,
+        /// ID of the parent workflow run when this is a sub-workflow; `None` for root runs.
+        parent_workflow_run_id: Option<String>,
     },
     /// A workflow run finished with a failure.
     WorkflowRunFailed {
@@ -25,6 +29,10 @@ pub enum NotificationEvent {
         label: String,
         timestamp: String,
         url: Option<String>,
+        /// Raw workflow name, e.g. `"deploy-staging"`.
+        workflow_name: String,
+        /// ID of the parent workflow run when this is a sub-workflow; `None` for root runs.
+        parent_workflow_run_id: Option<String>,
     },
     /// A workflow run's cost exceeded the configured multiple over baseline.
     /// Not yet wired — defined for schema completeness.
@@ -35,6 +43,10 @@ pub enum NotificationEvent {
         url: Option<String>,
         /// How many times over baseline this run cost.
         multiple: f64,
+        /// Raw workflow name, e.g. `"deploy-staging"`.
+        workflow_name: String,
+        /// ID of the parent workflow run when this is a sub-workflow; `None` for root runs.
+        parent_workflow_run_id: Option<String>,
     },
     /// A workflow run's duration exceeded the configured multiple over baseline.
     /// Not yet wired — defined for schema completeness.
@@ -44,6 +56,10 @@ pub enum NotificationEvent {
         timestamp: String,
         url: Option<String>,
         multiple: f64,
+        /// Raw workflow name, e.g. `"deploy-staging"`.
+        workflow_name: String,
+        /// ID of the parent workflow run when this is a sub-workflow; `None` for root runs.
+        parent_workflow_run_id: Option<String>,
     },
     /// A standalone agent run finished successfully.
     AgentRunCompleted {
@@ -126,8 +142,39 @@ impl NotificationEvent {
 
         // Event-specific fields
         match self {
-            Self::WorkflowRunCostSpike { multiple, .. }
-            | Self::WorkflowRunDurationSpike { multiple, .. } => {
+            Self::WorkflowRunCompleted {
+                workflow_name,
+                parent_workflow_run_id,
+                ..
+            }
+            | Self::WorkflowRunFailed {
+                workflow_name,
+                parent_workflow_run_id,
+                ..
+            } => {
+                map.insert("CONDUCTOR_WORKFLOW_NAME".into(), workflow_name.clone());
+                map.insert(
+                    "CONDUCTOR_PARENT_WORKFLOW_RUN_ID".into(),
+                    parent_workflow_run_id.as_deref().unwrap_or("").into(),
+                );
+            }
+            Self::WorkflowRunCostSpike {
+                workflow_name,
+                parent_workflow_run_id,
+                multiple,
+                ..
+            }
+            | Self::WorkflowRunDurationSpike {
+                workflow_name,
+                parent_workflow_run_id,
+                multiple,
+                ..
+            } => {
+                map.insert("CONDUCTOR_WORKFLOW_NAME".into(), workflow_name.clone());
+                map.insert(
+                    "CONDUCTOR_PARENT_WORKFLOW_RUN_ID".into(),
+                    parent_workflow_run_id.as_deref().unwrap_or("").into(),
+                );
                 map.insert("CONDUCTOR_MULTIPLE".into(), multiple.to_string());
             }
             Self::AgentRunFailed { error, .. } => {
@@ -173,8 +220,37 @@ impl NotificationEvent {
         }
 
         match self {
-            Self::WorkflowRunCostSpike { multiple, .. }
-            | Self::WorkflowRunDurationSpike { multiple, .. } => {
+            Self::WorkflowRunCompleted {
+                workflow_name,
+                parent_workflow_run_id,
+                ..
+            }
+            | Self::WorkflowRunFailed {
+                workflow_name,
+                parent_workflow_run_id,
+                ..
+            } => {
+                obj["workflow_name"] = Value::String(workflow_name.clone());
+                if let Some(parent_id) = parent_workflow_run_id {
+                    obj["parent_workflow_run_id"] = Value::String(parent_id.clone());
+                }
+            }
+            Self::WorkflowRunCostSpike {
+                workflow_name,
+                parent_workflow_run_id,
+                multiple,
+                ..
+            }
+            | Self::WorkflowRunDurationSpike {
+                workflow_name,
+                parent_workflow_run_id,
+                multiple,
+                ..
+            } => {
+                obj["workflow_name"] = Value::String(workflow_name.clone());
+                if let Some(parent_id) = parent_workflow_run_id {
+                    obj["parent_workflow_run_id"] = Value::String(parent_id.clone());
+                }
                 obj["multiple"] = json!(multiple);
             }
             Self::AgentRunFailed { error: Some(e), .. } => {
@@ -271,6 +347,8 @@ mod tests {
                 label: "l".into(),
                 timestamp: "t".into(),
                 url: None,
+                workflow_name: "wf".into(),
+                parent_workflow_run_id: None,
             }
             .event_name(),
             "workflow_run.completed"
@@ -281,6 +359,8 @@ mod tests {
                 label: "l".into(),
                 timestamp: "t".into(),
                 url: None,
+                workflow_name: "wf".into(),
+                parent_workflow_run_id: None,
             }
             .event_name(),
             "workflow_run.failed"
@@ -337,6 +417,8 @@ mod tests {
             label: "my-wf on main".into(),
             timestamp: "2024-01-01T00:00:00Z".into(),
             url: Some("https://example.com".into()),
+            workflow_name: "my-wf".into(),
+            parent_workflow_run_id: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_EVENT"], "workflow_run.completed");
@@ -353,6 +435,8 @@ mod tests {
             label: "l".into(),
             timestamp: "t".into(),
             url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_URL"], "");
@@ -418,6 +502,8 @@ mod tests {
             label: "wf on branch".into(),
             timestamp: "2024-06-01T12:00:00Z".into(),
             url: Some("https://localhost:3000".into()),
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "workflow_run.completed");
@@ -433,6 +519,8 @@ mod tests {
             label: "l".into(),
             timestamp: "t".into(),
             url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         let v = event.to_json();
         assert!(v.get("url").is_none());
@@ -460,6 +548,8 @@ mod tests {
                 timestamp: "t".into(),
                 url: None,
                 multiple: 3.0,
+                workflow_name: "wf".into(),
+                parent_workflow_run_id: None,
             }
             .event_name(),
             "workflow_run.cost_spike"
@@ -471,6 +561,8 @@ mod tests {
                 timestamp: "t".into(),
                 url: None,
                 multiple: 2.5,
+                workflow_name: "wf".into(),
+                parent_workflow_run_id: None,
             }
             .event_name(),
             "workflow_run.duration_spike"
@@ -497,6 +589,8 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             multiple: 4.2,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_EVENT"], "workflow_run.cost_spike");
@@ -511,6 +605,8 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             multiple: 1.5,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         let vars = event.to_env_vars();
         assert_eq!(vars["CONDUCTOR_EVENT"], "workflow_run.duration_spike");
@@ -541,6 +637,8 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             multiple: 3.0,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "workflow_run.cost_spike");
@@ -555,6 +653,8 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             multiple: 2.5,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         let v = event.to_json();
         assert_eq!(v["event"], "workflow_run.duration_spike");
@@ -632,5 +732,65 @@ mod tests {
         let v = event.to_json();
         assert_eq!(v["event"], "agent_run.failed");
         assert!(v.get("error").is_none());
+    }
+
+    #[test]
+    fn to_env_vars_workflow_run_completed_includes_hierarchy_root() {
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "deploy-staging on main".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "deploy-staging".into(),
+            parent_workflow_run_id: None,
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_WORKFLOW_NAME"], "deploy-staging");
+        assert_eq!(vars["CONDUCTOR_PARENT_WORKFLOW_RUN_ID"], "");
+    }
+
+    #[test]
+    fn to_env_vars_workflow_run_failed_includes_hierarchy_sub() {
+        let event = NotificationEvent::WorkflowRunFailed {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "child-wf".into(),
+            parent_workflow_run_id: Some("parent-run-id".into()),
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_WORKFLOW_NAME"], "child-wf");
+        assert_eq!(vars["CONDUCTOR_PARENT_WORKFLOW_RUN_ID"], "parent-run-id");
+    }
+
+    #[test]
+    fn to_json_workflow_run_completed_omits_parent_when_none() {
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "my-wf".into(),
+            parent_workflow_run_id: None,
+        };
+        let v = event.to_json();
+        assert_eq!(v["workflow_name"], "my-wf");
+        assert!(v.get("parent_workflow_run_id").is_none());
+    }
+
+    #[test]
+    fn to_json_workflow_run_failed_includes_parent_when_some() {
+        let event = NotificationEvent::WorkflowRunFailed {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "child-wf".into(),
+            parent_workflow_run_id: Some("parent-run-id".into()),
+        };
+        let v = event.to_json();
+        assert_eq!(v["workflow_name"], "child-wf");
+        assert_eq!(v["parent_workflow_run_id"], "parent-run-id");
     }
 }

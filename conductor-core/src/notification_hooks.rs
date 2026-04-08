@@ -55,6 +55,32 @@ fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bo
         }
     }
 
+    if hook.root_workflows_only == Some(true) {
+        match event {
+            NotificationEvent::WorkflowRunCompleted {
+                parent_workflow_run_id,
+                ..
+            }
+            | NotificationEvent::WorkflowRunFailed {
+                parent_workflow_run_id,
+                ..
+            }
+            | NotificationEvent::WorkflowRunCostSpike {
+                parent_workflow_run_id,
+                ..
+            }
+            | NotificationEvent::WorkflowRunDurationSpike {
+                parent_workflow_run_id,
+                ..
+            } => {
+                if parent_workflow_run_id.is_some() {
+                    return false;
+                }
+            }
+            _ => {} // non-workflow events pass through
+        }
+    }
+
     true
 }
 
@@ -290,6 +316,8 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             multiple: 2.0, // below 3.0 threshold
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         assert!(!hook_event_passes_filters(&hook, &event));
     }
@@ -307,6 +335,8 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             multiple: 3.5, // above 3.0 threshold
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
     }
@@ -324,6 +354,8 @@ mod tests {
             label: "l".into(),
             timestamp: "t".into(),
             url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
     }
@@ -376,6 +408,8 @@ mod tests {
             label: "ticket-to-pr on main".into(),
             timestamp: "t".into(),
             url: None,
+            workflow_name: "ticket-to-pr".into(),
+            parent_workflow_run_id: None,
         };
         assert!(!hook_event_passes_filters(&hook, &event));
     }
@@ -392,6 +426,8 @@ mod tests {
             label: "deploy on main".into(),
             timestamp: "t".into(),
             url: None,
+            workflow_name: "deploy".into(),
+            parent_workflow_run_id: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
     }
@@ -406,6 +442,8 @@ mod tests {
             label: "l".into(),
             timestamp: "t".into(),
             url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         // Should not panic or hang.
         runner.fire(&event);
@@ -425,6 +463,8 @@ mod tests {
             label: "l".into(),
             timestamp: "t".into(),
             url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         // Non-matching: should return immediately without spawning.
         runner.fire(&event);
@@ -451,6 +491,8 @@ mod tests {
             timestamp: "t".into(),
             url: None,
             multiple: 2.0, // below threshold
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         runner.fire(&event);
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -478,6 +520,8 @@ mod tests {
             label: "my-wf".into(),
             timestamp: "2024-01-01T00:00:00Z".into(),
             url: None,
+            workflow_name: "my-wf".into(),
+            parent_workflow_run_id: None,
         };
 
         run_shell_hook(&hook, &event);
@@ -510,6 +554,8 @@ mod tests {
             label: "l".into(),
             timestamp: "t".into(),
             url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
         };
         runner.fire(&event);
 
@@ -522,5 +568,61 @@ mod tests {
             .read_to_string(&mut contents)
             .unwrap();
         assert_eq!(contents.trim(), "fired");
+    }
+
+    // ── root_workflows_only filter ───────────────────────────────────────
+
+    #[test]
+    fn filter_root_workflows_only_blocks_sub_workflow() {
+        let hook = HookConfig {
+            on: "workflow_run.*".into(),
+            root_workflows_only: Some(true),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "child-wf".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "child-wf".into(),
+            parent_workflow_run_id: Some("parent-run-id".into()),
+        };
+        assert!(!hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_root_workflows_only_passes_root_workflow() {
+        let hook = HookConfig {
+            on: "workflow_run.*".into(),
+            root_workflows_only: Some(true),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "root-wf".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "root-wf".into(),
+            parent_workflow_run_id: None,
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_root_workflows_only_none_passes_all() {
+        let hook = HookConfig {
+            on: "workflow_run.*".into(),
+            root_workflows_only: None,
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunFailed {
+            run_id: "r".into(),
+            label: "child-wf".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "child-wf".into(),
+            parent_workflow_run_id: Some("parent-run-id".into()),
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
     }
 }

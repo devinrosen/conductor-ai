@@ -90,6 +90,7 @@ fn notify_workflow(
     workflow_name: &str,
     label: Option<&str>,
     succeeded: bool,
+    parent_workflow_run_id: Option<&str>,
 ) {
     fire_workflow_notification(
         conn,
@@ -99,6 +100,7 @@ fn notify_workflow(
         workflow_name,
         label,
         succeeded,
+        parent_workflow_run_id,
     );
 }
 
@@ -410,6 +412,7 @@ pub async fn run_workflow(
                         &workflow_name,
                         Some(&wt_target_label),
                         succeeded,
+                        None, // workflows launched from web are always root runs
                     );
                 } else if let Err(e) = &notification_conn {
                     tracing::error!("notify: DB open failed, skipping notification: {e}");
@@ -438,6 +441,7 @@ pub async fn run_workflow(
                         &workflow_name,
                         Some(&wt_target_label),
                         false,
+                        None, // workflows launched from web are always root runs
                     );
                 } else if let Err(e) = &notification_conn {
                     tracing::error!("notify: DB open failed, skipping notification: {e}");
@@ -681,6 +685,7 @@ pub async fn post_workflow_run(
                     &workflow_name,
                     Some(&target_label),
                     succeeded,
+                    None, // workflows launched from web are always root runs
                 );
 
                 state_clone
@@ -704,6 +709,7 @@ pub async fn post_workflow_run(
                     &workflow_name,
                     Some(&target_label),
                     false,
+                    None, // workflows launched from web are always root runs
                 );
             }
         }
@@ -1193,6 +1199,7 @@ pub async fn resume_workflow_endpoint(
                     &workflow_name,
                     target_label.as_deref(),
                     succeeded,
+                    None, // workflows resumed from web are always root runs
                 );
 
                 state_clone
@@ -1213,6 +1220,7 @@ pub async fn resume_workflow_endpoint(
                     &workflow_name,
                     target_label.as_deref(),
                     false,
+                    None, // workflows resumed from web are always root runs
                 );
             }
         }
@@ -1641,6 +1649,7 @@ mod tests {
                 "test-wf",
                 None,
                 false,
+                None,
             );
         })
         .await
