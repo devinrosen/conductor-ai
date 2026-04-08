@@ -131,47 +131,38 @@ pub fn strip_code_fences(s: &str) -> String {
 pub(crate) fn fix_invalid_backslash_escapes(s: &str) -> String {
     const VALID_ESCAPE: &[char] = &['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
 
-    let chars: Vec<char> = s.chars().collect();
+    let mut chars = s.chars().peekable();
     let mut result = String::with_capacity(s.len() + 16);
-    let mut i = 0;
     let mut in_string = false;
 
-    while i < chars.len() {
-        let c = chars[i];
-
+    while let Some(c) = chars.next() {
         if !in_string {
             result.push(c);
             if c == '"' {
                 in_string = true;
             }
-            i += 1;
         } else {
             match c {
                 '"' => {
                     // Closing quote — exit string
                     result.push(c);
                     in_string = false;
-                    i += 1;
                 }
                 '\\' => {
-                    let next = chars.get(i + 1).copied();
-                    if next.is_some_and(|nc| VALID_ESCAPE.contains(&nc)) {
+                    if chars.peek().is_some_and(|nc| VALID_ESCAPE.contains(nc)) {
                         // Valid escape sequence — emit both chars as a unit and advance past them.
                         // Advancing past the escaped char (e.g. `"` in `\"`) is critical: it
                         // prevents the escaped `"` from being misinterpreted as a string boundary.
                         result.push('\\');
-                        result.push(next.unwrap());
-                        i += 2;
+                        result.push(chars.next().unwrap());
                     } else {
                         // Invalid escape — double the backslash to make it a literal `\`
                         result.push('\\');
                         result.push('\\');
-                        i += 1;
                     }
                 }
                 _ => {
                     result.push(c);
-                    i += 1;
                 }
             }
         }
