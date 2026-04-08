@@ -270,7 +270,7 @@ pub async fn run_workflow(
     Json(req): Json<RunWorkflowRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate inputs while holding the lock
-    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, model, feature_id) = {
+    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, model, feature_id) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let wt_mgr = WorktreeManager::new(&db, &config);
@@ -313,6 +313,7 @@ pub async fn run_workflow(
             wt.ticket_id.clone(),
             repo.local_path.clone(),
             repo.slug.clone(),
+            repo.id.clone(),
             model,
             feature_id,
         )
@@ -406,6 +407,8 @@ pub async fn run_workflow(
                             duration_ms: None,
                             ticket_url: None,
                             error: None,
+                            repo_id: Some(&repo_id),
+                            worktree_id: params.worktree_id.as_deref(),
                         },
                     );
                 } else if let Err(e) = &notification_conn {
@@ -442,6 +445,8 @@ pub async fn run_workflow(
                             duration_ms: None,
                             ticket_url: None,
                             error: None,
+                            repo_id: Some(&repo_id),
+                            worktree_id: params.worktree_id.as_deref(),
                         },
                     );
                 } else if let Err(e) = &notification_conn {
@@ -695,6 +700,8 @@ pub async fn post_workflow_run(
                         duration_ms: None,
                         ticket_url: None,
                         error: None,
+                        repo_id: Some(&repo_id),
+                        worktree_id: wt_id_clone.as_deref(),
                     },
                 );
 
@@ -710,7 +717,7 @@ pub async fn post_workflow_run(
                 tracing::error!(
                     "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
                 );
-                let error_run_id = emit_failed(&run_id_slot, wt_id_clone);
+                let error_run_id = emit_failed(&run_id_slot, wt_id_clone.clone());
                 let (notify_repo_slug, notify_branch) =
                     conductor_core::notify::parse_target_label(Some(&target_label));
                 notify_workflow(
@@ -728,6 +735,8 @@ pub async fn post_workflow_run(
                         duration_ms: None,
                         ticket_url: None,
                         error: None,
+                        repo_id: Some(&repo_id),
+                        worktree_id: wt_id_clone.as_deref(),
                     },
                 );
             }
@@ -1167,7 +1176,7 @@ pub async fn resume_workflow_endpoint(
 
     // Validate the run exists and is in a resumable state before spawning.
     // Also capture the workflow name and target label for the completion notification.
-    let (workflow_name, target_label) = {
+    let (workflow_name, target_label, run_repo_id, run_worktree_id) = {
         let db = state.db.lock().await;
         let mgr = WorkflowManager::new(&db);
         let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
@@ -1175,7 +1184,12 @@ pub async fn resume_workflow_endpoint(
         })?;
         validate_resume_preconditions(&run.status, restart, from_step.as_deref())
             .map_err(ApiError::Core)?;
-        (run.workflow_name.clone(), run.target_label.clone())
+        (
+            run.workflow_name.clone(),
+            run.target_label.clone(),
+            run.repo_id.clone(),
+            run.worktree_id.clone(),
+        )
     }; // DB lock released here
 
     // Spawn blocking task with its own DB connection (same pattern as run_workflow)
@@ -1228,6 +1242,8 @@ pub async fn resume_workflow_endpoint(
                         duration_ms: None,
                         ticket_url: None,
                         error: None,
+                        repo_id: run_repo_id.as_deref(),
+                        worktree_id: run_worktree_id.as_deref(),
                     },
                 );
 
@@ -1256,6 +1272,8 @@ pub async fn resume_workflow_endpoint(
                         duration_ms: None,
                         ticket_url: None,
                         error: None,
+                        repo_id: run_repo_id.as_deref(),
+                        worktree_id: run_worktree_id.as_deref(),
                     },
                 );
             }
@@ -1692,6 +1710,8 @@ mod tests {
                     duration_ms: None,
                     ticket_url: None,
                     error: None,
+                    repo_id: None,
+                    worktree_id: None,
                 },
             );
         })
@@ -1710,6 +1730,7 @@ mod tests {
                 on_gate_pr_review: true,
             },
             slack: conductor_core::config::SlackConfig::default(),
+            web_url: None,
         }
     }
 
@@ -1747,6 +1768,8 @@ mod tests {
                     duration_ms: None,
                     ticket_url: None,
                     error: None,
+                    repo_id: None,
+                    worktree_id: None,
                 },
             );
         })
@@ -1773,6 +1796,8 @@ mod tests {
                     duration_ms: None,
                     ticket_url: None,
                     error: None,
+                    repo_id: None,
+                    worktree_id: None,
                 },
             );
         })
@@ -1801,7 +1826,7 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None });
+            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn

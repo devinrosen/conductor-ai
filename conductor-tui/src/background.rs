@@ -115,6 +115,8 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     duration_ms: t.duration_ms,
                                     ticket_url: None,
                                     error: t.error.as_deref(),
+                                    repo_id: t.repo_id.as_deref(),
+                                    worktree_id: t.worktree_id.as_deref(),
                                 },
                             );
                         }
