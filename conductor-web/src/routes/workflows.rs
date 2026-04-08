@@ -82,6 +82,7 @@ async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
 /// **Must only be called from a synchronous/blocking context** — i.e. inside
 /// `tokio::task::spawn_blocking` or a plain OS thread — because
 /// `open_database` is a synchronous call.
+#[allow(clippy::too_many_arguments)]
 fn notify_workflow(
     conn: &rusqlite::Connection,
     notifications: &conductor_core::config::NotificationConfig,
@@ -1697,6 +1698,7 @@ mod tests {
                 "my-workflow",
                 Some("repo/wt"),
                 false,
+                None,
             );
         })
         .await
@@ -1715,6 +1717,7 @@ mod tests {
                 "my-workflow",
                 Some("repo/wt"),
                 false,
+                None,
             );
         })
         .await
@@ -1742,7 +1745,7 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, &[], "run-notify-1", "my-workflow", None, true);
+            notify_workflow(&conn, &notifications, &[], "run-notify-1", "my-workflow", None, true, None);
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn
