@@ -24,7 +24,7 @@ pub struct HookSummary {
     pub command: Option<String>,
 }
 
-/// Request body for `POST /api/hooks/test`.
+/// Request body for `POST /api/config/hooks/test`.
 #[derive(Deserialize)]
 pub struct TestHookRequest {
     pub hook_index: usize,
@@ -66,7 +66,7 @@ pub async fn list_hooks(State(state): State<AppState>) -> Result<Json<Vec<HookSu
     Ok(Json(summaries))
 }
 
-/// `POST /api/hooks/test` — fire a synthetic event through a single configured hook
+/// `POST /api/config/hooks/test` — fire a synthetic event through a single configured hook
 /// identified by its index.
 ///
 /// The synthetic event is chosen to match the hook's configured `on` pattern so the

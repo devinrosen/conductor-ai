@@ -360,5 +360,5 @@ pub fn api_router() -> Router<AppState> {
         )
         // Notification Hooks
         .route("/api/config/hooks", get(hooks::list_hooks))
-        .route("/api/hooks/test", post(hooks::test_hook))
+        .route("/api/config/hooks/test", post(hooks::test_hook))
 }

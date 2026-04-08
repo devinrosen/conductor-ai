@@ -124,7 +124,7 @@ pub enum NotificationEvent {
 impl NotificationEvent {
     /// Creates a synthetic test event for the given concrete event name.
     ///
-    /// Used by CLI `notifications test` and the web API `POST /api/hooks/test` so that
+    /// Used by CLI `notifications test` and the web API `POST /api/config/hooks/test` so that
     /// the factory logic lives in one place rather than being duplicated across binary crates.
     ///
     /// Returns `Err` if `name` is not a recognized event name.
@@ -190,7 +190,7 @@ impl NotificationEvent {
     ///
     /// Picks the first concrete event name that the pattern matches, falling back to
     /// `workflow_run.completed` for `"*"` or any unrecognized pattern. Used by the web
-    /// API `POST /api/hooks/test` to ensure the test event actually reaches the hook.
+    /// API `POST /api/config/hooks/test` to ensure the test event actually reaches the hook.
     pub fn synthetic_for_pattern(pattern: &str, now: impl Into<String>) -> Self {
         let now = now.into();
         for &name in VALID_SYNTHETIC_EVENTS {
