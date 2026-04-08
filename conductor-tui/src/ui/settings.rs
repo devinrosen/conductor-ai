@@ -332,4 +332,3 @@ fn render_notifications(
     let para = Paragraph::new(lines);
     frame.render_widget(para, inner);
 }
-
