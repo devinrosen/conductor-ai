@@ -429,7 +429,9 @@ pub enum Action {
     /// Navigate to View::Settings.
     OpenSettings,
     /// Fire a synthetic test event through the hook at the given index.
-    SettingsTestHook { hook_index: usize },
+    SettingsTestHook {
+        hook_index: usize,
+    },
     /// Background result: hook test completed.
     SettingsHookTestComplete {
         hook_index: usize,

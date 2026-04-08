@@ -131,13 +131,7 @@ fn setting_line(label: &str, value: &str, style: Style) -> Line<'static> {
     ])
 }
 
-fn render_general(
-    frame: &mut Frame,
-    area: Rect,
-    block: Block,
-    state: &AppState,
-    focused: bool,
-) {
+fn render_general(frame: &mut Frame, area: Rect, block: Block, state: &AppState, focused: bool) {
     let theme = &state.theme;
     let sel = state.settings_row_index;
     let d = &state.settings_display;
@@ -194,13 +188,7 @@ fn render_general(
     frame.render_widget(para, area);
 }
 
-fn render_appearance(
-    frame: &mut Frame,
-    area: Rect,
-    block: Block,
-    state: &AppState,
-    focused: bool,
-) {
+fn render_appearance(frame: &mut Frame, area: Rect, block: Block, state: &AppState, focused: bool) {
     let theme = &state.theme;
     let sel = state.settings_row_index;
     let d = &state.settings_display;
@@ -273,7 +261,10 @@ fn render_notifications(
     } else {
         // Column header
         lines.push(Line::from(Span::styled(
-            format!("  {:<4} {:<20} {:<35} {}", "#", "on", "run / url", "Last test"),
+            format!(
+                "  {:<4} {:<20} {:<35} {}",
+                "#", "on", "run / url", "Last test"
+            ),
             Style::default()
                 .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
@@ -295,9 +286,10 @@ fn render_notifications(
 
             let test_result = state.settings_hook_test_results.get(&i);
             let test_span = match test_result {
-                Some(Ok(())) => {
-                    Span::styled("\u{2713} fired", Style::default().fg(theme.status_completed))
-                }
+                Some(Ok(())) => Span::styled(
+                    "\u{2713} fired",
+                    Style::default().fg(theme.status_completed),
+                ),
                 Some(Err(e)) => Span::styled(
                     format!("\u{2717} {}", &e[..e.len().min(20)]),
                     Style::default().fg(theme.status_failed),
@@ -310,7 +302,10 @@ fn render_notifications(
             let cmd_display = truncate(cmd, 33);
 
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:<4} {:<20} {:<35} ", i, on_display, cmd_display), base_style),
+                Span::styled(
+                    format!("  {:<4} {:<20} {:<35} ", i, on_display, cmd_display),
+                    base_style,
+                ),
                 test_span,
             ]));
         }

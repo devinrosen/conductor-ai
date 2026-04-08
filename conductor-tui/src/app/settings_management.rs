@@ -4,7 +4,7 @@ use conductor_core::notification_hooks::HookRunner;
 
 use crate::action::Action;
 use crate::state::{
-    AppState, InputAction, Modal, SettingsCategory, SettingsFocus, SettingsDisplayCache, View,
+    AppState, InputAction, Modal, SettingsCategory, SettingsDisplayCache, SettingsFocus, View,
 };
 use crate::ui::settings::{appearance_row, general_row};
 
@@ -94,12 +94,7 @@ impl App {
                     self.state.modal = Modal::Input {
                         title: "Set global model".into(),
                         prompt: "Model (blank to clear):".into(),
-                        value: self
-                            .config
-                            .general
-                            .model
-                            .clone()
-                            .unwrap_or_default(),
+                        value: self.config.general.model.clone().unwrap_or_default(),
                         on_submit: InputAction::SettingsSetModel,
                     };
                 }
@@ -136,26 +131,23 @@ impl App {
         if self.state.settings_category == SettingsCategory::General {
             match row {
                 general_row::PERMISSION_MODE => {
-                    self.config.general.agent_permission_mode = match self
-                        .config
-                        .general
-                        .agent_permission_mode
-                    {
-                        AgentPermissionMode::SkipPermissions => AgentPermissionMode::AutoMode,
-                        AgentPermissionMode::AutoMode => AgentPermissionMode::Plan,
-                        AgentPermissionMode::Plan => AgentPermissionMode::RepoSafe,
-                        AgentPermissionMode::RepoSafe => AgentPermissionMode::SkipPermissions,
-                    };
+                    self.config.general.agent_permission_mode =
+                        match self.config.general.agent_permission_mode {
+                            AgentPermissionMode::SkipPermissions => AgentPermissionMode::AutoMode,
+                            AgentPermissionMode::AutoMode => AgentPermissionMode::Plan,
+                            AgentPermissionMode::Plan => AgentPermissionMode::RepoSafe,
+                            AgentPermissionMode::RepoSafe => AgentPermissionMode::SkipPermissions,
+                        };
                     self.save_config_background();
                     self.refresh_settings_display();
                 }
                 general_row::AUTO_START => {
-                    self.config.general.auto_start_agent = match self.config.general.auto_start_agent
-                    {
-                        AutoStartAgent::Ask => AutoStartAgent::Always,
-                        AutoStartAgent::Always => AutoStartAgent::Never,
-                        AutoStartAgent::Never => AutoStartAgent::Ask,
-                    };
+                    self.config.general.auto_start_agent =
+                        match self.config.general.auto_start_agent {
+                            AutoStartAgent::Ask => AutoStartAgent::Always,
+                            AutoStartAgent::Always => AutoStartAgent::Never,
+                            AutoStartAgent::Never => AutoStartAgent::Ask,
+                        };
                     self.save_config_background();
                     self.refresh_settings_display();
                 }
@@ -262,8 +254,7 @@ impl App {
                 if len == 0 {
                     return;
                 }
-                self.state.settings_category_index =
-                    (self.state.settings_category_index + 1) % len;
+                self.state.settings_category_index = (self.state.settings_category_index + 1) % len;
                 self.update_selected_category();
             }
             SettingsFocus::SettingsList => {
@@ -271,15 +262,13 @@ impl App {
                 if count == 0 {
                     return;
                 }
-                self.state.settings_row_index =
-                    (self.state.settings_row_index + 1) % count;
+                self.state.settings_row_index = (self.state.settings_row_index + 1) % count;
             }
         }
     }
 
     fn update_selected_category(&mut self) {
-        self.state.settings_category =
-            SettingsCategory::all()[self.state.settings_category_index];
+        self.state.settings_category = SettingsCategory::all()[self.state.settings_category_index];
         self.state.settings_row_index = 0;
     }
 
