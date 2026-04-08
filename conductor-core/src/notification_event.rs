@@ -372,6 +372,20 @@ mod tests {
     }
 
     #[test]
+    fn to_env_vars_agent_run_failed_error_none_is_empty_string() {
+        let event = NotificationEvent::AgentRunFailed {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            error: None,
+        };
+        let vars = event.to_env_vars();
+        assert_eq!(vars["CONDUCTOR_ERROR"], "");
+        assert_eq!(vars["CONDUCTOR_EVENT"], "agent_run.failed");
+    }
+
+    #[test]
     fn to_env_vars_gate_waiting_includes_step_name() {
         let event = NotificationEvent::GateWaiting {
             run_id: "r".into(),
