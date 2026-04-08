@@ -240,7 +240,7 @@ impl NotificationEvent {
             self.url().map(|u| u.as_str()).unwrap_or("").into(),
         );
 
-        // Event-specific fields
+        // Pass 1: workflow hierarchy fields shared by all four workflow-run variants
         match self {
             Self::WorkflowRunCompleted {
                 workflow_name,
@@ -251,23 +251,15 @@ impl NotificationEvent {
                 workflow_name,
                 parent_workflow_run_id,
                 ..
-            } => {
-                map.insert("CONDUCTOR_WORKFLOW_NAME".into(), workflow_name.clone());
-                map.insert(
-                    "CONDUCTOR_PARENT_WORKFLOW_RUN_ID".into(),
-                    parent_workflow_run_id.as_deref().unwrap_or("").into(),
-                );
             }
-            Self::WorkflowRunCostSpike {
+            | Self::WorkflowRunCostSpike {
                 workflow_name,
                 parent_workflow_run_id,
-                multiple,
                 ..
             }
             | Self::WorkflowRunDurationSpike {
                 workflow_name,
                 parent_workflow_run_id,
-                multiple,
                 ..
             } => {
                 map.insert("CONDUCTOR_WORKFLOW_NAME".into(), workflow_name.clone());
@@ -275,6 +267,14 @@ impl NotificationEvent {
                     "CONDUCTOR_PARENT_WORKFLOW_RUN_ID".into(),
                     parent_workflow_run_id.as_deref().unwrap_or("").into(),
                 );
+            }
+            _ => {}
+        }
+
+        // Pass 2: spike-specific and remaining event-specific fields
+        match self {
+            Self::WorkflowRunCostSpike { multiple, .. }
+            | Self::WorkflowRunDurationSpike { multiple, .. } => {
                 map.insert("CONDUCTOR_MULTIPLE".into(), multiple.to_string());
             }
             Self::AgentRunFailed { error, .. } => {
@@ -319,6 +319,7 @@ impl NotificationEvent {
             obj["url"] = Value::String(u.clone());
         }
 
+        // Pass 1: workflow hierarchy fields shared by all four workflow-run variants
         match self {
             Self::WorkflowRunCompleted {
                 workflow_name,
@@ -329,28 +330,29 @@ impl NotificationEvent {
                 workflow_name,
                 parent_workflow_run_id,
                 ..
-            } => {
-                obj["workflow_name"] = Value::String(workflow_name.clone());
-                if let Some(parent_id) = parent_workflow_run_id {
-                    obj["parent_workflow_run_id"] = Value::String(parent_id.clone());
-                }
             }
-            Self::WorkflowRunCostSpike {
+            | Self::WorkflowRunCostSpike {
                 workflow_name,
                 parent_workflow_run_id,
-                multiple,
                 ..
             }
             | Self::WorkflowRunDurationSpike {
                 workflow_name,
                 parent_workflow_run_id,
-                multiple,
                 ..
             } => {
                 obj["workflow_name"] = Value::String(workflow_name.clone());
                 if let Some(parent_id) = parent_workflow_run_id {
                     obj["parent_workflow_run_id"] = Value::String(parent_id.clone());
                 }
+            }
+            _ => {}
+        }
+
+        // Pass 2: spike-specific and remaining event-specific fields
+        match self {
+            Self::WorkflowRunCostSpike { multiple, .. }
+            | Self::WorkflowRunDurationSpike { multiple, .. } => {
                 obj["multiple"] = json!(multiple);
             }
             Self::AgentRunFailed { error: Some(e), .. } => {
