@@ -432,6 +432,10 @@ pub enum Action {
     SettingsTestHook {
         hook_index: usize,
     },
+    /// Open the selected hook's local script file via the OS `open` command.
+    SettingsOpenHookScript {
+        hook_index: usize,
+    },
     /// Background result: hook test completed.
     SettingsHookTestComplete {
         hook_index: usize,
