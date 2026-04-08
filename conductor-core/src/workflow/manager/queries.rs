@@ -1488,8 +1488,8 @@ impl<'a> WorkflowManager<'a> {
                wrs.gate_prompt, \
                wr.workflow_name, \
                wr.id AS workflow_run_id, \
-               wrs.started_at, \
-               CAST(ROUND((julianday('now') - julianday(wrs.started_at)) * 86400000) AS INTEGER) AS wait_ms_so_far \
+               COALESCE(wrs.started_at, datetime('now')) AS started_at, \
+               CAST(ROUND((julianday('now') - julianday(COALESCE(wrs.started_at, datetime('now')))) * 86400000) AS INTEGER) AS wait_ms_so_far \
              FROM workflow_run_steps wrs \
              JOIN workflow_runs wr ON wr.id = wrs.workflow_run_id \
              WHERE wrs.status = 'waiting' \
