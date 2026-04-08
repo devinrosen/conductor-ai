@@ -316,6 +316,21 @@ mod tests {
         assert!(!glob_matches("workflow.*", "workflow_run.completed"));
     }
 
+    #[test]
+    fn glob_slash_star_matches_branch_with_prefix() {
+        // Positive: "feature/*" matches "feature/my-branch"
+        assert!(glob_matches("feature/*", "feature/my-branch"));
+        assert!(glob_matches("feature/*", "feature/foo"));
+    }
+
+    #[test]
+    fn glob_slash_star_does_not_match_other_prefix() {
+        // Negative: "feature/*" must NOT match branches without the "feature/" prefix
+        assert!(!glob_matches("feature/*", "main"));
+        assert!(!glob_matches("feature/*", "fix/my-fix"));
+        assert!(!glob_matches("feature/*", "feature"));
+    }
+
     // ── resolve_env_var ──────────────────────────────────────────────────
 
     #[test]

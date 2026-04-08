@@ -188,6 +188,14 @@ fn dispatch_notification(
     true
 }
 
+/// Parse `"repo_slug/branch"` from an optional target label.
+///
+/// Returns `("", "")` when the label is `None` or contains no `'/'` separator.
+/// The format `"repo_slug/worktree_slug"` is used by both workflow and agent runs.
+pub fn parse_target_label(label: Option<&str>) -> (&str, &str) {
+    label.and_then(|s| s.split_once('/')).unwrap_or(("", ""))
+}
+
 /// Parameters for [`fire_workflow_notification`].
 pub struct WorkflowNotificationArgs<'a> {
     pub run_id: &'a str,
@@ -212,6 +220,14 @@ pub struct AgentRunNotificationArgs<'a> {
     pub branch: &'a str,
     pub duration_ms: Option<u64>,
     pub ticket_url: Option<String>,
+}
+
+/// Parameters for [`fire_feedback_notification`].
+pub struct FeedbackNotificationParams<'a> {
+    pub request_id: &'a str,
+    pub prompt_preview: &'a str,
+    pub repo_slug: &'a str,
+    pub branch: &'a str,
 }
 
 /// Fire a desktop notification for a workflow completion, respecting user config.
@@ -330,10 +346,7 @@ pub fn fire_feedback_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
-    request_id: &str,
-    prompt_preview: &str,
-    repo_slug: &str,
-    branch: &str,
+    params: &FeedbackNotificationParams<'_>,
 ) {
     if !config.enabled {
         return;
@@ -343,22 +356,25 @@ pub fn fire_feedback_notification(
     let notification = CreateNotification {
         kind: "feedback_requested",
         title,
-        body: prompt_preview,
+        body: params.prompt_preview,
         severity: NotificationSeverity::Warning,
-        entity_id: Some(request_id),
+        entity_id: Some(params.request_id),
         entity_type: Some("agent_run"),
     };
 
-    let slack_text = format!("[conductor] agent run waiting for feedback: {prompt_preview}");
+    let slack_text = format!(
+        "[conductor] agent run waiting for feedback: {}",
+        params.prompt_preview
+    );
 
     let hook_event = NotificationEvent::FeedbackRequested {
-        run_id: request_id.to_string(),
-        label: prompt_preview.to_string(),
+        run_id: params.request_id.to_string(),
+        label: params.prompt_preview.to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         url: None,
-        prompt_preview: prompt_preview.to_string(),
-        repo_slug: repo_slug.to_string(),
-        branch: branch.to_string(),
+        prompt_preview: params.prompt_preview.to_string(),
+        repo_slug: params.repo_slug.to_string(),
+        branch: params.branch.to_string(),
         duration_ms: None,
         ticket_url: None,
     };
@@ -367,7 +383,7 @@ pub fn fire_feedback_notification(
         conn,
         config,
         &DispatchParams {
-            dedup_entity_id: request_id,
+            dedup_entity_id: params.request_id,
             dedup_event_type: "feedback_requested",
             notification: &notification,
             slack_text: &slack_text,
@@ -804,17 +820,10 @@ pub fn detect_workflow_terminal_transitions<'a>(
             if now_terminal && status_changed {
                 let succeeded = matches!(run.status, WorkflowRunStatus::Completed);
                 // Parse repo_slug/branch from target_label (format: "repo_slug/branch")
-                let (repo_slug, branch) = run
-                    .target_label
-                    .as_deref()
-                    .and_then(|s| s.split_once('/'))
-                    .map(|(r, b)| (r.to_string(), b.to_string()))
-                    .unwrap_or_else(|| {
-                        (
-                            run.target_label.as_deref().unwrap_or("").to_string(),
-                            String::new(),
-                        )
-                    });
+                let (repo_slug, branch) = {
+                    let (r, b) = parse_target_label(run.target_label.as_deref());
+                    (r.to_string(), b.to_string())
+                };
                 let duration_ms = run.total_duration_ms.map(|ms| ms as u64);
                 let error = if !succeeded {
                     run.result_summary.clone()
@@ -1319,7 +1328,17 @@ mod tests {
     fn fire_feedback_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_feedback_notification(&conn, &cfg, &[], "req-1", "Is this correct?", "", "");
+        fire_feedback_notification(
+            &conn,
+            &cfg,
+            &[],
+            &FeedbackNotificationParams {
+                request_id: "req-1",
+                prompt_preview: "Is this correct?",
+                repo_slug: "",
+                branch: "",
+            },
+        );
         // Notification was gated — no claim should have been recorded.
         let count: i64 = conn
             .query_row(
@@ -1339,8 +1358,28 @@ mod tests {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
         // Fire twice — second call must be a no-op (claim already taken).
-        fire_feedback_notification(&conn, &cfg, &[], "req-2", "preview", "", "");
-        fire_feedback_notification(&conn, &cfg, &[], "req-2", "preview", "", "");
+        fire_feedback_notification(
+            &conn,
+            &cfg,
+            &[],
+            &FeedbackNotificationParams {
+                request_id: "req-2",
+                prompt_preview: "preview",
+                repo_slug: "",
+                branch: "",
+            },
+        );
+        fire_feedback_notification(
+            &conn,
+            &cfg,
+            &[],
+            &FeedbackNotificationParams {
+                request_id: "req-2",
+                prompt_preview: "preview",
+                repo_slug: "",
+                branch: "",
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'req-2' AND event_type = 'feedback_requested'",
@@ -2364,6 +2403,49 @@ mod tests {
         assert_eq!(t2[0].run_id, "nw1");
         assert_eq!(t2[0].workflow_name, "label-all-tickets");
         assert!(t2[0].succeeded, "Completed → succeeded=true");
+    }
+
+    /// When `target_label` has no `'/'`, both `repo_slug` and `branch` must be empty
+    /// rather than misattributing the whole label as a repo slug.
+    #[test]
+    fn wf_transitions_target_label_no_slash_yields_empty_repo_and_branch() {
+        let mut run = make_workflow_run("r1", "deploy", WorkflowRunStatus::Running);
+        run.target_label = Some("noslash".to_string());
+
+        let tick1 = [run.clone()];
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+        detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+
+        let mut run_done = run;
+        run_done.status = WorkflowRunStatus::Completed;
+        let tick2 = [run_done];
+        let t = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].repo_slug, "", "repo_slug must be empty when no slash");
+        assert_eq!(t[0].branch, "", "branch must be empty when no slash");
+    }
+
+    /// When `target_label` is `Some("repo/branch")`, both components are parsed correctly.
+    #[test]
+    fn wf_transitions_target_label_with_slash_parses_repo_and_branch() {
+        let mut run = make_workflow_run("r1", "deploy", WorkflowRunStatus::Running);
+        run.target_label = Some("my-repo/main".to_string());
+
+        let tick1 = [run.clone()];
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+        detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+
+        let mut run_done = run;
+        run_done.status = WorkflowRunStatus::Completed;
+        let tick2 = [run_done];
+        let t = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].repo_slug, "my-repo");
+        assert_eq!(t[0].branch, "main");
     }
 
     // --- detect_agent_terminal_transitions ---

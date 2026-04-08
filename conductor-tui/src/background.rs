@@ -127,10 +127,12 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     conn,
                                     &config.notifications,
                                     &config.notify.hooks,
-                                    &req.id,
-                                    &req.prompt,
-                                    "",
-                                    "",
+                                    &crate::notify::FeedbackNotificationParams {
+                                        request_id: &req.id,
+                                        prompt_preview: &req.prompt,
+                                        repo_slug: "",
+                                        branch: "",
+                                    },
                                 );
                             }
                         }
@@ -161,8 +163,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     // Single gate: fire individual notification (no behavior change)
                                     let (step, workflow_name, target_label) = steps[0];
                                     notified_gate_ids.insert(step.id.clone());
-                                    let tl = target_label.as_deref().unwrap_or("");
-                                    let (rs, br) = tl.split_once('/').unwrap_or((tl, ""));
+                                    let (rs, br) = conductor_core::notify::parse_target_label(target_label.as_deref());
                                     crate::notify::fire_gate_notification(
                                         conn,
                                         &config.notifications,
@@ -238,8 +239,8 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                         worktree_slug: t.worktree_slug.as_deref(),
                                         succeeded: t.succeeded,
                                         error_msg: t.error_msg.as_deref(),
-                                        repo_slug: "",
-                                        branch: "",
+                                        repo_slug: &t.repo_slug,
+                                        branch: &t.branch,
                                         duration_ms: t.duration_ms,
                                         ticket_url: None,
                                     },
