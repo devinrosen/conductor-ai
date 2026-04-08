@@ -394,7 +394,7 @@ impl App {
         // permanently locking the UI with no recovery path.
         let Some(bg_tx) = self.bg_tx.clone() else {
             self.state.modal = Modal::Error {
-                message: "Cannot create worktree: background sender not ready.".into(),
+                message: super::BG_TX_NOT_READY.into(),
             };
             return;
         };

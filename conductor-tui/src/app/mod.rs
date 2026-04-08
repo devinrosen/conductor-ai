@@ -36,6 +36,8 @@ mod workflow_management;
 #[cfg(test)]
 mod tests;
 
+const BG_TX_NOT_READY: &str = "Cannot create worktree: background sender not ready.";
+
 pub struct App {
     state: AppState,
     conn: Connection,
