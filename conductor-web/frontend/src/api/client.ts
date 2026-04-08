@@ -42,6 +42,7 @@ import type {
   WorkflowRegressionSignal,
   GateAnalyticsRow,
   PendingGateAnalyticsRow,
+  HookSummary,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -357,6 +358,14 @@ export const api = {
     request<void>("/push/subscribe", {
       method: "DELETE",
       body: JSON.stringify(data),
+    }),
+
+  // Notification Hooks
+  listHooks: () => request<HookSummary[]>("/config/hooks"),
+  testHook: (hookIndex: number) =>
+    request<void>("/hooks/test", {
+      method: "POST",
+      body: JSON.stringify({ hook_index: hookIndex }),
     }),
 };
 

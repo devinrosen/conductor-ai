@@ -52,6 +52,9 @@ fn main() -> Result<()> {
         Commands::Setup { command } => handlers::setup::handle_setup(command)?,
         Commands::Mcp { command } => handlers::mcp::handle_mcp(command)?,
         Commands::Dev { command } => handlers::dev::handle_dev(command)?,
+        Commands::Notifications { command } => {
+            handlers::notifications::handle_notifications(command, &config)?
+        }
     }
 
     Ok(())
