@@ -345,11 +345,13 @@ async fn main() -> Result<()> {
                         &conn,
                         &cfg.notifications,
                         &cfg.notify.hooks,
-                        &t.run_id,
-                        &t.workflow_name,
-                        t.target_label.as_deref(),
-                        t.succeeded,
-                        t.parent_workflow_run_id.as_deref(),
+                        &conductor_core::notify::WorkflowNotificationArgs {
+                            run_id: &t.run_id,
+                            workflow_name: &t.workflow_name,
+                            target_label: t.target_label.as_deref(),
+                            succeeded: t.succeeded,
+                            parent_workflow_run_id: t.parent_workflow_run_id.as_deref(),
+                        },
                     );
                 }
 
