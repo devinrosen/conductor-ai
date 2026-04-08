@@ -1009,4 +1009,3 @@ fn with_waiting_gate(
         }
     }
 }
-
