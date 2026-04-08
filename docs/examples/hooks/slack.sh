@@ -3,6 +3,8 @@
 #
 # Posts a message to a Slack Incoming Webhook when a conductor event fires.
 #
+# Requires: curl, jq
+#
 # Required environment variables:
 #   SLACK_WEBHOOK_URL   — Slack Incoming Webhook URL
 #                         (https://api.slack.com/messaging/webhooks)
@@ -22,14 +24,19 @@ set -euo pipefail
 
 : "${SLACK_WEBHOOK_URL:?SLACK_WEBHOOK_URL must be set}"
 
-# Build message text
+# Build message text — jq handles all JSON escaping for CONDUCTOR_* values.
 if [ -n "${CONDUCTOR_URL:-}" ]; then
-  text="*Conductor* | \`${CONDUCTOR_EVENT}\` — <${CONDUCTOR_URL}|${CONDUCTOR_LABEL}>"
+  text=$(jq -rn --arg event "${CONDUCTOR_EVENT}" --arg label "${CONDUCTOR_LABEL}" \
+             --arg url "${CONDUCTOR_URL}" \
+             '"*Conductor* | `\($event)` — <\($url)|\($label)>"')
 else
-  text="*Conductor* | \`${CONDUCTOR_EVENT}\` — ${CONDUCTOR_LABEL}"
+  text=$(jq -rn --arg event "${CONDUCTOR_EVENT}" --arg label "${CONDUCTOR_LABEL}" \
+             '"*Conductor* | `\($event)` — \($label)"')
 fi
+
+payload=$(jq -n --arg text "${text}" '{"text": $text}')
 
 curl -s -X POST \
   -H "Content-Type: application/json" \
-  --data "{\"text\": \"${text}\"}" \
+  --data "${payload}" \
   "${SLACK_WEBHOOK_URL}"

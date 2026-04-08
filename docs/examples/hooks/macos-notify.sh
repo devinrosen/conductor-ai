@@ -23,8 +23,11 @@ if [[ "$(uname)" != "Darwin" ]]; then
   exit 0
 fi
 
-title="Conductor"
-subtitle="${CONDUCTOR_EVENT}"
-message="${CONDUCTOR_LABEL}"
-
-osascript -e "display notification \"${message}\" with title \"${title}\" subtitle \"${subtitle}\""
+# Pass shell variables as positional arguments to the AppleScript run handler
+# rather than interpolating them into the script text. This prevents injection
+# via label or event values that contain quotes or AppleScript metacharacters.
+osascript \
+  -e 'on run argv' \
+  -e '  display notification (item 1 of argv) with title (item 2 of argv) subtitle (item 3 of argv)' \
+  -e 'end run' \
+  -- "${CONDUCTOR_LABEL}" "Conductor" "${CONDUCTOR_EVENT}"

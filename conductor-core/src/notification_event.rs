@@ -106,6 +106,92 @@ pub enum NotificationEvent {
 }
 
 impl NotificationEvent {
+    /// Creates a synthetic test event for the given concrete event name.
+    ///
+    /// Used by CLI `notifications test` and the web API `POST /api/hooks/test` so that
+    /// the factory logic lives in one place rather than being duplicated across binary crates.
+    ///
+    /// Returns `Err` if `name` is not a recognized event name.
+    pub fn synthetic(name: &str, now: impl Into<String>) -> Result<Self, String> {
+        let now = now.into();
+        let run_id = "test-00000000000000000000000000".to_string();
+        let url = Some("http://localhost".to_string());
+        let ev = match name {
+            "workflow_run.completed" => Self::WorkflowRunCompleted {
+                run_id,
+                label: "Test Run".to_string(),
+                timestamp: now,
+                url,
+            },
+            "workflow_run.failed" => Self::WorkflowRunFailed {
+                run_id,
+                label: "Test Run".to_string(),
+                timestamp: now,
+                url,
+            },
+            "agent_run.completed" => Self::AgentRunCompleted {
+                run_id,
+                label: "Test Agent Run".to_string(),
+                timestamp: now,
+                url,
+            },
+            "agent_run.failed" => Self::AgentRunFailed {
+                run_id,
+                label: "Test Agent Run".to_string(),
+                timestamp: now,
+                url,
+                error: Some("Test error".to_string()),
+            },
+            "gate.waiting" => Self::GateWaiting {
+                run_id,
+                label: "Test Run".to_string(),
+                timestamp: now,
+                url,
+                step_name: "test-gate".to_string(),
+            },
+            "feedback.requested" => Self::FeedbackRequested {
+                run_id,
+                label: "Test Agent Run".to_string(),
+                timestamp: now,
+                url,
+                prompt_preview: "Is this correct?".to_string(),
+            },
+            other => {
+                return Err(format!(
+                    "unknown event name: '{other}'. Valid events: workflow_run.completed, \
+                     workflow_run.failed, agent_run.completed, agent_run.failed, \
+                     gate.waiting, feedback.requested"
+                ))
+            }
+        };
+        Ok(ev)
+    }
+
+    /// Creates a synthetic test event that will pass through a hook with the given `on` pattern.
+    ///
+    /// Picks the first concrete event name that the pattern matches, falling back to
+    /// `workflow_run.completed` for `"*"` or any unrecognized pattern. Used by the web
+    /// API `POST /api/hooks/test` to ensure the test event actually reaches the hook.
+    pub fn synthetic_for_pattern(pattern: &str, now: impl Into<String>) -> Self {
+        let now = now.into();
+        const CANDIDATES: &[&str] = &[
+            "workflow_run.completed",
+            "workflow_run.failed",
+            "agent_run.completed",
+            "agent_run.failed",
+            "gate.waiting",
+            "feedback.requested",
+        ];
+        for &name in CANDIDATES {
+            if crate::notification_hooks::glob_matches(pattern, name) {
+                // All candidate names are valid; unwrap is safe.
+                return Self::synthetic(name, now).unwrap();
+            }
+        }
+        // Fallback for "*" or any unrecognized pattern.
+        Self::synthetic("workflow_run.completed", now).unwrap()
+    }
+
     /// Returns the dotted event name string used for glob matching in hook configs.
     ///
     /// Examples: `"workflow_run.completed"`, `"gate.waiting"`.
@@ -792,5 +878,70 @@ mod tests {
         let v = event.to_json();
         assert_eq!(v["workflow_name"], "child-wf");
         assert_eq!(v["parent_workflow_run_id"], "parent-run-id");
+    }
+
+    // ── synthetic / synthetic_for_pattern ────────────────────────────────
+
+    #[test]
+    fn synthetic_known_event_names_succeed() {
+        let names = [
+            "workflow_run.completed",
+            "workflow_run.failed",
+            "agent_run.completed",
+            "agent_run.failed",
+            "gate.waiting",
+            "feedback.requested",
+        ];
+        for name in names {
+            let ev = NotificationEvent::synthetic(name, "t").unwrap();
+            assert_eq!(ev.event_name(), name, "event_name mismatch for {name}");
+        }
+    }
+
+    #[test]
+    fn synthetic_unknown_event_name_returns_err() {
+        let result = NotificationEvent::synthetic("does_not_exist", "t");
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("does_not_exist"),
+            "error message should include bad name"
+        );
+    }
+
+    #[test]
+    fn synthetic_for_pattern_star_returns_workflow_run_completed() {
+        let ev = NotificationEvent::synthetic_for_pattern("*", "t");
+        assert_eq!(ev.event_name(), "workflow_run.completed");
+    }
+
+    #[test]
+    fn synthetic_for_pattern_workflow_prefix() {
+        let ev = NotificationEvent::synthetic_for_pattern("workflow_run.*", "t");
+        assert_eq!(ev.event_name(), "workflow_run.completed");
+    }
+
+    #[test]
+    fn synthetic_for_pattern_agent_prefix() {
+        let ev = NotificationEvent::synthetic_for_pattern("agent_run.*", "t");
+        assert_eq!(ev.event_name(), "agent_run.completed");
+    }
+
+    #[test]
+    fn synthetic_for_pattern_exact_gate_waiting() {
+        let ev = NotificationEvent::synthetic_for_pattern("gate.waiting", "t");
+        assert_eq!(ev.event_name(), "gate.waiting");
+    }
+
+    #[test]
+    fn synthetic_for_pattern_exact_feedback_requested() {
+        let ev = NotificationEvent::synthetic_for_pattern("feedback.requested", "t");
+        assert_eq!(ev.event_name(), "feedback.requested");
+    }
+
+    #[test]
+    fn synthetic_for_pattern_unrecognized_falls_back_to_workflow_completed() {
+        let ev = NotificationEvent::synthetic_for_pattern("unrecognized.event", "t");
+        assert_eq!(ev.event_name(), "workflow_run.completed");
     }
 }

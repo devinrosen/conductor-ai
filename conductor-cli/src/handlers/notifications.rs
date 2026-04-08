@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 
 use conductor_core::config::Config;
@@ -18,7 +18,8 @@ pub fn handle_notifications(command: NotificationsCommands, config: &Config) -> 
             }
 
             let now = Utc::now().to_rfc3339();
-            let notification_event = build_event(&event, now)?;
+            let notification_event =
+                NotificationEvent::synthetic(&event, now).map_err(|e| anyhow!("{e}"))?;
 
             let runner = HookRunner::new(hooks);
             runner.fire(&notification_event);
@@ -34,55 +35,31 @@ pub fn handle_notifications(command: NotificationsCommands, config: &Config) -> 
     }
 }
 
-fn build_event(event: &str, now: String) -> Result<NotificationEvent> {
-    let run_id = "test-00000000000000000000000000".to_string();
-    let url = Some("http://localhost".to_string());
+#[cfg(test)]
+mod tests {
+    use conductor_core::notification_event::NotificationEvent;
 
-    let ev = match event {
-        "workflow_run.completed" => NotificationEvent::WorkflowRunCompleted {
-            run_id,
-            label: "Test Run".to_string(),
-            timestamp: now,
-            url,
-        },
-        "workflow_run.failed" => NotificationEvent::WorkflowRunFailed {
-            run_id,
-            label: "Test Run".to_string(),
-            timestamp: now,
-            url,
-        },
-        "agent_run.completed" => NotificationEvent::AgentRunCompleted {
-            run_id,
-            label: "Test Agent Run".to_string(),
-            timestamp: now,
-            url,
-        },
-        "agent_run.failed" => NotificationEvent::AgentRunFailed {
-            run_id,
-            label: "Test Agent Run".to_string(),
-            timestamp: now,
-            url,
-            error: Some("Test error".to_string()),
-        },
-        "gate.waiting" => NotificationEvent::GateWaiting {
-            run_id,
-            label: "Test Run".to_string(),
-            timestamp: now,
-            url,
-            step_name: "test-gate".to_string(),
-        },
-        "feedback.requested" => NotificationEvent::FeedbackRequested {
-            run_id,
-            label: "Test Agent Run".to_string(),
-            timestamp: now,
-            url,
-            prompt_preview: "Is this correct?".to_string(),
-        },
-        other => bail!(
-            "unknown event name: '{other}'. Valid events: workflow_run.completed, \
-             workflow_run.failed, agent_run.completed, agent_run.failed, \
-             gate.waiting, feedback.requested"
-        ),
-    };
-    Ok(ev)
+    #[test]
+    fn synthetic_all_valid_event_names() {
+        let names = [
+            "workflow_run.completed",
+            "workflow_run.failed",
+            "agent_run.completed",
+            "agent_run.failed",
+            "gate.waiting",
+            "feedback.requested",
+        ];
+        for name in names {
+            let result = NotificationEvent::synthetic(name, "2024-01-01T00:00:00Z");
+            assert!(result.is_ok(), "expected Ok for '{name}'");
+            assert_eq!(result.unwrap().event_name(), name);
+        }
+    }
+
+    #[test]
+    fn synthetic_unknown_event_name_returns_err() {
+        let result = NotificationEvent::synthetic("bad.event", "t");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("bad.event"));
+    }
 }

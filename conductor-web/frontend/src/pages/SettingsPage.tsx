@@ -20,6 +20,7 @@ export function SettingsPage() {
 
   // Track which hooks have had a test fired (map of index → timeout handle)
   const [firedHooks, setFiredHooks] = useState<Set<number>>(new Set());
+  const [hookTestError, setHookTestError] = useState<string | null>(null);
 
   async function handleGlobalModelChange(model: string | null) {
     setSavingGlobalModel(true);
@@ -37,6 +38,7 @@ export function SettingsPage() {
   }
 
   async function handleTestHook(hook: HookSummary) {
+    setHookTestError(null);
     try {
       await api.testHook(hook.index);
       setFiredHooks((prev) => new Set(prev).add(hook.index));
@@ -47,8 +49,10 @@ export function SettingsPage() {
           return next;
         });
       }, 3000);
-    } catch {
-      // Errors surface in hook output/logs, not here
+    } catch (err) {
+      setHookTestError(
+        err instanceof Error ? err.message : "Failed to dispatch test event",
+      );
     }
   }
 
@@ -97,6 +101,12 @@ export function SettingsPage() {
           Shell or HTTP hooks fired on workflow and agent lifecycle events. Configure in{" "}
           <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">~/.conductor/config.toml</code>.
         </p>
+
+        {hookTestError && (
+          <div className="mb-3 px-3 py-2 text-sm text-red-700 bg-red-50 rounded-md border border-red-200">
+            {hookTestError}
+          </div>
+        )}
 
         {hooksLoading ? (
           <div className="text-sm text-gray-400">Loading hooks…</div>

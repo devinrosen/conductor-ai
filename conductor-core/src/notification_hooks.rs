@@ -11,7 +11,7 @@ use crate::notification_event::NotificationEvent;
 /// - exact string — matches only when the strings are equal.
 ///
 /// No external crate is needed: the event namespace is two-level and well-defined.
-pub(crate) fn glob_matches(pattern: &str, event_name: &str) -> bool {
+pub fn glob_matches(pattern: &str, event_name: &str) -> bool {
     if pattern == "*" {
         return true;
     }
