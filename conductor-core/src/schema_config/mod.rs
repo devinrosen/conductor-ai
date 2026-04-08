@@ -30,6 +30,7 @@ pub use validation::{parse_structured_output, StructuredOutput};
 
 // Items that are pub(crate) in the original file — re-export with same visibility.
 pub(crate) use validation::extract_output_block;
+pub(crate) use validation::fix_invalid_backslash_escapes;
 
 // Items used by tests that are not otherwise public — re-export under cfg(test).
 #[cfg(test)]
