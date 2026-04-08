@@ -3078,4 +3078,162 @@ mod tests {
             "dedup claim must be made when hooks are configured, even if on_success=false"
         );
     }
+
+    /// `fire_agent_run_notification` must make a dedup claim (so hooks can fire)
+    /// when `enabled = false` but hooks are configured.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_agent_run() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "agent_run.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &AgentRunNotificationArgs {
+                run_id: "agent-hooks-1",
+                worktree_slug: Some("my-worktree"),
+                succeeded: true,
+                error_msg: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-hooks-1' AND event_type = 'agent_completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for agent_run when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// `fire_agent_run_notification` failure path: dedup claim must be made when
+    /// `enabled = false` but hooks are configured.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_agent_run_failure() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "agent_run.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &AgentRunNotificationArgs {
+                run_id: "agent-hooks-2",
+                worktree_slug: None,
+                succeeded: false,
+                error_msg: Some("exit 1"),
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-hooks-2' AND event_type = 'agent_failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for agent_run failure when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// `fire_gate_notification` must make a dedup claim (so hooks can fire)
+    /// when `enabled = false` but hooks are configured.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_gate() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "gate.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_gate_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &GateNotificationParams {
+                step_id: "gate-hooks-1",
+                step_name: "approve",
+                workflow_name: "deploy",
+                target_label: None,
+                gate_type: Some(&GateType::HumanApproval),
+                gate_prompt: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                ticket_url: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'gate-hooks-1' AND event_type = 'gate_waiting'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for gate when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// `fire_grouped_gate_notification` must make a dedup claim (so hooks can fire)
+    /// when `enabled = false` but hooks are configured.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_grouped_gate() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "gate.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_grouped_gate_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &GroupedGateNotificationParams {
+                run_id: "grouped-gate-hooks-1",
+                workflow_name: "deploy",
+                target_label: None,
+                gate_types: vec![Some(&GateType::HumanApproval)],
+                count: 2,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'grouped-gate-hooks-1' AND event_type = 'gates_grouped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for grouped gate when hooks are configured, even with enabled=false"
+        );
+    }
 }
