@@ -83,11 +83,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
 
                     // Reuse the connection returned by poll_data() — no need to open a
                     // second connection just for notification claims.
-                    let claim_conn = if config.notifications.enabled {
-                        Some(conn)
-                    } else {
-                        None
-                    };
+                    // Always pass the connection so dedup and hooks can run even when
+                    // desktop/Slack notifications are disabled.
+                    let claim_conn = Some(conn);
 
                     let all_runs = payload
                         .latest_workflow_runs_by_worktree
