@@ -5,6 +5,44 @@ pub enum View {
     WorktreeDetail,
     WorkflowRunDetail,
     WorkflowDefDetail,
+    Settings,
+}
+
+/// Which pane of the Settings view has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsFocus {
+    /// Left pane: category list.
+    #[default]
+    CategoryList,
+    /// Right pane: settings rows for the selected category.
+    SettingsList,
+}
+
+/// Top-level categories in the Settings view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsCategory {
+    #[default]
+    General,
+    Appearance,
+    Notifications,
+}
+
+impl SettingsCategory {
+    pub fn all() -> &'static [SettingsCategory] {
+        &[
+            SettingsCategory::General,
+            SettingsCategory::Appearance,
+            SettingsCategory::Notifications,
+        ]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Appearance => "Appearance",
+            Self::Notifications => "Notifications",
+        }
+    }
 }
 
 /// A row in the unified dashboard list — repo header or worktree entry.
@@ -516,4 +554,8 @@ pub enum InputAction {
         action: Box<RunWorkflowAction>,
         inputs: std::collections::HashMap<String, String>,
     },
+    /// Settings view: set the global model string (blank to clear).
+    SettingsSetModel,
+    /// Settings view: set the sync interval in minutes.
+    SettingsSetSyncInterval,
 }

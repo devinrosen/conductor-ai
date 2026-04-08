@@ -711,6 +711,9 @@ impl App {
                     }
                 }
             }
+            InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
+                self.handle_settings_input_submit(on_submit, value);
+            }
         }
     }
 
@@ -775,6 +778,9 @@ impl App {
                     resume_session_id,
                     model,
                 );
+            }
+            InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
+                self.handle_settings_input_submit(on_submit, value);
             }
             _ => {}
         }

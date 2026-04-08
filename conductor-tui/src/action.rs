@@ -101,6 +101,7 @@ pub enum Action {
     SyncTickets,
     #[allow(dead_code)]
     LinkTicket,
+    #[allow(dead_code)]
     ManageIssueSources,
     IssueSourceAdd,
     IssueSourceDelete,
@@ -423,6 +424,26 @@ pub enum Action {
         defs: Vec<WorkflowDef>,
         warnings: Vec<WorkflowWarning>,
     },
+
+    // Settings view
+    /// Navigate to View::Settings.
+    OpenSettings,
+    /// Fire a synthetic test event through the hook at the given index.
+    SettingsTestHook {
+        hook_index: usize,
+    },
+    /// Background result: hook test completed.
+    SettingsHookTestComplete {
+        hook_index: usize,
+        result: Result<(), String>,
+    },
+    /// Open an edit modal for the selected setting (string/numeric values).
+    SettingsEditSetting,
+    /// Cycle through enum options for the selected setting.
+    SettingsCycleValue,
+    /// Toggle the selected boolean setting.
+    #[allow(dead_code)]
+    SettingsToggleBool,
 
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,
