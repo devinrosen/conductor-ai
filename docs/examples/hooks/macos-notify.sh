@@ -41,5 +41,12 @@ case "$CONDUCTOR_EVENT" in
     ;;
 esac
 
-osascript \
-  -e "display notification \"${CONDUCTOR_LABEL}\" with title \"${TITLE}\" sound name \"${SOUND}\""
+# Pass variables as argv to avoid AppleScript injection via user-controlled strings.
+osascript - "$CONDUCTOR_LABEL" "$TITLE" "$SOUND" <<'EOF'
+on run argv
+  set notifText to item 1 of argv
+  set notifTitle to item 2 of argv
+  set notifSound to item 3 of argv
+  display notification notifText with title notifTitle sound name notifSound
+end run
+EOF
