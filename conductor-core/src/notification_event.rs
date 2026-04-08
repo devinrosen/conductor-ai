@@ -138,12 +138,16 @@ impl NotificationEvent {
                 label: "Test Run".to_string(),
                 timestamp: now,
                 url,
+                workflow_name: "test-workflow".to_string(),
+                parent_workflow_run_id: None,
             },
             "workflow_run.failed" => Self::WorkflowRunFailed {
                 run_id,
                 label: "Test Run".to_string(),
                 timestamp: now,
                 url,
+                workflow_name: "test-workflow".to_string(),
+                parent_workflow_run_id: None,
             },
             "agent_run.completed" => Self::AgentRunCompleted {
                 run_id,
