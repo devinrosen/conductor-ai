@@ -522,7 +522,10 @@ fn push_no_bg_tx_shows_error() {
         model: None,
         base_branch: None,
     }];
-    app.state.data.repo_slug_map.insert("r1".into(), "my-repo".into());
+    app.state
+        .data
+        .repo_slug_map
+        .insert("r1".into(), "my-repo".into());
     app.state.selected_worktree_id = Some("w1".into());
 
     app.update(Action::Push);
@@ -547,7 +550,10 @@ fn create_pr_no_bg_tx_shows_error() {
         model: None,
         base_branch: None,
     }];
-    app.state.data.repo_slug_map.insert("r1".into(), "my-repo".into());
+    app.state
+        .data
+        .repo_slug_map
+        .insert("r1".into(), "my-repo".into());
     app.state.selected_worktree_id = Some("w1".into());
 
     app.update(Action::CreatePr);
