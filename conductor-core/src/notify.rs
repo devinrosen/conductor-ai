@@ -86,7 +86,6 @@ struct DispatchParams<'a> {
 /// Returns `true` if the notification was dispatched, `false` if deduplicated.
 fn dispatch_notification(
     conn: &rusqlite::Connection,
-    _config: &NotificationConfig,
     params: &DispatchParams<'_>,
 ) -> bool {
     // Step 1: Try to claim notification for deduplication
@@ -266,7 +265,6 @@ pub fn fire_workflow_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: run_id,
             dedup_event_type: event_type,
@@ -318,7 +316,6 @@ pub fn fire_feedback_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: params.request_id,
             dedup_event_type: "feedback_requested",
@@ -422,7 +419,6 @@ pub fn fire_agent_run_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: run_id,
             dedup_event_type: event_type,
@@ -572,7 +568,6 @@ pub fn fire_gate_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: params.step_id,
             dedup_event_type: "gate_waiting",
@@ -693,7 +688,6 @@ pub fn fire_grouped_gate_notification(
 
     dispatch_notification(
         conn,
-        config,
         &DispatchParams {
             dedup_entity_id: params.run_id,
             dedup_event_type: "gates_grouped",
