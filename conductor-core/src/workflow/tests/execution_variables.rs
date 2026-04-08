@@ -175,7 +175,10 @@ fn test_resolve_child_inputs_keeps_unresolved_pattern() {
     use crate::workflow_dsl::InputDecl;
 
     let mut raw = HashMap::new();
-    raw.insert("query".to_string(), "Search for {{unknown_var}} results".to_string());
+    raw.insert(
+        "query".to_string(),
+        "Search for {{unknown_var}} results".to_string(),
+    );
 
     // vars map does NOT contain "unknown_var"
     let vars: HashMap<&str, String> = HashMap::new();
