@@ -196,6 +196,28 @@ pub fn parse_target_label(label: Option<&str>) -> (&str, &str) {
     label.and_then(|s| s.split_once('/')).unwrap_or(("", ""))
 }
 
+/// Build a deep link URL for a workflow run.
+///
+/// Returns `Some(url)` when all three of `web_url`, `repo_id`, and `worktree_id` are
+/// provided. Trailing slashes on `web_url` are trimmed automatically.
+pub fn build_workflow_deep_link(
+    web_url: Option<&str>,
+    repo_id: Option<&str>,
+    worktree_id: Option<&str>,
+    run_id: &str,
+) -> Option<String> {
+    match (web_url, repo_id, worktree_id) {
+        (Some(base), Some(repo), Some(wt)) => Some(format!(
+            "{}/repos/{}/worktrees/{}/workflows/runs/{}",
+            base.trim_end_matches('/'),
+            repo,
+            wt,
+            run_id
+        )),
+        _ => None,
+    }
+}
+
 /// Parameters for [`fire_workflow_notification`].
 pub struct WorkflowNotificationArgs<'a> {
     pub run_id: &'a str,
@@ -212,9 +234,6 @@ pub struct WorkflowNotificationArgs<'a> {
     pub repo_id: Option<&'a str>,
     /// Conductor worktree ID for deep-link construction. `None` for ephemeral PR runs.
     pub worktree_id: Option<&'a str>,
-    /// Base URL of the web UI (from `config.general.web_url`). When all three are
-    /// `Some`, a deep link is included in the notification event.
-    pub web_url: Option<&'a str>,
 }
 
 /// Parameters for [`fire_agent_run_notification`].
@@ -264,16 +283,12 @@ pub fn fire_workflow_notification(
     let duration_ms = params.duration_ms;
     let ticket_url = params.ticket_url.clone();
     let error = params.error.map(|s| s.to_string());
-    let deep_link = match (params.web_url, params.repo_id, params.worktree_id) {
-        (Some(base), Some(repo), Some(wt)) => Some(format!(
-            "{}/repos/{}/worktrees/{}/workflows/runs/{}",
-            base.trim_end_matches('/'),
-            repo,
-            wt,
-            run_id
-        )),
-        _ => None,
-    };
+    let deep_link = build_workflow_deep_link(
+        config.web_url.as_deref(),
+        params.repo_id,
+        params.worktree_id,
+        run_id,
+    );
 
     let event_type = if succeeded { "completed" } else { "failed" };
     let title = if succeeded {
@@ -973,6 +988,27 @@ mod tests {
                 on_gate_pr_review: true,
             },
             slack: SlackConfig::default(),
+            web_url: None,
+        }
+    }
+
+    fn config_with_web_url(
+        enabled: bool,
+        on_success: bool,
+        on_failure: bool,
+        web_url: &str,
+    ) -> NotificationConfig {
+        NotificationConfig {
+            enabled,
+            workflows: WorkflowNotificationConfig {
+                on_success,
+                on_failure,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+            },
+            slack: SlackConfig::default(),
+            web_url: Some(web_url.to_string()),
         }
     }
 
@@ -1118,7 +1154,6 @@ mod tests {
                 error: None,
                 repo_id: None,
                 worktree_id: None,
-                web_url: None,
             },
         );
         let count: i64 = conn
@@ -1155,7 +1190,6 @@ mod tests {
                 error: None,
                 repo_id: None,
                 worktree_id: None,
-                web_url: None,
             },
         );
         let count: i64 = conn
@@ -1192,7 +1226,6 @@ mod tests {
                 error: None,
                 repo_id: None,
                 worktree_id: None,
-                web_url: None,
             },
         );
         let count: i64 = conn
@@ -1229,7 +1262,6 @@ mod tests {
                 error: None,
                 repo_id: None,
                 worktree_id: None,
-                web_url: None,
             },
         );
         let count: i64 = conn
@@ -1267,7 +1299,6 @@ mod tests {
                 error: None,
                 repo_id: None,
                 worktree_id: None,
-                web_url: None,
             },
         );
         fire_workflow_notification(
@@ -1287,7 +1318,6 @@ mod tests {
                 error: None,
                 repo_id: None,
                 worktree_id: None,
-                web_url: None,
             },
         );
         let count: i64 = conn
@@ -1331,7 +1361,6 @@ mod tests {
                 error: None,
                 repo_id: None,
                 worktree_id: None,
-                web_url: None,
             },
         );
         fire_workflow_notification(
@@ -1351,7 +1380,6 @@ mod tests {
                 error: None,
                 repo_id: None,
                 worktree_id: None,
-                web_url: None,
             },
         );
         let count: i64 = conn
@@ -1371,9 +1399,25 @@ mod tests {
 
     #[test]
     fn deep_link_all_some_produces_correct_url() {
+        // Test the URL format directly via the pure helper.
+        let url = build_workflow_deep_link(
+            Some("https://conductor.example.ts.net"),
+            Some("repo-abc"),
+            Some("wt-xyz"),
+            "run-dl-1",
+        );
+        assert_eq!(
+            url,
+            Some(
+                "https://conductor.example.ts.net/repos/repo-abc/worktrees/wt-xyz/workflows/runs/run-dl-1"
+                    .to_string()
+            ),
+            "deep link URL must match expected format"
+        );
+
+        // Also verify that fire_workflow_notification reads web_url from config and fires.
         let conn = in_memory_db();
-        let cfg = config(true, true, true);
-        // Fire and verify notification event has the expected url via notification_log claim
+        let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net");
         fire_workflow_notification(
             &conn,
             &cfg,
@@ -1391,10 +1435,8 @@ mod tests {
                 error: None,
                 repo_id: Some("repo-abc"),
                 worktree_id: Some("wt-xyz"),
-                web_url: Some("https://conductor.example.ts.net"),
             },
         );
-        // Verify claim was made (meaning the notification fired)
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-dl-1' AND event_type = 'completed'",
@@ -1407,8 +1449,25 @@ mod tests {
 
     #[test]
     fn deep_link_trailing_slash_trimmed() {
+        // Trailing slash on web_url must be stripped so the URL has no double slash.
+        let url = build_workflow_deep_link(
+            Some("https://conductor.example.ts.net/"),
+            Some("repo-abc"),
+            Some("wt-xyz"),
+            "run-dl-2",
+        );
+        assert_eq!(
+            url,
+            Some(
+                "https://conductor.example.ts.net/repos/repo-abc/worktrees/wt-xyz/workflows/runs/run-dl-2"
+                    .to_string()
+            ),
+            "trailing slash on web_url must be trimmed"
+        );
+
+        // Confirm fire_workflow_notification still claims the notification.
         let conn = in_memory_db();
-        let cfg = config(true, true, true);
+        let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net/");
         fire_workflow_notification(
             &conn,
             &cfg,
@@ -1426,7 +1485,6 @@ mod tests {
                 error: None,
                 repo_id: Some("repo-abc"),
                 worktree_id: Some("wt-xyz"),
-                web_url: Some("https://conductor.example.ts.net/"),
             },
         );
         let count: i64 = conn
@@ -1444,9 +1502,38 @@ mod tests {
 
     #[test]
     fn deep_link_any_none_produces_no_url() {
+        // Missing worktree_id → no deep link.
+        assert_eq!(
+            build_workflow_deep_link(
+                Some("https://conductor.example.ts.net"),
+                Some("repo-abc"),
+                None,
+                "run-dl-3",
+            ),
+            None,
+            "missing worktree_id must produce None"
+        );
+        // Missing repo_id → no deep link.
+        assert_eq!(
+            build_workflow_deep_link(
+                Some("https://conductor.example.ts.net"),
+                None,
+                Some("wt-xyz"),
+                "run-dl-3",
+            ),
+            None,
+            "missing repo_id must produce None"
+        );
+        // Missing web_url → no deep link.
+        assert_eq!(
+            build_workflow_deep_link(None, Some("repo-abc"), Some("wt-xyz"), "run-dl-3"),
+            None,
+            "missing web_url must produce None"
+        );
+
+        // fire_workflow_notification must still fire (without a deep link) when worktree_id is absent.
         let conn = in_memory_db();
-        let cfg = config(true, true, true);
-        // worktree_id is None — should still fire but without a deep link
+        let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net");
         fire_workflow_notification(
             &conn,
             &cfg,
@@ -1464,7 +1551,6 @@ mod tests {
                 error: None,
                 repo_id: Some("repo-abc"),
                 worktree_id: None, // missing — no deep link
-                web_url: Some("https://conductor.example.ts.net"),
             },
         );
         let count: i64 = conn
@@ -2774,6 +2860,7 @@ mod tests {
                 on_gate_pr_review: true,
             },
             slack: SlackConfig::default(), // webhook_url = None
+            web_url: None,
         };
         let result = send_slack_sync(&cfg, "test message");
         assert!(result.is_err(), "expected error when webhook_url is None");
@@ -2799,6 +2886,7 @@ mod tests {
                 webhook_url: Some("".to_string()),
                 signing_secret: None,
             },
+            web_url: None,
         };
         let result = send_slack_sync(&cfg, "test message");
         assert!(result.is_err(), "expected error when webhook_url is empty");

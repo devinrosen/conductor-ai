@@ -409,7 +409,6 @@ pub async fn run_workflow(
                             error: None,
                             repo_id: Some(&repo_id),
                             worktree_id: params.worktree_id.as_deref(),
-                            web_url: params.config.general.web_url.as_deref(),
                         },
                     );
                 } else if let Err(e) = &notification_conn {
@@ -448,7 +447,6 @@ pub async fn run_workflow(
                             error: None,
                             repo_id: Some(&repo_id),
                             worktree_id: params.worktree_id.as_deref(),
-                            web_url: params.config.general.web_url.as_deref(),
                         },
                     );
                 } else if let Err(e) = &notification_conn {
@@ -704,7 +702,6 @@ pub async fn post_workflow_run(
                         error: None,
                         repo_id: Some(&repo_id),
                         worktree_id: wt_id_clone.as_deref(),
-                        web_url: config.general.web_url.as_deref(),
                     },
                 );
 
@@ -740,7 +737,6 @@ pub async fn post_workflow_run(
                         error: None,
                         repo_id: Some(&repo_id),
                         worktree_id: wt_id_clone.as_deref(),
-                        web_url: config.general.web_url.as_deref(),
                     },
                 );
             }
@@ -1248,7 +1244,6 @@ pub async fn resume_workflow_endpoint(
                         error: None,
                         repo_id: run_repo_id.as_deref(),
                         worktree_id: run_worktree_id.as_deref(),
-                        web_url: params.config.general.web_url.as_deref(),
                     },
                 );
 
@@ -1279,7 +1274,6 @@ pub async fn resume_workflow_endpoint(
                         error: None,
                         repo_id: run_repo_id.as_deref(),
                         worktree_id: run_worktree_id.as_deref(),
-                        web_url: params.config.general.web_url.as_deref(),
                     },
                 );
             }
@@ -1718,7 +1712,6 @@ mod tests {
                     error: None,
                     repo_id: None,
                     worktree_id: None,
-                    web_url: None,
                 },
             );
         })
@@ -1737,6 +1730,7 @@ mod tests {
                 on_gate_pr_review: true,
             },
             slack: conductor_core::config::SlackConfig::default(),
+            web_url: None,
         }
     }
 
@@ -1776,7 +1770,6 @@ mod tests {
                     error: None,
                     repo_id: None,
                     worktree_id: None,
-                    web_url: None,
                 },
             );
         })
@@ -1805,7 +1798,6 @@ mod tests {
                     error: None,
                     repo_id: None,
                     worktree_id: None,
-                    web_url: None,
                 },
             );
         })
@@ -1834,7 +1826,7 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None, web_url: None });
+            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn

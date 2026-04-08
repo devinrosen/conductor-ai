@@ -107,6 +107,12 @@ pub struct NotificationConfig {
     pub workflows: WorkflowNotificationConfig,
     #[serde(default)]
     pub slack: SlackConfig,
+    /// Base URL of the conductor web UI used to build deep links in notification
+    /// events (e.g. `https://conductor.myhost.ts.net`). Trailing slash is trimmed
+    /// automatically. When set, workflow completion/failure notifications include a
+    /// `url` field of the form `{web_url}/repos/{repo_id}/worktrees/{worktree_id}/workflows/runs/{run_id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -305,12 +311,6 @@ pub struct GeneralConfig {
     /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,
-    /// Base URL of the conductor web UI used to build deep links in notification
-    /// events (e.g. `https://conductor.myhost.ts.net`). Trailing slash is trimmed
-    /// automatically. When set, workflow completion/failure notifications include a
-    /// `url` field of the form `{web_url}/repos/{repo_id}/worktrees/{worktree_id}/workflows/runs/{run_id}`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub web_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -367,7 +367,6 @@ impl Default for GeneralConfig {
             theme: None,
             auto_cleanup_merged_branches: true,
             claude_config_dir: None,
-            web_url: None,
         }
     }
 }
