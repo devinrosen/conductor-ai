@@ -144,6 +144,9 @@ struct DispatchParams<'a> {
     slack_text: &'a str,
     hooks: &'a [HookConfig],
     event: Option<&'a NotificationEvent>,
+    /// When `true`, steps 3 (desktop) and 4 (Slack) are executed.
+    /// Set to `false` when `[notifications] enabled = false` — hooks (step 5) still fire.
+    fire_desktop_and_slack: bool,
 }
 
 /// Dispatch a notification using the common 5-step pattern.
@@ -168,17 +171,23 @@ fn dispatch_notification(
     // Step 2: Persist in-app notification
     persist_notification(conn, params.notification);
 
-    // Step 3: Show desktop notification with error logging
-    if let Err(e) = show_desktop_notification(params.notification.title, params.notification.body) {
-        tracing::warn!(
-            entity_id = params.notification.entity_id,
-            kind = params.notification.kind,
-            "desktop notification failed: {e}"
-        );
+    // Step 3: Show desktop notification with error logging (gated on fire_desktop_and_slack)
+    if params.fire_desktop_and_slack {
+        if let Err(e) =
+            show_desktop_notification(params.notification.title, params.notification.body)
+        {
+            tracing::warn!(
+                entity_id = params.notification.entity_id,
+                kind = params.notification.kind,
+                "desktop notification failed: {e}"
+            );
+        }
     }
 
-    // Step 4: Send Slack notification if configured
-    maybe_send_slack(config, params.slack_text);
+    // Step 4: Send Slack notification if configured (gated on fire_desktop_and_slack)
+    if params.fire_desktop_and_slack {
+        maybe_send_slack(config, params.slack_text);
+    }
 
     // Step 5: Fire user-configured notification hooks (fire-and-forget)
     if let Some(evt) = params.event {
@@ -269,7 +278,9 @@ pub fn fire_workflow_notification(
     notify_hooks: &[HookConfig],
     params: &WorkflowNotificationArgs<'_>,
 ) {
-    if !should_notify(config, params.succeeded) {
+    let fires_desktop_slack = should_notify(config, params.succeeded);
+    let has_hooks = !notify_hooks.is_empty();
+    if !fires_desktop_slack && !has_hooks {
         return;
     }
 
@@ -364,6 +375,7 @@ pub fn fire_workflow_notification(
             slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
+            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -380,7 +392,9 @@ pub fn fire_feedback_notification(
     notify_hooks: &[HookConfig],
     params: &FeedbackNotificationParams<'_>,
 ) {
-    if !config.enabled {
+    let fires_desktop_slack = config.enabled;
+    let has_hooks = !notify_hooks.is_empty();
+    if !fires_desktop_slack && !has_hooks {
         return;
     }
 
@@ -421,6 +435,7 @@ pub fn fire_feedback_notification(
             slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
+            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -445,7 +460,9 @@ pub fn fire_agent_run_notification(
     let duration_ms = params.duration_ms;
     let ticket_url = params.ticket_url.clone();
 
-    if !should_notify(config, succeeded) {
+    let fires_desktop_slack = should_notify(config, succeeded);
+    let has_hooks = !notify_hooks.is_empty();
+    if !fires_desktop_slack && !has_hooks {
         return;
     }
 
@@ -531,6 +548,7 @@ pub fn fire_agent_run_notification(
             slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
+            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -627,7 +645,9 @@ pub fn fire_gate_notification(
     notify_hooks: &[HookConfig],
     params: &GateNotificationParams<'_>,
 ) {
-    if !should_notify_gate(config, params.gate_type) {
+    let fires_desktop_slack = should_notify_gate(config, params.gate_type);
+    let has_hooks = !notify_hooks.is_empty();
+    if !fires_desktop_slack && !has_hooks {
         return;
     }
 
@@ -683,6 +703,7 @@ pub fn fire_gate_notification(
             slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
+            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -758,7 +779,9 @@ pub fn fire_grouped_gate_notification(
     notify_hooks: &[HookConfig],
     params: &GroupedGateNotificationParams<'_>,
 ) {
-    if !config.enabled {
+    let fires_desktop_slack = config.enabled;
+    let has_hooks = !notify_hooks.is_empty();
+    if !fires_desktop_slack && !has_hooks {
         return;
     }
 
@@ -806,6 +829,7 @@ pub fn fire_grouped_gate_notification(
             slack_text: &slack_text,
             hooks: notify_hooks,
             event: Some(&hook_event),
+            fire_desktop_and_slack: fires_desktop_slack,
         },
     );
 }
@@ -2890,5 +2914,168 @@ mod tests {
         };
         let result = send_slack_sync(&cfg, "test message");
         assert!(result.is_err(), "expected error when webhook_url is empty");
+    }
+
+    // --- hooks fire when [notifications] enabled = false ---
+
+    fn hook_matching_all() -> HookConfig {
+        HookConfig {
+            on: "workflow_run.*".to_string(),
+            run: None, // no actual shell command in tests
+            url: None,
+            ..Default::default()
+        }
+    }
+
+    /// When `enabled = false` but hooks are configured, the dedup claim MUST be
+    /// made (and hooks would fire) — desktop/Slack are just skipped.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_workflow() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![hook_matching_all()];
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &WorkflowNotificationArgs {
+                run_id: "run-hooks-1",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-hooks-1' AND event_type = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// Same as above for the failure path.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_workflow_failure() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![hook_matching_all()];
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &WorkflowNotificationArgs {
+                run_id: "run-hooks-2",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: false,
+                parent_workflow_run_id: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+                error: Some("out of memory"),
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-hooks-2' AND event_type = 'failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for failures when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// When `enabled = false` and hooks are configured, the feedback path must also
+    /// make a dedup claim so hooks can fire.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_feedback() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "feedback.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_feedback_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &FeedbackNotificationParams {
+                request_id: "req-hooks-1",
+                prompt_preview: "Is this correct?",
+                repo_slug: "my-repo",
+                branch: "main",
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'req-hooks-1' AND event_type = 'feedback_requested'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for feedback when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// `on_success = false` does NOT suppress hooks — hooks have their own event filtering.
+    /// The dedup claim must be made when hooks are configured even if on_success is false.
+    #[test]
+    fn hooks_fire_when_on_success_false_but_hooks_configured() {
+        let conn = in_memory_db();
+        let cfg = config(true, false, true); // enabled=true, on_success=false
+        let hooks = vec![hook_matching_all()];
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &WorkflowNotificationArgs {
+                run_id: "run-hooks-3",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-hooks-3' AND event_type = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made when hooks are configured, even if on_success=false"
+        );
     }
 }
