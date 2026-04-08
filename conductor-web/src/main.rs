@@ -279,10 +279,16 @@ async fn main() -> Result<()> {
                         &conn,
                         &cfg.notifications,
                         &cfg.notify.hooks,
-                        &t.run_id,
-                        t.worktree_slug.as_deref(),
-                        t.succeeded,
-                        t.error_msg.as_deref(),
+                        &conductor_web::notify::AgentRunNotificationArgs {
+                            run_id: &t.run_id,
+                            worktree_slug: t.worktree_slug.as_deref(),
+                            succeeded: t.succeeded,
+                            error_msg: t.error_msg.as_deref(),
+                            repo_slug: &t.repo_slug,
+                            branch: &t.branch,
+                            duration_ms: t.duration_ms,
+                            ticket_url: None,
+                        },
                     );
                 }
 
@@ -351,6 +357,11 @@ async fn main() -> Result<()> {
                             target_label: t.target_label.as_deref(),
                             succeeded: t.succeeded,
                             parent_workflow_run_id: t.parent_workflow_run_id.as_deref(),
+                            repo_slug: &t.repo_slug,
+                            branch: &t.branch,
+                            duration_ms: t.duration_ms,
+                            ticket_url: None,
+                            error: t.error.as_deref(),
                         },
                     );
                 }

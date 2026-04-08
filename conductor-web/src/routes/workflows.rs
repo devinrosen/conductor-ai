@@ -401,6 +401,11 @@ pub async fn run_workflow(
                             target_label: Some(&wt_target_label),
                             succeeded,
                             parent_workflow_run_id: None, // workflows launched from web are always root runs
+                            repo_slug: &repo_slug,
+                            branch: &wt_slug,
+                            duration_ms: None,
+                            ticket_url: None,
+                            error: None,
                         },
                     );
                 } else if let Err(e) = &notification_conn {
@@ -432,6 +437,11 @@ pub async fn run_workflow(
                             target_label: Some(&wt_target_label),
                             succeeded: false,
                             parent_workflow_run_id: None, // workflows launched from web are always root runs
+                            repo_slug: &repo_slug,
+                            branch: &wt_slug,
+                            duration_ms: None,
+                            ticket_url: None,
+                            error: None,
                         },
                     );
                 } else if let Err(e) = &notification_conn {
@@ -668,6 +678,8 @@ pub async fn post_workflow_run(
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
+                let (notify_repo_slug, notify_branch) =
+                    conductor_core::notify::parse_target_label(Some(&target_label));
                 notify_workflow(
                     &conn,
                     &notifications,
@@ -678,6 +690,11 @@ pub async fn post_workflow_run(
                         target_label: Some(&target_label),
                         succeeded,
                         parent_workflow_run_id: None, // workflows launched from web are always root runs
+                        repo_slug: notify_repo_slug,
+                        branch: notify_branch,
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
                     },
                 );
 
@@ -694,6 +711,8 @@ pub async fn post_workflow_run(
                     "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
                 );
                 let error_run_id = emit_failed(&run_id_slot, wt_id_clone);
+                let (notify_repo_slug, notify_branch) =
+                    conductor_core::notify::parse_target_label(Some(&target_label));
                 notify_workflow(
                     &conn,
                     &notifications,
@@ -704,6 +723,11 @@ pub async fn post_workflow_run(
                         target_label: Some(&target_label),
                         succeeded: false,
                         parent_workflow_run_id: None, // workflows launched from web are always root runs
+                        repo_slug: notify_repo_slug,
+                        branch: notify_branch,
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
                     },
                 );
             }
@@ -1181,6 +1205,9 @@ pub async fn resume_workflow_endpoint(
             }
         };
 
+        let (resume_repo_slug, resume_branch) =
+            conductor_core::notify::parse_target_label(target_label.as_deref());
+
         match result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
@@ -1196,6 +1223,11 @@ pub async fn resume_workflow_endpoint(
                         target_label: target_label.as_deref(),
                         succeeded,
                         parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                        repo_slug: resume_repo_slug,
+                        branch: resume_branch,
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
                     },
                 );
 
@@ -1219,6 +1251,11 @@ pub async fn resume_workflow_endpoint(
                         target_label: target_label.as_deref(),
                         succeeded: false,
                         parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                        repo_slug: resume_repo_slug,
+                        branch: resume_branch,
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
                     },
                 );
             }
@@ -1650,6 +1687,11 @@ mod tests {
                     target_label: None,
                     succeeded: false,
                     parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
                 },
             );
         })
@@ -1700,6 +1742,11 @@ mod tests {
                     target_label: Some("repo/wt"),
                     succeeded: false,
                     parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
                 },
             );
         })
@@ -1721,6 +1768,11 @@ mod tests {
                     target_label: Some("repo/wt"),
                     succeeded: false,
                     parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
                 },
             );
         })
@@ -1749,7 +1801,7 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None });
+            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None });
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn

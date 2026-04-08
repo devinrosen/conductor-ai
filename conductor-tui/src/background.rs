@@ -110,6 +110,11 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     target_label: t.target_label.as_deref(),
                                     succeeded: t.succeeded,
                                     parent_workflow_run_id: t.parent_workflow_run_id.as_deref(),
+                                    repo_slug: &t.repo_slug,
+                                    branch: &t.branch,
+                                    duration_ms: t.duration_ms,
+                                    ticket_url: None,
+                                    error: t.error.as_deref(),
                                 },
                             );
                         }
@@ -122,8 +127,12 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     conn,
                                     &config.notifications,
                                     &config.notify.hooks,
-                                    &req.id,
-                                    &req.prompt,
+                                    &crate::notify::FeedbackNotificationParams {
+                                        request_id: &req.id,
+                                        prompt_preview: &req.prompt,
+                                        repo_slug: "",
+                                        branch: "",
+                                    },
                                 );
                             }
                         }
@@ -154,6 +163,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     // Single gate: fire individual notification (no behavior change)
                                     let (step, workflow_name, target_label) = steps[0];
                                     notified_gate_ids.insert(step.id.clone());
+                                    let (rs, br) = conductor_core::notify::parse_target_label(
+                                        target_label.as_deref(),
+                                    );
                                     crate::notify::fire_gate_notification(
                                         conn,
                                         &config.notifications,
@@ -165,6 +177,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                             target_label: target_label.as_deref(),
                                             gate_type: step.gate_type.as_ref(),
                                             gate_prompt: step.gate_prompt.as_deref(),
+                                            repo_slug: rs,
+                                            branch: br,
+                                            ticket_url: None,
                                         },
                                     );
                                 } else if !notified_grouped_run_ids.contains(run_id) {
@@ -221,10 +236,16 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     conn,
                                     &config.notifications,
                                     &config.notify.hooks,
-                                    &t.run_id,
-                                    t.worktree_slug.as_deref(),
-                                    t.succeeded,
-                                    t.error_msg.as_deref(),
+                                    &crate::notify::AgentRunNotificationArgs {
+                                        run_id: &t.run_id,
+                                        worktree_slug: t.worktree_slug.as_deref(),
+                                        succeeded: t.succeeded,
+                                        error_msg: t.error_msg.as_deref(),
+                                        repo_slug: &t.repo_slug,
+                                        branch: &t.branch,
+                                        duration_ms: t.duration_ms,
+                                        ticket_url: None,
+                                    },
                                 );
                             }
                         }

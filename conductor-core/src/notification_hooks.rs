@@ -3,20 +3,22 @@ use std::time::Duration;
 use crate::config::HookConfig;
 use crate::notification_event::NotificationEvent;
 
-/// Returns `true` if `pattern` matches `event_name`.
+/// Returns `true` if `pattern` matches `event_name` or `value`.
 ///
-/// Three cases are supported:
-/// - `"*"` — matches every event name.
-/// - `"prefix.*"` — matches any event whose name starts with `"prefix."`.
+/// Supported cases:
+/// - `"*"` — matches everything.
+/// - `"prefix.*"` — matches any string that starts with `"prefix."`.
+/// - `"prefix/*"` — matches any string that starts with `"prefix/"` (for branch globs like `"feature/*"`).
 /// - exact string — matches only when the strings are equal.
-///
-/// No external crate is needed: the event namespace is two-level and well-defined.
 pub(crate) fn glob_matches(pattern: &str, event_name: &str) -> bool {
     if pattern == "*" {
         return true;
     }
     if let Some(prefix) = pattern.strip_suffix(".*") {
         return event_name.starts_with(&format!("{prefix}."));
+    }
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        return event_name.starts_with(&format!("{prefix}/"));
     }
     pattern == event_name
 }
@@ -27,7 +29,12 @@ pub(crate) fn glob_matches(pattern: &str, event_name: &str) -> bool {
 ///   `multiple` must be >= the configured minimum; other events pass through.
 /// - `gate_pending_ms`: for `gate.pending_too_long` events, the event's `pending_ms`
 ///   must be >= the configured minimum; other events pass through.
-/// - `workflow`: the event's label must start with the configured workflow name.
+/// - `workflow`: the event's `workflow_name` field must equal the configured workflow name
+///   (for workflow events only; non-workflow events pass through).
+/// - `repo`: the event's `repo_slug` must equal the configured repo (exact match).
+/// - `branch`: the event's `branch` must match the configured glob pattern.
+/// - `step`: for `GateWaiting`/`GatePendingTooLong`, the event's `step_name` must equal
+///   the configured step (exact match); non-gate events pass through.
 fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bool {
     if let Some(min_multiple) = hook.threshold_multiple {
         match event {
@@ -50,8 +57,17 @@ fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bo
     }
 
     if let Some(ref wf_filter) = hook.workflow {
-        if !event.label().starts_with(wf_filter.as_str()) {
-            return false;
+        // Match workflow_name directly for workflow events; non-workflow events pass through.
+        match event {
+            NotificationEvent::WorkflowRunCompleted { workflow_name, .. }
+            | NotificationEvent::WorkflowRunFailed { workflow_name, .. }
+            | NotificationEvent::WorkflowRunCostSpike { workflow_name, .. }
+            | NotificationEvent::WorkflowRunDurationSpike { workflow_name, .. } => {
+                if workflow_name != wf_filter {
+                    return false;
+                }
+            }
+            _ => {} // non-workflow events pass through
         }
     }
 
@@ -78,6 +94,30 @@ fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bo
                 }
             }
             _ => {} // non-workflow events pass through
+        }
+    }
+
+    if let Some(ref repo_filter) = hook.repo {
+        if event.repo_slug() != repo_filter.as_str() {
+            return false;
+        }
+    }
+
+    if let Some(ref branch_filter) = hook.branch {
+        if !glob_matches(branch_filter.as_str(), event.branch()) {
+            return false;
+        }
+    }
+
+    if let Some(ref step_filter) = hook.step {
+        match event {
+            NotificationEvent::GateWaiting { step_name, .. }
+            | NotificationEvent::GatePendingTooLong { step_name, .. } => {
+                if step_name != step_filter {
+                    return false;
+                }
+            }
+            _ => {} // non-gate events pass through
         }
     }
 
@@ -276,6 +316,21 @@ mod tests {
         assert!(!glob_matches("workflow.*", "workflow_run.completed"));
     }
 
+    #[test]
+    fn glob_slash_star_matches_branch_with_prefix() {
+        // Positive: "feature/*" matches "feature/my-branch"
+        assert!(glob_matches("feature/*", "feature/my-branch"));
+        assert!(glob_matches("feature/*", "feature/foo"));
+    }
+
+    #[test]
+    fn glob_slash_star_does_not_match_other_prefix() {
+        // Negative: "feature/*" must NOT match branches without the "feature/" prefix
+        assert!(!glob_matches("feature/*", "main"));
+        assert!(!glob_matches("feature/*", "fix/my-fix"));
+        assert!(!glob_matches("feature/*", "feature"));
+    }
+
     // ── resolve_env_var ──────────────────────────────────────────────────
 
     #[test]
@@ -318,6 +373,11 @@ mod tests {
             multiple: 2.0, // below 3.0 threshold
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            cost_usd: None,
         };
         assert!(!hook_event_passes_filters(&hook, &event));
     }
@@ -337,6 +397,11 @@ mod tests {
             multiple: 3.5, // above 3.0 threshold
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            cost_usd: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
     }
@@ -356,6 +421,10 @@ mod tests {
             url: None,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
     }
@@ -374,6 +443,10 @@ mod tests {
             url: None,
             step_name: "s".into(),
             pending_ms: 30_000, // below 60_000 threshold
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         assert!(!hook_event_passes_filters(&hook, &event));
     }
@@ -392,6 +465,10 @@ mod tests {
             url: None,
             step_name: "s".into(),
             pending_ms: 120_000, // above threshold
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
     }
@@ -410,6 +487,10 @@ mod tests {
             url: None,
             workflow_name: "ticket-to-pr".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         assert!(!hook_event_passes_filters(&hook, &event));
     }
@@ -428,6 +509,10 @@ mod tests {
             url: None,
             workflow_name: "deploy".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
     }
@@ -444,6 +529,10 @@ mod tests {
             url: None,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         // Should not panic or hang.
         runner.fire(&event);
@@ -465,6 +554,10 @@ mod tests {
             url: None,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         // Non-matching: should return immediately without spawning.
         runner.fire(&event);
@@ -493,6 +586,11 @@ mod tests {
             multiple: 2.0, // below threshold
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            cost_usd: None,
         };
         runner.fire(&event);
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -522,6 +620,10 @@ mod tests {
             url: None,
             workflow_name: "my-wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
 
         run_shell_hook(&hook, &event);
@@ -556,6 +658,10 @@ mod tests {
             url: None,
             workflow_name: "wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         runner.fire(&event);
 
@@ -586,6 +692,10 @@ mod tests {
             url: None,
             workflow_name: "child-wf".into(),
             parent_workflow_run_id: Some("parent-run-id".into()),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         assert!(!hook_event_passes_filters(&hook, &event));
     }
@@ -604,6 +714,10 @@ mod tests {
             url: None,
             workflow_name: "root-wf".into(),
             parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
         };
         assert!(hook_event_passes_filters(&hook, &event));
     }
@@ -622,7 +736,171 @@ mod tests {
             url: None,
             workflow_name: "child-wf".into(),
             parent_workflow_run_id: Some("parent-run-id".into()),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+            error: None,
         };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    // ── repo filter ──────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_repo_blocks_non_matching_repo() {
+        let hook = HookConfig {
+            on: "*".into(),
+            repo: Some("conductor-ai".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "other-repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        assert!(!hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_repo_passes_matching_repo() {
+        let hook = HookConfig {
+            on: "*".into(),
+            repo: Some("conductor-ai".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "conductor-ai".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    // ── branch filter ────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_branch_blocks_non_matching_branch() {
+        let hook = HookConfig {
+            on: "*".into(),
+            branch: Some("main".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "feature/foo".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        assert!(!hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_branch_glob_passes_matching_branch() {
+        let hook = HookConfig {
+            on: "*".into(),
+            branch: Some("feature/*".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "feature/foo".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    // ── step filter ──────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_step_blocks_non_matching_step() {
+        let hook = HookConfig {
+            on: "*".into(),
+            step: Some("review".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::GateWaiting {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            step_name: "approve".into(),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        assert!(!hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_step_passes_matching_step() {
+        let hook = HookConfig {
+            on: "*".into(),
+            step: Some("review".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::GateWaiting {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            step_name: "review".into(),
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        assert!(hook_event_passes_filters(&hook, &event));
+    }
+
+    #[test]
+    fn filter_step_ignored_for_non_gate_events() {
+        let hook = HookConfig {
+            on: "*".into(),
+            step: Some("anything".into()),
+            ..Default::default()
+        };
+        let event = NotificationEvent::WorkflowRunCompleted {
+            run_id: "r".into(),
+            label: "l".into(),
+            timestamp: "t".into(),
+            url: None,
+            workflow_name: "wf".into(),
+            parent_workflow_run_id: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            duration_ms: None,
+            ticket_url: None,
+        };
+        // Non-gate event: step filter is ignored, event passes through
         assert!(hook_event_passes_filters(&hook, &event));
     }
 }
