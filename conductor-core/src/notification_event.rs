@@ -2,6 +2,22 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
+use crate::error::{ConductorError, Result};
+
+/// All concrete event names that `NotificationEvent::synthetic` accepts.
+///
+/// This is the single source of truth shared by both `synthetic()` (for its error
+/// message) and `synthetic_for_pattern()` (for candidate selection). Adding a new
+/// variant requires updating this list *and* the `synthetic()` match arms together.
+const VALID_SYNTHETIC_EVENTS: &[&str] = &[
+    "workflow_run.completed",
+    "workflow_run.failed",
+    "agent_run.completed",
+    "agent_run.failed",
+    "gate.waiting",
+    "feedback.requested",
+];
+
 /// A lifecycle event that can be dispatched to user-configured notification hooks.
 ///
 /// Each variant corresponds to one RFC 011 event name. Cost/duration spike variants
@@ -112,7 +128,7 @@ impl NotificationEvent {
     /// the factory logic lives in one place rather than being duplicated across binary crates.
     ///
     /// Returns `Err` if `name` is not a recognized event name.
-    pub fn synthetic(name: &str, now: impl Into<String>) -> Result<Self, String> {
+    pub fn synthetic(name: &str, now: impl Into<String>) -> Result<Self> {
         let now = now.into();
         let run_id = "test-00000000000000000000000000".to_string();
         let url = Some("http://localhost".to_string());
@@ -157,11 +173,10 @@ impl NotificationEvent {
                 prompt_preview: "Is this correct?".to_string(),
             },
             other => {
-                return Err(format!(
-                    "unknown event name: '{other}'. Valid events: workflow_run.completed, \
-                     workflow_run.failed, agent_run.completed, agent_run.failed, \
-                     gate.waiting, feedback.requested"
-                ))
+                return Err(ConductorError::InvalidInput(format!(
+                    "unknown event name: '{other}'. Valid events: {}",
+                    VALID_SYNTHETIC_EVENTS.join(", ")
+                )))
             }
         };
         Ok(ev)
@@ -174,22 +189,17 @@ impl NotificationEvent {
     /// API `POST /api/hooks/test` to ensure the test event actually reaches the hook.
     pub fn synthetic_for_pattern(pattern: &str, now: impl Into<String>) -> Self {
         let now = now.into();
-        const CANDIDATES: &[&str] = &[
-            "workflow_run.completed",
-            "workflow_run.failed",
-            "agent_run.completed",
-            "agent_run.failed",
-            "gate.waiting",
-            "feedback.requested",
-        ];
-        for &name in CANDIDATES {
+        for &name in VALID_SYNTHETIC_EVENTS {
             if crate::notification_hooks::glob_matches(pattern, name) {
-                // All candidate names are valid; unwrap is safe.
-                return Self::synthetic(name, now).unwrap();
+                // VALID_SYNTHETIC_EVENTS entries are kept in sync with synthetic()'s
+                // match arms, so this can never fail.
+                return Self::synthetic(name, &now)
+                    .expect("VALID_SYNTHETIC_EVENTS entry must match a synthetic() arm");
             }
         }
         // Fallback for "*" or any unrecognized pattern.
-        Self::synthetic("workflow_run.completed", now).unwrap()
+        Self::synthetic("workflow_run.completed", now)
+            .expect("workflow_run.completed is always a valid synthetic event name")
     }
 
     /// Returns the dotted event name string used for glob matching in hook configs.
@@ -902,7 +912,7 @@ mod tests {
     fn synthetic_unknown_event_name_returns_err() {
         let result = NotificationEvent::synthetic("does_not_exist", "t");
         assert!(result.is_err());
-        let msg = result.unwrap_err();
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("does_not_exist"),
             "error message should include bad name"
