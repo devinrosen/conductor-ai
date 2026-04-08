@@ -10,7 +10,9 @@ use crate::workflow::engine::{
     ExecutionState,
 };
 use crate::workflow::output::parse_conductor_output;
-use crate::workflow::prompt_builder::{build_variable_map, substitute_variables, substitute_variables_keep_literal};
+use crate::workflow::prompt_builder::{
+    build_variable_map, substitute_variables, substitute_variables_keep_literal,
+};
 use crate::workflow::status::WorkflowStepStatus;
 
 // ---------------------------------------------------------------------------

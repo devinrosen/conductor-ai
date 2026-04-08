@@ -5,7 +5,11 @@ use crate::schema_config;
 use super::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
 use super::engine::ExecutionState;
 
-fn substitute_variables_impl(template: &str, vars: &HashMap<&str, String>, strip_unresolved: bool) -> String {
+fn substitute_variables_impl(
+    template: &str,
+    vars: &HashMap<&str, String>,
+    strip_unresolved: bool,
+) -> String {
     let mut result = template.to_string();
     for (key, value) in vars {
         let pattern = format!("{{{{{key}}}}}");
@@ -32,7 +36,10 @@ pub(super) fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -
 
 /// For data contexts (env vars, sub-workflow inputs): substitutes variables but
 /// preserves any `{{…}}` text that was not a template variable.
-pub(super) fn substitute_variables_keep_literal(template: &str, vars: &HashMap<&str, String>) -> String {
+pub(super) fn substitute_variables_keep_literal(
+    template: &str,
+    vars: &HashMap<&str, String>,
+) -> String {
     substitute_variables_impl(template, vars, false)
 }
 
@@ -290,7 +297,10 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("prior_output", json_value);
         let result = substitute_variables_keep_literal("{{prior_output}}", &vars);
-        assert_eq!(result, r#"{"risks":["{{deterministic-review.score}}","other"]}"#);
+        assert_eq!(
+            result,
+            r#"{"risks":["{{deterministic-review.score}}","other"]}"#
+        );
     }
 
     #[test]
