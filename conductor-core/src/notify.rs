@@ -84,10 +84,7 @@ struct DispatchParams<'a> {
 /// 3. Fire user-configured notification hooks (shell/HTTP)
 ///
 /// Returns `true` if the notification was dispatched, `false` if deduplicated.
-fn dispatch_notification(
-    conn: &rusqlite::Connection,
-    params: &DispatchParams<'_>,
-) -> bool {
+fn dispatch_notification(conn: &rusqlite::Connection, params: &DispatchParams<'_>) -> bool {
     // Step 1: Try to claim notification for deduplication
     if !try_claim_notification(conn, params.dedup_entity_id, params.dedup_event_type) {
         return false;
