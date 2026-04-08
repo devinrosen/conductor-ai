@@ -146,8 +146,7 @@ fn test_resolve_child_inputs_preserves_unresolved_braces() {
     // not be stripped from the child input.
     use crate::workflow_dsl::InputDecl;
 
-    let json_value =
-        r#"{"risks":["{{deterministic-review.score}}","other"]}"#.to_string();
+    let json_value = r#"{"risks":["{{deterministic-review.score}}","other"]}"#.to_string();
 
     let mut raw = HashMap::new();
     raw.insert("prior_output".to_string(), "{{prior_output}}".to_string());
