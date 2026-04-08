@@ -3,6 +3,7 @@ pub mod conversations;
 pub mod events;
 pub mod features;
 pub mod health;
+pub mod hooks;
 pub mod issue_sources;
 pub mod model_config;
 pub mod notifications;
@@ -357,4 +358,7 @@ pub fn api_router() -> Router<AppState> {
             "/api/config/suggest-model",
             post(model_config::suggest_model),
         )
+        // Notification Hooks
+        .route("/api/config/hooks", get(hooks::list_hooks))
+        .route("/api/hooks/test", post(hooks::test_hook))
 }

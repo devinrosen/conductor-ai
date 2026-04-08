@@ -518,3 +518,10 @@ export interface PushSubscribeResponse {
   success: boolean;
   message: string;
 }
+
+export interface HookSummary {
+  index: number;
+  on: string;
+  kind: "shell" | "http";
+  command?: string;
+}
