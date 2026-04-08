@@ -163,7 +163,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     // Single gate: fire individual notification (no behavior change)
                                     let (step, workflow_name, target_label) = steps[0];
                                     notified_gate_ids.insert(step.id.clone());
-                                    let (rs, br) = conductor_core::notify::parse_target_label(target_label.as_deref());
+                                    let (rs, br) = conductor_core::notify::parse_target_label(
+                                        target_label.as_deref(),
+                                    );
                                     crate::notify::fire_gate_notification(
                                         conn,
                                         &config.notifications,
