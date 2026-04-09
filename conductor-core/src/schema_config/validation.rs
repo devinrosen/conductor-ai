@@ -172,25 +172,26 @@ pub(crate) fn fix_invalid_backslash_escapes(s: &str) -> String {
 
 /// Remove trailing commas before `}` or `]` (common LLM artifact).
 pub(crate) fn strip_trailing_commas(s: &str) -> String {
-    // Simple regex-like replacement: comma followed by optional whitespace then } or ]
     let mut result = String::with_capacity(s.len());
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == ',' {
-            // Look ahead past whitespace for } or ]
-            let mut j = i + 1;
-            while j < chars.len() && chars[j].is_whitespace() {
-                j += 1;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == ',' {
+            // Collect any whitespace between the comma and the next non-ws char
+            let mut ws_buf = String::new();
+            while chars.peek().is_some_and(|p| p.is_whitespace()) {
+                ws_buf.push(chars.next().unwrap());
             }
-            if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
-                // Skip the comma, keep whitespace and closing bracket
-                i += 1;
+            // If next non-ws char is a closing bracket, drop the comma but keep whitespace
+            if chars.peek().is_some_and(|p| *p == '}' || *p == ']') {
+                result.push_str(&ws_buf);
                 continue;
             }
+            // Otherwise keep the comma and the whitespace
+            result.push(c);
+            result.push_str(&ws_buf);
+        } else {
+            result.push(c);
         }
-        result.push(chars[i]);
-        i += 1;
     }
     result
 }

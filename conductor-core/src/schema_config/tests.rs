@@ -373,11 +373,40 @@ fn test_optional_field_not_required() {
 
 #[test]
 fn test_strip_trailing_commas() {
+    // Basic object and array trailing commas
     assert_eq!(
         strip_trailing_commas(r#"{"a": 1, "b": 2,}"#),
         r#"{"a": 1, "b": 2}"#
     );
     assert_eq!(strip_trailing_commas(r#"[1, 2, 3,]"#), r#"[1, 2, 3]"#);
+
+    // Comma + multiple spaces before }
+    assert_eq!(strip_trailing_commas(r#"{"a": 1,   }"#), r#"{"a": 1   }"#);
+
+    // Comma + newline before ]
+    assert_eq!(strip_trailing_commas("{\"a\": [1,\n]}"), "{\"a\": [1\n]}");
+
+    // No trailing comma — input passes through unchanged
+    assert_eq!(
+        strip_trailing_commas(r#"{"a": 1, "b": 2}"#),
+        r#"{"a": 1, "b": 2}"#
+    );
+
+    // Multi-byte Unicode in values — must not corrupt non-ASCII chars
+    assert_eq!(
+        strip_trailing_commas(r#"{"emoji": "🎉",}"#),
+        r#"{"emoji": "🎉"}"#
+    );
+    assert_eq!(
+        strip_trailing_commas(r#"{"cjk": "日本語",}"#),
+        r#"{"cjk": "日本語"}"#
+    );
+
+    // Nested structures with trailing commas at multiple levels
+    assert_eq!(
+        strip_trailing_commas(r#"{"a": {"b": 1,}, "c": [2,],}"#),
+        r#"{"a": {"b": 1}, "c": [2]}"#
+    );
 }
 
 #[test]
