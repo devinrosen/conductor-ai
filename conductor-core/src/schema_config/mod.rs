@@ -31,6 +31,7 @@ pub use validation::{parse_structured_output, StructuredOutput};
 // Items that are pub(crate) in the original file — re-export with same visibility.
 pub(crate) use validation::extract_output_block;
 pub(crate) use validation::fix_invalid_backslash_escapes;
+pub(crate) use validation::strip_trailing_commas;
 
 // Items used by tests that are not otherwise public — re-export under cfg(test).
 #[cfg(test)]
@@ -38,6 +39,4 @@ pub(crate) use loader::load_schema_by_path;
 #[cfg(test)]
 pub(crate) use prompt::generate_field_hints;
 #[cfg(test)]
-pub(crate) use validation::{
-    derive_default_markers, evaluate_marker_expr, strip_code_fences, strip_trailing_commas,
-};
+pub(crate) use validation::{derive_default_markers, evaluate_marker_expr, strip_code_fences};

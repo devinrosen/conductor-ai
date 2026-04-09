@@ -17,8 +17,18 @@ pub struct ConductorOutput {
 /// inside code examples, grep output, and JSON field values.
 pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let cleaned = crate::schema_config::extract_output_block(text)?;
+    let cleaned = crate::schema_config::strip_trailing_commas(&cleaned);
     let cleaned = crate::schema_config::fix_invalid_backslash_escapes(&cleaned);
-    serde_json::from_str(&cleaned).ok()
+    match serde_json::from_str(&cleaned) {
+        Ok(output) => Some(output),
+        Err(e) => {
+            let snippet: String = cleaned.chars().take(200).collect();
+            tracing::warn!(
+                "parse_conductor_output: invalid JSON in CONDUCTOR_OUTPUT block: {e}\n  snippet: {snippet}"
+            );
+            None
+        }
+    }
 }
 
 /// Interpret agent output using a schema (if present) or generic `CONDUCTOR_OUTPUT` parsing.
@@ -118,6 +128,28 @@ Real output:
         let result = parse_conductor_output(text).unwrap();
         assert_eq!(result.markers, vec!["real"]);
         assert_eq!(result.context, "the actual result");
+    }
+
+    /// Genuinely malformed JSON (unquoted key) returns None without panic.
+    #[test]
+    fn test_parse_conductor_output_malformed_json_returns_none() {
+        let text = r#"<<<CONDUCTOR_OUTPUT>>>
+{markers: ["done"]}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        assert!(parse_conductor_output(text).is_none());
+    }
+
+    /// Trailing comma (common LLM artifact) now parses successfully via strip_trailing_commas.
+    #[test]
+    fn test_parse_conductor_output_trailing_comma_succeeds() {
+        let text = r#"<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["done"], "context": "trailing comma test",}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_conductor_output(text).unwrap();
+        assert_eq!(result.markers, vec!["done"]);
+        assert_eq!(result.context, "trailing comma test");
     }
 
     /// Output block wrapped in a markdown code fence — must strip fences before parsing.
