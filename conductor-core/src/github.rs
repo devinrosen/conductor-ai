@@ -55,6 +55,7 @@ pub struct IssueRef {
 }
 
 /// An open GitHub pull request returned by `gh pr list`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GithubPr {
     pub number: i64,
@@ -154,6 +155,7 @@ pub fn list_open_prs(remote_url: &str) -> Result<Vec<GithubPr>> {
 }
 
 /// A GitHub repository discovered via the `gh` CLI.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredRepo {
     pub name: String,

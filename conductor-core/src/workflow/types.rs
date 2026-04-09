@@ -11,6 +11,7 @@ use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 ///
 /// Uses internally-tagged JSON (`{"type":"human_approval",...}`) for forward-compatibility
 /// with future blocker types and easy consumption by non-Rust consumers.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BlockedOn {
@@ -45,6 +46,7 @@ pub(super) type StepKey = (String, u32);
 pub type RunIdSlot = std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>;
 
 /// A workflow run record from the database.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowRun {
     pub id: String,
@@ -125,6 +127,7 @@ impl WorkflowRun {
 }
 
 /// A workflow step execution record from the database.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowRunStep {
     pub id: String,
@@ -511,6 +514,7 @@ pub fn resolve_conductor_bin_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Per-workflow aggregate token usage, averaged across completed runs.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowTokenAggregate {
     pub workflow_name: String,
@@ -527,6 +531,7 @@ pub struct WorkflowTokenAggregate {
 }
 
 /// Token totals for a time-series trend row (daily or weekly bucket).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowTokenTrendRow {
     pub period: String,
@@ -537,6 +542,7 @@ pub struct WorkflowTokenTrendRow {
 }
 
 /// Per-step token averages across recent runs of the same workflow.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct StepTokenHeatmapRow {
     pub step_name: String,
@@ -547,6 +553,7 @@ pub struct StepTokenHeatmapRow {
 }
 
 /// Failure rate per time period for a specific workflow.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowFailureRateTrendRow {
     pub period: String,
@@ -557,6 +564,7 @@ pub struct WorkflowFailureRateTrendRow {
 }
 
 /// Per-step failure statistics across recent terminal runs of a workflow.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct StepFailureHeatmapRow {
     pub step_name: String,
@@ -568,6 +576,7 @@ pub struct StepFailureHeatmapRow {
 }
 
 /// Per-step retry statistics across recent terminal runs of a workflow.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct StepRetryAnalyticsRow {
     pub step_name: String,
@@ -582,6 +591,7 @@ pub struct StepRetryAnalyticsRow {
 }
 
 /// P50/P75/P95/P99 percentile distributions for duration, cost, and tokens.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowPercentiles {
     // Duration percentiles (milliseconds)
@@ -607,6 +617,7 @@ pub struct WorkflowPercentiles {
 /// Compares a recent window (last N days) against a baseline window (prior M days)
 /// across three signals: P75 duration, P75 cost, and failure rate.
 /// Boolean regression flags are set in Rust after the query, using threshold constants.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRegressionSignal {
     pub workflow_name: String,
@@ -633,6 +644,7 @@ pub struct WorkflowRegressionSignal {
 
 /// Per-gate-step aggregate analytics for a workflow (one row per step_name).
 /// Approval is inferred from status: completed = approved, failed = rejected.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateAnalyticsRow {
     pub step_name: String,
@@ -648,6 +660,7 @@ pub struct GateAnalyticsRow {
 
 /// Cross-workflow snapshot of all currently-waiting gate steps (one row per step).
 /// Distinct from `PendingGateRow` which is TUI-enriched and repo-scoped.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingGateAnalyticsRow {
     pub step_id: String,
@@ -661,6 +674,7 @@ pub struct PendingGateAnalyticsRow {
 }
 
 /// Raw per-run metrics for histogram distribution (one row per completed run).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunMetricsRow {
     pub run_id: String,

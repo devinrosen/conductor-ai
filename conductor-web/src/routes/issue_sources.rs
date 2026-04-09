@@ -11,12 +11,24 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateIssueSourceRequest {
     pub source_type: String,
     pub config_json: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/sources",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "List of issue sources for the repo", body = Vec<IssueSource>),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "issue_sources",
+)]
 pub async fn list_issue_sources(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -27,6 +39,19 @@ pub async fn list_issue_sources(
     Ok(Json(sources))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/repos/{id}/sources",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    request_body(content = CreateIssueSourceRequest, description = "Issue source to create"),
+    responses(
+        (status = 201, description = "Issue source created", body = IssueSource),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "issue_sources",
+)]
 pub async fn create_issue_source(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -60,6 +85,19 @@ pub async fn create_issue_source(
     Ok((StatusCode::CREATED, Json(source)))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/repos/{id}/sources/{source_id}",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+        ("source_id" = String, Path, description = "Issue source ID"),
+    ),
+    responses(
+        (status = 204, description = "Issue source deleted"),
+        (status = 404, description = "Issue source not found"),
+    ),
+    tag = "issue_sources",
+)]
 pub async fn delete_issue_source(
     State(state): State<AppState>,
     Path((repo_id, source_id)): Path<(String, String)>,

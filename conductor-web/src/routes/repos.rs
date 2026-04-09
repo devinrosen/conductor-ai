@@ -12,7 +12,7 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct RegisterRepoRequest {
     pub remote_url: String,
     pub slug: Option<String>,
@@ -20,6 +20,14 @@ pub struct RegisterRepoRequest {
     pub workspace_dir: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/repos",
+    responses(
+        (status = 200, description = "List of registered repos", body = Vec<Repo>),
+    ),
+    tag = "repos",
+)]
 pub async fn list_repos(State(state): State<AppState>) -> Result<Json<Vec<Repo>>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
@@ -28,6 +36,15 @@ pub async fn list_repos(State(state): State<AppState>) -> Result<Json<Vec<Repo>>
     Ok(Json(repos))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/repos",
+    request_body(content = RegisterRepoRequest, description = "Repo registration details"),
+    responses(
+        (status = 201, description = "Repo registered", body = Repo),
+    ),
+    tag = "repos",
+)]
 pub async fn register_repo(
     State(state): State<AppState>,
     Json(body): Json<RegisterRepoRequest>,
@@ -53,6 +70,18 @@ pub async fn register_repo(
     Ok((StatusCode::CREATED, Json(repo)))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/repos/{id}",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 204, description = "Repo unregistered"),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "repos",
+)]
 pub async fn unregister_repo(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -65,11 +94,24 @@ pub async fn unregister_repo(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SetModelRequest {
     pub model: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/repos/{id}/model",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    request_body(content = SetModelRequest, description = "Model to set for repo"),
+    responses(
+        (status = 200, description = "Updated repo", body = Repo),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "repos",
+)]
 pub async fn patch_repo_model(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -85,12 +127,25 @@ pub async fn patch_repo_model(
     Ok(Json(updated))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct UpdateRepoSettingsRequest {
     pub allow_agent_issue_creation: Option<bool>,
 }
 
 /// Update per-repo settings (e.g. agent issue creation opt-in).
+#[utoipa::path(
+    patch,
+    path = "/api/repos/{id}/settings",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    request_body(content = UpdateRepoSettingsRequest, description = "Repo settings to update"),
+    responses(
+        (status = 200, description = "Updated repo", body = Repo),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "repos",
+)]
 pub async fn update_repo_settings(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -107,7 +162,7 @@ pub async fn update_repo_settings(
 }
 
 /// A repo discovered via GitHub with a flag indicating if it's already registered.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct DiscoverableRepo {
     #[serde(flatten)]
     pub repo: DiscoveredRepo,
@@ -116,18 +171,35 @@ pub struct DiscoverableRepo {
 }
 
 /// GET /api/github/orgs — list GitHub organizations the authenticated user belongs to.
+#[utoipa::path(
+    get,
+    path = "/api/github/orgs",
+    responses(
+        (status = 200, description = "List of GitHub organizations", body = Vec<String>),
+    ),
+    tag = "repos",
+)]
 pub async fn list_github_orgs_handler() -> Result<Json<Vec<String>>, ApiError> {
     let orgs = list_github_orgs()?;
     Ok(Json(orgs))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct DiscoverReposQuery {
     pub owner: Option<String>,
 }
 
 /// GET /api/github/repos?owner=<org> — fetch repos for the given org (or personal if omitted)
 /// and annotate each with whether it's already registered in Conductor.
+#[utoipa::path(
+    get,
+    path = "/api/github/repos",
+    params(DiscoverReposQuery),
+    responses(
+        (status = 200, description = "List of discoverable GitHub repos", body = Vec<DiscoverableRepo>),
+    ),
+    tag = "repos",
+)]
 pub async fn discover_github_repos_handler(
     State(state): State<AppState>,
     Query(params): Query<DiscoverReposQuery>,
@@ -157,6 +229,18 @@ pub async fn discover_github_repos_handler(
 }
 
 /// GET /api/repos/{id}/prs — list open PRs for the given repo.
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/prs",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "List of open PRs", body = Vec<GithubPr>),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "repos",
+)]
 pub async fn list_prs(
     State(state): State<AppState>,
     Path(id): Path<String>,

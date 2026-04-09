@@ -95,7 +95,7 @@ fn notify_workflow(
 
 /// Web-layer wrapper that attaches active steps to a `WorkflowRun` for the list endpoint.
 /// Preserves the exact JSON shape the frontend expects (active_steps is omitted when empty).
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct WorkflowRunResponse {
     #[serde(flatten)]
     run: WorkflowRun,
@@ -107,7 +107,7 @@ pub struct WorkflowRunResponse {
     worktree_slug: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct InputDeclSummary {
     pub name: String,
     pub required: bool,
@@ -134,7 +134,7 @@ impl From<&InputDecl> for InputDeclSummary {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct WorkflowDefSummary {
     pub name: String,
     pub title: Option<String>,
@@ -163,7 +163,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
 
 // ── Request types ─────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct RunWorkflowRequest {
     pub name: String,
     pub model: Option<String>,
@@ -172,7 +172,7 @@ pub struct RunWorkflowRequest {
     pub feature: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct PostWorkflowRunRequest {
     pub repo: String,
     pub workflow: String,
@@ -184,14 +184,14 @@ pub struct PostWorkflowRunRequest {
     pub feature: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct ResumeWorkflowRequest {
     pub from_step: Option<String>,
     pub model: Option<String>,
     pub restart: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct GateActionRequest {
     pub feedback: Option<String>,
     pub selections: Option<Vec<String>>,
@@ -199,6 +199,18 @@ pub struct GateActionRequest {
 
 // ── Endpoints ─────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/workflows",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow definitions for repo", body = Vec<WorkflowDefSummary>),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/repos/{id}/workflows
 pub async fn list_repo_workflow_defs(
     State(state): State<AppState>,
@@ -216,6 +228,18 @@ pub async fn list_repo_workflow_defs(
     Ok(Json(summaries))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/workflows/defs",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow definitions for worktree", body = Vec<WorkflowDefSummary>),
+        (status = 404, description = "Worktree not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/worktrees/{id}/workflows/defs
 pub async fn list_workflow_defs(
     State(state): State<AppState>,
@@ -236,6 +260,19 @@ pub async fn list_workflow_defs(
     Ok(Json(summaries))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/workflows/defs/{name}",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("name" = String, Path, description = "Workflow definition name"),
+    ),
+    responses(
+        (status = 200, description = "Workflow definition"),
+        (status = 404, description = "Worktree or workflow not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/worktrees/{id}/workflows/defs/{name}
 pub async fn get_workflow_def(
     State(state): State<AppState>,
@@ -263,6 +300,19 @@ pub async fn get_workflow_def(
     Ok(Json(def))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/workflows/run",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    request_body(content = RunWorkflowRequest, description = "Workflow run parameters"),
+    responses(
+        (status = 202, description = "Workflow started"),
+        (status = 404, description = "Worktree or workflow not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/worktrees/{id}/workflows/run
 pub async fn run_workflow(
     State(state): State<AppState>,
@@ -481,6 +531,16 @@ fn check_no_active_run(wf_mgr: &WorkflowManager<'_>, wt_id: &str) -> Result<(), 
     Ok(())
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs",
+    request_body(content = PostWorkflowRunRequest, description = "Workflow run parameters"),
+    responses(
+        (status = 202, description = "Workflow started"),
+        (status = 404, description = "Repo or workflow not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs
 pub async fn post_workflow_run(
     State(state): State<AppState>,
@@ -761,7 +821,7 @@ pub async fn post_workflow_run(
 }
 
 /// Query params for GET /api/workflows/runs
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct ListAllRunsQuery {
     /// Comma-separated list of statuses. Defaults to running, waiting, pending (owned by the manager layer).
     pub status: Option<String>,
@@ -769,6 +829,15 @@ pub struct ListAllRunsQuery {
     pub repo: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs",
+    params(ListAllRunsQuery),
+    responses(
+        (status = 200, description = "List of workflow runs", body = Vec<WorkflowRunResponse>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs?status=<csv>
 pub async fn list_all_workflow_runs_handler(
     State(state): State<AppState>,
@@ -856,6 +925,17 @@ pub async fn list_all_workflow_runs_handler(
     Ok(Json(responses))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/workflows/runs",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow runs for worktree", body = Vec<WorkflowRun>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/worktrees/{id}/workflows/runs
 pub async fn list_workflow_runs(
     State(state): State<AppState>,
@@ -867,6 +947,18 @@ pub async fn list_workflow_runs(
     Ok(Json(runs))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "Workflow run", body = WorkflowRun),
+        (status = 404, description = "Workflow run not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs/{id}
 pub async fn get_workflow_run(
     State(state): State<AppState>,
@@ -880,6 +972,18 @@ pub async fn get_workflow_run(
     Ok(Json(run))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}/steps",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow run steps", body = Vec<WorkflowRunStep>),
+        (status = 404, description = "Workflow run not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs/{id}/steps
 pub async fn get_workflow_steps(
     State(state): State<AppState>,
@@ -892,11 +996,20 @@ pub async fn get_workflow_steps(
 }
 
 /// GET /api/workflows/analytics/aggregates?repo_id=
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct AggregatesQuery {
     pub repo_id: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/aggregates",
+    params(AggregatesQuery),
+    responses(
+        (status = 200, description = "Token aggregates per workflow", body = Vec<WorkflowTokenAggregate>),
+    ),
+    tag = "workflows",
+)]
 pub async fn get_token_aggregates(
     State(state): State<AppState>,
     Query(q): Query<AggregatesQuery>,
@@ -908,12 +1021,21 @@ pub async fn get_token_aggregates(
 }
 
 /// GET /api/workflows/analytics/trend?workflow_name=&granularity=daily|weekly
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct TrendQuery {
     pub workflow_name: String,
     pub granularity: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/trend",
+    params(TrendQuery),
+    responses(
+        (status = 200, description = "Token usage trend over time", body = Vec<WorkflowTokenTrendRow>),
+    ),
+    tag = "workflows",
+)]
 pub async fn get_token_trend(
     State(state): State<AppState>,
     Query(q): Query<TrendQuery>,
@@ -926,12 +1048,21 @@ pub async fn get_token_trend(
 }
 
 /// GET /api/workflows/analytics/heatmap?workflow_name=&runs=20
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct HeatmapQuery {
     pub workflow_name: String,
     pub runs: Option<usize>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/heatmap",
+    params(HeatmapQuery),
+    responses(
+        (status = 200, description = "Step token usage heatmap", body = Vec<StepTokenHeatmapRow>),
+    ),
+    tag = "workflows",
+)]
 pub async fn get_step_heatmap(
     State(state): State<AppState>,
     Query(q): Query<HeatmapQuery>,
@@ -944,12 +1075,21 @@ pub async fn get_step_heatmap(
 }
 
 /// GET /api/workflows/analytics/runs?workflow_name=&days=30
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct RunMetricsQuery {
     pub workflow_name: String,
     pub days: Option<u32>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/runs",
+    params(RunMetricsQuery),
+    responses(
+        (status = 200, description = "Workflow run metrics", body = Vec<WorkflowRunMetricsRow>),
+    ),
+    tag = "workflows",
+)]
 pub async fn get_run_metrics(
     State(state): State<AppState>,
     Query(q): Query<RunMetricsQuery>,
@@ -962,12 +1102,21 @@ pub async fn get_run_metrics(
 }
 
 /// GET /api/workflows/analytics/failure-trend?workflow_name=&granularity=daily|weekly
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct FailureTrendQuery {
     pub workflow_name: String,
     pub granularity: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/failure-trend",
+    params(FailureTrendQuery),
+    responses(
+        (status = 200, description = "Workflow failure rate trend", body = Vec<WorkflowFailureRateTrendRow>),
+    ),
+    tag = "workflows",
+)]
 pub async fn get_failure_trend(
     State(state): State<AppState>,
     Query(q): Query<FailureTrendQuery>,
@@ -979,6 +1128,15 @@ pub async fn get_failure_trend(
     Ok(Json(rows))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/failure-heatmap",
+    params(HeatmapQuery),
+    responses(
+        (status = 200, description = "Step failure heatmap", body = Vec<StepFailureHeatmapRow>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/analytics/failure-heatmap?workflow_name=&runs=20
 pub async fn get_failure_heatmap(
     State(state): State<AppState>,
@@ -991,6 +1149,15 @@ pub async fn get_failure_heatmap(
     Ok(Json(rows))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/step-retries",
+    params(HeatmapQuery),
+    responses(
+        (status = 200, description = "Step retry analytics", body = Vec<StepRetryAnalyticsRow>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/analytics/step-retries?workflow_name=&runs=20
 pub async fn get_step_retry_analytics(
     State(state): State<AppState>,
@@ -1004,12 +1171,21 @@ pub async fn get_step_retry_analytics(
 }
 
 /// GET /api/workflows/analytics/percentiles?workflow_name=&days=30
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct PercentilesQuery {
     pub workflow_name: String,
     pub days: Option<u32>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/percentiles",
+    params(PercentilesQuery),
+    responses(
+        (status = 200, description = "Workflow percentile statistics"),
+    ),
+    tag = "workflows",
+)]
 pub async fn get_workflow_percentiles(
     State(state): State<AppState>,
     Query(q): Query<PercentilesQuery>,
@@ -1022,13 +1198,22 @@ pub async fn get_workflow_percentiles(
 }
 
 /// GET /api/workflows/analytics/regressions?recent_days=7&baseline_days=30&min_runs=5
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct RegressionsQuery {
     pub recent_days: Option<i64>,
     pub baseline_days: Option<i64>,
     pub min_runs: Option<i64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/regressions",
+    params(RegressionsQuery),
+    responses(
+        (status = 200, description = "Workflow regression signals", body = Vec<WorkflowRegressionSignal>),
+    ),
+    tag = "workflows",
+)]
 pub async fn get_workflow_regressions(
     State(state): State<AppState>,
     Query(q): Query<RegressionsQuery>,
@@ -1043,12 +1228,21 @@ pub async fn get_workflow_regressions(
 }
 
 /// GET /api/workflows/analytics/gates?workflow_name=&days=30
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct GateAnalyticsQuery {
     pub workflow_name: String,
     pub days: Option<u32>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/gates",
+    params(GateAnalyticsQuery),
+    responses(
+        (status = 200, description = "Gate analytics", body = Vec<GateAnalyticsRow>),
+    ),
+    tag = "workflows",
+)]
 pub async fn get_gate_analytics(
     State(state): State<AppState>,
     Query(q): Query<GateAnalyticsQuery>,
@@ -1060,6 +1254,14 @@ pub async fn get_gate_analytics(
     Ok(Json(rows))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/gates/pending",
+    responses(
+        (status = 200, description = "List of pending gates across all workflow runs", body = Vec<PendingGateAnalyticsRow>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/analytics/gates/pending
 pub async fn get_pending_gates(
     State(state): State<AppState>,
@@ -1070,6 +1272,19 @@ pub async fn get_pending_gates(
     Ok(Json(rows))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}/steps/{step_name}/log",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+        ("step_name" = String, Path, description = "Workflow step name"),
+    ),
+    responses(
+        (status = 200, description = "Step log content"),
+        (status = 404, description = "Run or step not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs/{id}/steps/{step_name}/log
 pub async fn get_workflow_step_log(
     State(state): State<AppState>,
@@ -1126,6 +1341,17 @@ pub async fn get_workflow_step_log(
     Ok(Json(serde_json::json!({ "log": log })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}/children",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of child workflow runs", body = Vec<WorkflowRun>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs/{id}/children
 pub async fn get_child_workflow_runs(
     State(state): State<AppState>,
@@ -1137,6 +1363,18 @@ pub async fn get_child_workflow_runs(
     Ok(Json(children))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs/{id}/cancel",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "Workflow cancelled"),
+        (status = 404, description = "Workflow run not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs/{id}/cancel
 pub async fn cancel_workflow(
     State(state): State<AppState>,
@@ -1163,6 +1401,19 @@ pub async fn cancel_workflow(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs/{id}/resume",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    request_body(content = ResumeWorkflowRequest, description = "Resume parameters"),
+    responses(
+        (status = 202, description = "Workflow resume started"),
+        (status = 404, description = "Workflow run not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs/{id}/resume
 pub async fn resume_workflow_endpoint(
     State(state): State<AppState>,
@@ -1289,6 +1540,19 @@ pub async fn resume_workflow_endpoint(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs/{id}/gate/approve",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    request_body(content = GateActionRequest, description = "Gate approval details"),
+    responses(
+        (status = 200, description = "Gate approved"),
+        (status = 404, description = "Workflow run or waiting gate not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs/{id}/gate/approve
 pub async fn approve_gate(
     State(state): State<AppState>,
@@ -1325,6 +1589,18 @@ pub async fn approve_gate(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs/{id}/gate/reject",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "Gate rejected"),
+        (status = 404, description = "Workflow run or waiting gate not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs/{id}/gate/reject
 pub async fn reject_gate(
     State(state): State<AppState>,
@@ -1358,6 +1634,14 @@ pub async fn reject_gate(
 // ── Template endpoints ────────────────────────────────────────────────
 
 /// GET /api/templates — list all embedded workflow templates.
+#[utoipa::path(
+    get,
+    path = "/api/templates",
+    responses(
+        (status = 200, description = "List of embedded workflow templates"),
+    ),
+    tag = "workflows",
+)]
 pub async fn list_templates() -> Json<Vec<conductor_core::workflow_template::TemplateFrontmatter>> {
     use conductor_core::workflow_template::list_embedded_templates;
 
@@ -1365,14 +1649,14 @@ pub async fn list_templates() -> Json<Vec<conductor_core::workflow_template::Tem
     Json(templates.into_iter().map(|t| t.metadata).collect())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct InstantiateTemplateRequest {
     pub template: String,
     pub repo: String,
     pub worktree: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct InstantiateTemplateResponse {
     pub template_name: String,
     pub template_version: String,
@@ -1380,6 +1664,16 @@ pub struct InstantiateTemplateResponse {
     pub prompt: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/templates/instantiate",
+    request_body(content = InstantiateTemplateRequest, description = "Template instantiation parameters"),
+    responses(
+        (status = 200, description = "Template instantiation prompt", body = InstantiateTemplateResponse),
+        (status = 404, description = "Template or repo not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/templates/instantiate — build the agent instantiation prompt for a template.
 pub async fn instantiate_template(
     State(state): State<AppState>,

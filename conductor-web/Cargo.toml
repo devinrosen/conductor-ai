@@ -11,7 +11,9 @@ name = "conductor-web"
 path = "src/main.rs"
 
 [dependencies]
-conductor-core = { path = "../conductor-core" }
+conductor-core = { path = "../conductor-core", features = ["openapi"] }
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }

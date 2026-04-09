@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::agent::AgentRun;
 
 /// Which resource a conversation is scoped to.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConversationScope {
@@ -32,6 +33,7 @@ impl std::str::FromStr for ConversationScope {
 }
 
 /// A persisted conversation thread (repo-scoped or worktree-scoped).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
@@ -46,6 +48,7 @@ pub struct Conversation {
 }
 
 /// A conversation together with all its associated agent runs (oldest first).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationWithRuns {
     #[serde(flatten)]

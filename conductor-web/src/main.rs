@@ -11,9 +11,12 @@ use tower_http::trace::TraceLayer;
 
 use conductor_web::assets::static_handler;
 use conductor_web::events::{ConductorEvent, EventBus};
+use conductor_web::openapi::ApiDoc;
 use conductor_web::push::{PushPayload, PushSubscriptionManager};
 use conductor_web::routes::api_router;
 use conductor_web::state::AppState;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -635,6 +638,7 @@ async fn main() -> Result<()> {
         .allow_headers(Any);
 
     let app = api_router()
+        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
         .fallback(static_handler)
         .layer(TraceLayer::new_for_http())
         .layer(cors)

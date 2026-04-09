@@ -14,7 +14,7 @@ use crate::state::AppState;
 ///
 /// Avoids exposing raw `headers` map values (which may contain `$ENV_VAR` references)
 /// and keeps the API surface minimal and stable even if `HookConfig` fields change.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct HookSummary {
     pub index: usize,
     pub on: String,
@@ -25,7 +25,7 @@ pub struct HookSummary {
 }
 
 /// Request body for `POST /api/config/hooks/test`.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct TestHookRequest {
     pub hook_index: usize,
 }
@@ -41,6 +41,14 @@ fn truncate_command(s: &str) -> String {
 }
 
 /// `GET /api/config/hooks` — return all configured notification hooks.
+#[utoipa::path(
+    get,
+    path = "/api/config/hooks",
+    responses(
+        (status = 200, description = "List of configured notification hooks", body = Vec<HookSummary>),
+    ),
+    tag = "hooks",
+)]
 pub async fn list_hooks(State(state): State<AppState>) -> Result<Json<Vec<HookSummary>>, ApiError> {
     let config = state.config.read().await;
     let summaries = config
@@ -74,6 +82,16 @@ pub async fn list_hooks(State(state): State<AppState>) -> Result<Json<Vec<HookSu
 ///
 /// Returns 204 immediately. The hook executes fire-and-forget in a background
 /// OS thread; errors appear in hook output, not in the HTTP response.
+#[utoipa::path(
+    post,
+    path = "/api/config/hooks/test",
+    request_body(content = TestHookRequest, description = "Hook index to test"),
+    responses(
+        (status = 204, description = "Hook fired successfully"),
+        (status = 404, description = "Hook index not found"),
+    ),
+    tag = "hooks",
+)]
 pub async fn test_hook(
     State(state): State<AppState>,
     Json(body): Json<TestHookRequest>,

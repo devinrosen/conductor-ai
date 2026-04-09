@@ -19,6 +19,7 @@ pub struct Feature {
     pub merged_at: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FeatureStatus {
     Active,
@@ -51,6 +52,7 @@ impl FromStr for FeatureStatus {
 crate::impl_sql_enum!(FeatureStatus);
 
 /// Summary row returned by `list()`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureRow {
     pub id: String,

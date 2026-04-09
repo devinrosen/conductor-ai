@@ -18,32 +18,41 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct TicketListResponse {
     pub tickets: Vec<Ticket>,
     pub dependencies: HashMap<String, TicketDependencies>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct SyncResult {
     pub synced: usize,
     pub closed: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct TicketDetail {
     pub agent_totals: Option<TicketAgentTotals>,
     pub worktrees: Vec<Worktree>,
     pub dependencies: TicketDependencies,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct TicketListQuery {
     /// When true, include closed tickets. Defaults to false (closed tickets hidden).
     #[serde(default)]
     pub show_closed: bool,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/tickets",
+    params(TicketListQuery),
+    responses(
+        (status = 200, description = "List of all tickets", body = TicketListResponse),
+    ),
+    tag = "tickets",
+)]
 pub async fn list_all_tickets(
     State(state): State<AppState>,
     Query(params): Query<TicketListQuery>,
@@ -61,6 +70,19 @@ pub async fn list_all_tickets(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/tickets",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+        TicketListQuery,
+    ),
+    responses(
+        (status = 200, description = "List of tickets for repo", body = TicketListResponse),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "tickets",
+)]
 pub async fn list_tickets(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -98,6 +120,18 @@ fn sync_source(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/repos/{id}/tickets/sync",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "Sync result", body = SyncResult),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "tickets",
+)]
 pub async fn sync_tickets(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -145,6 +179,14 @@ pub async fn sync_tickets(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/ticket-labels",
+    responses(
+        (status = 200, description = "List of all ticket labels", body = Vec<TicketLabel>),
+    ),
+    tag = "tickets",
+)]
 pub async fn list_ticket_labels(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<TicketLabel>>, ApiError> {
@@ -155,6 +197,18 @@ pub async fn list_ticket_labels(
     Ok(Json(labels))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/tickets/{id}",
+    params(
+        ("id" = String, Path, description = "Ticket ID"),
+    ),
+    responses(
+        (status = 200, description = "Ticket detail", body = TicketDetail),
+        (status = 404, description = "Ticket not found"),
+    ),
+    tag = "tickets",
+)]
 pub async fn ticket_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Status of a workflow run.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowRunStatus {
@@ -70,6 +71,7 @@ impl WorkflowRunStatus {
 crate::impl_sql_enum!(WorkflowRunStatus);
 
 /// Status of a single workflow step execution.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStepStatus {

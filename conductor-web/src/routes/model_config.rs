@@ -8,16 +8,24 @@ use conductor_core::models;
 use crate::error::ApiError;
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct GlobalModelResponse {
     pub model: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SetGlobalModelRequest {
     pub model: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/config/model",
+    responses(
+        (status = 200, description = "Current global model configuration", body = GlobalModelResponse),
+    ),
+    tag = "model_config",
+)]
 pub async fn get_global_model(
     State(state): State<AppState>,
 ) -> Result<Json<GlobalModelResponse>, ApiError> {
@@ -27,6 +35,15 @@ pub async fn get_global_model(
     }))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/config/model",
+    request_body(content = SetGlobalModelRequest, description = "New global model setting"),
+    responses(
+        (status = 200, description = "Updated global model configuration", body = GlobalModelResponse),
+    ),
+    tag = "model_config",
+)]
 pub async fn patch_global_model(
     State(state): State<AppState>,
     Json(body): Json<SetGlobalModelRequest>,
@@ -40,7 +57,7 @@ pub async fn patch_global_model(
 }
 
 /// Response type for the known models list.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct KnownModelResponse {
     pub id: &'static str,
     pub alias: &'static str,
@@ -50,6 +67,14 @@ pub struct KnownModelResponse {
 }
 
 /// Returns the curated list of known Claude models.
+#[utoipa::path(
+    get,
+    path = "/api/config/known-models",
+    responses(
+        (status = 200, description = "List of known Claude models", body = Vec<KnownModelResponse>),
+    ),
+    tag = "model_config",
+)]
 pub async fn list_known_models() -> Json<Vec<KnownModelResponse>> {
     let models: Vec<KnownModelResponse> = models::KNOWN_MODELS
         .iter()
@@ -65,18 +90,27 @@ pub async fn list_known_models() -> Json<Vec<KnownModelResponse>> {
 }
 
 /// Request body for prompt-based model suggestion.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SuggestModelRequest {
     pub prompt: String,
 }
 
 /// Response for model suggestion.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct SuggestModelResponse {
     pub suggested: &'static str,
 }
 
 /// Suggest a model based on prompt text using keyword heuristics.
+#[utoipa::path(
+    post,
+    path = "/api/config/suggest-model",
+    request_body(content = SuggestModelRequest, description = "Prompt text to base suggestion on"),
+    responses(
+        (status = 200, description = "Suggested model", body = SuggestModelResponse),
+    ),
+    tag = "model_config",
+)]
 pub async fn suggest_model(Json(body): Json<SuggestModelRequest>) -> Json<SuggestModelResponse> {
     Json(SuggestModelResponse {
         suggested: models::suggest_model(&body.prompt),

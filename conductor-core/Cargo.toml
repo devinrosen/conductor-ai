@@ -22,9 +22,11 @@ notify = "6"
 tracing = "0.1"
 tempfile = "3"
 rust-embed = { version = "8", features = ["include-exclude"] }
+utoipa = { version = "5", optional = true }
 
 [features]
 test-helpers = []
+openapi = ["dep:utoipa"]
 
 [dev-dependencies]
 regex-lite = "0.1"

@@ -19,7 +19,9 @@ use axum::http::HeaderValue;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
+use utoipa::OpenApi;
 
+use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 /// Build the API router with CORS restricted to the given origins.
@@ -361,4 +363,9 @@ pub fn api_router() -> Router<AppState> {
         // Notification Hooks
         .route("/api/config/hooks", get(hooks::list_hooks))
         .route("/api/config/hooks/test", post(hooks::test_hook))
+        // OpenAPI spec (stateless — no AppState needed)
+        .route(
+            "/api/openapi.json",
+            get(|| async { axum::Json(ApiDoc::openapi()) }),
+        )
 }

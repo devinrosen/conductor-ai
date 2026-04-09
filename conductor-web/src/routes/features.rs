@@ -8,12 +8,24 @@ use conductor_core::repo::RepoManager;
 use crate::error::ApiError;
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct FeaturesResponse {
     pub features: Vec<FeatureRow>,
     pub stale_feature_days: u32,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/features",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "List of features for the repo", body = FeaturesResponse),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "features",
+)]
 pub async fn list_features(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,

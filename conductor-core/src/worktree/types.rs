@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Typed representation of the three worktree lifecycle states stored in the DB.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorktreeStatus {
@@ -47,6 +48,7 @@ impl std::str::FromStr for WorktreeStatus {
 
 crate::impl_sql_enum!(WorktreeStatus);
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worktree {
     pub id: String,
@@ -83,6 +85,7 @@ impl Worktree {
 
 /// A `Worktree` augmented with the status of its latest agent run and linked ticket info.
 /// Returned by `WorktreeManager::list_all_with_status` and the enriched GET methods.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeWithStatus {
     #[serde(flatten)]

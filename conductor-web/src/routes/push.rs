@@ -7,24 +7,24 @@ use crate::error::ApiError;
 use crate::push::PushSubscriptionManager;
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PushSubscribeRequest {
     pub endpoint: String,
     pub keys: PushSubscriptionKeys,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PushSubscriptionKeys {
     pub p256dh: String,
     pub auth: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VapidPublicKeyResponse {
     pub public_key: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct PushSubscribeResponse {
     pub success: bool,
     pub message: String,
@@ -32,6 +32,15 @@ pub struct PushSubscribeResponse {
 
 /// GET /api/push/vapid-public-key
 /// Returns the VAPID public key for push subscription
+#[utoipa::path(
+    get,
+    path = "/api/push/vapid-public-key",
+    responses(
+        (status = 200, description = "VAPID public key", body = VapidPublicKeyResponse),
+        (status = 503, description = "Push notifications not configured"),
+    ),
+    tag = "push",
+)]
 pub async fn get_vapid_public_key(
     State(state): State<AppState>,
 ) -> Result<Json<VapidPublicKeyResponse>, ApiError> {
@@ -49,6 +58,16 @@ pub async fn get_vapid_public_key(
 
 /// POST /api/push/subscribe
 /// Subscribe to push notifications
+#[utoipa::path(
+    post,
+    path = "/api/push/subscribe",
+    request_body(content = PushSubscribeRequest, description = "Push subscription details"),
+    responses(
+        (status = 200, description = "Successfully subscribed", body = PushSubscribeResponse),
+        (status = 503, description = "Push notifications not configured"),
+    ),
+    tag = "push",
+)]
 pub async fn subscribe_push(
     State(state): State<AppState>,
     Json(request): Json<PushSubscribeRequest>,
@@ -89,6 +108,17 @@ pub async fn subscribe_push(
 
 /// DELETE /api/push/subscribe
 /// Unsubscribe from push notifications
+#[utoipa::path(
+    delete,
+    path = "/api/push/subscribe",
+    request_body(content = PushSubscribeRequest, description = "Push subscription to remove"),
+    responses(
+        (status = 204, description = "Successfully unsubscribed"),
+        (status = 404, description = "Subscription not found"),
+        (status = 503, description = "Push notifications not configured"),
+    ),
+    tag = "push",
+)]
 pub async fn unsubscribe_push(
     State(state): State<AppState>,
     Json(request): Json<PushSubscribeRequest>,

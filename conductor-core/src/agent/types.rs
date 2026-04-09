@@ -4,6 +4,7 @@ use super::status::{AgentRunStatus, FeedbackStatus, FeedbackType, StepStatus};
 
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
     /// ULID primary key.
@@ -38,6 +39,7 @@ impl Default for PlanStep {
     }
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRun {
     pub id: String,
@@ -148,6 +150,7 @@ pub struct AgentEvent {
 }
 
 /// A persisted agent run event (trace/span model) stored in `agent_run_events`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRunEvent {
     pub id: String,
@@ -191,6 +194,7 @@ impl AgentRunEvent {
 }
 
 /// A GitHub issue (or other tracker issue) created by an agent run.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCreatedIssue {
     pub id: String,
@@ -204,6 +208,7 @@ pub struct AgentCreatedIssue {
 }
 
 /// A selectable option for `SingleSelect` / `MultiSelect` feedback types.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedbackOption {
     /// Machine-readable value sent back as the response.
@@ -214,6 +219,7 @@ pub struct FeedbackOption {
 
 /// A human-in-the-loop feedback request created by an agent run.
 /// The agent pauses execution and waits for the user to respond.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedbackRequest {
     pub id: String,
@@ -245,6 +251,7 @@ pub struct FeedbackRequestParams {
 }
 
 /// Aggregated agent stats for a ticket (across all linked worktrees).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TicketAgentTotals {
     pub ticket_id: String,
@@ -259,6 +266,7 @@ pub struct TicketAgentTotals {
 }
 
 /// Aggregated stats for a run tree (parent + all descendants).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunTreeTotals {
     pub total_runs: i64,

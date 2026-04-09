@@ -58,6 +58,17 @@ pub(super) async fn spawn_tmux_blocking(
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent-runs",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "List of agent runs for the worktree", body = Vec<AgentRun>),
+    ),
+    tag = "agents",
+)]
 pub async fn list_agent_runs(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -68,12 +79,21 @@ pub async fn list_agent_runs(
     Ok(Json(runs))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
 pub struct ListAllAgentRunsQuery {
     pub status: Option<String>,
 }
 
 /// List all agent runs globally, with optional `?status=` filter.
+#[utoipa::path(
+    get,
+    path = "/api/agent/runs",
+    params(ListAllAgentRunsQuery),
+    responses(
+        (status = 200, description = "List of all agent runs", body = Vec<AgentRun>),
+    ),
+    tag = "agents",
+)]
 pub async fn list_all_agent_runs(
     State(state): State<AppState>,
     Query(params): Query<ListAllAgentRunsQuery>,
@@ -94,6 +114,14 @@ pub async fn list_all_agent_runs(
     Ok(Json(runs))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/agent/latest-runs",
+    responses(
+        (status = 200, description = "Map of worktree ID to latest agent run"),
+    ),
+    tag = "agents",
+)]
 pub async fn latest_runs_by_worktree(
     State(state): State<AppState>,
 ) -> Result<Json<HashMap<String, AgentRun>>, ApiError> {
@@ -103,6 +131,14 @@ pub async fn latest_runs_by_worktree(
     Ok(Json(map))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/agent/ticket-totals",
+    responses(
+        (status = 200, description = "Map of ticket ID to agent totals"),
+    ),
+    tag = "agents",
+)]
 pub async fn ticket_totals(
     State(state): State<AppState>,
 ) -> Result<Json<HashMap<String, TicketAgentTotals>>, ApiError> {
@@ -112,6 +148,17 @@ pub async fn ticket_totals(
     Ok(Json(map))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/agent/latest-runs",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "Map of worktree ID to latest agent run for repo"),
+    ),
+    tag = "agents",
+)]
 pub async fn latest_runs_by_worktree_for_repo(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -122,6 +169,17 @@ pub async fn latest_runs_by_worktree_for_repo(
     Ok(Json(map))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/agent/ticket-totals",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "Map of ticket ID to agent totals for repo"),
+    ),
+    tag = "agents",
+)]
 pub async fn ticket_totals_for_repo(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -135,6 +193,17 @@ pub async fn ticket_totals_for_repo(
 // ── Agent orchestration ───────────────────────────────────────────────
 
 /// List all agent runs for a worktree (newest first).
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/runs",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "List of agent runs for worktree", body = Vec<AgentRun>),
+    ),
+    tag = "agents",
+)]
 pub async fn list_runs(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -146,6 +215,17 @@ pub async fn list_runs(
 }
 
 /// Get the latest agent run for a worktree.
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/latest",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "Latest agent run or null", body = Option<AgentRun>),
+    ),
+    tag = "agents",
+)]
 pub async fn latest_run(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -156,7 +236,7 @@ pub async fn latest_run(
     Ok(Json(run))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct StartAgentRequest {
     pub prompt: String,
     pub resume_session_id: Option<String>,
@@ -164,6 +244,19 @@ pub struct StartAgentRequest {
 }
 
 /// Start an agent for a worktree. Creates a DB record and spawns a tmux window.
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/agent/start",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    request_body(content = StartAgentRequest, description = "Agent start parameters"),
+    responses(
+        (status = 201, description = "Agent run created", body = AgentRun),
+        (status = 404, description = "Worktree not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn start_agent(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -248,6 +341,18 @@ pub async fn start_agent(
 
 /// Stop a running agent: mark cancelled under lock, then capture scrollback
 /// and kill tmux on a blocking thread without holding the DB mutex.
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/agent/stop",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "Stopped agent run", body = AgentRun),
+        (status = 404, description = "Worktree or active agent not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn stop_agent(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -295,7 +400,7 @@ pub async fn stop_agent(
     Ok(Json(updated))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct AgentEventResponse {
     pub id: String,
     pub run_id: String,
@@ -340,6 +445,17 @@ impl From<AgentEvent> for AgentEventResponse {
 
 /// Get parsed agent events for all runs of a worktree.
 /// Uses DB records when available; falls back to log file parsing for older runs.
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/events",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "List of agent events", body = Vec<AgentEventResponse>),
+    ),
+    tag = "agents",
+)]
 pub async fn get_events(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -387,6 +503,18 @@ pub async fn get_events(
 }
 
 /// Get events for a specific agent run.
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/runs/{run_id}/events",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("run_id" = String, Path, description = "Agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of events for the agent run", body = Vec<AgentEventResponse>),
+    ),
+    tag = "agents",
+)]
 pub async fn get_run_events(
     State(state): State<AppState>,
     Path((worktree_id, run_id)): Path<(String, String)>,
@@ -434,7 +562,7 @@ pub async fn get_run_events(
     Ok(Json(events))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct AgentPromptResponse {
     pub prompt: String,
     pub resume_session_id: Option<String>,
@@ -445,6 +573,18 @@ pub struct AgentPromptResponse {
 }
 
 /// Get a pre-filled agent prompt for a worktree (from its linked ticket).
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/prompt",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "Agent prompt for worktree", body = AgentPromptResponse),
+        (status = 404, description = "Worktree not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn get_prompt(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -496,6 +636,18 @@ pub async fn get_prompt(
 // ── Parent/child run tree endpoints ───────────────────────────────────
 
 /// List direct child runs of a given parent run.
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/runs/{run_id}/children",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("run_id" = String, Path, description = "Parent agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of child agent runs", body = Vec<AgentRun>),
+    ),
+    tag = "agents",
+)]
 pub async fn list_child_runs(
     State(state): State<AppState>,
     Path((_worktree_id, run_id)): Path<(String, String)>,
@@ -507,6 +659,18 @@ pub async fn list_child_runs(
 }
 
 /// Get a full run tree: the root run plus all descendants.
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/runs/{run_id}/tree",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("run_id" = String, Path, description = "Root agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "Full run tree (root + all descendants)", body = Vec<AgentRun>),
+    ),
+    tag = "agents",
+)]
 pub async fn get_run_tree(
     State(state): State<AppState>,
     Path((_worktree_id, run_id)): Path<(String, String)>,
@@ -518,6 +682,18 @@ pub async fn get_run_tree(
 }
 
 /// Get aggregated cost/turns/duration for a run tree.
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/runs/{run_id}/tree-totals",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("run_id" = String, Path, description = "Root agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "Aggregated totals for a run tree", body = RunTreeTotals),
+    ),
+    tag = "agents",
+)]
 pub async fn get_run_tree_totals(
     State(state): State<AppState>,
     Path((_worktree_id, run_id)): Path<(String, String)>,
@@ -529,6 +705,17 @@ pub async fn get_run_tree_totals(
 }
 
 /// List issues created by all agent runs for a worktree.
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/created-issues",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "List of GitHub issues created by agent runs", body = Vec<AgentCreatedIssue>),
+    ),
+    tag = "agents",
+)]
 pub async fn list_created_issues(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -541,7 +728,7 @@ pub async fn list_created_issues(
 
 // ── Agent orchestration (auto-spawn child runs) ──────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct OrchestrateRequest {
     pub prompt: String,
     /// Stop on first child failure.
@@ -558,6 +745,19 @@ fn default_child_timeout_secs() -> u64 {
 
 /// Start an orchestrated agent run: generate a plan, then spawn child agents
 /// for each step sequentially. The orchestrator runs in a tmux window.
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/agent/orchestrate",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    request_body(content = OrchestrateRequest, description = "Orchestration parameters"),
+    responses(
+        (status = 201, description = "Orchestrator agent run created", body = AgentRun),
+        (status = 404, description = "Worktree not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn orchestrate_agent(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -626,6 +826,17 @@ pub async fn orchestrate_agent(
 // ── Feedback (human-in-the-loop) ──────────────────────────────────────
 
 /// Get the pending feedback request for a worktree's running agent (if any).
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/feedback",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "Pending feedback request or null", body = Option<FeedbackRequest>),
+    ),
+    tag = "agents",
+)]
 pub async fn get_pending_feedback(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -637,6 +848,18 @@ pub async fn get_pending_feedback(
 }
 
 /// List all feedback requests for a specific run.
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/agent/runs/{run_id}/feedback",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("run_id" = String, Path, description = "Agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of feedback requests for the run", body = Vec<FeedbackRequest>),
+    ),
+    tag = "agents",
+)]
 pub async fn list_run_feedback(
     State(state): State<AppState>,
     Path((_worktree_id, run_id)): Path<(String, String)>,
@@ -647,12 +870,25 @@ pub async fn list_run_feedback(
     Ok(Json(feedback))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct RequestFeedbackBody {
     pub prompt: String,
 }
 
 /// Create a feedback request for a running agent (pauses the agent).
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/agent/feedback",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    request_body(content = RequestFeedbackBody, description = "Feedback prompt"),
+    responses(
+        (status = 201, description = "Feedback request created", body = FeedbackRequest),
+        (status = 404, description = "Worktree or active agent not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn request_feedback(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -685,12 +921,26 @@ pub async fn request_feedback(
     Ok((StatusCode::CREATED, Json(feedback)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SubmitFeedbackBody {
     pub response: String,
 }
 
 /// Submit a response to a pending feedback request (resumes the agent).
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/agent/feedback/{feedback_id}/respond",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("feedback_id" = String, Path, description = "Feedback request ID"),
+    ),
+    request_body(content = SubmitFeedbackBody, description = "Feedback response"),
+    responses(
+        (status = 200, description = "Updated feedback request", body = FeedbackRequest),
+        (status = 404, description = "Feedback request not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn submit_feedback(
     State(state): State<AppState>,
     Path((worktree_id, feedback_id)): Path<(String, String)>,
@@ -714,6 +964,19 @@ pub async fn submit_feedback(
 }
 
 /// Dismiss a pending feedback request without responding (resumes the agent).
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/agent/feedback/{feedback_id}/dismiss",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("feedback_id" = String, Path, description = "Feedback request ID"),
+    ),
+    responses(
+        (status = 204, description = "Feedback dismissed"),
+        (status = 404, description = "Feedback request not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn dismiss_feedback(
     State(state): State<AppState>,
     Path((worktree_id, feedback_id)): Path<(String, String)>,
@@ -776,6 +1039,19 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
 
 /// Restart a failed/cancelled agent run by creating a new run with the
 /// same prompt/config and re-spawning a tmux window.
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/agent/runs/{run_id}/restart",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("run_id" = String, Path, description = "Agent run ID to restart"),
+    ),
+    responses(
+        (status = 201, description = "New agent run created from restart", body = AgentRun),
+        (status = 404, description = "Worktree or run not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn restart_agent(
     State(state): State<AppState>,
     Path((worktree_id, run_id)): Path<(String, String)>,
@@ -878,7 +1154,7 @@ async fn cancel_agent_blocking(state: &AppState, run_id: &str, tmux_window: Opti
 
 // ── Repo-scoped agent routes ────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct StartRepoAgentRequest {
     pub prompt: String,
     /// When true, ignore any prior session and start fresh.
@@ -889,6 +1165,19 @@ pub struct StartRepoAgentRequest {
 /// Start a read-only agent scoped to a repo. Uses `--allowedTools` restriction with
 /// `--dangerously-skip-permissions` for unrestricted Bash/gh access while blocking
 /// file-writing tools (Edit, Write, MultiEdit, NotebookEdit).
+#[utoipa::path(
+    post,
+    path = "/api/repos/{id}/agent/start",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    request_body(content = StartRepoAgentRequest, description = "Repo agent start parameters"),
+    responses(
+        (status = 201, description = "Repo-scoped agent run created", body = AgentRun),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn start_repo_agent(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -962,6 +1251,17 @@ pub async fn start_repo_agent(
 }
 
 /// List repo-scoped agent runs (newest first).
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/agent/runs",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "List of repo-scoped agent runs", body = Vec<AgentRun>),
+    ),
+    tag = "agents",
+)]
 pub async fn list_repo_agent_runs(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -973,6 +1273,19 @@ pub async fn list_repo_agent_runs(
 }
 
 /// Stop a repo-scoped agent run by run_id.
+#[utoipa::path(
+    post,
+    path = "/api/repos/{id}/agent/{run_id}/stop",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+        ("run_id" = String, Path, description = "Agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "Stopped agent run", body = AgentRun),
+        (status = 404, description = "Repo or run not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn stop_repo_agent(
     State(state): State<AppState>,
     Path((repo_id, run_id)): Path<(String, String)>,
@@ -1019,6 +1332,19 @@ pub async fn stop_repo_agent(
 }
 
 /// Get events for a repo-scoped agent run.
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/agent/{run_id}/events",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+        ("run_id" = String, Path, description = "Agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of events for repo-scoped agent run", body = Vec<AgentEventResponse>),
+        (status = 404, description = "Repo or run not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn repo_agent_events(
     State(state): State<AppState>,
     Path((repo_id, run_id)): Path<(String, String)>,
@@ -1046,6 +1372,18 @@ pub async fn repo_agent_events(
 // ── Global agent run endpoints ────────────────────────────────────────
 
 /// Get a single agent run by its ID (globally scoped, no worktree required).
+#[utoipa::path(
+    get,
+    path = "/api/agent/runs/{id}",
+    params(
+        ("id" = String, Path, description = "Agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "Agent run", body = AgentRun),
+        (status = 404, description = "Agent run not found"),
+    ),
+    tag = "agents",
+)]
 pub async fn get_agent_run_by_id(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
@@ -1061,6 +1399,17 @@ pub async fn get_agent_run_by_id(
 }
 
 /// List all feedback requests for a given agent run ID (globally scoped).
+#[utoipa::path(
+    get,
+    path = "/api/agent/runs/{id}/feedback",
+    params(
+        ("id" = String, Path, description = "Agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of feedback requests for the run", body = Vec<FeedbackRequest>),
+    ),
+    tag = "agents",
+)]
 pub async fn get_agent_run_feedback_by_run_id(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
@@ -1074,6 +1423,17 @@ pub async fn get_agent_run_feedback_by_run_id(
 /// Get parsed agent events for a single run by ID — scope-agnostic.
 ///
 /// Checks DB-persisted events first; falls back to log-file parsing for older runs.
+#[utoipa::path(
+    get,
+    path = "/api/agent/runs/{id}/events",
+    params(
+        ("id" = String, Path, description = "Agent run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of events for the agent run", body = Vec<AgentEventResponse>),
+    ),
+    tag = "agents",
+)]
 pub async fn get_agent_run_events_by_id(
     State(state): State<AppState>,
     Path(run_id): Path<String>,

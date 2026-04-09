@@ -25,7 +25,7 @@ fn open_db_and_config(
     Ok((conn, config))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateWorktreeRequest {
     pub name: String,
     pub from_branch: Option<String>,
@@ -36,7 +36,7 @@ pub struct CreateWorktreeRequest {
 
 /// Structured body returned as HTTP 409 when the base branch is dirty or stale
 /// and `force` is not set.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct MainDirtyConflict {
     pub code: &'static str,
     pub message: &'static str,
@@ -46,7 +46,7 @@ pub struct MainDirtyConflict {
 
 /// Typed success body returned as HTTP 201 when a worktree is created.
 /// Extends the core `Worktree` fields with optional runtime metadata.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct CreateWorktreeResponse {
     #[serde(flatten)]
     pub worktree: Worktree,
@@ -60,18 +60,27 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct LinkTicketRequest {
     pub ticket_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct WorktreeListQuery {
     /// When true, include merged/abandoned worktrees. Defaults to false (completed worktrees hidden).
     #[serde(default)]
     pub show_completed: bool,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees",
+    params(WorktreeListQuery),
+    responses(
+        (status = 200, description = "List of all worktrees", body = Vec<WorktreeWithStatus>),
+    ),
+    tag = "worktrees",
+)]
 pub async fn list_all_worktrees(
     State(state): State<AppState>,
     Query(params): Query<WorktreeListQuery>,
@@ -84,6 +93,19 @@ pub async fn list_all_worktrees(
     Ok(Json(worktrees))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/worktrees",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+        WorktreeListQuery,
+    ),
+    responses(
+        (status = 200, description = "List of worktrees for repo", body = Vec<WorktreeWithStatus>),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "worktrees",
+)]
 pub async fn list_worktrees(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -99,6 +121,20 @@ pub async fn list_worktrees(
     Ok(Json(worktrees))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/repos/{id}/worktrees",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    request_body(content = CreateWorktreeRequest, description = "Worktree creation parameters"),
+    responses(
+        (status = 201, description = "Worktree created", body = CreateWorktreeResponse),
+        (status = 404, description = "Repo not found"),
+        (status = 409, description = "Base branch is dirty", body = MainDirtyConflict),
+    ),
+    tag = "worktrees",
+)]
 pub async fn create_worktree(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -175,6 +211,18 @@ pub async fn create_worktree(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "Worktree detail", body = WorktreeWithStatus),
+        (status = 404, description = "Worktree not found"),
+    ),
+    tag = "worktrees",
+)]
 pub async fn get_worktree(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -186,6 +234,18 @@ pub async fn get_worktree(
     Ok(Json(wt))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/worktrees/{id}",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 204, description = "Worktree deleted"),
+        (status = 404, description = "Worktree not found"),
+    ),
+    tag = "worktrees",
+)]
 pub async fn delete_worktree(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -204,6 +264,19 @@ pub async fn delete_worktree(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{repo_id}/worktrees/{id}",
+    params(
+        ("repo_id" = String, Path, description = "Repo ID"),
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "Worktree detail", body = WorktreeWithStatus),
+        (status = 404, description = "Worktree not found or does not belong to repo"),
+    ),
+    tag = "worktrees",
+)]
 pub async fn get_worktree_for_repo(
     State(state): State<AppState>,
     Path((repo_id, id)): Path<(String, String)>,
@@ -215,6 +288,19 @@ pub async fn get_worktree_for_repo(
     Ok(Json(wt))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/repos/{repo_id}/worktrees/{id}",
+    params(
+        ("repo_id" = String, Path, description = "Repo ID"),
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 204, description = "Worktree deleted"),
+        (status = 404, description = "Worktree not found or does not belong to repo"),
+    ),
+    tag = "worktrees",
+)]
 pub async fn delete_worktree_for_repo(
     State(state): State<AppState>,
     Path((repo_id, id)): Path<(String, String)>,
@@ -233,11 +319,24 @@ pub async fn delete_worktree_for_repo(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SetModelRequest {
     pub model: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/worktrees/{id}/model",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    request_body(content = SetModelRequest, description = "Model to set for worktree"),
+    responses(
+        (status = 200, description = "Updated worktree", body = Worktree),
+        (status = 404, description = "Worktree not found"),
+    ),
+    tag = "worktrees",
+)]
 pub async fn patch_worktree_model(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -253,6 +352,20 @@ pub async fn patch_worktree_model(
     Ok(Json(updated))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/worktrees/{id}/ticket",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    request_body(content = LinkTicketRequest, description = "Ticket to link"),
+    responses(
+        (status = 200, description = "Updated worktree with linked ticket", body = Worktree),
+        (status = 404, description = "Worktree or ticket not found"),
+        (status = 409, description = "Ticket already linked"),
+    ),
+    tag = "worktrees",
+)]
 pub async fn link_ticket(
     State(state): State<AppState>,
     Path(id): Path<String>,
