@@ -4,7 +4,7 @@ use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use conductor_core::config::save_config;
+use conductor_core::config::{save_config, HookConfig};
 use conductor_core::notification_event::{NotificationEvent, ALL_EVENTS};
 use conductor_core::notification_hooks::HookRunner;
 
@@ -15,7 +15,7 @@ use crate::state::AppState;
 ///
 /// Avoids exposing raw `headers` map values (which may contain `$ENV_VAR` references)
 /// and keeps the API surface minimal and stable even if `HookConfig` fields change.
-#[derive(Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct HookSummary {
     pub index: usize,
     pub on: String,
@@ -47,6 +47,14 @@ pub struct HookEventEntry {
     pub label: &'static str,
 }
 
+fn hook_to_summary(index: usize, hook: &HookConfig) -> HookSummary {
+    let kind = if hook.run.is_some() { "shell" } else { "http" };
+    let command = hook.run.as_deref().or(hook.url.as_deref()).map(truncate_command);
+    let on = hook.on.clone();
+    let is_wildcard = on.contains('*');
+    HookSummary { index, on, kind, command, is_wildcard }
+}
+
 fn truncate_command(s: &str) -> String {
     let max = 80;
     if s.chars().count() > max {
@@ -73,22 +81,7 @@ pub async fn list_hooks(State(state): State<AppState>) -> Result<Json<Vec<HookSu
         .hooks
         .iter()
         .enumerate()
-        .map(|(index, hook)| {
-            let kind = if hook.run.is_some() { "shell" } else { "http" };
-            let command = hook
-                .run
-                .as_deref()
-                .or(hook.url.as_deref())
-                .map(truncate_command);
-            let is_wildcard = hook.on.contains('*');
-            HookSummary {
-                index,
-                on: hook.on.clone(),
-                kind,
-                command,
-                is_wildcard,
-            }
-        })
+        .map(|(index, hook)| hook_to_summary(index, hook))
         .collect();
     Ok(Json(summaries))
 }
@@ -177,34 +170,96 @@ pub async fn patch_hook_on(
     Path(index): Path<usize>,
     Json(body): Json<PatchHookOnRequest>,
 ) -> Result<Json<HookSummary>, ApiError> {
-    let mut config = state.config.write().await;
-    let hook = config
-        .notify
-        .hooks
-        .get_mut(index)
-        .ok_or_else(|| ApiError::NotFound(format!("hook index {index} not found")))?;
-    hook.on = body.on;
-    let kind: &'static str = if hook.run.is_some() { "shell" } else { "http" };
-    let command = hook
-        .run
-        .as_deref()
-        .or(hook.url.as_deref())
-        .map(truncate_command);
-    let on = hook.on.clone();
-    let is_wildcard = on.contains('*');
-    save_config(&config)?;
-    Ok(Json(HookSummary {
-        index,
-        on,
-        kind,
-        command,
-        is_wildcard,
-    }))
+    let (summary, config_snapshot) = {
+        let mut config = state.config.write().await;
+        let hook = config
+            .notify
+            .hooks
+            .get_mut(index)
+            .ok_or_else(|| ApiError::NotFound(format!("hook index {index} not found")))?;
+        hook.on = body.on;
+        let summary = hook_to_summary(index, hook);
+        let config_snapshot = config.clone();
+        (summary, config_snapshot)
+        // write lock released here
+    };
+    save_config(&config_snapshot)?;
+    Ok(Json(summary))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_command;
+    use std::sync::Arc;
+
+    use axum::extract::{Path, State};
+    use axum::Json;
+    use conductor_core::config::{Config, HookConfig};
+    use tempfile::NamedTempFile;
+    use tokio::sync::{Mutex, RwLock};
+
+    use super::{patch_hook_on, truncate_command, PatchHookOnRequest};
+    use crate::events::EventBus;
+    use crate::state::AppState;
+
+    fn state_with_hooks(hooks: Vec<HookConfig>) -> (AppState, NamedTempFile) {
+        let tmp = NamedTempFile::new().expect("create temp db file");
+        let conn =
+            conductor_core::db::open_database(tmp.path()).expect("open temp db");
+        let mut config = Config::default();
+        config.notify.hooks = hooks;
+        let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(config)),
+            events: EventBus::new(1),
+            db_path: tmp.path().to_path_buf(),
+            workflow_done_notify: None,
+        };
+        (state, tmp)
+    }
+
+    #[tokio::test]
+    async fn patch_hook_on_returns_404_for_out_of_range_index() {
+        let (state, _tmp) = state_with_hooks(vec![]);
+        let result = patch_hook_on(
+            State(state),
+            Path(0),
+            Json(PatchHookOnRequest {
+                on: "workflow_run.completed".into(),
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            format!("{err:?}").contains("not found"),
+            "expected NotFound, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_hook_on_updates_on_field_and_returns_summary() {
+        let hook = HookConfig {
+            on: "workflow_run.completed".into(),
+            run: Some("echo hello".into()),
+            ..Default::default()
+        };
+        let (state, _tmp) = state_with_hooks(vec![hook]);
+        let result = patch_hook_on(
+            State(state.clone()),
+            Path(0),
+            Json(PatchHookOnRequest { on: "*".into() }),
+        )
+        .await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        let Json(summary) = result.unwrap();
+        assert_eq!(summary.index, 0);
+        assert_eq!(summary.on, "*");
+        assert!(summary.is_wildcard);
+        assert_eq!(summary.kind, "shell");
+        // Verify in-memory state was updated
+        let config = state.config.read().await;
+        assert_eq!(config.notify.hooks[0].on, "*");
+    }
 
     #[test]
     fn short_string_unchanged() {

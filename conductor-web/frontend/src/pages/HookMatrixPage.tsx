@@ -2,16 +2,22 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Link } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
+import type { HookSummary } from "../api/types";
 import { HookMatrixGrid } from "../components/hooks/HookMatrixGrid";
 import { TomlPreviewPanel } from "../components/hooks/TomlPreviewPanel";
 
 export function HookMatrixPage() {
   const {
-    data: hooks,
+    data: fetchedHooks,
     loading: hooksLoading,
     error: hooksError,
-    refetch: refetchHooks,
   } = useApi(() => api.listHooks(), []);
+
+  // Local mirror of hooks — updated optimistically on each PATCH response.
+  const [hooks, setHooks] = useState<HookSummary[] | null>(null);
+  useEffect(() => {
+    if (fetchedHooks !== null) setHooks(fetchedHooks);
+  }, [fetchedHooks]);
 
   const {
     data: events,
@@ -41,33 +47,30 @@ export function HookMatrixPage() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
-  const sendPatch = useCallback(
-    async (hookIndex: number, newOn: string) => {
-      setInFlight((prev) => new Set(prev).add(hookIndex));
-      setPatchError(null);
-      try {
-        const updated = await api.patchHookOn(hookIndex, newOn);
-        // Reflect saved state — remove from draft and update hooks cache via refetch
-        setDraft((prev) => {
-          const next = new Map(prev);
-          next.delete(hookIndex);
-          return next;
-        });
-        // Optimistically update in-place without a full refetch
-        void updated;
-        refetchHooks();
-      } catch (err) {
-        setPatchError(err instanceof Error ? err.message : "Failed to update hook");
-      } finally {
-        setInFlight((prev) => {
-          const next = new Set(prev);
-          next.delete(hookIndex);
-          return next;
-        });
-      }
-    },
-    [refetchHooks],
-  );
+  const sendPatch = useCallback(async (hookIndex: number, newOn: string) => {
+    setInFlight((prev) => new Set(prev).add(hookIndex));
+    setPatchError(null);
+    try {
+      const updated = await api.patchHookOn(hookIndex, newOn);
+      setDraft((prev) => {
+        const next = new Map(prev);
+        next.delete(hookIndex);
+        return next;
+      });
+      // Update in-place using the server's response — no extra GET needed.
+      setHooks((prev) =>
+        prev ? prev.map((h) => (h.index === hookIndex ? updated : h)) : prev,
+      );
+    } catch (err) {
+      setPatchError(err instanceof Error ? err.message : "Failed to update hook");
+    } finally {
+      setInFlight((prev) => {
+        const next = new Set(prev);
+        next.delete(hookIndex);
+        return next;
+      });
+    }
+  }, []);
 
   function handleCellToggle(hookIndex: number, eventName: string, currentOn: string) {
     if (currentOn === eventName) {
