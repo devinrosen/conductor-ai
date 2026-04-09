@@ -650,6 +650,42 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
+    /// Multipart attachment with a valid MIME type but wrong magic bytes returns 422.
+    #[tokio::test]
+    async fn send_message_multipart_magic_bytes_mismatch_returns_422() {
+        let (state, _tmp) = seeded_state();
+        let boundary = "testboundarymagic";
+        // Claims image/png but sends GIF bytes — magic-byte check should reject it.
+        let body = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"prompt\"\r\n\
+             \r\n\
+             hello\r\n\
+             --{boundary}\r\n\
+             Content-Disposition: form-data; name=\"attachment1\"; filename=\"fake.png\"\r\n\
+             Content-Type: image/png\r\n\
+             \r\n\
+             GIF89a\r\n\
+             --{boundary}--\r\n"
+        );
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/conversations/any/messages")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
     /// Multipart attachment with an unsupported MIME type returns 422.
     #[tokio::test]
     async fn send_message_multipart_unsupported_mime_returns_422() {

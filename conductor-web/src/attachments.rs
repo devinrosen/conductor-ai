@@ -280,4 +280,92 @@ mod tests {
     fn validate_magic_bytes_heic_passes_through() {
         assert!(validate_magic_bytes("image/heic", b"anything"));
     }
+
+    // ── write_attachments_and_augment_prompt ──────────────────────────────────
+
+    #[test]
+    fn write_attachments_empty_returns_original_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = write_attachments_and_augment_prompt(
+            "run-abc",
+            tmp.path().to_str().unwrap(),
+            "original prompt",
+            &[],
+        );
+        assert_eq!(result.unwrap(), "original prompt");
+        // No attachment directory should be created.
+        assert!(!tmp.path().join(".conductor-attachments-run-abc").exists());
+    }
+
+    #[test]
+    fn write_attachments_augments_prompt_with_file_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let attachments = vec![Attachment {
+            filename: "photo.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            data: bytes::Bytes::from_static(b"\xff\xd8\xff\xe0"),
+        }];
+        let result = write_attachments_and_augment_prompt(
+            "run-xyz",
+            tmp.path().to_str().unwrap(),
+            "describe this image",
+            &attachments,
+        )
+        .unwrap();
+        assert!(result.starts_with("describe this image\n\n---\nAttached files:\n"));
+        assert!(result.contains("photo.jpg"));
+        assert!(result.contains("image/jpeg"));
+    }
+
+    #[test]
+    fn write_attachments_writes_file_content_to_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = b"hello world";
+        let attachments = vec![Attachment {
+            filename: "note.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            data: bytes::Bytes::from_static(content),
+        }];
+        write_attachments_and_augment_prompt(
+            "run-123",
+            tmp.path().to_str().unwrap(),
+            "read this",
+            &attachments,
+        )
+        .unwrap();
+        let written =
+            std::fs::read(tmp.path().join(".conductor-attachments-run-123").join("note.txt"))
+                .unwrap();
+        assert_eq!(written, content);
+    }
+
+    #[test]
+    fn write_attachments_multiple_files_all_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let attachments = vec![
+            Attachment {
+                filename: "a.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data: bytes::Bytes::from_static(b"file a"),
+            },
+            Attachment {
+                filename: "b.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data: bytes::Bytes::from_static(b"file b"),
+            },
+        ];
+        let result = write_attachments_and_augment_prompt(
+            "run-multi",
+            tmp.path().to_str().unwrap(),
+            "two files",
+            &attachments,
+        )
+        .unwrap();
+        let dir = tmp.path().join(".conductor-attachments-run-multi");
+        assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), b"file a");
+        assert_eq!(std::fs::read(dir.join("b.txt")).unwrap(), b"file b");
+        // Both filenames appear in the augmented prompt.
+        assert!(result.contains("a.txt"));
+        assert!(result.contains("b.txt"));
+    }
 }
