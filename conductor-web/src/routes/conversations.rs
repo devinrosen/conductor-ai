@@ -1,4 +1,4 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
@@ -47,6 +47,87 @@ pub struct RespondToFeedbackByIdRequest {
     pub run_id: String,
     pub feedback_id: String,
     pub response: String,
+}
+
+/// Raw attachment data parsed from a multipart field.
+struct Attachment {
+    filename: String,
+    mime_type: String,
+    data: Vec<u8>,
+}
+
+const ALLOWED_MIME_TYPES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/heic",
+    "application/pdf",
+    "text/plain",
+];
+
+/// Parse a `multipart/form-data` request body into a prompt string and optional attachments.
+///
+/// Expects a `prompt` text field (required) and zero or more fields whose names
+/// begin with `attachment` (filename + content-type preserved). Unknown fields
+/// are silently ignored. Returns 422 if `prompt` is absent or if an attachment
+/// carries an unsupported MIME type.
+async fn parse_multipart_body(
+    request: axum::extract::Request,
+    state: &AppState,
+) -> Result<(String, Vec<Attachment>), ApiError> {
+    let mut multipart = Multipart::from_request(request, state)
+        .await
+        .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?;
+
+    let mut prompt: Option<String> = None;
+    let mut attachments: Vec<Attachment> = Vec::new();
+
+    loop {
+        let field = multipart
+            .next_field()
+            .await
+            .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?;
+        let Some(field) = field else { break };
+
+        let name = field.name().unwrap_or("").to_string();
+        if name == "prompt" {
+            let text = field
+                .text()
+                .await
+                .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?;
+            prompt = Some(text);
+        } else if name.starts_with("attachment") {
+            let filename = field.file_name().unwrap_or("attachment").to_string();
+            let mime_type = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_string();
+
+            if !ALLOWED_MIME_TYPES.contains(&mime_type.as_str()) {
+                return Err(ApiError::UnprocessableEntity(format!(
+                    "unsupported MIME type: {mime_type}"
+                )));
+            }
+
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?
+                .to_vec();
+
+            attachments.push(Attachment {
+                filename,
+                mime_type,
+                data,
+            });
+        }
+        // Unknown fields are silently ignored.
+    }
+
+    let prompt = prompt
+        .ok_or_else(|| ApiError::UnprocessableEntity("missing required field: prompt".into()))?;
+
+    Ok((prompt, attachments))
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -146,6 +227,13 @@ pub async fn delete_conversation(
 
 /// POST /api/conversations/{id}/messages — send a message to a conversation.
 ///
+/// Accepts both `application/json` and `multipart/form-data`. For multipart,
+/// include a `prompt` text field and zero or more `attachment_N` file fields.
+/// Supported attachment MIME types: image/png, image/jpeg, image/heic,
+/// application/pdf, text/plain. Attachment files are saved to
+/// `{worktree_path}/.conductor-attachments-{run_id}/` and their absolute paths
+/// are appended to the prompt so the agent can read them.
+///
 /// Creates a new agent run, with automatic session resumption from the last
 /// completed run. Returns the full `AgentRun` object immediately; the agent
 /// runs asynchronously.
@@ -155,18 +243,45 @@ pub async fn delete_conversation(
     params(
         ("id" = String, Path, description = "Conversation ID"),
     ),
-    request_body(content = SendMessageRequest, description = "Message to send"),
+    request_body(
+        content = SendMessageRequest,
+        description = "Message prompt. Also accepts multipart/form-data with a 'prompt' text field and optional 'attachment_N' file fields (image/png, image/jpeg, image/heic, application/pdf, text/plain).",
+    ),
     responses(
         (status = 201, description = "Agent run created", body = AgentRun),
         (status = 404, description = "Conversation not found"),
+        (status = 415, description = "Unsupported Content-Type (expected application/json or multipart/form-data)"),
+        (status = 422, description = "Missing or invalid field in request body"),
     ),
     tag = "conversations",
 )]
 pub async fn send_message(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
-    Json(body): Json<SendMessageRequest>,
+    request: axum::extract::Request,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
+    // Read content-type before consuming the body.
+    let content_type = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // Pre-Phase: parse body before acquiring the DB lock.
+    let (prompt, raw_attachments) = if content_type.starts_with("multipart/form-data") {
+        parse_multipart_body(request, &state).await?
+    } else if content_type.starts_with("application/json") || content_type.is_empty() {
+        let Json(body) = Json::<SendMessageRequest>::from_request(request, &state)
+            .await
+            .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?;
+        (body.prompt, vec![])
+    } else {
+        return Err(ApiError::UnsupportedMediaType(format!(
+            "expected application/json or multipart/form-data, got: {content_type}"
+        )));
+    };
+
     // Phase 1: all DB work under the async lock.
     let (run, resume_session_id, working_dir, permission_mode, model, window_name) = {
         let db = state.db.lock().await;
@@ -214,9 +329,10 @@ pub async fn send_message(
 
         // Delegate run creation, concurrency guard, session lookup, and
         // metadata updates to ConversationManager::send_message.
+        // The original prompt (without attachment paths) is stored in the DB.
         let (run, resume_session_id) = conv_mgr.send_message(
             &conversation_id,
-            &body.prompt,
+            &prompt,
             Some(&window_name),
             model.as_deref(),
         )?;
@@ -232,12 +348,35 @@ pub async fn send_message(
     };
     // DB and config locks are now dropped.
 
-    // Phase 2: build args and spawn the tmux window.
+    // Phase 2: write attachment files to disk, build augmented prompt, spawn tmux.
+    let final_prompt = if raw_attachments.is_empty() {
+        prompt
+    } else {
+        let attach_dir =
+            std::path::Path::new(&working_dir).join(format!(".conductor-attachments-{}", run.id));
+        std::fs::create_dir_all(&attach_dir)
+            .map_err(|e| ApiError::Internal(format!("failed to create attachment dir: {e}")))?;
+
+        let mut path_lines: Vec<String> = Vec::new();
+        for att in &raw_attachments {
+            let file_path = attach_dir.join(&att.filename);
+            std::fs::write(&file_path, &att.data).map_err(|e| {
+                ApiError::Internal(format!("failed to write attachment {}: {e}", att.filename))
+            })?;
+            path_lines.push(format!("- {} ({})", file_path.display(), att.mime_type));
+        }
+
+        format!(
+            "{prompt}\n\n---\nAttached files:\n{}",
+            path_lines.join("\n")
+        )
+    };
+
     let args = match permission_mode {
         Some(ref mode) => conductor_core::agent_runtime::build_agent_args_with_mode(
             &run.id,
             &working_dir,
-            &body.prompt,
+            &final_prompt,
             resume_session_id.as_deref(),
             model.as_deref(),
             None,
@@ -248,7 +387,7 @@ pub async fn send_message(
         None => conductor_core::agent_runtime::build_agent_args(
             &run.id,
             &working_dir,
-            &body.prompt,
+            &final_prompt,
             resume_session_id.as_deref(),
             model.as_deref(),
             None,
@@ -518,6 +657,97 @@ mod tests {
         // Second call finds no pending feedback → 400
         let status = send_post_json(&uri, body, state).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    // ── send_message content-type tests ──────────────────────────────────────
+
+    /// Regression guard: JSON content-type is still accepted after the multipart refactor.
+    /// The conversation doesn't exist in the DB so the response is 400 (not 415/422).
+    #[tokio::test]
+    async fn send_message_json_still_works() {
+        let (state, _tmp) = seeded_state();
+        let status = send_post_json(
+            "/api/conversations/nonexistent-conv/messages",
+            serde_json::json!({ "prompt": "hello" }),
+            state,
+        )
+        .await;
+        assert_ne!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_ne!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Sending `text/plain` returns 415 Unsupported Media Type.
+    #[tokio::test]
+    async fn send_message_unsupported_content_type_returns_415() {
+        let (state, _tmp) = seeded_state();
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/conversations/any/messages")
+                    .header("content-type", "text/plain")
+                    .body(Body::from("hello"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    /// Multipart with a valid `prompt` field reaches the DB lookup phase.
+    /// The conversation doesn't exist, so response is 400 (not 415/422).
+    #[tokio::test]
+    async fn send_message_multipart_prompt_only() {
+        let (state, _tmp) = seeded_state();
+        let boundary = "testboundary1234";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nhello world\r\n--{boundary}--\r\n"
+        );
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/conversations/nonexistent/messages")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Multipart parsed successfully — failure is at DB lookup, not parsing.
+        assert_ne!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_ne!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Multipart body missing the `prompt` field returns 422.
+    #[tokio::test]
+    async fn send_message_multipart_missing_prompt_returns_422() {
+        let (state, _tmp) = seeded_state();
+        let boundary = "testboundary1234";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"other_field\"\r\n\r\nsome value\r\n--{boundary}--\r\n"
+        );
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/conversations/any/messages")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

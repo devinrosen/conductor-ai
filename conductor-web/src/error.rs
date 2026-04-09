@@ -12,6 +12,10 @@ pub enum ApiError {
     NotFound(String),
     /// 503 Service Unavailable (e.g. optional feature not configured).
     ServiceUnavailable(String),
+    /// 415 Unsupported Media Type (unexpected Content-Type header).
+    UnsupportedMediaType(String),
+    /// 422 Unprocessable Entity (malformed or incomplete request body).
+    UnprocessableEntity(String),
 }
 
 impl IntoResponse for ApiError {
@@ -22,6 +26,8 @@ impl IntoResponse for ApiError {
             }
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
+            ApiError::UnsupportedMediaType(msg) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg),
+            ApiError::UnprocessableEntity(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
             ApiError::Internal(msg) => {
                 tracing::error!(error = %msg, "internal request error");
                 (StatusCode::INTERNAL_SERVER_ERROR, msg)
