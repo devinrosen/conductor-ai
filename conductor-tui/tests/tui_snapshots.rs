@@ -312,6 +312,7 @@ fn snap_workflow_run_detail_with_steps() {
         started_at: "2024-01-15T10:00:00Z".into(),
         ended_at: None,
         result_summary: None,
+        error: None,
         definition_snapshot: None,
         inputs: std::collections::HashMap::new(),
         ticket_id: None,

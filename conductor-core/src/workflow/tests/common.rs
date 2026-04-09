@@ -481,7 +481,7 @@ pub(super) fn make_running_wf(conn: &Connection, name: &str) -> (String, String)
         .create_workflow_run(name, Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     (run.id, parent.id)
 }

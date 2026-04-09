@@ -188,6 +188,7 @@ impl<'a> WorkflowManager<'a> {
                     "Orphaned: executor died while waiting for gate \
                      — run was automatically cancelled",
                 ),
+                None,
             )?;
             tracing::info!(run_id = %run_id, "Reaped orphaned workflow run");
             reaped += 1;
@@ -304,7 +305,7 @@ impl<'a> WorkflowManager<'a> {
                 "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'"
                     .to_string();
 
-            self.update_workflow_status(&run_id, final_status.clone(), Some(&summary))?;
+            self.update_workflow_status(&run_id, final_status.clone(), Some(&summary), None)?;
             tracing::info!(
                 run_id = %run_id,
                 status = %final_status,

@@ -744,11 +744,7 @@ pub fn detect_workflow_terminal_transitions<'a>(
                     (r.to_string(), b.to_string())
                 };
                 let duration_ms = run.total_duration_ms.map(|ms| ms as u64);
-                let error = if !succeeded {
-                    run.result_summary.clone()
-                } else {
-                    None
-                };
+                let error = if !succeeded { run.error.clone() } else { None };
                 transitions.push(WorkflowTerminalTransition {
                     run_id: run.id.clone(),
                     workflow_name: run.display_name().to_string(),
@@ -2169,6 +2165,7 @@ mod tests {
             started_at: "2026-01-01T00:00:00Z".to_string(),
             ended_at: None,
             result_summary: None,
+            error: None,
             definition_snapshot: None,
             inputs: std::collections::HashMap::new(),
             ticket_id: None,

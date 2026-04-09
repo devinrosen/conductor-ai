@@ -60,6 +60,9 @@ pub struct WorkflowRun {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub result_summary: Option<String>,
+    /// Dedicated error message populated only on `Failed` transitions.
+    /// Mirrors `AgentRun.result_text` as a focused failure context field.
+    pub error: Option<String>,
     pub definition_snapshot: Option<String>,
     pub inputs: HashMap<String, String>,
     pub ticket_id: Option<String>,
@@ -703,6 +706,7 @@ mod tests {
             started_at: String::new(),
             ended_at: None,
             result_summary: None,
+            error: None,
             definition_snapshot: definition_snapshot.map(String::from),
             inputs: HashMap::new(),
             ticket_id: None,

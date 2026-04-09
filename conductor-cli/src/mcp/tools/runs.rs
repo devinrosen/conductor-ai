@@ -394,7 +394,7 @@ mod tests {
             .create_workflow_run("test-wf", None, &parent.id, false, "manual", None)
             .expect("create workflow run");
         if !matches!(status, conductor_core::workflow::WorkflowRunStatus::Pending) {
-            mgr.update_workflow_status(&run.id, status, None)
+            mgr.update_workflow_status(&run.id, status, None, None)
                 .expect("update status");
         }
         run.id

@@ -1388,7 +1388,12 @@ pub async fn cancel_workflow(
         .get_workflow_run(&id)?
         .ok_or_else(|| ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
 
-    mgr.update_workflow_status(&id, WorkflowRunStatus::Cancelled, Some("Cancelled by user"))?;
+    mgr.update_workflow_status(
+        &id,
+        WorkflowRunStatus::Cancelled,
+        Some("Cancelled by user"),
+        None,
+    )?;
 
     state.events.emit(ConductorEvent::WorkflowRunStatusChanged {
         run_id: id.clone(),
@@ -1865,7 +1870,7 @@ mod tests {
             let run = mgr
                 .create_workflow_run("test-wf", Some("wt1"), "ar1", false, "manual", None)
                 .unwrap();
-            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
                 .unwrap();
         }
 
@@ -1898,7 +1903,7 @@ mod tests {
             let run = mgr
                 .create_workflow_run("test-wf", None, "ar1", false, "manual", None)
                 .unwrap();
-            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
                 .unwrap();
 
             // Insert 4 steps with mixed statuses

@@ -17,7 +17,7 @@ fn test_cannot_start_workflow_run_when_active() {
         .create_workflow_run("running-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -66,7 +66,7 @@ fn test_can_start_workflow_run_after_completion() {
         .create_workflow_run("done-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"), None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -116,7 +116,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         .create_workflow_run("parent-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let workflow = make_empty_workflow();

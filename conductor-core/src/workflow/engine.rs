@@ -484,7 +484,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     }
 
     // Mark as running
-    wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None)?;
+    wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
 
     let mut state = ExecutionState {
         conn,
@@ -598,6 +598,7 @@ pub(super) fn run_workflow_engine(
             &wf_run_id,
             WorkflowRunStatus::Completed,
             Some(&summary),
+            None,
         )?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
 
@@ -621,6 +622,7 @@ pub(super) fn run_workflow_engine(
             &wf_run_id,
             WorkflowRunStatus::Failed,
             Some(&summary),
+            body_error.as_deref(),
         )?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
 
@@ -1034,7 +1036,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     };
 
     // Reset run status to Running
-    wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None)?;
+    wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
 
     tracing::info!(
         "Resuming workflow '{}' (run {}), {} completed steps to skip",
