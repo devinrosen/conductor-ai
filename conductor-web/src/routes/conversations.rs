@@ -1,4 +1,4 @@
-use axum::extract::{FromRequest, Multipart, Path, Query, State};
+use axum::extract::{FromRequest, Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
@@ -13,6 +13,7 @@ use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::worktree::WorktreeManager;
 
+use crate::attachments::{parse_multipart_body, write_attachments_and_augment_prompt};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -47,87 +48,6 @@ pub struct RespondToFeedbackByIdRequest {
     pub run_id: String,
     pub feedback_id: String,
     pub response: String,
-}
-
-/// Raw attachment data parsed from a multipart field.
-struct Attachment {
-    filename: String,
-    mime_type: String,
-    data: Vec<u8>,
-}
-
-const ALLOWED_MIME_TYPES: &[&str] = &[
-    "image/png",
-    "image/jpeg",
-    "image/jpg",
-    "image/heic",
-    "application/pdf",
-    "text/plain",
-];
-
-/// Parse a `multipart/form-data` request body into a prompt string and optional attachments.
-///
-/// Expects a `prompt` text field (required) and zero or more fields whose names
-/// begin with `attachment` (filename + content-type preserved). Unknown fields
-/// are silently ignored. Returns 422 if `prompt` is absent or if an attachment
-/// carries an unsupported MIME type.
-async fn parse_multipart_body(
-    request: axum::extract::Request,
-    state: &AppState,
-) -> Result<(String, Vec<Attachment>), ApiError> {
-    let mut multipart = Multipart::from_request(request, state)
-        .await
-        .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?;
-
-    let mut prompt: Option<String> = None;
-    let mut attachments: Vec<Attachment> = Vec::new();
-
-    loop {
-        let field = multipart
-            .next_field()
-            .await
-            .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?;
-        let Some(field) = field else { break };
-
-        let name = field.name().unwrap_or("").to_string();
-        if name == "prompt" {
-            let text = field
-                .text()
-                .await
-                .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?;
-            prompt = Some(text);
-        } else if name.starts_with("attachment") {
-            let filename = field.file_name().unwrap_or("attachment").to_string();
-            let mime_type = field
-                .content_type()
-                .unwrap_or("application/octet-stream")
-                .to_string();
-
-            if !ALLOWED_MIME_TYPES.contains(&mime_type.as_str()) {
-                return Err(ApiError::UnprocessableEntity(format!(
-                    "unsupported MIME type: {mime_type}"
-                )));
-            }
-
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| ApiError::UnprocessableEntity(e.to_string()))?
-                .to_vec();
-
-            attachments.push(Attachment {
-                filename,
-                mime_type,
-                data,
-            });
-        }
-        // Unknown fields are silently ignored.
-    }
-
-    let prompt = prompt
-        .ok_or_else(|| ApiError::UnprocessableEntity("missing required field: prompt".into()))?;
-
-    Ok((prompt, attachments))
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -349,28 +269,8 @@ pub async fn send_message(
     // DB and config locks are now dropped.
 
     // Phase 2: write attachment files to disk, build augmented prompt, spawn tmux.
-    let final_prompt = if raw_attachments.is_empty() {
-        prompt
-    } else {
-        let attach_dir =
-            std::path::Path::new(&working_dir).join(format!(".conductor-attachments-{}", run.id));
-        std::fs::create_dir_all(&attach_dir)
-            .map_err(|e| ApiError::Internal(format!("failed to create attachment dir: {e}")))?;
-
-        let mut path_lines: Vec<String> = Vec::new();
-        for att in &raw_attachments {
-            let file_path = attach_dir.join(&att.filename);
-            std::fs::write(&file_path, &att.data).map_err(|e| {
-                ApiError::Internal(format!("failed to write attachment {}: {e}", att.filename))
-            })?;
-            path_lines.push(format!("- {} ({})", file_path.display(), att.mime_type));
-        }
-
-        format!(
-            "{prompt}\n\n---\nAttached files:\n{}",
-            path_lines.join("\n")
-        )
-    };
+    let final_prompt =
+        write_attachments_and_augment_prompt(&run.id, &working_dir, &prompt, &raw_attachments)?;
 
     let args = match permission_mode {
         Some(ref mode) => conductor_core::agent_runtime::build_agent_args_with_mode(
@@ -731,6 +631,42 @@ mod tests {
         let boundary = "testboundary1234";
         let body = format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"other_field\"\r\n\r\nsome value\r\n--{boundary}--\r\n"
+        );
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/conversations/any/messages")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Multipart attachment with an unsupported MIME type returns 422.
+    #[tokio::test]
+    async fn send_message_multipart_unsupported_mime_returns_422() {
+        let (state, _tmp) = seeded_state();
+        let boundary = "testboundary5678";
+        // Build a multipart body with a valid `prompt` and a `video/mp4` attachment.
+        let body = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"prompt\"\r\n\
+             \r\n\
+             hello\r\n\
+             --{boundary}\r\n\
+             Content-Disposition: form-data; name=\"attachment1\"; filename=\"clip.mp4\"\r\n\
+             Content-Type: video/mp4\r\n\
+             \r\n\
+             fakevideobytes\r\n\
+             --{boundary}--\r\n"
         );
         let app = api_router().with_state(state);
         let response = app
