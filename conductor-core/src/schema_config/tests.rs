@@ -381,16 +381,10 @@ fn test_strip_trailing_commas() {
     assert_eq!(strip_trailing_commas(r#"[1, 2, 3,]"#), r#"[1, 2, 3]"#);
 
     // Comma + multiple spaces before }
-    assert_eq!(
-        strip_trailing_commas(r#"{"a": 1,   }"#),
-        r#"{"a": 1   }"#
-    );
+    assert_eq!(strip_trailing_commas(r#"{"a": 1,   }"#), r#"{"a": 1   }"#);
 
     // Comma + newline before ]
-    assert_eq!(
-        strip_trailing_commas("{\"a\": [1,\n]}"),
-        "{\"a\": [1\n]}"
-    );
+    assert_eq!(strip_trailing_commas("{\"a\": [1,\n]}"), "{\"a\": [1\n]}");
 
     // No trailing comma — input passes through unchanged
     assert_eq!(
