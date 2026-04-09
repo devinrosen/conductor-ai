@@ -333,9 +333,12 @@ mod tests {
             &attachments,
         )
         .unwrap();
-        let written =
-            std::fs::read(tmp.path().join(".conductor-attachments-run-123").join("note.txt"))
-                .unwrap();
+        let written = std::fs::read(
+            tmp.path()
+                .join(".conductor-attachments-run-123")
+                .join("note.txt"),
+        )
+        .unwrap();
         assert_eq!(written, content);
     }
 
