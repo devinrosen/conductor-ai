@@ -1164,14 +1164,14 @@ impl AppState {
         self.data.tickets.get(self.ticket_index)
     }
 
-    /// Returns true if the selected workflow run has failed with a non-empty result_summary.
+    /// Returns true if the selected workflow run has failed with a non-empty error field.
     pub fn selected_run_has_error(&self) -> bool {
         self.selected_workflow_run_id
             .as_ref()
             .and_then(|id| self.data.workflow_runs.iter().find(|r| &r.id == id))
             .map(|run| {
                 run.status == WorkflowRunStatus::Failed
-                    && run.result_summary.as_ref().is_some_and(|s| !s.is_empty())
+                    && run.error.as_ref().is_some_and(|s| !s.is_empty())
             })
             .unwrap_or(false)
     }

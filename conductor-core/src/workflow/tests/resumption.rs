@@ -24,7 +24,7 @@ fn test_get_active_run_for_worktree_returns_active() {
         .create_workflow_run("my-flow", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     // Set status to running
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let active = mgr.get_active_run_for_worktree("w1").unwrap();
@@ -44,7 +44,7 @@ fn test_get_active_run_for_worktree_none_after_completion() {
     let run = mgr
         .create_workflow_run("my-flow", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"), None)
         .unwrap();
 
     let active = mgr.get_active_run_for_worktree("w1").unwrap();
@@ -70,7 +70,7 @@ fn test_get_active_run_for_worktree_ignores_other_worktree() {
     let run = mgr
         .create_workflow_run("other-flow", Some("w2"), &parent.id, false, "manual", None)
         .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // w1 should see no active runs
@@ -143,7 +143,7 @@ fn test_resume_rejects_completed_run() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"), None)
         .unwrap();
 
     let input = WorkflowResumeInput {
@@ -182,7 +182,7 @@ fn test_resume_rejects_cancelled_run() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Cancelled, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Cancelled, None, None)
         .unwrap();
 
     let input = WorkflowResumeInput {
@@ -230,7 +230,7 @@ fn test_resume_rejects_restart_and_from_step_together() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"), None)
         .unwrap();
 
     let input = WorkflowResumeInput {
@@ -264,7 +264,7 @@ fn test_resume_rejects_missing_snapshot() {
         .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"), None)
         .unwrap();
 
     let input = WorkflowResumeInput {
@@ -323,7 +323,7 @@ fn test_resume_rejects_nonexistent_from_step() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"), None)
         .unwrap();
 
     // Add a step so the run has steps to search through
@@ -384,7 +384,7 @@ fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("prior error"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("prior error"), None)
         .unwrap();
 
     let input = WorkflowResumeInput {
@@ -785,7 +785,7 @@ fn test_resume_allows_restart_on_completed_run() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"), None)
         .unwrap();
 
     // Without restart, completed run should be rejected
@@ -899,7 +899,7 @@ fn test_resume_workflow_ephemeral_run_rejected() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("step failed"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("step failed"), None)
         .unwrap();
 
     let result = resume_workflow(&WorkflowResumeInput {
@@ -958,6 +958,7 @@ fn test_resume_workflow_repo_target() {
             &result.workflow_run_id,
             WorkflowRunStatus::Failed,
             Some("step failed"),
+            None,
         )
         .unwrap();
 
@@ -1018,6 +1019,7 @@ fn test_resume_workflow_ticket_target() {
             &result.workflow_run_id,
             WorkflowRunStatus::Failed,
             Some("step failed"),
+            None,
         )
         .unwrap();
 
@@ -1091,6 +1093,7 @@ fn test_resume_workflow_preserves_feature_id() {
             &result.workflow_run_id,
             WorkflowRunStatus::Failed,
             Some("step failed"),
+            None,
         )
         .unwrap();
 

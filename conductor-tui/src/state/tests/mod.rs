@@ -93,6 +93,7 @@ pub(crate) fn make_wf_run_full(
         started_at: "2026-01-01T00:00:00Z".into(),
         ended_at: None,
         result_summary: None,
+        error: None,
         definition_snapshot: None,
         inputs: std::collections::HashMap::new(),
         ticket_id: None,
@@ -212,6 +213,7 @@ pub(crate) fn make_workflow_run(
     run.workflow_name = "test".to_string();
     run.parent_run_id = String::new();
     run.result_summary = summary.map(|s| s.to_string());
+    run.error = summary.map(|s| s.to_string());
     run
 }
 

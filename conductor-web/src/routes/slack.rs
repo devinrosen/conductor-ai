@@ -331,6 +331,7 @@ mod tests {
             started_at: "2025-01-15T10:30:00Z".into(),
             ended_at: None,
             result_summary: None,
+            error: None,
             definition_snapshot: None,
             inputs: HashMap::new(),
             ticket_id: None,

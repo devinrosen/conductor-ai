@@ -189,14 +189,14 @@ impl App {
         use crate::state::workflow_run_info_row;
         use crate::state::WorkflowRunDetailFocus;
 
-        // When the Error pane is focused, copy the full result_summary text.
+        // When the Error pane is focused, copy the full error text.
         if self.state.workflow_run_detail_focus == WorkflowRunDetailFocus::Error {
             let text = self
                 .state
                 .selected_workflow_run_id
                 .as_ref()
                 .and_then(|id| self.state.data.workflow_runs.iter().find(|r| &r.id == id))
-                .and_then(|run| run.result_summary.clone());
+                .and_then(|run| run.error.clone());
             if let Some(text) = text {
                 self.copy_text_to_clipboard(text);
             } else {

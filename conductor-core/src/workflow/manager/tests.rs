@@ -187,10 +187,10 @@ fn test_list_active_workflow_runs_empty_slice_defaults_to_pending_running_waitin
 
     let pending_run = create_worktree_run(&conn, "w1"); // created as pending
     let running_run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     let completed_run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&completed_run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&completed_run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let runs = mgr.list_active_workflow_runs(&[]).unwrap();
@@ -218,7 +218,7 @@ fn test_list_active_workflow_runs_explicit_status_filter() {
 
     let pending_run = create_worktree_run(&conn, "w1");
     let running_run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // Ask only for running — pending must not appear.
@@ -345,10 +345,10 @@ fn test_list_active_workflow_runs_multiple_statuses_dynamic_placeholders() {
 
     let pending_run = create_worktree_run(&conn, "w1");
     let running_run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     let failed_run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&failed_run.id, WorkflowRunStatus::Failed, None)
+    mgr.update_workflow_status(&failed_run.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
 
     let runs = mgr
@@ -536,7 +536,7 @@ fn test_list_workflow_runs_filtered_with_status() {
 
     let pending_run = create_worktree_run(&conn, "w1");
     let running_run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let runs = mgr
@@ -561,7 +561,7 @@ fn test_list_workflow_runs_filtered_none_returns_all() {
 
     let pending_run = create_worktree_run(&conn, "w1");
     let running_run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let runs = mgr.list_workflow_runs_filtered("w1", None).unwrap();
@@ -587,7 +587,7 @@ fn test_list_workflow_runs_by_repo_id_filtered_with_status() {
     // Use repo-targeted runs so workflow_runs.repo_id is set.
     let pending_run = create_repo_run(&conn, "r1");
     let running_run = create_repo_run(&conn, "r1");
-    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let runs = mgr
@@ -612,7 +612,7 @@ fn test_list_workflow_runs_by_repo_id_filtered_none_returns_all() {
 
     let pending_run = create_repo_run(&conn, "r1");
     let running_run = create_repo_run(&conn, "r1");
-    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let runs = mgr
@@ -641,7 +641,7 @@ fn test_list_workflow_runs_filtered_paginated_with_status() {
     let _pending1 = create_worktree_run(&conn, "w1");
     let _pending2 = create_worktree_run(&conn, "w1");
     let running = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // First page: limit=1, offset=0 — exactly one pending run.
@@ -705,7 +705,7 @@ fn test_list_all_workflow_runs_filtered_paginated_with_status() {
 
     let pending_run = create_worktree_run(&conn, "w1");
     let running_run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let runs = mgr
@@ -730,7 +730,7 @@ fn test_list_all_workflow_runs_filtered_paginated_none() {
 
     let run1 = create_worktree_run(&conn, "w1");
     let run2 = create_worktree_run(&conn, "w2");
-    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let runs = mgr
@@ -1244,7 +1244,7 @@ fn test_get_step_summaries_for_runs_single_level_running_step() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     let step_id = mgr
         .insert_step(&run.id, "build", "actor", false, 0, 0)
@@ -1271,7 +1271,7 @@ fn test_get_step_summaries_for_runs_child_chain_traversal() {
 
     // Create root run and set it running.
     let root = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&root.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&root.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // Create a child workflow run parented under the root.
@@ -1291,7 +1291,7 @@ fn test_get_step_summaries_for_runs_child_chain_traversal() {
             None,
         )
         .unwrap();
-    mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // Add a running step on the child.
@@ -1320,7 +1320,7 @@ fn test_get_step_summaries_for_runs_deep_chain() {
     let mgr = WorkflowManager::new(&conn);
 
     let root = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&root.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&root.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let agent_id = make_parent_id(&conn, "w1");
@@ -1339,7 +1339,7 @@ fn test_get_step_summaries_for_runs_deep_chain() {
             None,
         )
         .unwrap();
-    mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let agent_id2 = make_parent_id(&conn, "w1");
@@ -1358,7 +1358,7 @@ fn test_get_step_summaries_for_runs_deep_chain() {
             None,
         )
         .unwrap();
-    mgr.update_workflow_status(&grandchild.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&grandchild.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let step_id = mgr
@@ -1385,7 +1385,7 @@ fn test_get_step_summaries_for_runs_no_running_step_omitted() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     // Insert a completed step — not running.
     let step_id = mgr
@@ -1408,7 +1408,7 @@ fn test_get_step_summaries_for_runs_multiple_roots() {
     let mgr = WorkflowManager::new(&conn);
 
     let run1 = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     let step1_id = mgr
         .insert_step(&run1.id, "compile", "actor", false, 0, 0)
@@ -1416,7 +1416,7 @@ fn test_get_step_summaries_for_runs_multiple_roots() {
     set_step_status(&mgr, &step1_id, WorkflowStepStatus::Running);
 
     let run2 = create_worktree_run(&conn, "w2");
-    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     let step2_id = mgr
         .insert_step(&run2.id, "lint", "actor", false, 0, 0)
@@ -1447,7 +1447,7 @@ fn test_get_step_summaries_for_runs_multiple_roots_with_chains() {
 
     // Root A: has an active child with a running step.
     let root_a = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&root_a.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&root_a.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     let agent_id_a = make_parent_id(&conn, "w1");
     let child_a = mgr
@@ -1465,7 +1465,7 @@ fn test_get_step_summaries_for_runs_multiple_roots_with_chains() {
             None,
         )
         .unwrap();
-    mgr.update_workflow_status(&child_a.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&child_a.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     let step_a_id = mgr
         .insert_step(&child_a.id, "deploy", "actor", false, 0, 0)
@@ -1474,7 +1474,7 @@ fn test_get_step_summaries_for_runs_multiple_roots_with_chains() {
 
     // Root B: no children, running step directly on root.
     let root_b = create_worktree_run(&conn, "w2");
-    mgr.update_workflow_status(&root_b.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&root_b.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     let step_b_id = mgr
         .insert_step(&root_b.id, "test", "actor", false, 0, 0)
@@ -1511,7 +1511,7 @@ fn test_cancel_run_marks_run_cancelled() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     mgr.cancel_run(&run.id, "user requested").unwrap();
@@ -1527,7 +1527,7 @@ fn test_cancel_run_fails_on_terminal_state() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let result = mgr.cancel_run(&run.id, "too late");
@@ -1540,7 +1540,7 @@ fn test_cancel_run_marks_active_steps_failed() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_worktree_run(&conn, "w1");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // One running step and one completed step.
@@ -1753,7 +1753,7 @@ fn test_list_active_workflow_runs_for_repo_empty_slice_defaults_to_active() {
 
     let pending = create_repo_run(&conn, "r1");
     let completed = create_repo_run(&conn, "r1");
-    mgr.update_workflow_status(&completed.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&completed.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let runs = mgr.list_active_workflow_runs_for_repo("r1", &[]).unwrap();
@@ -1777,7 +1777,7 @@ fn test_list_active_workflow_runs_for_repo_explicit_status_filter() {
 
     let pending = create_repo_run(&conn, "r1");
     let running = create_repo_run(&conn, "r1");
-    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let runs = mgr
@@ -1859,7 +1859,7 @@ fn create_named_repo_run(conn: &rusqlite::Connection, repo_id: &str, wf_name: &s
 
 fn complete_with_metrics(conn: &rusqlite::Connection, run_id: &str, input: i64, output: i64) {
     let mgr = WorkflowManager::new(conn);
-    mgr.update_workflow_status(run_id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(run_id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(run_id, input, output, 0, 0, 1, 0.0, 1000, None)
         .unwrap();
@@ -1886,7 +1886,7 @@ fn test_token_aggregates_excludes_non_terminal_runs() {
 
     // running run — should never appear
     let running = create_named_worktree_run(&conn, "w1", "wf-a");
-    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let result = mgr.get_workflow_token_aggregates(None).unwrap();
@@ -1901,7 +1901,7 @@ fn test_token_aggregates_includes_completed_without_tokens() {
 
     // completed run with no token data — terminal, so it appears with 0 token averages
     let completed_no_tokens = create_named_worktree_run(&conn, "w1", "wf-a");
-    mgr.update_workflow_status(&completed_no_tokens.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&completed_no_tokens.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let result = mgr.get_workflow_token_aggregates(None).unwrap();
@@ -1925,7 +1925,7 @@ fn test_token_aggregates_includes_failed_runs() {
         200,
     );
     let failed = create_named_worktree_run(&conn, "w1", "wf-a");
-    mgr.update_workflow_status(&failed.id, WorkflowRunStatus::Failed, None)
+    mgr.update_workflow_status(&failed.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
 
     let result = mgr.get_workflow_token_aggregates(None).unwrap();
@@ -2081,7 +2081,7 @@ fn test_token_trend_excludes_non_completed_and_null_token_runs() {
 
     // completed but no tokens — excluded
     let no_tokens = create_named_worktree_run(&conn, "w1", "trend-wf");
-    mgr.update_workflow_status(&no_tokens.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&no_tokens.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let result = mgr.get_workflow_token_trend("trend-wf", "daily").unwrap();
@@ -2234,10 +2234,10 @@ fn test_step_heatmap_basic_per_step_averages() {
     let run1 = create_named_worktree_run(&conn, "w1", "heat-wf");
     let run2 = create_named_worktree_run(&conn, "w1", "heat-wf");
     WorkflowManager::new(&conn)
-        .update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None)
+        .update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     WorkflowManager::new(&conn)
-        .update_workflow_status(&run2.id, WorkflowRunStatus::Completed, None)
+        .update_workflow_status(&run2.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     insert_agent_run_with_tokens(&conn, "ar-r1-a", 100, 200, 10);
@@ -2269,7 +2269,7 @@ fn test_step_heatmap_limit_runs_respected() {
     let run3 = create_named_worktree_run(&conn, "w1", "heat-wf");
 
     for r in [&run1, &run2, &run3] {
-        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None)
+        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None, None)
             .unwrap();
     }
 
@@ -2317,7 +2317,7 @@ fn test_step_heatmap_ordered_by_avg_total_tokens_desc() {
 
     let run = create_named_worktree_run(&conn, "w1", "heat-wf");
     WorkflowManager::new(&conn)
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     // step-high: 500+500 = 1000 total; step-low: 10+10 = 20 total
@@ -2364,7 +2364,7 @@ fn test_run_metrics_returns_completed_run_data() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.0, 5000, None)
         .unwrap();
@@ -2384,13 +2384,13 @@ fn test_run_metrics_filters_by_workflow_name() {
     let mgr = WorkflowManager::new(&conn);
 
     let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
-    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&run_a.id, 100, 200, 0, 0, 1, 0.0, 1000, None)
         .unwrap();
 
     let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
-    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&run_b.id, 999, 999, 0, 0, 1, 0.0, 9999, None)
         .unwrap();
@@ -2409,12 +2409,12 @@ fn test_run_metrics_excludes_null_metric_runs() {
 
     // All-null run: completed but no metrics persisted — should be excluded
     let null_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
-    mgr.update_workflow_status(&null_run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&null_run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     // Duration-only run: set total_duration_ms but leave tokens null — should be included
     let dur_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
-    mgr.update_workflow_status(&dur_run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&dur_run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET total_duration_ms = 3000 WHERE id = ?1",
@@ -2437,7 +2437,7 @@ fn test_run_metrics_excludes_zero_metric_runs() {
 
     // All-zero run: completed with metrics all set to 0 — should be excluded
     let zero_run = create_named_worktree_run(&conn, "w1", "metrics-wf");
-    mgr.update_workflow_status(&zero_run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&zero_run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&zero_run.id, 0, 0, 0, 0, 0, 0.0, 0, None)
         .unwrap();
@@ -2453,7 +2453,7 @@ fn test_run_metrics_includes_partial_nonzero_run() {
 
     // Zero tokens but nonzero duration — should be included
     let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&run.id, 0, 0, 0, 0, 1, 0.0, 2500, None)
         .unwrap();
@@ -2475,7 +2475,7 @@ fn test_run_metrics_includes_worktree_and_repo_id() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_named_worktree_run(&conn, "w1", "metrics-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.0, 5000, None)
         .unwrap();
@@ -2508,7 +2508,7 @@ fn test_failure_rate_trend_excludes_non_terminal_runs() {
 
     // running run — should not appear
     let running = create_named_worktree_run(&conn, "w1", "trend-wf");
-    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let result = mgr
@@ -2523,7 +2523,7 @@ fn test_failure_rate_trend_completed_only_period() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_named_worktree_run(&conn, "w1", "trend-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     // Pin started_at to a known date so period is deterministic
     conn.execute(
@@ -2550,7 +2550,7 @@ fn test_failure_rate_trend_mixed_completed_and_failed() {
     // 2 completed + 1 failed all on the same day → success_rate = 66.67%
     for _ in 0..2 {
         let run = create_named_worktree_run(&conn, "w1", "trend-wf");
-        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
             .unwrap();
         conn.execute(
             "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
@@ -2559,7 +2559,7 @@ fn test_failure_rate_trend_mixed_completed_and_failed() {
         .unwrap();
     }
     let failed = create_named_worktree_run(&conn, "w1", "trend-wf");
-    mgr.update_workflow_status(&failed.id, WorkflowRunStatus::Failed, None)
+    mgr.update_workflow_status(&failed.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET started_at = '2024-03-15T12:00:00Z' WHERE id = ?1",
@@ -2583,11 +2583,11 @@ fn test_failure_rate_trend_filters_by_workflow_name() {
     let mgr = WorkflowManager::new(&conn);
 
     let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
-    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Failed, None)
+    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
 
     let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
-    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let result = mgr
@@ -2606,7 +2606,7 @@ fn test_failure_rate_trend_weekly_granularity() {
     // Two runs on the same ISO week but different days → single period row
     for ts in ["2024-03-11T00:00:00Z", "2024-03-13T00:00:00Z"] {
         let run = create_named_worktree_run(&conn, "w1", "trend-wf");
-        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
             .unwrap();
         conn.execute(
             "UPDATE workflow_runs SET started_at = ?1 WHERE id = ?2",
@@ -2659,9 +2659,9 @@ fn test_step_failure_heatmap_basic_failure_rate() {
     // Two terminal runs of "heat-wf"
     let run1 = create_named_worktree_run(&conn, "w1", "heat-wf");
     let run2 = create_named_worktree_run(&conn, "w1", "heat-wf");
-    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
-    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Failed, None)
+    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
 
     // step-a completed in run1, failed in run2 → failure_rate = 50%
@@ -2682,7 +2682,7 @@ fn test_step_failure_heatmap_excludes_pending_and_skipped_steps() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_named_worktree_run(&conn, "w1", "heat-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     // pending and skipped steps must not appear in results
@@ -2706,7 +2706,7 @@ fn test_step_failure_heatmap_limit_runs_respected() {
     let run2 = create_named_worktree_run(&conn, "w1", "heat-wf");
     let run3 = create_named_worktree_run(&conn, "w1", "heat-wf");
     for r in [&run1, &run2, &run3] {
-        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None)
+        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None, None)
             .unwrap();
     }
 
@@ -2746,7 +2746,7 @@ fn test_step_failure_heatmap_ordered_by_failure_rate_desc() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_named_worktree_run(&conn, "w1", "heat-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     // step-never-fails: completed; step-always-fails: failed → second row first
@@ -2795,7 +2795,7 @@ fn test_step_retry_analytics_no_retries() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_named_worktree_run(&conn, "w1", "retry-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     insert_step_with_retries(&conn, "s1", &run.id, "step-a", 0, "completed", 0);
 
@@ -2816,7 +2816,7 @@ fn test_step_retry_analytics_basic() {
     let mgr = WorkflowManager::new(&conn);
 
     let run = create_named_worktree_run(&conn, "w1", "retry-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     insert_step_with_retries(&conn, "s1", &run.id, "step-a", 0, "completed", 2);
 
@@ -2851,7 +2851,7 @@ fn test_step_retry_analytics_mixed() {
         } else {
             WorkflowRunStatus::Failed
         };
-        mgr.update_workflow_status(&run.id, wf_status, None)
+        mgr.update_workflow_status(&run.id, wf_status, None, None)
             .unwrap();
         insert_step_with_retries(&conn, &format!("s{idx}"), &run.id, "step-a", 0, status, *rc);
     }
@@ -2875,7 +2875,7 @@ fn test_step_retry_analytics_limit_runs() {
     let run2 = create_named_worktree_run(&conn, "w1", "retry-wf");
     let run3 = create_named_worktree_run(&conn, "w1", "retry-wf");
     for r in [&run1, &run2, &run3] {
-        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None)
+        mgr.update_workflow_status(&r.id, WorkflowRunStatus::Completed, None, None)
             .unwrap();
     }
 
@@ -2922,7 +2922,7 @@ fn test_get_workflow_percentiles_no_duration() {
     let conn = setup_db();
     let mgr = WorkflowManager::new(&conn);
     let run = create_named_worktree_run(&conn, "w1", "pct-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     // persist_workflow_metrics with duration 0 — but do NOT set total_duration_ms directly
     // because persist_workflow_metrics sets it. Instead insert a run with NULL duration_ms
@@ -2936,7 +2936,7 @@ fn test_get_workflow_percentiles_single_run() {
     let conn = setup_db();
     let mgr = WorkflowManager::new(&conn);
     let run = create_named_worktree_run(&conn, "w1", "pct-wf");
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&run.id, 100, 200, 0, 0, 1, 0.05, 5000, None)
         .unwrap();
@@ -2959,7 +2959,7 @@ fn test_get_workflow_percentiles_multi_run() {
     // Insert 10 runs with durations 1000, 2000, …, 10000 ms
     for i in 1..=10u64 {
         let run = create_named_worktree_run(&conn, "w1", "pct-wf");
-        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
             .unwrap();
         mgr.persist_workflow_metrics(
             &run.id,
@@ -2998,13 +2998,13 @@ fn test_get_workflow_percentiles_excludes_other_workflows() {
     let mgr = WorkflowManager::new(&conn);
 
     let run_a = create_named_worktree_run(&conn, "w1", "wf-a");
-    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_a.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&run_a.id, 100, 200, 0, 0, 1, 0.10, 5000, None)
         .unwrap();
 
     let run_b = create_named_worktree_run(&conn, "w1", "wf-b");
-    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_b.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(&run_b.id, 999, 999, 0, 0, 1, 9.99, 99000, None)
         .unwrap();
@@ -3388,7 +3388,7 @@ fn complete_with_duration_cost(
     cost_usd: f64,
 ) {
     let mgr = WorkflowManager::new(conn);
-    mgr.update_workflow_status(run_id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(run_id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     mgr.persist_workflow_metrics(run_id, 0, 0, 0, 0, 1, cost_usd, duration_ms, None)
         .unwrap();
@@ -3557,7 +3557,7 @@ fn test_regression_signals_failure_rate_regressed() {
     for _ in 0..5 {
         let run = create_named_worktree_run(&conn, "w1", "flaky-wf");
         WorkflowManager::new(&conn)
-            .update_workflow_status(&run.id, WorkflowRunStatus::Failed, None)
+            .update_workflow_status(&run.id, WorkflowRunStatus::Failed, None, None)
             .unwrap();
     }
 

@@ -64,6 +64,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let total_cost_usd: Option<f64> = row.get(25)?;
     let total_duration_ms: Option<i64> = row.get(26)?;
     let model: Option<String> = row.get(27)?;
+    let error: Option<String> = row.get(28)?;
     let definition_snapshot: Option<String> = row.get(10)?;
     let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
     Ok(WorkflowRun {
@@ -77,6 +78,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
         started_at: row.get(7)?,
         ended_at: row.get(8)?,
         result_summary: row.get(9)?,
+        error,
         definition_snapshot,
         inputs,
         ticket_id,

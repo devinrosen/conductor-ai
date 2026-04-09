@@ -704,7 +704,7 @@ fn test_reap_finalization_already_terminal_not_touched() {
 
     let (run_id, _) = make_running_wf(&conn, "flow");
     wf_mgr
-        .update_workflow_status(&run_id, WorkflowRunStatus::Completed, None)
+        .update_workflow_status(&run_id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     insert_terminal_step(&conn, &run_id, WorkflowStepStatus::Completed, 0);
 
@@ -808,7 +808,7 @@ fn test_reap_finalization_child_run_not_reaped() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&child_run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&child_run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     insert_terminal_step(&conn, &child_run.id, WorkflowStepStatus::Completed, 0);
 

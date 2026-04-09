@@ -93,6 +93,7 @@ impl App {
                     &workflow_run_id,
                     WorkflowRunStatus::Cancelled,
                     Some("Cancelled by user"),
+                    None,
                 ) {
                     Ok(()) => {
                         self.state.status_message = Some("Workflow run cancelled".to_string());

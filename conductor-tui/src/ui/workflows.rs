@@ -1176,8 +1176,8 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     }
 
                     if run.status == WorkflowRunStatus::Failed {
-                        if let Some(ref summary) = run.result_summary {
-                            let snippet = truncate(summary.lines().next().unwrap_or(""), 50);
+                        if let Some(ref err) = run.error {
+                            let snippet = truncate(err.lines().next().unwrap_or(""), 50);
                             spans.push(Span::styled(
                                 format!("  {snippet}"),
                                 Style::default().fg(state.theme.label_error),
@@ -1238,8 +1238,8 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     }
 
                     if run.status == WorkflowRunStatus::Failed {
-                        if let Some(ref summary) = run.result_summary {
-                            let snippet = truncate(summary.lines().next().unwrap_or(""), 40);
+                        if let Some(ref err) = run.error {
+                            let snippet = truncate(err.lines().next().unwrap_or(""), 40);
                             spans.push(Span::styled(
                                 format!("  {snippet}"),
                                 Style::default().fg(state.theme.label_error),
@@ -1339,11 +1339,11 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         0
     };
 
-    // Error pane: visible only for Failed runs with a non-empty result_summary
+    // Error pane: visible only for Failed runs with a non-empty error field
     let has_error = state.selected_run_has_error();
     let error_text = if has_error {
         run_info
-            .and_then(|r| r.result_summary.as_deref())
+            .and_then(|r| r.error.as_deref())
             .unwrap_or("")
     } else {
         ""

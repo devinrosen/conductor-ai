@@ -729,6 +729,7 @@ pub fn handle_workflow(
                             &id,
                             conductor_core::workflow::WorkflowRunStatus::Cancelled,
                             Some("Cancelled by user"),
+                            None,
                         )?;
                         println!("Workflow run {} cancelled.", id);
                     }
@@ -748,10 +749,12 @@ pub fn handle_workflow(
         WorkflowCommands::GateReject { run_id } => {
             with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
                 wf_mgr.reject_gate(&step.id, user, None)?;
+                let reject_msg = format!("Gate '{}' rejected by {user}", step.step_name);
                 wf_mgr.update_workflow_status(
                     &run_id,
                     conductor_core::workflow::WorkflowRunStatus::Failed,
-                    Some(&format!("Gate '{}' rejected by {user}", step.step_name)),
+                    Some(&reject_msg),
+                    Some(&reject_msg),
                 )?;
                 println!("Gate '{}' rejected by {user}.", step.step_name);
                 Ok(())
