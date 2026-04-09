@@ -49,10 +49,20 @@ pub struct HookEventEntry {
 
 fn hook_to_summary(index: usize, hook: &HookConfig) -> HookSummary {
     let kind = if hook.run.is_some() { "shell" } else { "http" };
-    let command = hook.run.as_deref().or(hook.url.as_deref()).map(truncate_command);
+    let command = hook
+        .run
+        .as_deref()
+        .or(hook.url.as_deref())
+        .map(truncate_command);
     let on = hook.on.clone();
     let is_wildcard = on.contains('*');
-    HookSummary { index, on, kind, command, is_wildcard }
+    HookSummary {
+        index,
+        on,
+        kind,
+        command,
+        is_wildcard,
+    }
 }
 
 fn truncate_command(s: &str) -> String {
@@ -203,8 +213,7 @@ mod tests {
 
     fn state_with_hooks(hooks: Vec<HookConfig>) -> (AppState, NamedTempFile) {
         let tmp = NamedTempFile::new().expect("create temp db file");
-        let conn =
-            conductor_core::db::open_database(tmp.path()).expect("open temp db");
+        let conn = conductor_core::db::open_database(tmp.path()).expect("open temp db");
         let mut config = Config::default();
         config.notify.hooks = hooks;
         let state = AppState {
