@@ -1,8 +1,9 @@
-//! Multipart attachment parsing, validation, and disk I/O.
+//! Multipart attachment parsing and validation.
 //!
 //! Extracted from the `send_message` route handler so that the handler stays
 //! thin (input/output only) while business logic (filename sanitisation, MIME
-//! validation, file writing, prompt augmentation) lives here.
+//! validation) lives here. File I/O and prompt augmentation are delegated to
+//! `conductor_core::attachments`.
 
 use axum::extract::{FromRequest, Multipart};
 
@@ -162,6 +163,7 @@ pub async fn parse_multipart_body(
 /// Write attachment files to `{working_dir}/.conductor-attachments-{run_id}/`
 /// and return the original prompt augmented with a file-path appendix.
 ///
+/// Delegates to `conductor_core::attachments::write_attachments_and_augment_prompt`.
 /// If `attachments` is empty the original `prompt` is returned unchanged.
 pub fn write_attachments_and_augment_prompt(
     run_id: &str,
@@ -169,28 +171,21 @@ pub fn write_attachments_and_augment_prompt(
     prompt: &str,
     attachments: &[Attachment],
 ) -> Result<String, ApiError> {
-    if attachments.is_empty() {
-        return Ok(prompt.to_string());
-    }
-
-    let attach_dir =
-        std::path::Path::new(working_dir).join(format!(".conductor-attachments-{run_id}"));
-    std::fs::create_dir_all(&attach_dir)
-        .map_err(|e| ApiError::Internal(format!("failed to create attachment dir: {e}")))?;
-
-    let mut path_lines: Vec<String> = Vec::new();
-    for att in attachments {
-        let file_path = attach_dir.join(&att.filename);
-        std::fs::write(&file_path, &att.data).map_err(|e| {
-            ApiError::Internal(format!("failed to write attachment {}: {e}", att.filename))
-        })?;
-        path_lines.push(format!("- {} ({})", file_path.display(), att.mime_type));
-    }
-
-    Ok(format!(
-        "{prompt}\n\n---\nAttached files:\n{}",
-        path_lines.join("\n")
-    ))
+    let core_attachments: Vec<conductor_core::attachments::AttachmentFile<'_>> = attachments
+        .iter()
+        .map(|a| conductor_core::attachments::AttachmentFile {
+            filename: &a.filename,
+            mime_type: &a.mime_type,
+            data: &a.data,
+        })
+        .collect();
+    conductor_core::attachments::write_attachments_and_augment_prompt(
+        run_id,
+        working_dir,
+        prompt,
+        &core_attachments,
+    )
+    .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -279,96 +274,5 @@ mod tests {
     #[test]
     fn validate_magic_bytes_heic_passes_through() {
         assert!(validate_magic_bytes("image/heic", b"anything"));
-    }
-
-    // ── write_attachments_and_augment_prompt ──────────────────────────────────
-
-    #[test]
-    fn write_attachments_empty_returns_original_prompt() {
-        let tmp = tempfile::tempdir().unwrap();
-        let result = write_attachments_and_augment_prompt(
-            "run-abc",
-            tmp.path().to_str().unwrap(),
-            "original prompt",
-            &[],
-        );
-        assert_eq!(result.unwrap(), "original prompt");
-        // No attachment directory should be created.
-        assert!(!tmp.path().join(".conductor-attachments-run-abc").exists());
-    }
-
-    #[test]
-    fn write_attachments_augments_prompt_with_file_paths() {
-        let tmp = tempfile::tempdir().unwrap();
-        let attachments = vec![Attachment {
-            filename: "photo.jpg".to_string(),
-            mime_type: "image/jpeg".to_string(),
-            data: bytes::Bytes::from_static(b"\xff\xd8\xff\xe0"),
-        }];
-        let result = write_attachments_and_augment_prompt(
-            "run-xyz",
-            tmp.path().to_str().unwrap(),
-            "describe this image",
-            &attachments,
-        )
-        .unwrap();
-        assert!(result.starts_with("describe this image\n\n---\nAttached files:\n"));
-        assert!(result.contains("photo.jpg"));
-        assert!(result.contains("image/jpeg"));
-    }
-
-    #[test]
-    fn write_attachments_writes_file_content_to_disk() {
-        let tmp = tempfile::tempdir().unwrap();
-        let content = b"hello world";
-        let attachments = vec![Attachment {
-            filename: "note.txt".to_string(),
-            mime_type: "text/plain".to_string(),
-            data: bytes::Bytes::from_static(content),
-        }];
-        write_attachments_and_augment_prompt(
-            "run-123",
-            tmp.path().to_str().unwrap(),
-            "read this",
-            &attachments,
-        )
-        .unwrap();
-        let written = std::fs::read(
-            tmp.path()
-                .join(".conductor-attachments-run-123")
-                .join("note.txt"),
-        )
-        .unwrap();
-        assert_eq!(written, content);
-    }
-
-    #[test]
-    fn write_attachments_multiple_files_all_written() {
-        let tmp = tempfile::tempdir().unwrap();
-        let attachments = vec![
-            Attachment {
-                filename: "a.txt".to_string(),
-                mime_type: "text/plain".to_string(),
-                data: bytes::Bytes::from_static(b"file a"),
-            },
-            Attachment {
-                filename: "b.txt".to_string(),
-                mime_type: "text/plain".to_string(),
-                data: bytes::Bytes::from_static(b"file b"),
-            },
-        ];
-        let result = write_attachments_and_augment_prompt(
-            "run-multi",
-            tmp.path().to_str().unwrap(),
-            "two files",
-            &attachments,
-        )
-        .unwrap();
-        let dir = tmp.path().join(".conductor-attachments-run-multi");
-        assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), b"file a");
-        assert_eq!(std::fs::read(dir.join("b.txt")).unwrap(), b"file b");
-        // Both filenames appear in the augmented prompt.
-        assert!(result.contains("a.txt"));
-        assert!(result.contains("b.txt"));
     }
 }
