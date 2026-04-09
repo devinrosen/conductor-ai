@@ -14,7 +14,7 @@ path = "src/main.rs"
 conductor-core = { path = "../conductor-core", features = ["openapi"] }
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"
@@ -36,6 +36,7 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 serde_urlencoded = "0.7"
+bytes = "1"
 
 [dev-dependencies]
 conductor-core = { path = "../conductor-core", features = ["test-helpers"] }
