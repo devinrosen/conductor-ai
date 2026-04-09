@@ -319,7 +319,12 @@ impl<'a> WorkflowManager<'a> {
     /// Returns the parent agent run ID so callers can handle updating it
     /// separately to avoid cross-manager coupling.
     pub fn fail_workflow_run(&self, workflow_run_id: &str, error_msg: &str) -> Result<String> {
-        self.update_workflow_status(workflow_run_id, WorkflowRunStatus::Failed, Some(error_msg), Some(error_msg))?;
+        self.update_workflow_status(
+            workflow_run_id,
+            WorkflowRunStatus::Failed,
+            Some(error_msg),
+            Some(error_msg),
+        )?;
         if let Ok(Some(run)) = self.get_workflow_run(workflow_run_id) {
             Ok(run.parent_run_id)
         } else {

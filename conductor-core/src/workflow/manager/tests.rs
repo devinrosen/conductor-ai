@@ -1901,8 +1901,13 @@ fn test_token_aggregates_includes_completed_without_tokens() {
 
     // completed run with no token data — terminal, so it appears with 0 token averages
     let completed_no_tokens = create_named_worktree_run(&conn, "w1", "wf-a");
-    mgr.update_workflow_status(&completed_no_tokens.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    mgr.update_workflow_status(
+        &completed_no_tokens.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
     let result = mgr.get_workflow_token_aggregates(None).unwrap();
     assert_eq!(result.len(), 1);

@@ -1388,7 +1388,12 @@ pub async fn cancel_workflow(
         .get_workflow_run(&id)?
         .ok_or_else(|| ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
 
-    mgr.update_workflow_status(&id, WorkflowRunStatus::Cancelled, Some("Cancelled by user"), None)?;
+    mgr.update_workflow_status(
+        &id,
+        WorkflowRunStatus::Cancelled,
+        Some("Cancelled by user"),
+        None,
+    )?;
 
     state.events.emit(ConductorEvent::WorkflowRunStatusChanged {
         run_id: id.clone(),

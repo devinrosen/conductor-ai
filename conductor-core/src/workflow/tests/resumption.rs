@@ -384,7 +384,12 @@ fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("prior error"), None)
+        .update_workflow_status(
+            &run.id,
+            WorkflowRunStatus::Failed,
+            Some("prior error"),
+            None,
+        )
         .unwrap();
 
     let input = WorkflowResumeInput {
@@ -899,7 +904,12 @@ fn test_resume_workflow_ephemeral_run_rejected() {
         )
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("step failed"), None)
+        .update_workflow_status(
+            &run.id,
+            WorkflowRunStatus::Failed,
+            Some("step failed"),
+            None,
+        )
         .unwrap();
 
     let result = resume_workflow(&WorkflowResumeInput {

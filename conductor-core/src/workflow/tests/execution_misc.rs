@@ -577,7 +577,12 @@ fn test_execute_nodes_stops_on_external_cancel() {
 
     // Mark the run as cancelled before any nodes execute.
     WorkflowManager::new(&conn)
-        .update_workflow_status(&state.workflow_run_id, WorkflowRunStatus::Cancelled, None, None)
+        .update_workflow_status(
+            &state.workflow_run_id,
+            WorkflowRunStatus::Cancelled,
+            None,
+            None,
+        )
         .unwrap();
 
     // Any node will do — cancellation is detected before execute_single_node is called.

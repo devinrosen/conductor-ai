@@ -1342,9 +1342,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     // Error pane: visible only for Failed runs with a non-empty error field
     let has_error = state.selected_run_has_error();
     let error_text = if has_error {
-        run_info
-            .and_then(|r| r.error.as_deref())
-            .unwrap_or("")
+        run_info.and_then(|r| r.error.as_deref()).unwrap_or("")
     } else {
         ""
     };
