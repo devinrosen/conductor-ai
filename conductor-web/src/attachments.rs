@@ -173,8 +173,8 @@ pub fn write_attachments_and_augment_prompt(
         return Ok(prompt.to_string());
     }
 
-    let attach_dir = std::path::Path::new(working_dir)
-        .join(format!(".conductor-attachments-{run_id}"));
+    let attach_dir =
+        std::path::Path::new(working_dir).join(format!(".conductor-attachments-{run_id}"));
     std::fs::create_dir_all(&attach_dir)
         .map_err(|e| ApiError::Internal(format!("failed to create attachment dir: {e}")))?;
 
@@ -212,10 +212,7 @@ mod tests {
     #[test]
     fn sanitize_filename_strips_absolute_path() {
         // Path::file_name() on "/etc/passwd" returns "passwd".
-        assert_eq!(
-            sanitize_filename("/etc/passwd"),
-            Some("passwd".to_string())
-        );
+        assert_eq!(sanitize_filename("/etc/passwd"), Some("passwd".to_string()));
     }
 
     #[test]
@@ -273,7 +270,10 @@ mod tests {
 
     #[test]
     fn validate_magic_bytes_rejects_invalid_utf8_as_text() {
-        assert!(!validate_magic_bytes("text/plain", b"\xff\xfe binary garbage"));
+        assert!(!validate_magic_bytes(
+            "text/plain",
+            b"\xff\xfe binary garbage"
+        ));
     }
 
     #[test]
