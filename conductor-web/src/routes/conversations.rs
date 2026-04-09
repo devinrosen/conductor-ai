@@ -20,29 +20,29 @@ use super::agents::spawn_tmux_blocking;
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateConversationRequest {
     pub scope: ConversationScope,
     pub scope_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct ListConversationsQuery {
     pub scope: ConversationScope,
     pub scope_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SendMessageRequest {
     pub prompt: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct RespondToFeedbackRequest {
     pub response: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct RespondToFeedbackByIdRequest {
     pub run_id: String,
     pub feedback_id: String,
@@ -52,6 +52,15 @@ pub struct RespondToFeedbackByIdRequest {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// POST /api/conversations — create a new conversation.
+#[utoipa::path(
+    post,
+    path = "/api/conversations",
+    request_body(content = CreateConversationRequest, description = "Conversation creation details"),
+    responses(
+        (status = 201, description = "Conversation created", body = Conversation),
+    ),
+    tag = "conversations",
+)]
 pub async fn create_conversation(
     State(state): State<AppState>,
     Json(body): Json<CreateConversationRequest>,
@@ -63,6 +72,15 @@ pub async fn create_conversation(
 }
 
 /// GET /api/conversations?scope=&scope_id= — list conversations for a scope.
+#[utoipa::path(
+    get,
+    path = "/api/conversations",
+    params(ListConversationsQuery),
+    responses(
+        (status = 200, description = "List of conversations", body = Vec<Conversation>),
+    ),
+    tag = "conversations",
+)]
 pub async fn list_conversations(
     State(state): State<AppState>,
     Query(params): Query<ListConversationsQuery>,
@@ -74,6 +92,18 @@ pub async fn list_conversations(
 }
 
 /// GET /api/conversations/{id} — get conversation detail with associated runs.
+#[utoipa::path(
+    get,
+    path = "/api/conversations/{id}",
+    params(
+        ("id" = String, Path, description = "Conversation ID"),
+    ),
+    responses(
+        (status = 200, description = "Conversation with runs", body = ConversationWithRuns),
+        (status = 404, description = "Conversation not found"),
+    ),
+    tag = "conversations",
+)]
 pub async fn get_conversation(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
@@ -92,6 +122,19 @@ pub async fn get_conversation(
 ///
 /// Returns 204 No Content on success. Returns 409 Conflict if the conversation
 /// has an active or waiting agent run.
+#[utoipa::path(
+    delete,
+    path = "/api/conversations/{id}",
+    params(
+        ("id" = String, Path, description = "Conversation ID"),
+    ),
+    responses(
+        (status = 204, description = "Conversation deleted"),
+        (status = 404, description = "Conversation not found"),
+        (status = 409, description = "Conversation has an active agent run"),
+    ),
+    tag = "conversations",
+)]
 pub async fn delete_conversation(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
@@ -106,6 +149,19 @@ pub async fn delete_conversation(
 /// Creates a new agent run, with automatic session resumption from the last
 /// completed run. Returns the full `AgentRun` object immediately; the agent
 /// runs asynchronously.
+#[utoipa::path(
+    post,
+    path = "/api/conversations/{id}/messages",
+    params(
+        ("id" = String, Path, description = "Conversation ID"),
+    ),
+    request_body(content = SendMessageRequest, description = "Message to send"),
+    responses(
+        (status = 201, description = "Agent run created", body = AgentRun),
+        (status = 404, description = "Conversation not found"),
+    ),
+    tag = "conversations",
+)]
 pub async fn send_message(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
@@ -209,6 +265,19 @@ pub async fn send_message(
 /// POST /api/conversations/{id}/feedback — submit feedback for a run using an
 /// explicit feedback_id. This is the mobile-client entrypoint; the run_id is
 /// used only to verify the run belongs to the conversation.
+#[utoipa::path(
+    post,
+    path = "/api/conversations/{id}/feedback",
+    params(
+        ("id" = String, Path, description = "Conversation ID"),
+    ),
+    request_body(content = RespondToFeedbackByIdRequest, description = "Feedback response"),
+    responses(
+        (status = 200, description = "Updated agent run", body = AgentRun),
+        (status = 404, description = "Conversation or run not found"),
+    ),
+    tag = "conversations",
+)]
 pub async fn respond_to_feedback(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
@@ -229,6 +298,20 @@ pub async fn respond_to_feedback(
 
 /// POST /api/conversations/{id}/messages/{run_id}/respond — respond to a
 /// human-in-the-loop feedback request for a specific run.
+#[utoipa::path(
+    post,
+    path = "/api/conversations/{id}/messages/{run_id}/respond",
+    params(
+        ("id" = String, Path, description = "Conversation ID"),
+        ("run_id" = String, Path, description = "Agent run ID"),
+    ),
+    request_body(content = RespondToFeedbackRequest, description = "Feedback response"),
+    responses(
+        (status = 200, description = "Updated agent run", body = AgentRun),
+        (status = 404, description = "Conversation or run not found"),
+    ),
+    tag = "conversations",
+)]
 pub async fn respond_to_run_feedback(
     State(state): State<AppState>,
     Path((conversation_id, run_id)): Path<(String, String)>,

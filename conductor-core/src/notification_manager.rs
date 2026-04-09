@@ -4,6 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Severity levels for in-app notifications.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationSeverity {
@@ -37,6 +38,7 @@ impl FromStr for NotificationSeverity {
 impl_sql_enum!(NotificationSeverity);
 
 /// A persistent in-app notification record.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
     pub id: String,

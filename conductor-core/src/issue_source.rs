@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueSource {
     pub id: String,

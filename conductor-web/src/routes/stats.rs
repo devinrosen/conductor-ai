@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::error::ApiError;
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct ThemeUnlockStats {
     pub repos_registered: i64,
     pub prs_merged: i64,
@@ -18,6 +18,14 @@ pub struct ThemeUnlockStats {
 /// GET /api/stats/theme-unlocks
 ///
 /// Returns aggregated stats used to evaluate theme unlock conditions.
+#[utoipa::path(
+    get,
+    path = "/api/stats/theme-unlocks",
+    responses(
+        (status = 200, description = "Theme unlock stats", body = ThemeUnlockStats),
+    ),
+    tag = "stats",
+)]
 pub async fn theme_unlock_stats(
     State(state): State<AppState>,
 ) -> Result<Json<ThemeUnlockStats>, ApiError> {

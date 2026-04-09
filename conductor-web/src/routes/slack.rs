@@ -94,6 +94,17 @@ fn verify_slack_signature(
 /// Supports:
 ///   /conductor active   — list active workflow runs
 ///   /conductor help     — show available commands
+#[utoipa::path(
+    post,
+    path = "/api/slack/commands",
+    request_body(content = String, description = "URL-encoded Slack slash command payload", content_type = "application/x-www-form-urlencoded"),
+    responses(
+        (status = 200, description = "Slack slash command response"),
+        (status = 400, description = "Invalid request payload"),
+        (status = 401, description = "Signature verification failed"),
+    ),
+    tag = "slack",
+)]
 pub async fn handle_slash_command(
     State(state): State<AppState>,
     headers: HeaderMap,

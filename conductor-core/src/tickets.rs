@@ -13,6 +13,7 @@ use crate::error::{ConductorError, Result};
 use crate::github::has_merged_pr;
 use crate::worktree::WorktreeManager;
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticket {
     pub id: String,
@@ -85,6 +86,7 @@ pub struct TicketLabelInput {
 }
 
 /// A label row from the ticket_labels table.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TicketLabel {
     pub ticket_id: String,
@@ -94,6 +96,7 @@ pub struct TicketLabel {
 
 /// Dependency relationships for a single ticket.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TicketDependencies {
     /// Tickets that must complete before this one (blocks this ticket).
     pub blocked_by: Vec<Ticket>,
