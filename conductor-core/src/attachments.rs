@@ -175,6 +175,60 @@ mod tests {
     }
 
     #[test]
+    fn write_attachments_rejects_dot_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = write_attachments_and_augment_prompt(
+            "run-sec3",
+            tmp.path().to_str().unwrap(),
+            "prompt",
+            &[AttachmentFile {
+                filename: ".",
+                mime_type: "text/plain",
+                data: b"data",
+            }],
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("unsafe attachment filename"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn write_attachments_rejects_empty_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = write_attachments_and_augment_prompt(
+            "run-sec4",
+            tmp.path().to_str().unwrap(),
+            "prompt",
+            &[AttachmentFile {
+                filename: "",
+                mime_type: "text/plain",
+                data: b"data",
+            }],
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("unsafe attachment filename"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn write_attachments_rejects_backslash_in_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = write_attachments_and_augment_prompt(
+            "run-sec5",
+            tmp.path().to_str().unwrap(),
+            "prompt",
+            &[AttachmentFile {
+                filename: "evil\\file.txt",
+                mime_type: "text/plain",
+                data: b"data",
+            }],
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("unsafe attachment filename"), "unexpected error: {msg}");
+    }
+
+    #[test]
     fn write_attachments_multiple_files_all_written() {
         let tmp = tempfile::tempdir().unwrap();
         let attachments = vec![

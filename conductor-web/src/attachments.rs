@@ -185,7 +185,12 @@ pub fn write_attachments_and_augment_prompt(
         prompt,
         &core_attachments,
     )
-    .map_err(|e| ApiError::Internal(e.to_string()))
+    .map_err(|e| match e {
+        conductor_core::error::ConductorError::InvalidInput(msg) => {
+            ApiError::UnprocessableEntity(msg)
+        }
+        _ => ApiError::Internal(e.to_string()),
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
