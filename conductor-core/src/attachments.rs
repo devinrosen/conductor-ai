@@ -189,7 +189,10 @@ mod tests {
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("unsafe attachment filename"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("unsafe attachment filename"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
@@ -207,7 +210,10 @@ mod tests {
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("unsafe attachment filename"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("unsafe attachment filename"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
@@ -225,7 +231,10 @@ mod tests {
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("unsafe attachment filename"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("unsafe attachment filename"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
