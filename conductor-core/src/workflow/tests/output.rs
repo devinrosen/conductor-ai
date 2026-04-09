@@ -146,3 +146,49 @@ fn test_interpret_agent_output_no_text() {
     assert!(context.is_empty());
     assert!(json.is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for invalid backslash escape handling
+// ---------------------------------------------------------------------------
+
+/// `parse_conductor_output` must succeed when a field value contains `\.`
+/// (Swift key-path syntax), which is not a valid JSON escape sequence.
+#[test]
+fn test_parse_conductor_output_backslash_in_context() {
+    let text = r#"<<<CONDUCTOR_OUTPUT>>>
+{"markers": [], "context": "Added @Environment(\.openURL) to toolbar"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+    let output = parse_conductor_output(text);
+    assert!(
+        output.is_some(),
+        "parse_conductor_output must succeed with bare backslash in context"
+    );
+    let output = output.unwrap();
+    assert!(
+        output.context.contains(r"\.openURL"),
+        "backslash must be preserved in context string"
+    );
+}
+
+/// `interpret_agent_output` with `succeeded = true` must return `Ok(...)` even
+/// when the output block contains a bare backslash in a string field value.
+#[test]
+fn test_interpret_agent_output_backslash_succeeded_true() {
+    let schema = make_test_schema();
+    // `\.` in the summary field — invalid JSON escape that the sanitizer must fix.
+    let text =
+        "<<<CONDUCTOR_OUTPUT>>>\n{\"approved\": true, \"summary\": \"Use @Environment(\\.openURL)\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let result = interpret_agent_output(Some(text), Some(&schema), true);
+    assert!(
+        result.is_ok(),
+        "interpret_agent_output must not return Err on successful run with bare backslash: {:?}",
+        result
+    );
+    let (_, context, json) = result.unwrap();
+    assert!(
+        context.contains(r"\.openURL"),
+        "backslash must be preserved in context"
+    );
+    assert!(json.is_some());
+}

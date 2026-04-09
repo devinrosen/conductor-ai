@@ -17,6 +17,7 @@ pub struct ConductorOutput {
 /// inside code examples, grep output, and JSON field values.
 pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let cleaned = crate::schema_config::extract_output_block(text)?;
+    let cleaned = crate::schema_config::fix_invalid_backslash_escapes(&cleaned);
     serde_json::from_str(&cleaned).ok()
 }
 

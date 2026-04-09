@@ -70,6 +70,8 @@ pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<Stru
 
     // Strip trailing commas (common LLM artifact)
     let cleaned = strip_trailing_commas(&cleaned);
+    // Fix invalid backslash escapes (e.g. Swift key-paths, regex, Windows paths)
+    let cleaned = fix_invalid_backslash_escapes(&cleaned);
 
     let value: serde_json::Value = serde_json::from_str(&cleaned)
         .map_err(|e| ConductorError::Schema(format!("Invalid JSON in CONDUCTOR_OUTPUT: {e}")))?;
@@ -115,6 +117,57 @@ pub fn strip_code_fences(s: &str) -> String {
         }
     }
     s.to_string()
+}
+
+/// Fix invalid backslash escapes inside JSON string literals.
+///
+/// Walks the input character-by-character, tracking JSON string boundaries.
+/// When inside a string, a `\` followed by an invalid JSON escape character
+/// (`"`, `\`, `/`, `b`, `f`, `n`, `r`, `t`, `u` are the valid ones) is
+/// doubled to `\\`, making it a valid JSON escaped backslash.  Valid escape
+/// sequences (including `\\`, `\"`, `\uXXXX`) are emitted verbatim.
+///
+/// Backslashes outside string literals are passed through unchanged.
+pub(crate) fn fix_invalid_backslash_escapes(s: &str) -> String {
+    const VALID_ESCAPE: &[char] = &['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
+
+    let mut chars = s.chars().peekable();
+    let mut result = String::with_capacity(s.len() + 16);
+    let mut in_string = false;
+
+    while let Some(c) = chars.next() {
+        if !in_string {
+            result.push(c);
+            if c == '"' {
+                in_string = true;
+            }
+        } else {
+            match c {
+                '"' => {
+                    // Closing quote — exit string
+                    result.push(c);
+                    in_string = false;
+                }
+                '\\' => {
+                    if chars.peek().is_some_and(|nc| VALID_ESCAPE.contains(nc)) {
+                        // Valid escape sequence — emit both chars as a unit and advance past them.
+                        // Advancing past the escaped char (e.g. `"` in `\"`) is critical: it
+                        // prevents the escaped `"` from being misinterpreted as a string boundary.
+                        result.push('\\');
+                        result.push(chars.next().unwrap());
+                    } else {
+                        // Invalid escape — double the backslash to make it a literal `\`
+                        result.push('\\');
+                        result.push('\\');
+                    }
+                }
+                _ => {
+                    result.push(c);
+                }
+            }
+        }
+    }
+    result
 }
 
 /// Remove trailing commas before `}` or `]` (common LLM artifact).
