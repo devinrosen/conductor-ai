@@ -43,6 +43,7 @@ import type {
   GateAnalyticsRow,
   PendingGateAnalyticsRow,
   HookSummary,
+  HookEvent,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -366,6 +367,12 @@ export const api = {
     request<void>("/config/hooks/test", {
       method: "POST",
       body: JSON.stringify({ hook_index: hookIndex }),
+    }),
+  listHookEvents: () => request<HookEvent[]>("/config/hooks/events"),
+  patchHookOn: (index: number, on: string) =>
+    request<HookSummary>(`/config/hooks/${index}/on`, {
+      method: "PATCH",
+      body: JSON.stringify({ on }),
     }),
 };
 

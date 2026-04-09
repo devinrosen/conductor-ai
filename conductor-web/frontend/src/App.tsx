@@ -11,6 +11,7 @@ import { WorkflowDefDetailPage } from "./pages/WorkflowDefDetailPage";
 import { WorkflowAnalyticsPage } from "./pages/WorkflowAnalyticsPage";
 import { TicketsPage } from "./pages/TicketsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { HookMatrixPage } from "./pages/HookMatrixPage";
 import { GettingStartedPage } from "./pages/GettingStartedPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
@@ -37,6 +38,7 @@ const router = createBrowserRouter([
         element: <WorkflowDefDetailPage />,
       },
       { path: "settings", element: <SettingsPage /> },
+      { path: "settings/hooks", element: <HookMatrixPage /> },
       { path: "getting-started", element: <GettingStartedPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],

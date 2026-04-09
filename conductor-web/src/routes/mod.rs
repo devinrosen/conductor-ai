@@ -360,5 +360,7 @@ pub fn api_router() -> Router<AppState> {
         // Notification Hooks
         .route("/api/config/hooks", get(hooks::list_hooks))
         .route("/api/config/hooks/test", post(hooks::test_hook))
+        .route("/api/config/hooks/events", get(hooks::list_hook_events))
+        .route("/api/config/hooks/{index}/on", patch(hooks::patch_hook_on))
     // OpenAPI spec is served by SwaggerUi in main.rs at /api/openapi.json
 }

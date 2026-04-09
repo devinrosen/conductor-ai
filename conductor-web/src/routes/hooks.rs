@@ -1,10 +1,11 @@
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use conductor_core::notification_event::NotificationEvent;
+use conductor_core::config::save_config;
+use conductor_core::notification_event::{NotificationEvent, ALL_EVENTS};
 use conductor_core::notification_hooks::HookRunner;
 
 use crate::error::ApiError;
@@ -22,12 +23,28 @@ pub struct HookSummary {
     pub kind: &'static str,
     /// First 80 characters of `run` (shell) or `url` (HTTP), with `…` appended if truncated.
     pub command: Option<String>,
+    /// `true` when `on` contains a wildcard `*` character (e.g. `"*"` or `"workflow_run.*"`).
+    pub is_wildcard: bool,
 }
 
 /// Request body for `POST /api/config/hooks/test`.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct TestHookRequest {
     pub hook_index: usize,
+}
+
+/// Request body for `PATCH /api/config/hooks/:index/on`.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct PatchHookOnRequest {
+    /// New event pattern for this hook (e.g. `"workflow_run.completed"`, `"*"`).
+    pub on: String,
+}
+
+/// A single lifecycle event entry returned by `GET /api/config/hooks/events`.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct HookEventEntry {
+    pub name: &'static str,
+    pub label: &'static str,
 }
 
 fn truncate_command(s: &str) -> String {
@@ -63,11 +80,13 @@ pub async fn list_hooks(State(state): State<AppState>) -> Result<Json<Vec<HookSu
                 .as_deref()
                 .or(hook.url.as_deref())
                 .map(truncate_command);
+            let is_wildcard = hook.on.contains('*');
             HookSummary {
                 index,
                 on: hook.on.clone(),
                 kind,
                 command,
+                is_wildcard,
             }
         })
         .collect();
@@ -112,6 +131,75 @@ pub async fn test_hook(
     runner.fire(&event);
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/config/hooks/events` — return the static list of lifecycle event names
+/// and display labels used to populate the hook × event matrix UI.
+///
+/// Threshold-based events (`cost_spike`, `duration_spike`, `gate.pending_too_long`)
+/// are excluded because they require additional filter fields.
+#[utoipa::path(
+    get,
+    path = "/api/config/hooks/events",
+    responses(
+        (status = 200, description = "List of lifecycle event names and labels", body = Vec<HookEventEntry>),
+    ),
+    tag = "hooks",
+)]
+pub async fn list_hook_events() -> Json<Vec<HookEventEntry>> {
+    let events = ALL_EVENTS
+        .iter()
+        .map(|(name, label)| HookEventEntry { name, label })
+        .collect();
+    Json(events)
+}
+
+/// `PATCH /api/config/hooks/:index/on` — update the `on` pattern for a single
+/// configured notification hook identified by its zero-based index.
+///
+/// Writes the updated pattern to `~/.conductor/config.toml` and returns the
+/// updated `HookSummary`. Returns 404 if the index is out of range.
+#[utoipa::path(
+    patch,
+    path = "/api/config/hooks/{index}/on",
+    params(
+        ("index" = usize, Path, description = "Zero-based hook index"),
+    ),
+    request_body(content = PatchHookOnRequest, description = "New event pattern"),
+    responses(
+        (status = 200, description = "Updated hook summary", body = HookSummary),
+        (status = 404, description = "Hook index not found"),
+    ),
+    tag = "hooks",
+)]
+pub async fn patch_hook_on(
+    State(state): State<AppState>,
+    Path(index): Path<usize>,
+    Json(body): Json<PatchHookOnRequest>,
+) -> Result<Json<HookSummary>, ApiError> {
+    let mut config = state.config.write().await;
+    let hook = config
+        .notify
+        .hooks
+        .get_mut(index)
+        .ok_or_else(|| ApiError::NotFound(format!("hook index {index} not found")))?;
+    hook.on = body.on;
+    let kind: &'static str = if hook.run.is_some() { "shell" } else { "http" };
+    let command = hook
+        .run
+        .as_deref()
+        .or(hook.url.as_deref())
+        .map(truncate_command);
+    let on = hook.on.clone();
+    let is_wildcard = on.contains('*');
+    save_config(&config)?;
+    Ok(Json(HookSummary {
+        index,
+        on,
+        kind,
+        command,
+        is_wildcard,
+    }))
 }
 
 #[cfg(test)]

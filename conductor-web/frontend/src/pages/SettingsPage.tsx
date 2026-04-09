@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
 import type { HookSummary } from "../api/types";
@@ -94,9 +95,19 @@ export function SettingsPage() {
 
       {/* Notification Hooks Section */}
       <section>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-1">
-          Notification Hooks
-        </h3>
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+            Notification Hooks
+          </h3>
+          {hooks && hooks.length > 0 && (
+            <Link
+              to="/settings/hooks"
+              className="text-xs text-blue-600 hover:underline font-medium"
+            >
+              Manage event matrix →
+            </Link>
+          )}
+        </div>
         <p className="text-sm text-gray-500 mb-3">
           Shell or HTTP hooks fired on workflow and agent lifecycle events. Configure in{" "}
           <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">~/.conductor/config.toml</code>.
@@ -175,9 +186,17 @@ export function SettingsPage() {
                 ))}
               </tbody>
             </table>
-            <p className="px-3 py-2 text-xs text-gray-400 bg-gray-50 border-t border-gray-200">
-              Test events fire asynchronously. Errors appear in hook output, not here.
-            </p>
+            <div className="px-3 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+              <p className="text-xs text-gray-400">
+                Test events fire asynchronously. Errors appear in hook output, not here.
+              </p>
+              <Link
+                to="/settings/hooks"
+                className="text-xs text-blue-600 hover:underline font-medium"
+              >
+                Edit event assignments →
+              </Link>
+            </div>
           </div>
         )}
       </section>

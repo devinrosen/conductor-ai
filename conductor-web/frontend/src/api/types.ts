@@ -524,4 +524,10 @@ export interface HookSummary {
   on: string;
   kind: "shell" | "http";
   command?: string;
+  is_wildcard: boolean;
+}
+
+export interface HookEvent {
+  name: string;
+  label: string;
 }

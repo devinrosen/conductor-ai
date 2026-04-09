@@ -4,6 +4,21 @@ use serde_json::{json, Value};
 
 use crate::error::{ConductorError, Result};
 
+/// All non-threshold lifecycle event names with their display labels.
+///
+/// This is the authoritative list used by `GET /api/config/hooks/events` to populate
+/// the hook × event matrix UI. Threshold-based events (`workflow_run.cost_spike`,
+/// `workflow_run.duration_spike`, `gate.pending_too_long`) are excluded because they
+/// require additional filter fields that cannot be represented as simple checkboxes.
+pub const ALL_EVENTS: &[(&str, &str)] = &[
+    ("workflow_run.completed", "Workflow completed"),
+    ("workflow_run.failed", "Workflow failed"),
+    ("agent_run.completed", "Agent completed"),
+    ("agent_run.failed", "Agent failed"),
+    ("gate.waiting", "Gate waiting"),
+    ("feedback.requested", "Feedback requested"),
+];
+
 /// All concrete event names that `NotificationEvent::synthetic` accepts.
 ///
 /// This is the single source of truth shared by both `synthetic()` (for its error
