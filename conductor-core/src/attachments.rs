@@ -4,7 +4,7 @@
 //! (which holds `bytes::Bytes`). Once bytes are available, callers convert to
 //! `AttachmentFile` and delegate to this module for the filesystem operations.
 
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
 
 /// A resolved attachment ready for disk I/O.
 pub struct AttachmentFile<'a> {
@@ -30,12 +30,39 @@ pub fn write_attachments_and_augment_prompt(
 
     let attach_dir =
         std::path::Path::new(working_dir).join(format!(".conductor-attachments-{run_id}"));
-    std::fs::create_dir_all(&attach_dir)?;
+    std::fs::create_dir_all(&attach_dir).map_err(|e| {
+        ConductorError::Io(std::io::Error::new(
+            e.kind(),
+            format!(
+                "failed to create attachment directory '{}': {e}",
+                attach_dir.display()
+            ),
+        ))
+    })?;
 
     let mut path_lines: Vec<String> = Vec::new();
     for att in attachments {
+        // Reject filenames with path separators or traversal components.
+        // This is a defence-in-depth check: the web layer sanitizes before calling
+        // here, but the core function is public and must not trust its callers.
+        if att.filename.contains('/')
+            || att.filename.contains('\\')
+            || att.filename == ".."
+            || att.filename == "."
+            || att.filename.is_empty()
+        {
+            return Err(ConductorError::InvalidInput(format!(
+                "unsafe attachment filename: {:?}",
+                att.filename
+            )));
+        }
         let file_path = attach_dir.join(att.filename);
-        std::fs::write(&file_path, att.data)?;
+        std::fs::write(&file_path, att.data).map_err(|e| {
+            ConductorError::Io(std::io::Error::new(
+                e.kind(),
+                format!("failed to write attachment '{}': {e}", file_path.display()),
+            ))
+        })?;
         path_lines.push(format!("- {} ({})", file_path.display(), att.mime_type));
     }
 
@@ -108,6 +135,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(written, content);
+    }
+
+    #[test]
+    fn write_attachments_rejects_path_traversal_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = write_attachments_and_augment_prompt(
+            "run-sec",
+            tmp.path().to_str().unwrap(),
+            "prompt",
+            &[AttachmentFile {
+                filename: "../../etc/passwd",
+                mime_type: "text/plain",
+                data: b"data",
+            }],
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("unsafe attachment filename"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn write_attachments_rejects_dotdot_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = write_attachments_and_augment_prompt(
+            "run-sec2",
+            tmp.path().to_str().unwrap(),
+            "prompt",
+            &[AttachmentFile {
+                filename: "..",
+                mime_type: "text/plain",
+                data: b"data",
+            }],
+        );
+        assert!(result.is_err());
     }
 
     #[test]
