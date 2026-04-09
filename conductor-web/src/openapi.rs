@@ -20,14 +20,14 @@ use conductor_core::repo::Repo;
 #[allow(unused_imports)]
 use conductor_core::tickets::{Ticket, TicketLabel};
 #[allow(unused_imports)]
-use conductor_core::worktree::{Worktree, WorktreeStatus, WorktreeWithStatus};
-#[allow(unused_imports)]
 use conductor_core::workflow::{
     BlockedOn, GateAnalyticsRow, GateType, PendingGateAnalyticsRow, StepFailureHeatmapRow,
     StepRetryAnalyticsRow, StepTokenHeatmapRow, WorkflowFailureRateTrendRow, WorkflowPercentiles,
     WorkflowRegressionSignal, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
     WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
+#[allow(unused_imports)]
+use conductor_core::worktree::{Worktree, WorktreeStatus, WorktreeWithStatus};
 
 #[allow(unused_imports)]
 use crate::routes::conversations::{
@@ -51,22 +51,22 @@ use crate::routes::notifications::{ListNotificationsQuery, UnreadCountResponse};
 use crate::routes::push::{PushSubscribeRequest, VapidPublicKeyResponse};
 #[allow(unused_imports)]
 use crate::routes::repos::{
-    DiscoverableRepo, DiscoverReposQuery, RegisterRepoRequest, SetModelRequest as RepoSetModelRequest,
-    UpdateRepoSettingsRequest,
+    DiscoverReposQuery, DiscoverableRepo, RegisterRepoRequest,
+    SetModelRequest as RepoSetModelRequest, UpdateRepoSettingsRequest,
 };
 #[allow(unused_imports)]
 use crate::routes::stats::ThemeUnlockStats;
 #[allow(unused_imports)]
 use crate::routes::tickets::{SyncResult, TicketDetail, TicketListQuery, TicketListResponse};
 #[allow(unused_imports)]
-use crate::routes::worktrees::{
-    CreateWorktreeRequest, CreateWorktreeResponse, LinkTicketRequest,
-    SetModelRequest as WorktreeSetModelRequest, WorktreeListQuery,
-};
-#[allow(unused_imports)]
 use crate::routes::workflows::{
     InputDeclSummary, InstantiateTemplateRequest, PostWorkflowRunRequest, RunWorkflowRequest,
     WorkflowDefSummary, WorkflowRunResponse,
+};
+#[allow(unused_imports)]
+use crate::routes::worktrees::{
+    CreateWorktreeRequest, CreateWorktreeResponse, LinkTicketRequest,
+    SetModelRequest as WorktreeSetModelRequest, WorktreeListQuery,
 };
 
 /// OpenAPI documentation for the Conductor REST API.
