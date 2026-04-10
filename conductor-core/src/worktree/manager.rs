@@ -725,6 +725,10 @@ impl<'a> WorktreeManager<'a> {
     /// Remove the git worktree directory and delete the associated branch (best-effort).
     /// Failures are logged but not propagated. Delegates to the module-private
     /// `remove_git_artifacts` to keep the implementation detail encapsulated.
+    ///
+    /// NOTE: This is a static method by design — it's a cross-manager utility called from
+    /// TicketSyncer that doesn't require WorktreeManager instance state (db connection, config).
+    /// Making it an instance method would create circular dependency issues.
     pub fn remove_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
         remove_git_artifacts(repo_path, worktree_path, branch);
     }
