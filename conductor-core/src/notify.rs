@@ -853,7 +853,6 @@ pub fn detect_agent_terminal_transitions<'a>(
     transitions
 }
 
-
 /// Fire a notification when orphaned/stuck workflow runs are auto-resumed on
 /// startup or during periodic recovery.
 pub fn fire_orphan_resumed_notification(
@@ -901,7 +900,6 @@ pub fn fire_orphan_resumed_notification(
         },
     );
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -3048,7 +3046,6 @@ mod tests {
         );
     }
 
-
     // --- fire_orphan_resumed_notification tests ---
 
     #[test]
@@ -3107,5 +3104,4 @@ mod tests {
             "duplicate orphan resumed notification should be deduped"
         );
     }
-
 }
