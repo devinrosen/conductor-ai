@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
-use conductor_core::workflow::estimation;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
     GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
@@ -199,7 +198,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
-            node_count: def.total_nodes(),
+            node_count: def.body.len(),
             group: def.group.clone(),
             targets: def.targets.clone(),
         }
@@ -924,9 +923,9 @@ pub async fn list_all_workflow_runs_handler(
         mgr.list_active_workflow_runs(&statuses)?
     };
 
-    // Batch-fetch running/waiting/failed steps for progress computation
+    // Batch-fetch only running/waiting steps for all runs (filter pushed to SQL)
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    let mut progress_steps_by_run = mgr.get_progress_steps_for_runs(&run_ids)?;
+    let mut steps_by_run = mgr.get_active_steps_for_runs(&run_ids)?;
 
     // Build slug lookup maps for repo_slug / worktree_slug enrichment
     let repo_slug_map: HashMap<String, String> = RepoManager::new(&db, &config)
@@ -990,29 +989,32 @@ pub async fn list_all_workflow_runs_handler(
     // Batch-fetch all steps for active runs (for live remaining estimation)
     let mut all_active_run_steps: HashMap<String, Vec<WorkflowRunStep>> =
         mgr.get_steps_for_runs(&active_run_ids)?;
-
     let responses: Vec<WorkflowRunResponse> = runs
         .into_iter()
         .map(|run| {
-            let all_progress_steps = progress_steps_by_run.remove(&run.id).unwrap_or_default();
-
-            // Split into active (running/waiting) and failed steps
-            let mut active_steps = Vec::new();
-            let mut failed_steps = Vec::new();
-            for step in &all_progress_steps {
-                match step.status {
-                    WorkflowStepStatus::Running | WorkflowStepStatus::Waiting => {
-                        active_steps.push(step.clone());
-                    }
-                    WorkflowStepStatus::Failed => {
-                        failed_steps.push(step.clone());
-                    }
-                    _ => {}
-                }
-            }
+            let active_steps = steps_by_run.remove(&run.id).unwrap_or_default();
+            let repo_slug = run
+                .repo_id
+                .as_deref()
+                .and_then(|id| repo_slug_map.get(id))
+                .cloned();
+            let worktree_slug = run
+                .worktree_id
+                .as_deref()
+                .and_then(|id| wt_slug_map.get(id))
+                .cloned();
 
             // Determine the "current" step — prefer active, fall back to failed
-            let current = active_steps.first().or(failed_steps.first());
+            let failed_steps: Vec<&WorkflowRunStep> = active_steps
+                .iter()
+                .filter(|s| matches!(s.status, WorkflowStepStatus::Failed))
+                .collect();
+            let active_steps_vec: Vec<&WorkflowRunStep> = active_steps
+                .iter()
+                .filter(|s| matches!(s.status, WorkflowStepStatus::Running))
+                .collect();
+
+            let current = active_steps_vec.first().or(failed_steps.first());
             let current_step = current.map(|s| s.position + 1); // 1-indexed
             let current_step_name = current.map(|s| s.step_name.clone());
             let current_iteration = current.map(|s| s.iteration);
@@ -1028,16 +1030,6 @@ pub async fn list_all_workflow_runs_handler(
                 .and_then(|name| def.as_ref().and_then(|d| d.max_iterations_for_step(name)))
                 .map(|v| v as i64);
 
-            let repo_slug = run
-                .repo_id
-                .as_deref()
-                .and_then(|id| repo_slug_map.get(id))
-                .cloned();
-            let worktree_slug = run
-                .worktree_id
-                .as_deref()
-                .and_then(|id| wt_slug_map.get(id))
-                .cloned();
             // Compute time estimates for active runs
             let is_active = matches!(
                 run.status,
@@ -1061,14 +1053,16 @@ pub async fn list_all_workflow_runs_handler(
                 // Try per-step live estimation first
                 let sh = step_histories.get(&run.workflow_name);
                 let run_steps = all_active_run_steps.remove(&run.id).unwrap_or_default();
-                let step_ests = sh.map(estimation::estimate_all_steps);
-                let live = step_ests
-                    .as_ref()
-                    .and_then(|se| estimation::live_remaining_estimate(&run_steps, se));
+                let step_ests = sh.map(conductor_core::workflow::estimation::estimate_all_steps);
+                let live = step_ests.as_ref().and_then(|se| {
+                    conductor_core::workflow::estimation::live_remaining_estimate(&run_steps, se)
+                });
 
                 if let Some(ref live_est) = live {
                     // Use per-step live estimate
-                    let wf_est = estimation::estimate_with_confidence(llm_est, hist);
+                    let wf_est = conductor_core::workflow::estimation::estimate_with_confidence(
+                        llm_est, hist,
+                    );
                     (
                         wf_est.as_ref().map(|e| e.point_ms),
                         Some(live_est.remaining_ms),
@@ -1079,15 +1073,26 @@ pub async fn list_all_workflow_runs_handler(
                     )
                 } else {
                     // Fall back to workflow-level estimate with confidence
-                    let wf_est = estimation::estimate_with_confidence(llm_est, hist);
+                    let wf_est = conductor_core::workflow::estimation::estimate_with_confidence(
+                        llm_est, hist,
+                    );
                     match wf_est {
                         Some(ref est) => {
                             let remaining =
-                                estimation::estimated_remaining_ms(est.point_ms, &run.started_at);
+                                conductor_core::workflow::estimation::estimated_remaining_ms(
+                                    est.point_ms,
+                                    &run.started_at,
+                                );
                             let remaining_low =
-                                estimation::estimated_remaining_ms(est.low_ms, &run.started_at);
+                                conductor_core::workflow::estimation::estimated_remaining_ms(
+                                    est.low_ms,
+                                    &run.started_at,
+                                );
                             let remaining_high =
-                                estimation::estimated_remaining_ms(est.high_ms, &run.started_at);
+                                conductor_core::workflow::estimation::estimated_remaining_ms(
+                                    est.high_ms,
+                                    &run.started_at,
+                                );
                             (
                                 Some(est.point_ms),
                                 Some(remaining),
@@ -1103,7 +1108,6 @@ pub async fn list_all_workflow_runs_handler(
             } else {
                 (None, None, None, None, None, None)
             };
-
             WorkflowRunResponse {
                 run,
                 active_steps,

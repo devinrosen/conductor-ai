@@ -1064,7 +1064,6 @@ impl<'a> WorkflowManager<'a> {
         Ok(result)
     }
 
-
     /// Aggregate token usage per workflow name across all terminal runs (completed + failed).
     /// Token averages are computed only over completed runs to avoid skewing with failed runs.
     /// When `repo_id` is `Some`, restricts to runs for that repo.

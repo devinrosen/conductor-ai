@@ -54,7 +54,6 @@ pub type StepEstimates = HashMap<String, Estimate>;
 
 // ── Workflow-level estimation (v1) ───────────────────────────────────
 
-
 /// Compute the estimated total workflow duration in milliseconds.
 ///
 /// Blending strategy based on amount of historical data:
@@ -117,7 +116,6 @@ pub fn estimate_with_confidence(
         confidence,
     })
 }
-
 
 /// Compute estimated remaining milliseconds for an in-progress run.
 ///
@@ -242,7 +240,6 @@ pub fn live_remaining_estimate(
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-
 /// Compute the median of a slice of durations.
 fn median(values: &[i64]) -> Option<i64> {
     if values.is_empty() {
@@ -295,13 +292,11 @@ fn compute_confidence(n: usize, values: &[i64]) -> Confidence {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // ── v1 tests ─────────────────────────────────────────────────────
-
 
     #[test]
     fn test_median_odd() {
@@ -377,7 +372,7 @@ mod tests {
         // Use a start time 5 minutes ago
         let start = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
         let remaining = estimated_remaining_ms(600_000, &start); // 10 min total
-        // Should be roughly 5 minutes remaining (300_000 ms), allow 2s tolerance
+                                                                 // Should be roughly 5 minutes remaining (300_000 ms), allow 2s tolerance
         assert!(
             remaining > 298_000 && remaining < 302_000,
             "got {remaining}"

@@ -339,13 +339,13 @@ impl<'a> WorkflowManager<'a> {
         for s in stale {
             // If the tmux window is still alive, the agent is running — just slow.
             if let Some(ref window) = s.tmux_window {
-                if live_tmux_windows.contains(window.as_str()) {
+                if live_tmux_windows.contains(window) {
                     continue;
                 }
             }
 
             // Agent process is dead. Mark child agent run as failed.
-            if let Some(ref child_run_id) = s.child_run_id {
+            if let Some(child_run_id) = &s.child_run_id {
                 let _ = agent_mgr.update_run_failed(
                     child_run_id,
                     "Stale workflow watchdog: agent process died (tmux session lost)",
