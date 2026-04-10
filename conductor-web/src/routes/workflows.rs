@@ -9,7 +9,7 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
+    apply_workflow_input_defaults, estimation, execute_workflow, validate_resume_preconditions,
     GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
     StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity, WorkflowDef, WorkflowExecConfig,
     WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles,
@@ -198,7 +198,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
-            node_count: def.body.len(),
+            node_count: def.top_level_steps(),
             group: def.group.clone(),
             targets: def.targets.clone(),
         }
@@ -1004,17 +1004,10 @@ pub async fn list_all_workflow_runs_handler(
                 .and_then(|id| wt_slug_map.get(id))
                 .cloned();
 
-            // Determine the "current" step — prefer active, fall back to failed
-            let failed_steps: Vec<&WorkflowRunStep> = active_steps
+            // Determine the "current" step — get first running step
+            let current = active_steps
                 .iter()
-                .filter(|s| matches!(s.status, WorkflowStepStatus::Failed))
-                .collect();
-            let active_steps_vec: Vec<&WorkflowRunStep> = active_steps
-                .iter()
-                .filter(|s| matches!(s.status, WorkflowStepStatus::Running))
-                .collect();
-
-            let current = active_steps_vec.first().or(failed_steps.first());
+                .find(|s| matches!(s.status, WorkflowStepStatus::Running));
             let current_step = current.map(|s| s.position + 1); // 1-indexed
             let current_step_name = current.map(|s| s.step_name.clone());
             let current_iteration = current.map(|s| s.iteration);
@@ -1053,14 +1046,14 @@ pub async fn list_all_workflow_runs_handler(
                 // Try per-step live estimation first
                 let sh = step_histories.get(&run.workflow_name);
                 let run_steps = all_active_run_steps.remove(&run.id).unwrap_or_default();
-                let step_ests = sh.map(conductor_core::workflow::estimation::estimate_all_steps);
+                let step_ests = sh.map(estimation::estimate_all_steps);
                 let live = step_ests.as_ref().and_then(|se| {
-                    conductor_core::workflow::estimation::live_remaining_estimate(&run_steps, se)
+                    estimation::live_remaining_estimate(&run_steps, se)
                 });
 
                 if let Some(ref live_est) = live {
                     // Use per-step live estimate
-                    let wf_est = conductor_core::workflow::estimation::estimate_with_confidence(
+                    let wf_est = estimation::estimate_with_confidence(
                         llm_est, hist,
                     );
                     (
@@ -1073,23 +1066,23 @@ pub async fn list_all_workflow_runs_handler(
                     )
                 } else {
                     // Fall back to workflow-level estimate with confidence
-                    let wf_est = conductor_core::workflow::estimation::estimate_with_confidence(
+                    let wf_est = estimation::estimate_with_confidence(
                         llm_est, hist,
                     );
                     match wf_est {
                         Some(ref est) => {
                             let remaining =
-                                conductor_core::workflow::estimation::estimated_remaining_ms(
+                                estimation::estimated_remaining_ms(
                                     est.point_ms,
                                     &run.started_at,
                                 );
                             let remaining_low =
-                                conductor_core::workflow::estimation::estimated_remaining_ms(
+                                estimation::estimated_remaining_ms(
                                     est.low_ms,
                                     &run.started_at,
                                 );
                             let remaining_high =
-                                conductor_core::workflow::estimation::estimated_remaining_ms(
+                                estimation::estimated_remaining_ms(
                                     est.high_ms,
                                     &run.started_at,
                                 );
