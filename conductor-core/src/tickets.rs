@@ -1788,22 +1788,7 @@ mod tests {
             .unwrap();
 
         // Insert worktree record pointing to non-existent path (safe for testing)
-        let test_wt_path = "/tmp/nonexistent-test-cleanup-path";
-        conn.execute(
-            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                "wt-cleanup",
-                "r1",
-                "test-cleanup-wt",
-                "test-cleanup-branch",
-                test_wt_path,
-                ticket_id,
-                "active",
-                "2024-01-01T00:00:00Z",
-            ],
-        )
-        .unwrap();
+        insert_worktree(&conn, "wt-cleanup", "r1", Some(&ticket_id), "active");
 
         // Close the ticket
         syncer
