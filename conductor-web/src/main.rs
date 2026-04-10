@@ -135,11 +135,7 @@ async fn main() -> Result<()> {
             Ok(ids) if !ids.is_empty() => {
                 let n = ids.len();
                 tracing::info!("Auto-resuming {n} stuck workflow run(s) on startup");
-                notify::fire_orphan_resumed_notification(
-                    &conn,
-                    &config.notifications,
-                    &ids,
-                );
+                notify::fire_orphan_resumed_notification(&conn, &config.notifications, &ids);
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                 for run_id in ids {
                     let config_clone = config.clone();
