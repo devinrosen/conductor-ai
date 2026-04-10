@@ -16,6 +16,13 @@ use crate::error::{ConductorError, Result};
 pub const ALL_EVENTS: &[(&str, &str, bool)] = &[
     ("workflow_run.completed", "Workflow completed", true),
     ("workflow_run.failed", "Workflow failed", true),
+    ("workflow_run.stale", "Workflow step stale", true),
+    ("workflow_run.reaped", "Dead workflow detected", true),
+    (
+        "workflow_run.orphan_resumed",
+        "Orphaned workflows resumed",
+        true,
+    ),
     ("agent_run.completed", "Agent completed", false),
     ("agent_run.failed", "Agent failed", false),
     ("gate.waiting", "Gate waiting", false),
@@ -30,6 +37,9 @@ pub const ALL_EVENTS: &[(&str, &str, bool)] = &[
 const VALID_SYNTHETIC_EVENTS: &[&str] = &[
     "workflow_run.completed",
     "workflow_run.failed",
+    "workflow_run.stale",
+    "workflow_run.reaped",
+    "workflow_run.orphan_resumed",
     "agent_run.completed",
     "agent_run.failed",
     "gate.waiting",

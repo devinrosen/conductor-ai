@@ -52,8 +52,10 @@ export function ColumnHeader({
     onFilter(columnKey, next);
   }
 
+  const ariaSortValue = sortDirection === "asc" ? "ascending" : sortDirection === "desc" ? "descending" : undefined;
+
   return (
-    <th className={`px-4 py-2 ${className}`}>
+    <th className={`px-4 py-2 ${className}`} aria-sort={ariaSortValue}>
       <div className="relative inline-flex items-center" ref={ref}>
         <button
           className="inline-flex items-center gap-0.5 uppercase text-xs font-medium text-gray-500 hover:text-gray-700"
@@ -67,6 +69,7 @@ export function ColumnHeader({
           <button
             onClick={() => setOpen(!open)}
             className={`ml-1 p-0.5 rounded ${filterActive ? "text-indigo-500" : "text-gray-300 hover:text-gray-400"}`}
+            aria-label={filterActive ? `Clear ${label} filter` : `Filter by ${label}`}
           >
             <svg className="w-2.5 h-2.5" viewBox="0 0 16 16" fill="currentColor">
               <path d="M1 2h14l-5.5 6.5V14l-3-1.5V8.5z" />
