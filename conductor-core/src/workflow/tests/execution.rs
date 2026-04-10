@@ -2209,6 +2209,16 @@ fn test_execute_workflow_injects_ticket_variables() {
         run.inputs.contains_key("ticket_url"),
         "ticket_url should be injected"
     );
+    assert_eq!(
+        run.inputs.get("ticket_body").map(String::as_str),
+        Some(""),
+        "ticket_body should be injected (empty in test data)"
+    );
+    assert_eq!(
+        run.inputs.get("ticket_source_type").map(String::as_str),
+        Some("github"),
+        "ticket_source_type should be injected"
+    );
     // Assert the ticket_id column is persisted on the WorkflowRun record itself.
     assert_eq!(run.ticket_id.as_deref(), Some("tkt-1"));
     assert_eq!(run.repo_id, None);
