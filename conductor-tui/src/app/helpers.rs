@@ -394,31 +394,19 @@ mod tests {
 
     #[test]
     fn derive_slug_bug_label_produces_fix_prefix() {
-        let slug = derive_worktree_slug(
-            "42",
-            "null ptr crash",
-            &["bug".to_string()],
-        );
+        let slug = derive_worktree_slug("42", "null ptr crash", &["bug".to_string()]);
         assert!(slug.starts_with("fix-42-"), "got: {slug}");
     }
 
     #[test]
     fn derive_slug_chore_label_produces_chore_prefix() {
-        let slug = derive_worktree_slug(
-            "7",
-            "clean up deps",
-            &["chore".to_string()],
-        );
+        let slug = derive_worktree_slug("7", "clean up deps", &["chore".to_string()]);
         assert!(slug.starts_with("chore-7-"), "got: {slug}");
     }
 
     #[test]
     fn derive_slug_unknown_label_falls_back_to_feat() {
-        let slug = derive_worktree_slug(
-            "5",
-            "some work",
-            &["wontfix".to_string()],
-        );
+        let slug = derive_worktree_slug("5", "some work", &["wontfix".to_string()]);
         assert!(slug.starts_with("feat-5-"), "got: {slug}");
     }
 

@@ -226,14 +226,13 @@ impl<'a> WorktreeManager<'a> {
             ("ci-", "ci"),
             ("perf-", "perf"),
         ];
-        let (wt_slug, branch) = if let Some(&(dash, slash)) =
-            SLUG_PREFIXES.iter().find(|(d, _)| name.starts_with(d))
-        {
-            let clean = name.strip_prefix(dash).unwrap();
-            (format!("{dash}{clean}"), format!("{slash}/{clean}"))
-        } else {
-            (format!("feat-{name}"), format!("feat/{name}"))
-        };
+        let (wt_slug, branch) =
+            if let Some(&(dash, slash)) = SLUG_PREFIXES.iter().find(|(d, _)| name.starts_with(d)) {
+                let clean = name.strip_prefix(dash).unwrap();
+                (format!("{dash}{clean}"), format!("{slash}/{clean}"))
+            } else {
+                (format!("feat-{name}"), format!("feat/{name}"))
+            };
 
         // Check for existing worktree with same slug
         let existing_status: Option<WorktreeStatus> = self
