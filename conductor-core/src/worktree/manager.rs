@@ -111,12 +111,18 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
             Err(_) => continue,
         };
         // Find an active worktree for this parent ticket
-        let worktrees: Vec<Worktree> = query_collect(
+        let worktrees: Vec<Worktree> = match query_collect(
             conn,
             &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
             params![&parent.id],
             map_worktree_row,
-        ).ok().unwrap_or_default();
+        ) {
+            Ok(wts) => wts,
+            Err(e) => {
+                tracing::warn!("resolve_parent_branch: DB query failed for ticket {}: {e}", parent.id);
+                vec![]
+            }
+        };
         if let Some(wt) = worktrees
             .iter()
             .find(|w| w.status == WorktreeStatus::Active)

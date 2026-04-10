@@ -247,7 +247,7 @@ fn run_sdlc(sdlc_root: &str, args: &[&str]) -> Result<std::process::Output> {
 }
 
 /// Update Vantage conductor status to "dispatched" when a workflow starts.
-pub fn notify_dispatched(
+pub(crate) fn notify_dispatched(
     deliverable_id: &str,
     sdlc_root: &str,
     workflow_run_id: &str,
@@ -270,7 +270,7 @@ pub fn notify_dispatched(
 }
 
 /// Update Vantage conductor status to "completed" when a workflow succeeds.
-pub fn notify_completed(
+pub(crate) fn notify_completed(
     deliverable_id: &str,
     sdlc_root: &str,
     pr_url: Option<&str>,
@@ -302,7 +302,7 @@ pub fn notify_completed(
 }
 
 /// Update Vantage conductor status to "failed" when a workflow fails.
-pub fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
+pub(crate) fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
     let escaped_reason = reason.replace('"', "'");
     let reason_arg = format!("conductor.failed_reason={escaped_reason}");
     run_sdlc(

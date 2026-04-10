@@ -867,7 +867,7 @@ pub fn fire_stale_workflow_notification(
     step_name: &str,
     running_minutes: i64,
 ) {
-    if !config.enabled || config.workflows.as_ref().is_some_and(|w| !w.on_stale) {
+    if !config.enabled || config.workflows.as_ref().is_none_or(|w| !w.on_stale) {
         return;
     }
 
@@ -897,13 +897,7 @@ pub fn fire_stale_workflow_notification(
         },
     );
 
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(
-            run_id,
-            workflow_name,
-            "desktop notification (stale) failed: {e}"
-        );
-    }
+    let _ = show_desktop_notification(title, &body);
 
     let slack_text = format!("[conductor] {title}: {body}");
     maybe_send_slack(config, &slack_text);
@@ -916,7 +910,7 @@ pub fn fire_orphan_resumed_notification(
     config: &NotificationConfig,
     run_ids: &[String],
 ) {
-    if !config.enabled || config.workflows.as_ref().is_some_and(|w| !w.on_failure) {
+    if !config.enabled || config.workflows.as_ref().is_none_or(|w| !w.on_failure) {
         return;
     }
     if run_ids.is_empty() {
@@ -950,9 +944,7 @@ pub fn fire_orphan_resumed_notification(
         },
     );
 
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!("desktop notification (orphan resumed) failed: {e}");
-    }
+    let _ = show_desktop_notification(title, &body);
 
     let slack_text = format!("[conductor] {body}");
     maybe_send_slack(config, &slack_text);
@@ -969,7 +961,7 @@ pub fn fire_stale_reaped_notification(
     step_name: &str,
     auto_restarted: bool,
 ) {
-    if !config.enabled || config.workflows.as_ref().is_some_and(|w| !w.on_stale) {
+    if !config.enabled || config.workflows.as_ref().is_none_or(|w| !w.on_stale) {
         return;
     }
 
@@ -1002,13 +994,7 @@ pub fn fire_stale_reaped_notification(
         },
     );
 
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(
-            run_id,
-            workflow_name,
-            "desktop notification (stale reaped) failed: {e}"
-        );
-    }
+    let _ = show_desktop_notification(title, &body);
 
     let slack_text = format!("[conductor] {title}: {body}");
     maybe_send_slack(config, &slack_text);
@@ -3130,6 +3116,17 @@ mod tests {
             count, 1,
             "dedup claim must be made for feedback when hooks are configured, even with enabled=false"
         );
+
+        // Verify the notification body contains the expected auto-restart text
+        let (body, kind): (String, String) = conn
+            .query_row(
+                "SELECT body, kind FROM notifications WHERE entity_id = 'run-r2' AND kind = 'workflow_stale_reaped'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "workflow_stale_reaped");
+        assert!(body.contains("marked as failed and auto-restarted"), "body should mention auto-restart: {}", body);
     }
 
     /// `on_success = false` does NOT suppress hooks — hooks have their own event filtering.
@@ -3347,5 +3344,31 @@ mod tests {
             "body must NOT mention auto-restart when auto_restarted=false: {}",
             unread[0].body
         );
+    }
+
+    #[test]
+    fn fire_stale_workflow_notification_suppressed_when_on_stale_false() {
+        let conn = in_memory_db();
+        let mut cfg = config(true, true, true);
+        cfg.workflows.as_mut().unwrap().on_stale = false;
+
+        fire_stale_workflow_notification(
+            &conn,
+            &cfg,
+            "run-s1",
+            "test-workflow",
+            None,
+            "test-step",
+            15,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-s1' AND event_type = 'workflow_stale'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "notification should be suppressed when on_stale = false");
     }
 }
