@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useId } from "react";
+import { BaseModal } from "../shared/BaseModal";
 import { api } from "../../api/client";
 import type { FeedbackRequest } from "../../api/types";
 
@@ -22,6 +23,20 @@ export function AgentFeedbackModal({
   const [error, setError] = useState<string | null>(null);
   const [remainingSecs, setRemainingSecs] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const titleId = useId();
+
+  const handleDismiss = useCallback(async () => {
+    if (!feedback) {
+      onClose();
+      return;
+    }
+    try {
+      await api.dismissFeedback(worktreeId, feedback.id);
+    } catch {
+      // ignore dismiss errors
+    }
+    onClose();
+  }, [feedback, worktreeId, onClose]);
 
   useEffect(() => {
     if (!open) {
@@ -88,19 +103,6 @@ export function AgentFeedbackModal({
     }
   }
 
-  async function handleDismiss() {
-    if (!feedback) {
-      onClose();
-      return;
-    }
-    try {
-      await api.dismissFeedback(worktreeId, feedback.id);
-    } catch {
-      // ignore dismiss errors
-    }
-    onClose();
-  }
-
   function toggleMultiSelect(value: string) {
     setSelectedValues((prev) => {
       const next = new Set(prev);
@@ -110,15 +112,18 @@ export function AgentFeedbackModal({
     });
   }
 
-  if (!open) return null;
-
   const ft = feedback?.feedback_type ?? "text";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4">
+    <BaseModal
+      open={open}
+      onClose={handleDismiss}
+      titleId={titleId}
+      className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4 outline-none modal-panel"
+    >
+      <div>
         <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900">
+          <h3 id={titleId} className="text-lg font-semibold text-gray-900">
             Agent Awaiting Feedback
           </h3>
           <p className="text-sm text-gray-500 mt-1">
@@ -247,19 +252,19 @@ export function AgentFeedbackModal({
           <button
             onClick={handleDismiss}
             disabled={submitting}
-            className="px-4 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 active:scale-95 transition-transform disabled:opacity-50"
           >
             Dismiss
           </button>
           <button
             onClick={handleSubmit}
             disabled={!canSubmit()}
-            className="px-4 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 hover:brightness-110 active:scale-95 transition-transform disabled:opacity-50"
           >
             {submitting ? "Submitting..." : "Submit"}
           </button>
         </div>
       </div>
-    </div>
+    </BaseModal>
   );
 }
