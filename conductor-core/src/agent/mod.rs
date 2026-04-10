@@ -25,7 +25,7 @@ pub use status::{
     FEEDBACK_MAX_LEN,
 };
 
-pub use tmux::list_live_tmux_windows;
+pub(crate) use tmux::list_live_tmux_windows;
 
 pub use types::{
     ActiveAgentCounts, AgentCreatedIssue, AgentEvent, AgentRun, AgentRunEvent, ClaudeJsonResult,

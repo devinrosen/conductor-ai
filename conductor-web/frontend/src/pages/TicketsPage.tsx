@@ -11,7 +11,6 @@ import { ColumnHeader, type SortDirection } from "../components/shared/ColumnHea
 import type { Ticket, Repo } from "../api/types";
 import { parseLabels, buildLabelColorMap, getPipelineStatus, filterTicketsByColumns, sortTickets } from "../utils/ticketUtils";
 import { buildTicketTree } from "../utils/ticketDeps";
-import { parseLabels, buildLabelColorMap } from "../utils/ticketUtils";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { useListNav } from "../hooks/useListNav";
 
@@ -50,13 +49,6 @@ export function TicketsPage() {
       return next;
     });
   }, []);
-
-  // Sort state
-  const [sortColumn, setSortColumn] = useState<SortColumn>(null);
-  const [sortDir, setSortDir] = useState<SortDirection>(null);
-
-  // Per-column filters
-  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({});
 
   // Sort state
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);

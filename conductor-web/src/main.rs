@@ -298,7 +298,7 @@ async fn main() -> Result<()> {
                     };
                     // Reap runs whose agent process is confirmed dead and auto-restart,
                     // passing the already-detected list to avoid a redundant DB query.
-                    let live_windows = conductor_core::agent::list_live_tmux_windows();
+                    let live_windows = wf_mgr.get_live_tmux_windows();
                     match wf_mgr.reap_detected_stale_runs(stale_runs, &live_windows) {
                         Ok(reaped) if !reaped.is_empty() => {
                             let conductor_bin_dir =

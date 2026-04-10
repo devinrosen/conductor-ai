@@ -418,6 +418,15 @@ impl<'a> WorkflowManager<'a> {
     ///    workflow step as failed, and mark the workflow run as failed.
     /// 3. If the window is still alive, the agent is running (just slow) — skip.
     ///
+    /// Returns the currently live tmux windows.
+    ///
+    /// This is a convenience method that encapsulates the tmux liveness check
+    /// for callers who need to use [`reap_detected_stale_runs`] with already-detected
+    /// stale runs to avoid redundant database queries.
+    pub fn get_live_tmux_windows(&self) -> std::collections::HashSet<String> {
+        crate::agent::list_live_tmux_windows()
+    }
+
     /// Returns the list of reaped runs so callers can fire notifications and
     /// optionally auto-restart them.
     pub fn reap_stale_workflow_runs(

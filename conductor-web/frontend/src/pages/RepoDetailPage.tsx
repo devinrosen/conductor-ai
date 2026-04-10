@@ -14,7 +14,6 @@ import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSec
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { ColumnHeader, type SortDirection } from "../components/shared/ColumnHeader";
 import { parseLabels, getPipelineStatus, filterTicketsByColumns, sortTickets } from "../utils/ticketUtils";
-import { parseLabels } from "../utils/ticketUtils";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -96,7 +95,6 @@ export function RepoDetailPage() {
       states.add(t.state);
       if (t.assignee) assignees.add(t.assignee);
       for (const l of parseLabels(t.labels)) labels.add(l);
-      const ps = getPipelineStatus(t);
       const ps = getTicketPipelineStatus(t);
       if (ps) pipelines.add(ps);
     }
@@ -110,9 +108,6 @@ export function RepoDetailPage() {
 
   const sortedFilteredTickets = useMemo(() => {
     if (!tickets) return [];
-    const noRepo = () => "";
-    let result = filterTicketsByColumns([...tickets], ticketColumnFilters, noRepo);
-    result = sortTickets(result, ticketSortColumn, ticketSortDir, noRepo);
     let result = [...tickets];
 
     // Column filters
@@ -262,7 +257,6 @@ export function RepoDetailPage() {
 
   // Fetch active workflow runs for this repo to show running indicators on tickets
   const { data: activeWorkflowRuns, refetch: refetchWorkflowRuns } = useApi(
-    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed", "completed"]),
     () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed"]),
     [],
   );
@@ -279,8 +273,6 @@ export function RepoDetailPage() {
           )
         : null,
     [tickets, worktrees, prs, ticketDependencies],
-    () => (tickets ? buildTicketTree(tickets, worktrees ?? undefined, prs ?? undefined) : null),
-    [tickets, worktrees, prs],
   );
 
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display
@@ -303,11 +295,6 @@ export function RepoDetailPage() {
   // Prefers: running/pending/waiting > completed > failed (most recent wins within tier)
   const workflowRunByWorktreeId = useMemo(() => {
     const m = new Map<string, WorkflowRun>();
-  // Map worktree_id -> active workflow run status (for ticket running indicators)
-  const workflowStatusByWorktreeId = useMemo(() => {
-    const m = new Map<string, WorkflowRun["status"]>();
-  const workflowRunByWorktreeId = useMemo(() => {
-    const m = new Map<string, WorkflowRun>();
     if (!activeWorkflowRuns) return m;
     const priority = (s: string) =>
       s === "running" || s === "pending" || s === "waiting" ? 3 : s === "completed" ? 2 : 1;
@@ -319,7 +306,6 @@ export function RepoDetailPage() {
             (priority(run.status) === priority(existing.status) && run.started_at > existing.started_at)) {
           m.set(run.worktree_id, run);
         }
-        m.set(run.worktree_id, run);
       }
     }
     return m;
@@ -353,19 +339,12 @@ export function RepoDetailPage() {
     try {
       const labels = JSON.parse(ticket.labels || "[]") as string[];
       const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title, labels);
-      const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title);
       // Parse base_branch from Vantage deliverable if present
       let fromBranch: string | undefined;
       try {
         const raw = JSON.parse(ticket.raw_json);
         if (raw.base_branch) fromBranch = raw.base_branch;
       } catch { /* ignore */ }
-      const wt = await api.createWorktree(repoId!, {
-        name: wtName,
-        ticket_id: ticket.id,
-        from_branch: fromBranch,
-      });
-      const result = await api.runWorkflow(wt.id, {
       const wt = await api.createWorktree(repoId!, {
         name: wtName,
         ticket_id: ticket.id,
@@ -508,7 +487,6 @@ export function RepoDetailPage() {
       const hasChildren = !!children && children.length > 0;
       const isCollapsed = collapsedNodes.has(t.source_id);
       const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | "failed" | "completed" | undefined;
-      const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | undefined;
       rows.push(
         <TicketRow
           key={`${t.id}-d${depth}`}

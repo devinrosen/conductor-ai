@@ -429,8 +429,9 @@ pub fn poll_data() -> Option<PollResult> {
                 };
                 // Reap runs whose agent process is confirmed dead and auto-restart,
                 // passing the already-detected list to avoid a redundant DB query.
-                let live_windows = conductor_core::agent::list_live_tmux_windows();
-                match wf_mgr.reap_detected_stale_runs(stale_runs, &live_windows) {
+                if !stale_runs.is_empty() {
+                    let live_windows = wf_mgr.get_live_tmux_windows();
+                    match wf_mgr.reap_detected_stale_runs(stale_runs, &live_windows) {
                     Ok(reaped) if !reaped.is_empty() => {
                         let conductor_bin_dir =
                             conductor_core::workflow::resolve_conductor_bin_dir();
@@ -469,8 +470,9 @@ pub fn poll_data() -> Option<PollResult> {
                             );
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
+                    }
                 }
             }
         }
