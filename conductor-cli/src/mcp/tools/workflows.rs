@@ -24,7 +24,18 @@ pub(super) fn tool_list_workflows(
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
-    let (defs, warnings) = match WorkflowManager::list_defs(&repo.local_path, &repo.local_path) {
+    let worktree_slug = get_arg(args, "worktree");
+    let wt_path: String = if let Some(wt_slug) = worktree_slug {
+        use conductor_core::worktree::WorktreeManager;
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
+            Ok(wt) => wt.path,
+            Err(e) => return tool_err(e),
+        }
+    } else {
+        repo.local_path.clone()
+    };
+    let (defs, warnings) = match WorkflowManager::list_defs(&wt_path, &repo.local_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
@@ -64,10 +75,20 @@ pub(super) fn tool_validate_workflow(
         Err(e) => return tool_err(e),
     };
 
-    let wt_path = &repo.local_path;
-    let repo_path = &repo.local_path;
+    let worktree_slug = get_arg(args, "worktree");
+    let wt_path: String = if let Some(wt_slug) = worktree_slug {
+        use conductor_core::worktree::WorktreeManager;
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
+            Ok(wt) => wt.path,
+            Err(e) => return tool_err(e),
+        }
+    } else {
+        repo.local_path.clone()
+    };
+    let repo_path = repo.local_path.clone();
 
-    let workflow = match WorkflowManager::load_def_by_name(wt_path, repo_path, workflow_name) {
+    let workflow = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, workflow_name) {
         Ok(w) => w,
         Err(e) => return tool_err(e),
     };
@@ -75,7 +96,7 @@ pub(super) fn tool_validate_workflow(
     let known_bots: std::collections::HashSet<String> =
         config.github.apps.keys().cloned().collect();
 
-    let entry = WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots);
+    let entry = WorkflowManager::validate_single(&wt_path, &repo_path, &workflow, &known_bots);
 
     format_validation_result(workflow_name, &entry)
 }
