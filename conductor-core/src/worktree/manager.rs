@@ -58,6 +58,21 @@ const AGENT_LATEST_JOIN: &str = "LEFT JOIN (\
         GROUP BY a.worktree_id\
     ) latest ON latest.worktree_id = w.id";
 
+/// Returns the base SELECT+FROM+JOIN fragment for enriched worktree queries.
+/// This includes all worktree columns plus ticket info and latest agent status.
+/// To be used with `map_enriched_row`.
+fn enriched_worktree_base() -> String {
+    format!(
+        "SELECT {cols}, latest.status AS agent_status, \
+         t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
+         FROM worktrees w \
+         {agent_join} \
+         LEFT JOIN tickets t ON t.id = w.ticket_id",
+        cols = &*WORKTREE_COLUMNS_W,
+        agent_join = AGENT_LATEST_JOIN,
+    )
+}
+
 /// Map a row that contains the standard worktree columns followed by
 /// `agent_status`, `ticket_title`, `ticket_number`, and `ticket_url` (in that order).
 ///
@@ -103,29 +118,45 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
         return None;
     }
 
+    // Query 1: Get all parent tickets and their worktrees in a single JOIN query
+    // This reduces N+1 queries to just 2 total: one to get the child ticket, one to get all relevant data
+    let placeholders = dep_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT w.branch, t.source_id \
+         FROM tickets t \
+         LEFT JOIN worktrees w ON w.ticket_id = t.id AND w.status = 'active' \
+         WHERE t.repo_id = ?1 AND t.source_id IN ({placeholders}) \
+         ORDER BY w.created_at DESC"
+    );
+
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&repo_id];
     for dep_id in &dep_ids {
-        let parent = match syncer.get_by_source_id(repo_id, dep_id) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        // Find an active worktree for this parent ticket
-        let worktrees: Vec<Worktree> = match query_collect(
-            conn,
-            &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
-            params![&parent.id],
-            map_worktree_row,
-        ) {
-            Ok(wts) => wts,
+        params.push(dep_id);
+    }
+
+    let results: Vec<(Option<String>, String)> =
+        match query_collect(conn, &sql, params.as_slice(), |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?, // branch (nullable if no active worktree)
+                row.get::<_, String>(1)?,         // source_id
+            ))
+        }) {
+            Ok(results) => results,
             Err(e) => {
-                tracing::warn!("resolve_parent_branch: DB query failed for ticket {}: {e}", parent.id);
-                continue;
+                tracing::warn!("resolve_parent_branch: batch query failed: {e}");
+                return None;
             }
         };
-        if let Some(wt) = worktrees
-            .iter()
-            .find(|w| w.status == WorktreeStatus::Active)
-        {
-            return Some(wt.branch.clone());
+
+    // Return the first active worktree branch we find, respecting dependency order
+    for dep_id in &dep_ids {
+        for (branch_opt, source_id) in &results {
+            if source_id == dep_id {
+                if let Some(branch) = branch_opt {
+                    return Some(branch.clone());
+                }
+                break; // Found the ticket but no active worktree, move to next dependency
+            }
         }
     }
 
@@ -278,46 +309,28 @@ impl<'a> WorktreeManager<'a> {
             (pr_branch, Some(pr_base), Vec::new())
         } else {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
-            let base = if let Some(b) = from_branch {
-                b.to_string()
-            } else if let Some(parent_branch) = ticket_id
-                .as_deref()
-                .and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
-            {
-                parent_branch
+            //
+            // `resolve_and_update_base` handles:
+            //   - explicit from_branch with prefix fallback (feat/, fix/)
+            //   - auto-creating a local tracking branch from remote
+            //   - non-checkout fast-forward updates
+            let explicit_base = if let Some(b) = from_branch {
+                Some(b)
             } else {
-                resolve_base_branch(&repo.local_path, &repo.default_branch)
+                ticket_id
+                    .as_deref()
+                    .and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
             };
-            // If the base branch doesn't exist locally, try fetching it from remote
-            let local_ref_exists = git_in(&repo.local_path)
-                .args(["rev-parse", "--verify", &format!("refs/heads/{base}")])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-            if !local_ref_exists {
-                tracing::info!("Base branch {base:?} not found locally, fetching from origin");
-                let fetch_result = git_in(&repo.local_path)
-                    .args(["fetch", "origin", &format!("{base}:{base}")])
-                    .output();
-                match fetch_result {
-                    Ok(o) if o.status.success() => {
-                        tracing::info!("Fetched {base:?} from origin");
-                    }
-                    _ => {
-                        return Err(ConductorError::Git(
-                            crate::error::SubprocessFailure::from_message(
-                                "git fetch",
-                                format!("Base branch '{base}' not found locally or on remote"),
-                            ),
-                        ));
-                    }
-                }
-            }
             let pre_verified_clean = pre_health
                 .map(|h| !h.is_dirty && !h.status_check_failed)
                 .unwrap_or(false);
-            let warnings =
-                ensure_base_up_to_date(&repo.local_path, &base, force_dirty, pre_verified_clean)?;
+            let (base, warnings) = resolve_and_update_base(
+                &repo.local_path,
+                explicit_base.as_deref(),
+                &repo.default_branch,
+                force_dirty,
+                pre_verified_clean,
+            )?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",
@@ -565,15 +578,10 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let sql = format!(
-            "SELECT {cols}, latest.status AS agent_status, \
-             t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
-             FROM worktrees w \
-             {agent_join} \
-             LEFT JOIN tickets t ON t.id = w.ticket_id \
+            "{base} \
              WHERE 1=1{status_filter} \
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
-            cols = &*WORKTREE_COLUMNS_W,
-            agent_join = AGENT_LATEST_JOIN,
+            base = enriched_worktree_base(),
             status_filter = status_filter,
         );
         query_collect(self.conn, &sql, [], map_enriched_row)
@@ -583,16 +591,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_id_enriched(&self, id: &str) -> Result<WorktreeWithStatus> {
         self.conn
             .query_row(
-                &format!(
-                    "SELECT {cols}, latest.status AS agent_status, \
-                     t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
-                     FROM worktrees w \
-                     {agent_join} \
-                     LEFT JOIN tickets t ON t.id = w.ticket_id \
-                     WHERE w.id = ?1",
-                    cols = &*WORKTREE_COLUMNS_W,
-                    agent_join = AGENT_LATEST_JOIN,
-                ),
+                &format!("{base} WHERE w.id = ?1", base = enriched_worktree_base(),),
                 params![id],
                 map_enriched_row,
             )
@@ -609,14 +608,8 @@ impl<'a> WorktreeManager<'a> {
         self.conn
             .query_row(
                 &format!(
-                    "SELECT {cols}, latest.status AS agent_status, \
-                     t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
-                     FROM worktrees w \
-                     {agent_join} \
-                     LEFT JOIN tickets t ON t.id = w.ticket_id \
-                     WHERE w.id = ?1 AND w.repo_id = ?2",
-                    cols = &*WORKTREE_COLUMNS_W,
-                    agent_join = AGENT_LATEST_JOIN,
+                    "{base} WHERE w.id = ?1 AND w.repo_id = ?2",
+                    base = enriched_worktree_base(),
                 ),
                 params![id, repo_id],
                 map_enriched_row,
@@ -637,15 +630,10 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let sql = format!(
-            "SELECT {cols}, latest.status AS agent_status, \
-             t.title AS ticket_title, t.source_id AS ticket_number, t.url AS ticket_url \
-             FROM worktrees w \
-             {agent_join} \
-             LEFT JOIN tickets t ON t.id = w.ticket_id \
+            "{base} \
              WHERE w.repo_id = ?1{status_filter} \
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
-            cols = &*WORKTREE_COLUMNS_W,
-            agent_join = AGENT_LATEST_JOIN,
+            base = enriched_worktree_base(),
             status_filter = status_filter,
         );
         query_collect(self.conn, &sql, params![repo_id], map_enriched_row)
@@ -769,6 +757,10 @@ impl<'a> WorktreeManager<'a> {
     /// Remove the git worktree directory and delete the associated branch (best-effort).
     /// Failures are logged but not propagated. Delegates to the module-private
     /// `remove_git_artifacts` to keep the implementation detail encapsulated.
+    ///
+    /// NOTE: This is a static method by design — it's a cross-manager utility called from
+    /// TicketSyncer that doesn't require WorktreeManager instance state (db connection, config).
+    /// Making it an instance method would create circular dependency issues.
     pub fn remove_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
         remove_git_artifacts(repo_path, worktree_path, branch);
     }
