@@ -3126,7 +3126,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(kind, "workflow_stale_reaped");
-        assert!(body.contains("marked as failed and auto-restarted"), "body should mention auto-restart: {}", body);
+        assert!(
+            body.contains("marked as failed and auto-restarted"),
+            "body should mention auto-restart: {}",
+            body
+        );
     }
 
     /// `on_success = false` does NOT suppress hooks — hooks have their own event filtering.
@@ -3369,6 +3373,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 0, "notification should be suppressed when on_stale = false");
+        assert_eq!(
+            count, 0,
+            "notification should be suppressed when on_stale = false"
+        );
     }
 }
