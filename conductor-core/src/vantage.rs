@@ -1,4 +1,6 @@
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::path::Path;
 use std::process::Command;
 
@@ -37,12 +39,8 @@ pub fn sync_vantage_deliverables(
         project_id,
     );
 
-    // Pre-read all deliverable frontmatter files once to avoid N file reads in the loop.
-    let frontmatter_cache = preload_deliverable_frontmatter(sdlc_root);
-
     let mut tickets = Vec::with_capacity(items.len());
-    let mut skipped_codebase = 0usize;
-    let mut skipped_mode_or_status = 0usize;
+    let mut skipped = 0usize;
     for item in &items {
         let id = item["id"].as_str().unwrap_or("");
         if id.is_empty() {
@@ -51,18 +49,9 @@ pub fn sync_vantage_deliverables(
         // Only sync deliverables whose codebase matches this repo
         let codebase = item["codebase"].as_str().unwrap_or("");
         if codebase != repo_slug {
-            skipped_codebase += 1;
             tracing::debug!("Vantage sync: skipping {id} (codebase={codebase:?} != {repo_slug:?})");
             continue;
         }
-        // Only sync conductor-mode deliverables in actionable pipeline states.
-        // The sdlc CLI may not include these fields in JSON output, so fall back
-        // to the pre-loaded YAML frontmatter cache.
-        let (exec_mode, conductor_status) = resolve_conductor_fields(item, id, &frontmatter_cache);
-        if exec_mode != "conductor"
-            || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status.as_str())
-        {
-            skipped_mode_or_status += 1;
         // Only sync conductor-mode deliverables in actionable pipeline states
         let exec_mode = item["execution_mode"].as_str().unwrap_or("");
         let conductor_status = item["conductor"]["status"].as_str().unwrap_or("");
@@ -72,15 +61,6 @@ pub fn sync_vantage_deliverables(
                 "Vantage sync: skipping {id} (execution_mode={exec_mode:?}, conductor.status={conductor_status:?})"
             );
             continue;
-        }
-        let status = item["status"].as_str().unwrap_or("");
-        tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?}, conductor.status={conductor_status:?})");
-        // Fetch full detail for each deliverable (list output lacks body)
-        match fetch_vantage_deliverable(id, sdlc_root) {
-            Ok(ticket) => tickets.push(ticket),
-            Err(e) => {
-                tracing::warn!("Failed to fetch Vantage deliverable {id}: {e}");
-            }
         }
         let status = item["status"].as_str().unwrap_or("");
         tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?}, conductor.status={conductor_status:?})");
@@ -99,24 +79,6 @@ pub fn sync_vantage_deliverables(
         tickets.push(ticket);
     }
 
-    let total_skipped = skipped_codebase + skipped_mode_or_status;
-    if tickets.is_empty() && total_skipped > 0 {
-        tracing::warn!(
-            project_id,
-            repo_slug,
-            skipped_codebase,
-            skipped_mode_or_status,
-            "Vantage sync: 0 deliverables matched for repo {repo_slug:?} — \
-             {skipped_codebase} skipped (codebase mismatch), \
-             {skipped_mode_or_status} skipped (execution_mode != 'conductor' or pre-ready status). \
-             Check that deliverables have codebase={repo_slug:?} and execution_mode='conductor'."
-        );
-    } else {
-        tracing::info!(
-            "Vantage sync: matched {} deliverables, skipped {total_skipped} (filtered out)",
-            tickets.len(),
-        );
-    }
     tracing::info!(
         "Vantage sync: matched {} deliverables, skipped {skipped} (filtered out)",
         tickets.len(),
@@ -150,6 +112,7 @@ pub fn fetch_vantage_deliverable(deliverable_id: &str, sdlc_root: &str) -> Resul
 /// frontmatter into `(execution_mode, conductor.status)` pairs, keyed by
 /// deliverable ID (filename stem). This avoids N individual file reads inside
 /// the sync loop.
+#[cfg(test)]
 fn preload_deliverable_frontmatter(sdlc_root: &str) -> HashMap<String, (String, String)> {
     let mut cache = HashMap::new();
     if sdlc_root.is_empty() {
@@ -188,6 +151,7 @@ fn preload_deliverable_frontmatter(sdlc_root: &str) -> HashMap<String, (String, 
 ///
 /// First checks the CLI JSON output; if the fields are missing (the sdlc CLI
 /// may not serialize them), falls back to the pre-loaded frontmatter cache.
+#[cfg(test)]
 fn resolve_conductor_fields(
     item: &serde_json::Value,
     id: &str,
@@ -224,6 +188,7 @@ fn resolve_conductor_fields(
 /// Extract `execution_mode` and `conductor.status` from YAML frontmatter.
 ///
 /// Expects `---` delimited frontmatter at the start of the file.
+#[cfg(test)]
 fn parse_conductor_frontmatter(contents: &str) -> Option<(String, String)> {
     let trimmed = contents.trim_start();
     if !trimmed.starts_with("---") {
@@ -277,13 +242,11 @@ fn run_sdlc(sdlc_root: &str, args: &[&str]) -> Result<std::process::Output> {
             "sdlc exited with status {code}: {detail}"
         )));
     }
-    }
 
     Ok(output)
 }
 
 /// Update Vantage conductor status to "dispatched" when a workflow starts.
-fn notify_dispatched(deliverable_id: &str, sdlc_root: &str, workflow_run_id: &str) -> Result<()> {
 pub fn notify_dispatched(
     deliverable_id: &str,
     sdlc_root: &str,
@@ -298,8 +261,6 @@ pub fn notify_dispatched(
             "--",
             deliverable_id,
             "conductor.status=dispatched",
-            deliverable_id,
-            "conductor.status=dispatched",
             &format!("conductor.dispatched_at={now}"),
             &format!("conductor.workflow_run_id={workflow_run_id}"),
         ],
@@ -309,7 +270,6 @@ pub fn notify_dispatched(
 }
 
 /// Update Vantage conductor status to "completed" when a workflow succeeds.
-fn notify_completed(
 pub fn notify_completed(
     deliverable_id: &str,
     sdlc_root: &str,
@@ -342,8 +302,6 @@ pub fn notify_completed(
 }
 
 /// Update Vantage conductor status to "failed" when a workflow fails.
-fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
-    let reason_arg = format!("conductor.failed_reason={reason}");
 pub fn notify_failed(deliverable_id: &str, sdlc_root: &str, reason: &str) -> Result<()> {
     let escaped_reason = reason.replace('"', "'");
     let reason_arg = format!("conductor.failed_reason={escaped_reason}");

@@ -359,6 +359,8 @@ impl<'a> WorkflowManager<'a> {
         }
 
         Ok(finalized)
+    }
+
     /// Detect workflow runs with an active step that has been running longer
     /// than `threshold_minutes` without completing.
     ///
@@ -480,6 +482,7 @@ impl<'a> WorkflowManager<'a> {
                 &s.run_id,
                 WorkflowRunStatus::Failed,
                 Some("Stale workflow watchdog: agent process died, run marked as failed"),
+                None,
             )?;
 
             tracing::info!(

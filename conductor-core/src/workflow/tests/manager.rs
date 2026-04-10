@@ -2453,7 +2453,7 @@ fn test_detect_stale_workflow_runs_skips_completed_step() {
     let conn = setup_db();
     insert_running_root_run_with_label(&conn, "done-run", "deploy", None);
     // Step is completed, not running — should not be detected.
-    insert_terminal_step(&conn, "s1", "done-run", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s1", "done-run", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
     let stale = mgr.detect_stale_workflow_runs(60).unwrap();

@@ -88,22 +88,6 @@ fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithSta
 ///
 /// Dependency IDs are extracted via [`crate::ticket_source::get_dependency_ids`];
 /// swap to a `ticket_dependencies` table query once RFC 009 lands.
-fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> Option<String> {
-    let syncer = TicketSyncer::new(conn);
-    let ticket = match syncer.get_by_id(ticket_id) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!("resolve_parent_branch: failed to look up ticket {ticket_id}: {e}");
-            return None;
-        }
-    };
-
-    let dep_ids = crate::ticket_source::get_dependency_ids(&ticket.raw_json, &ticket.source_type);
-    if dep_ids.is_empty() {
-        return None;
-    }
-
-    for dep_id in &dep_ids {
 /// Look up a ticket's Vantage dependencies and return the branch of the first
 /// parent that has an active worktree.  Returns `None` if the ticket has no
 /// resolvable parent branch (non-Vantage, no deps, or no parent worktree).
@@ -127,19 +111,11 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
             Err(_) => continue,
         };
         // Find an active worktree for this parent ticket
-        let worktrees: Vec<Worktree> = match query_collect(
         let worktrees: Vec<Worktree> = query_collect(
             conn,
             &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
             params![&parent.id],
             map_worktree_row,
-        ) {
-            Ok(wts) => wts,
-            Err(e) => {
-                tracing::warn!("resolve_parent_branch: DB query failed for ticket {}: {e}", parent.id);
-                continue;
-            }
-        };
         ).ok().unwrap_or_default();
         if let Some(wt) = worktrees
             .iter()
@@ -303,8 +279,6 @@ impl<'a> WorktreeManager<'a> {
             } else if let Some(parent_branch) = ticket_id
                 .as_deref()
                 .and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
-            } else if let Some(parent_branch) =
-                ticket_id.and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
             {
                 parent_branch
             } else {
@@ -350,7 +324,6 @@ impl<'a> WorktreeManager<'a> {
                 .unwrap_or(false);
             let warnings =
                 ensure_base_up_to_date(&repo.local_path, &base, force_dirty, pre_verified_clean)?;
-            let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",

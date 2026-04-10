@@ -2027,9 +2027,8 @@ mod tests {
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
-            }),
                 on_stale: true,
-            },
+            }),
             slack: conductor_core::config::SlackConfig::default(),
             web_url: None,
         }

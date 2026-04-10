@@ -56,7 +56,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                                     &r.slug,
                                     ts.source_type_str(),
                                     label,
-                                    || ts.sync(token, Some(&r.slug)),
+                                    || ts.sync(token),
                                 );
                             }
                             Err(e) => {

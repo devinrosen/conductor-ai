@@ -54,14 +54,6 @@ pub(super) struct ResumeContext {
     pub child_runs: HashMap<String, crate::agent::AgentRun>,
 }
 
-/// If the workflow's ticket is a Vantage deliverable, resolve the lifecycle hooks.
-fn resolve_vantage_lifecycle(
-    conn: &Connection,
-    state: &ExecutionState<'_>,
-) -> Option<crate::vantage::VantageLifecycle> {
-    let ticket_id = state.ticket_id.as_deref()?;
-    let repo_id = state.repo_id.as_deref()?;
-    crate::vantage::VantageLifecycle::resolve(conn, ticket_id, repo_id)
 /// Vantage context needed to write back pipeline status.
 struct VantageContext {
     deliverable_id: String,
@@ -612,9 +604,6 @@ pub(super) fn run_workflow_engine(
     workflow: &WorkflowDef,
 ) -> Result<WorkflowResult> {
     // Notify Vantage on dispatch (best-effort — don't fail the workflow)
-    let vantage_lc = resolve_vantage_lifecycle(state.conn, state);
-    if let Some(ref lc) = vantage_lc {
-        if let Err(e) = lc.on_dispatched(&state.workflow_run_id) {
     let vantage_ctx = resolve_vantage_context(state.conn, state);
     if let Some(ref ctx) = vantage_ctx {
         if let Err(e) = crate::vantage::notify_dispatched(
@@ -683,7 +672,6 @@ pub(super) fn run_workflow_engine(
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
 
         // Notify Vantage of completion (best-effort)
-        if let Some(ref lc) = vantage_lc {
         if let Some(ref ctx) = vantage_ctx {
             let pr_url = state.inputs.get("pr_url").map(|s| s.as_str());
             let wt_slug = if state.worktree_slug.is_empty() {
@@ -691,7 +679,6 @@ pub(super) fn run_workflow_engine(
             } else {
                 Some(state.worktree_slug.as_str())
             };
-            if let Err(e) = lc.on_completed(pr_url, wt_slug) {
             if let Err(e) = crate::vantage::notify_completed(
                 &ctx.deliverable_id,
                 &ctx.sdlc_root,
@@ -714,8 +701,10 @@ pub(super) fn run_workflow_engine(
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
 
         // Notify Vantage of failure (best-effort)
-        if let Some(ref lc) = vantage_lc {
-            if let Err(e) = lc.on_failed(&summary) {
+        if let Some(ref ctx) = vantage_ctx {
+            if let Err(e) =
+                crate::vantage::notify_failed(&ctx.deliverable_id, &ctx.sdlc_root, &summary)
+            {
                 tracing::warn!("Vantage failure notification failed: {e}");
             }
         }
@@ -726,13 +715,6 @@ pub(super) fn run_workflow_engine(
             workflow_run_id = %wf_run_id,
             "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
         );
-        if let Some(ref ctx) = vantage_ctx {
-            if let Err(e) =
-                crate::vantage::notify_failed(&ctx.deliverable_id, &ctx.sdlc_root, &summary)
-            {
-                tracing::warn!("Vantage failure notification failed: {e}");
-            }
-        }
     }
 
     tracing::info!(

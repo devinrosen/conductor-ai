@@ -378,6 +378,7 @@ impl Default for GeneralConfig {
             theme: None,
             auto_cleanup_merged_branches: true,
             claude_config_dir: None,
+            stale_workflow_minutes: default_stale_workflow_minutes(),
         }
     }
 }
@@ -425,7 +426,6 @@ impl GeneralConfig {
                 None
             }
             None => None,
-            stale_workflow_minutes: default_stale_workflow_minutes(),
         }
     }
 }
