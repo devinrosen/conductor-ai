@@ -26,7 +26,9 @@ impl App {
             // Ticket-aware path: derive repo and name from the ticket
             let repo_slug = self.state.data.repo_slug_map.get(&ticket.repo_id).cloned();
             if let Some(slug) = repo_slug {
-                let suggested = derive_worktree_slug(&ticket.source_id, &ticket.title);
+                let labels: Vec<String> =
+                    serde_json::from_str(&ticket.labels).unwrap_or_default();
+                let suggested = derive_worktree_slug(&ticket.source_id, &ticket.title, &labels);
                 self.state.modal = Modal::Input {
                     title: "Create Worktree".to_string(),
                     prompt: format!("Worktree for #{} ({}):", ticket.source_id, slug),

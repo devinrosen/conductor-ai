@@ -294,7 +294,8 @@ export function RepoDetailPage() {
     if (startingWorkflow) return;
     setStartingWorkflow(ticket.id);
     try {
-      const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title);
+      const labels = JSON.parse(ticket.labels || "[]") as string[];
+      const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title, labels);
       // Parse base_branch from Vantage deliverable if present
       let fromBranch: string | undefined;
       try {

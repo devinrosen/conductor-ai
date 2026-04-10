@@ -1550,6 +1550,283 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
     assert_eq!(s2, "merged");
 }
 
+// -----------------------------------------------------------------------
+// label_to_branch_prefix tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_label_prefix_bug_maps_to_fix() {
+    assert_eq!(manager::label_to_branch_prefix(&["bug"]), "fix");
+}
+
+#[test]
+fn test_label_prefix_fix_maps_to_fix() {
+    assert_eq!(manager::label_to_branch_prefix(&["fix"]), "fix");
+}
+
+#[test]
+fn test_label_prefix_security_maps_to_fix() {
+    assert_eq!(manager::label_to_branch_prefix(&["security"]), "fix");
+}
+
+#[test]
+fn test_label_prefix_enhancement_maps_to_feat() {
+    assert_eq!(manager::label_to_branch_prefix(&["enhancement"]), "feat");
+}
+
+#[test]
+fn test_label_prefix_feature_maps_to_feat() {
+    assert_eq!(manager::label_to_branch_prefix(&["feature"]), "feat");
+}
+
+#[test]
+fn test_label_prefix_chore_maps_to_chore() {
+    assert_eq!(manager::label_to_branch_prefix(&["chore"]), "chore");
+}
+
+#[test]
+fn test_label_prefix_maintenance_maps_to_chore() {
+    assert_eq!(manager::label_to_branch_prefix(&["maintenance"]), "chore");
+}
+
+#[test]
+fn test_label_prefix_documentation_maps_to_docs() {
+    assert_eq!(manager::label_to_branch_prefix(&["documentation"]), "docs");
+}
+
+#[test]
+fn test_label_prefix_docs_maps_to_docs() {
+    assert_eq!(manager::label_to_branch_prefix(&["docs"]), "docs");
+}
+
+#[test]
+fn test_label_prefix_refactor_maps_to_refactor() {
+    assert_eq!(manager::label_to_branch_prefix(&["refactor"]), "refactor");
+}
+
+#[test]
+fn test_label_prefix_test_maps_to_test() {
+    assert_eq!(manager::label_to_branch_prefix(&["test"]), "test");
+}
+
+#[test]
+fn test_label_prefix_testing_maps_to_test() {
+    assert_eq!(manager::label_to_branch_prefix(&["testing"]), "test");
+}
+
+#[test]
+fn test_label_prefix_ci_maps_to_ci() {
+    assert_eq!(manager::label_to_branch_prefix(&["ci"]), "ci");
+}
+
+#[test]
+fn test_label_prefix_build_maps_to_ci() {
+    assert_eq!(manager::label_to_branch_prefix(&["build"]), "ci");
+}
+
+#[test]
+fn test_label_prefix_perf_maps_to_perf() {
+    assert_eq!(manager::label_to_branch_prefix(&["perf"]), "perf");
+}
+
+#[test]
+fn test_label_prefix_performance_maps_to_perf() {
+    assert_eq!(manager::label_to_branch_prefix(&["performance"]), "perf");
+}
+
+#[test]
+fn test_label_prefix_case_insensitive() {
+    assert_eq!(manager::label_to_branch_prefix(&["Bug"]), "fix");
+    assert_eq!(manager::label_to_branch_prefix(&["BUG"]), "fix");
+    assert_eq!(manager::label_to_branch_prefix(&["CHORE"]), "chore");
+    assert_eq!(manager::label_to_branch_prefix(&["Docs"]), "docs");
+}
+
+#[test]
+fn test_label_prefix_empty_slice_falls_back_to_feat() {
+    assert_eq!(manager::label_to_branch_prefix(&[]), "feat");
+}
+
+#[test]
+fn test_label_prefix_unknown_label_falls_back_to_feat() {
+    assert_eq!(manager::label_to_branch_prefix(&["foobar"]), "feat");
+    assert_eq!(manager::label_to_branch_prefix(&["wontfix"]), "feat");
+}
+
+#[test]
+fn test_label_prefix_first_match_wins() {
+    // "bug" should win over "enhancement"
+    assert_eq!(
+        manager::label_to_branch_prefix(&["bug", "enhancement"]),
+        "fix"
+    );
+}
+
+// -----------------------------------------------------------------------
+// WorktreeManager::create prefix normalization tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_create_chore_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "chore-123-cleanup", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "chore-123-cleanup");
+    assert_eq!(wt.branch, "chore/123-cleanup");
+}
+
+#[test]
+fn test_create_docs_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "docs-456-readme", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "docs-456-readme");
+    assert_eq!(wt.branch, "docs/456-readme");
+}
+
+#[test]
+fn test_create_bug_prefix_maps_to_fix_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "bug-789-null-crash", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "bug-789-null-crash");
+    assert_eq!(wt.branch, "fix/789-null-crash");
+}
+
+#[test]
+fn test_create_refactor_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "refactor-10-extract-fn", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "refactor-10-extract-fn");
+    assert_eq!(wt.branch, "refactor/10-extract-fn");
+}
+
+#[test]
+fn test_create_test_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "test-11-add-coverage", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "test-11-add-coverage");
+    assert_eq!(wt.branch, "test/11-add-coverage");
+}
+
+#[test]
+fn test_create_ci_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "ci-12-update-actions", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "ci-12-update-actions");
+    assert_eq!(wt.branch, "ci/12-update-actions");
+}
+
+#[test]
+fn test_create_perf_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "perf-13-cache-results", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "perf-13-cache-results");
+    assert_eq!(wt.branch, "perf/13-cache-results");
+}
+
 #[test]
 fn test_cleanup_merged_worktrees_filters_by_repo() {
     let conn = crate::test_helpers::setup_db();

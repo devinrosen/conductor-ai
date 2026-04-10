@@ -120,10 +120,14 @@ pub(super) fn format_metadata_entries(entries: &[MetadataEntry]) -> String {
     parts.join("\n")
 }
 
-/// Derive a worktree slug from a ticket's source_id and title.
-/// Format: `{source_id}-{slugified-title}`, e.g. `15-tui-create-worktree`.
+/// Derive a worktree slug from a ticket's source_id, title, and labels.
+/// Format: `{prefix}-{source_id}-{slugified-title}`, e.g. `feat-15-tui-create-worktree`.
+/// The prefix is inferred from labels via `label_to_branch_prefix`.
 /// Title portion is truncated to keep the total slug under ~40 chars.
-pub(super) fn derive_worktree_slug(source_id: &str, title: &str) -> String {
+pub(super) fn derive_worktree_slug(source_id: &str, title: &str, labels: &[String]) -> String {
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let prefix = conductor_core::worktree::label_to_branch_prefix(&refs);
+
     let slug: String = title
         .to_lowercase()
         .chars()
@@ -145,8 +149,8 @@ pub(super) fn derive_worktree_slug(source_id: &str, title: &str) -> String {
     }
     let title_slug = collapsed.trim_matches('-');
 
-    // Budget: 40 chars total, minus source_id and separator
-    let budget = 40_usize.saturating_sub(source_id.len() + 1);
+    // Budget: 40 chars total, minus prefix, separator, source_id, and separator
+    let budget = 40_usize.saturating_sub(prefix.len() + 1 + source_id.len() + 1);
     let truncated = if title_slug.len() <= budget {
         title_slug
     } else {
@@ -157,9 +161,9 @@ pub(super) fn derive_worktree_slug(source_id: &str, title: &str) -> String {
     };
 
     if truncated.is_empty() {
-        source_id.to_string()
+        format!("{prefix}-{source_id}")
     } else {
-        format!("{}-{}", source_id, truncated)
+        format!("{prefix}-{source_id}-{truncated}")
     }
 }
 
@@ -348,44 +352,85 @@ mod tests {
 
     #[test]
     fn derive_slug_normal() {
-        let slug = derive_worktree_slug("123", "Add login flow");
-        assert_eq!(slug, "123-add-login-flow");
+        let slug = derive_worktree_slug("123", "Add login flow", &[]);
+        assert_eq!(slug, "feat-123-add-login-flow");
     }
 
     #[test]
     fn derive_slug_special_chars() {
-        let slug = derive_worktree_slug("42", "Fix: null-ptr crash!!");
-        assert_eq!(slug, "42-fix-null-ptr-crash");
+        let slug = derive_worktree_slug("42", "Fix: null-ptr crash!!", &[]);
+        assert_eq!(slug, "feat-42-fix-null-ptr-crash");
     }
 
     #[test]
     fn derive_slug_consecutive_dashes() {
-        let slug = derive_worktree_slug("7", "hello---world   test");
-        assert_eq!(slug, "7-hello-world-test");
+        let slug = derive_worktree_slug("7", "hello---world   test", &[]);
+        assert_eq!(slug, "feat-7-hello-world-test");
     }
 
     #[test]
     fn derive_slug_long_title_truncation() {
         let long_title = "a".repeat(100);
-        let slug = derive_worktree_slug("99", &long_title);
+        let slug = derive_worktree_slug("99", &long_title, &[]);
         // Total should be ≤ 40 chars
         assert!(slug.len() <= 40, "slug too long: {} chars", slug.len());
-        assert!(slug.starts_with("99-"));
+        assert!(slug.starts_with("feat-99-"));
     }
 
     #[test]
     fn derive_slug_empty_title() {
-        assert_eq!(derive_worktree_slug("123", ""), "123");
+        assert_eq!(derive_worktree_slug("123", "", &[]), "feat-123");
     }
 
     #[test]
     fn derive_slug_all_special_chars() {
-        assert_eq!(derive_worktree_slug("42", "!!@@##"), "42");
+        assert_eq!(derive_worktree_slug("42", "!!@@##", &[]), "feat-42");
     }
 
     #[test]
     fn derive_slug_whitespace_only() {
-        assert_eq!(derive_worktree_slug("7", "   "), "7");
+        assert_eq!(derive_worktree_slug("7", "   ", &[]), "feat-7");
+    }
+
+    #[test]
+    fn derive_slug_bug_label_produces_fix_prefix() {
+        let slug = derive_worktree_slug(
+            "42",
+            "null ptr crash",
+            &["bug".to_string()],
+        );
+        assert!(slug.starts_with("fix-42-"), "got: {slug}");
+    }
+
+    #[test]
+    fn derive_slug_chore_label_produces_chore_prefix() {
+        let slug = derive_worktree_slug(
+            "7",
+            "clean up deps",
+            &["chore".to_string()],
+        );
+        assert!(slug.starts_with("chore-7-"), "got: {slug}");
+    }
+
+    #[test]
+    fn derive_slug_unknown_label_falls_back_to_feat() {
+        let slug = derive_worktree_slug(
+            "5",
+            "some work",
+            &["wontfix".to_string()],
+        );
+        assert!(slug.starts_with("feat-5-"), "got: {slug}");
+    }
+
+    #[test]
+    fn derive_slug_with_labels_total_length_within_40() {
+        let long_title = "a".repeat(100);
+        let slug = derive_worktree_slug("99", &long_title, &["refactor".to_string()]);
+        assert!(
+            slug.len() <= 40,
+            "slug too long: {} chars: {slug}",
+            slug.len()
+        );
     }
 
     // ── build_form_fields ───────────────────────────────────────────────────
