@@ -607,7 +607,7 @@ fn sync_repo(
                     {
                         eprintln!("warn: close_missing_tickets failed for {repo_slug}: {e}");
                     }
-                    if let Err(e) = syncer.mark_worktrees_for_closed_tickets(repo_id, None) {
+                    if let Err(e) = syncer.mark_worktrees_for_closed_tickets(repo_id) {
                         eprintln!(
                             "warn: mark_worktrees_for_closed_tickets failed for {repo_slug}: {e}"
                         );

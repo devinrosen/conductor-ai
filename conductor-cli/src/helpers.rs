@@ -161,7 +161,7 @@ pub(crate) fn sync_repo(
                             0
                         });
                     let merged = syncer
-                        .mark_worktrees_for_closed_tickets(repo_id, None)
+                        .mark_worktrees_for_closed_tickets(repo_id)
                         .unwrap_or_else(|e| {
                             eprintln!(
                                 "  {repo_slug} — warning: mark_worktrees_for_closed_tickets failed: {e}"

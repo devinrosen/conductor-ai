@@ -725,7 +725,7 @@ impl<'a> WorktreeManager<'a> {
     /// Remove the git worktree directory and delete the associated branch (best-effort).
     /// Failures are logged but not propagated. Delegates to the module-private
     /// `remove_git_artifacts` to keep the implementation detail encapsulated.
-    pub fn remove_artifacts(&self, repo_path: &str, worktree_path: &str, branch: &str) {
+    pub fn remove_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
         remove_git_artifacts(repo_path, worktree_path, branch);
     }
 
