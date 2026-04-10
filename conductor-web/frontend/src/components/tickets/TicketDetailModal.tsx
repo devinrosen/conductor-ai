@@ -197,7 +197,11 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
                 <CreateWorktreeForm
                   repoId={ticket.repo_id}
                   ticketId={ticket.id}
-                  initialName={deriveWorktreeSlug(ticket.source_id, ticket.title)}
+                  initialName={deriveWorktreeSlug(
+                    ticket.source_id,
+                    ticket.title,
+                    JSON.parse(ticket.labels || "[]"),
+                  )}
                   open={showCreateForm}
                   onOpenChange={setShowCreateForm}
                   onCreated={refetch}

@@ -14,6 +14,26 @@ use super::git_helpers::*;
 use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
 use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W, WORKTREE_COLUMN_COUNT};
 
+/// Map a ticket label to the conventional-commit branch prefix it implies.
+///
+/// Matching is case-insensitive and exact (no substring matching).
+/// First matching label wins. Returns `"feat"` when no label matches.
+pub fn label_to_branch_prefix(labels: &[&str]) -> &'static str {
+    for label in labels {
+        match label.to_lowercase().as_str() {
+            "bug" | "fix" | "security" => return "fix",
+            "chore" | "maintenance" => return "chore",
+            "documentation" | "docs" => return "docs",
+            "refactor" => return "refactor",
+            "test" | "testing" => return "test",
+            "ci" | "build" => return "ci",
+            "perf" | "performance" => return "perf",
+            _ => {}
+        }
+    }
+    "feat"
+}
+
 fn worktree_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
     let slug = slug.into();
     move |e| match e {
@@ -193,14 +213,26 @@ impl<'a> WorktreeManager<'a> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
-        // Determine branch name and worktree slug
-        let (wt_slug, branch) = if name.starts_with("fix-") {
-            let clean = name.strip_prefix("fix-").unwrap();
-            (format!("fix-{clean}"), format!("fix/{clean}"))
-        } else {
-            let clean = name.strip_prefix("feat-").unwrap_or(name);
-            (format!("feat-{clean}"), format!("feat/{clean}"))
-        };
+        // Determine branch name and worktree slug.
+        // "bug-" slugs are preserved as-is but map to "fix/" in git.
+        const SLUG_PREFIXES: &[(&str, &str)] = &[
+            ("fix-", "fix"),
+            ("bug-", "fix"),
+            ("feat-", "feat"),
+            ("chore-", "chore"),
+            ("docs-", "docs"),
+            ("refactor-", "refactor"),
+            ("test-", "test"),
+            ("ci-", "ci"),
+            ("perf-", "perf"),
+        ];
+        let (wt_slug, branch) =
+            if let Some(&(dash, slash)) = SLUG_PREFIXES.iter().find(|(d, _)| name.starts_with(d)) {
+                let clean = name.strip_prefix(dash).unwrap();
+                (format!("{dash}{clean}"), format!("{slash}/{clean}"))
+            } else {
+                (format!("feat-{name}"), format!("feat/{name}"))
+            };
 
         // Check for existing worktree with same slug
         let existing_status: Option<WorktreeStatus> = self
