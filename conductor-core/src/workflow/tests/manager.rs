@@ -2303,7 +2303,8 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
-    assert_eq!(ids.len(), 0, "sub-workflow must not be detected");
+    assert_eq!(ids.len(), 1, "sub-workflow must also be detected as stuck");
+    assert_eq!(ids[0], "sub-run");
 }
 
 #[test]
@@ -2591,4 +2592,111 @@ fn test_reap_stale_reaps_step_with_no_tmux_window() {
     let live_windows = std::collections::HashSet::new();
     let reaped = mgr.reap_stale_workflow_runs(60, &live_windows).unwrap();
     assert_eq!(reaped.len(), 1, "no tmux window should be treated as dead");
+}
+
+// ---------------------------------------------------------------------------
+// detect_stuck_workflow_run_ids — stuck run detection tests
+// (Tests the refactored API that replaced detect_stale_workflow_runs)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_detect_stuck_finds_run_with_only_terminal_steps() {
+    let conn = setup_db();
+    // Insert a running root run whose only step is completed (old ended_at).
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES ('stuck-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL)",
+        params![parent.id],
+    )
+    .unwrap();
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "stuck-run",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids[0], "stuck-run");
+}
+
+#[test]
+fn test_detect_stuck_skips_run_with_active_steps() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES ('active-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL)",
+        params![parent.id],
+    )
+    .unwrap();
+    // Step is still running — run is not stuck.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
+         VALUES ('s1', 'active-run', 'code-review', 'actor', 0, 'running', 0, '2020-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert!(ids.is_empty(), "run with active steps should not be stuck");
+}
+
+// ---------------------------------------------------------------------------
+// recover_stuck_steps — step recovery tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES ('recover-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL)",
+        params![parent.id],
+    )
+    .unwrap();
+
+    // Create a child agent run and mark it completed via SQL.
+    let child = agent_mgr
+        .create_run(None, "step prompt", None, None)
+        .unwrap();
+    conn.execute(
+        "UPDATE agent_runs SET status = 'completed' WHERE id = ?1",
+        params![child.id],
+    )
+    .unwrap();
+
+    // Insert a step still marked 'running' but whose child is terminal.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          started_at, child_run_id) \
+         VALUES ('s1', 'recover-run', 'code-review', 'actor', 0, 'running', 0, \
+                 '2020-01-01T00:00:00Z', ?1)",
+        params![child.id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let recovered = mgr.recover_stuck_steps().unwrap();
+    assert_eq!(recovered, 1, "should recover the stuck step");
 }

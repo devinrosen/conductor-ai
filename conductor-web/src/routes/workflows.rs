@@ -12,11 +12,11 @@ use conductor_core::workflow::estimation;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
     GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
-    StepRetryAnalyticsRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
-    WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
-    WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate, WorkflowTokenTrendRow,
-    REGRESSION_MIN_RECENT_RUNS,
+    StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity, WorkflowDef, WorkflowExecConfig,
+    WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles,
+    WorkflowRegressionSignal, WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow,
+    WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate,
+    WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -24,6 +24,16 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::notify::{fire_workflow_notification, WorkflowNotificationArgs};
 use crate::state::AppState;
+
+/// Parse granularity from query parameter with default fallback.
+/// Returns a parsed TimeGranularity or an error for invalid values.
+fn parse_granularity(granularity: Option<String>) -> Result<TimeGranularity, ApiError> {
+    granularity
+        .as_deref()
+        .unwrap_or("daily")
+        .parse()
+        .map_err(|e: String| ApiError::Core(ConductorError::InvalidInput(e)))
+}
 
 /// Resolve the run ID to use for error-path notifications.
 ///
@@ -1234,7 +1244,7 @@ pub async fn get_token_trend(
 ) -> Result<Json<Vec<WorkflowTokenTrendRow>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let granularity = q.granularity.as_deref().unwrap_or("daily");
+    let granularity = parse_granularity(q.granularity)?;
     let rows = mgr.get_workflow_token_trend(&q.workflow_name, granularity)?;
     Ok(Json(rows))
 }
@@ -1294,16 +1304,10 @@ pub async fn get_run_metrics(
 }
 
 /// GET /api/workflows/analytics/failure-trend?workflow_name=&granularity=daily|weekly
-#[derive(Deserialize, utoipa::IntoParams)]
-pub struct FailureTrendQuery {
-    pub workflow_name: String,
-    pub granularity: Option<String>,
-}
-
 #[utoipa::path(
     get,
     path = "/api/workflows/analytics/failure-trend",
-    params(FailureTrendQuery),
+    params(TrendQuery),
     responses(
         (status = 200, description = "Workflow failure rate trend", body = Vec<WorkflowFailureRateTrendRow>),
     ),
@@ -1311,11 +1315,11 @@ pub struct FailureTrendQuery {
 )]
 pub async fn get_failure_trend(
     State(state): State<AppState>,
-    Query(q): Query<FailureTrendQuery>,
+    Query(q): Query<TrendQuery>,
 ) -> Result<Json<Vec<WorkflowFailureRateTrendRow>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let granularity = q.granularity.as_deref().unwrap_or("daily");
+    let granularity = parse_granularity(q.granularity)?;
     let rows = mgr.get_workflow_failure_rate_trend(&q.workflow_name, granularity)?;
     Ok(Json(rows))
 }

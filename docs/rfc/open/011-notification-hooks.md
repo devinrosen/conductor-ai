@@ -50,6 +50,9 @@ This replaces all built-in channel implementations. Slack, Discord, ntfy, PagerD
 |---|---|
 | `workflow_run.completed` | Workflow finished successfully |
 | `workflow_run.failed` | Workflow finished with failure |
+| `workflow_run.stale` | A step has been running longer than `stale_workflow_minutes` |
+| `workflow_run.reaped` | Dead workflow detected — agent confirmed dead, run marked failed |
+| `workflow_run.orphan_resumed` | Stuck workflow runs auto-resumed by recovery |
 | `workflow_run.cost_spike` | Run cost exceeded threshold multiple of rolling average |
 | `workflow_run.duration_spike` | Run duration exceeded threshold multiple of P75 |
 | `agent_run.completed` | Agent run finished successfully |

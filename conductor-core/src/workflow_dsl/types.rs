@@ -37,6 +37,12 @@ impl WorkflowDef {
         count_nodes(&self.body) + count_nodes(&self.always)
     }
 
+    /// Number of top-level steps (body + always, non-recursive).
+    /// Better for user-facing progress display than `total_nodes()`.
+    pub fn top_level_steps(&self) -> usize {
+        self.body.len() + self.always.len()
+    }
+
     /// Find the `max_iterations` of the do-while or while loop that owns
     /// the step with the given name. Returns `None` if the step is not
     /// inside a loop or the step name is not found.

@@ -8,6 +8,7 @@ import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
 import { RunWorkflowModal } from "../components/workflows/RunWorkflowModal";
+import { getWorkflowDisplayName } from "../utils/workflow";
 import { WorkflowRunTree } from "../components/workflows/WorkflowRunTree";
 import { formatDuration, liveElapsedMs } from "../utils/agentStats";
 import { formatWorkflowProgress } from "../utils/workflowProgress";
@@ -392,6 +393,7 @@ export function WorkflowsPage() {
               repos={repos}
               ctxMap={treeCtxMap}
               onCancel={handleCancelWorkflow}
+              onResume={handleResumeWorkflow}
             />
           </div>
         ) : (
@@ -436,10 +438,10 @@ export function WorkflowsPage() {
                           to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
                           className="text-indigo-600 hover:underline font-medium"
                         >
-                          {run.workflow_title ?? run.workflow_name}
+                          {getWorkflowDisplayName(run)}
                         </Link>
                       ) : (
-                        <span className="font-medium">{run.workflow_title ?? run.workflow_name}</span>
+                        <span className="font-medium">{getWorkflowDisplayName(run)}</span>
                       )}
                     </td>
                     <td className="px-3 py-1.5 text-gray-500">
@@ -457,7 +459,7 @@ export function WorkflowsPage() {
                         {(() => {
                           const prog = formatWorkflowProgress(run);
                           return prog ? (
-                            <span className="text-[10px] text-gray-400">{prog}</span>
+                            <span className="text-[11px] text-gray-400">{prog}</span>
                           ) : null;
                         })()}
                       </div>

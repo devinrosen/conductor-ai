@@ -45,7 +45,10 @@ fn verify_slack_signature(
 ) -> Result<(), StatusCode> {
     let secret = match signing_secret {
         Some(s) if !s.is_empty() => s,
-        _ => return Ok(()), // no secret configured — skip verification
+        _ => {
+            tracing::warn!("Slack signature verification failed: no signing secret configured");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
     };
 
     let timestamp = headers
@@ -167,7 +170,7 @@ async fn handle_active(state: &AppState) -> SlackResponse {
             tracing::error!(error = %e, "Failed to list active workflow runs for Slack command");
             return SlackResponse {
                 response_type: "ephemeral",
-                text: format!("Error querying workflows: {e}"),
+                text: "Sorry, I couldn't retrieve the workflow status right now. Please try again later.".to_string(),
             };
         }
     };
@@ -236,11 +239,17 @@ mod tests {
     }
 
     #[test]
-    fn no_secret_skips_verification() {
+    fn no_secret_rejects_verification() {
         let ts = fresh_timestamp();
         let headers = make_headers(&ts, "v0=badhash");
-        assert_eq!(verify_slack_signature(None, &headers, b"body"), Ok(()));
-        assert_eq!(verify_slack_signature(Some(""), &headers, b"body"), Ok(()));
+        assert_eq!(
+            verify_slack_signature(None, &headers, b"body"),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(
+            verify_slack_signature(Some(""), &headers, b"body"),
+            Err(StatusCode::UNAUTHORIZED)
+        );
     }
 
     #[test]

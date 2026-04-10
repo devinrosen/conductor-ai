@@ -19,8 +19,8 @@ use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
     extract_workflow_title, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
     PendingGateRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow,
-    WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowRun,
-    WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
+    TimeGranularity, WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
     WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
@@ -32,7 +32,31 @@ fn pct_change(recent: Option<f64>, baseline: Option<f64>) -> Option<f64> {
     }
 }
 
+/// Returns the SQLite strftime format string for the given time granularity.
+/// This is a database-specific helper for formatting time periods in SQL queries.
+fn granularity_to_strftime_format(granularity: TimeGranularity) -> &'static str {
+    match granularity {
+        TimeGranularity::Daily => "%Y-%m-%d",
+        TimeGranularity::Weekly => "%Y-%W",
+    }
+}
+
 impl<'a> WorkflowManager<'a> {
+    /// Common SELECT clause for step queries with agent run token data.
+    const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
+                 FROM workflow_run_steps s \
+                 LEFT JOIN agent_runs ar ON s.child_run_id = ar.id";
+
+    /// Common subquery to get N most recent completed runs for a workflow.
+    const N_RECENT_COMPLETED_RUNS_SUBQUERY: &'static str = "SELECT id FROM workflow_runs \
+                 WHERE workflow_name = ?1 AND status = 'completed' \
+                 ORDER BY started_at DESC LIMIT ?2";
+
+    /// Common subquery to get N most recent terminal runs (completed or failed) for a workflow.
+    const N_RECENT_TERMINAL_RUNS_SUBQUERY: &'static str = "SELECT id FROM workflow_runs \
+                 WHERE workflow_name = ?1 AND status IN ('completed', 'failed') \
+                 ORDER BY started_at DESC LIMIT ?2";
+
     /// Returns counts of active workflow runs (pending / running / waiting) per repo_id.
     /// Repos with no active runs are absent from the map. Rows where repo_id IS NULL are skipped.
     pub fn active_run_counts_by_repo(&self) -> Result<HashMap<String, ActiveWorkflowCounts>> {
@@ -133,12 +157,10 @@ impl<'a> WorkflowManager<'a> {
         query_collect(
             self.conn,
             &format!(
-                "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
-                 FROM workflow_run_steps s \
-                 LEFT JOIN agent_runs ar ON s.child_run_id = ar.id \
+                "{} \
                  WHERE s.workflow_run_id = ?1 \
                  ORDER BY s.position",
-                cols = &*STEP_COLUMNS_WITH_PREFIX
+                Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
             ),
             params![workflow_run_id],
             row_to_workflow_step,
@@ -194,12 +216,10 @@ impl<'a> WorkflowManager<'a> {
             String::new()
         };
         let sql = format!(
-            "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
-             FROM workflow_run_steps s \
-             LEFT JOIN agent_runs ar ON s.child_run_id = ar.id \
+            "{} \
              WHERE s.workflow_run_id IN ({placeholders}){status_clause} \
              ORDER BY s.workflow_run_id, s.position",
-            cols = &*STEP_COLUMNS_WITH_PREFIX
+            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
         );
         let combined = run_ids
             .iter()
@@ -220,11 +240,9 @@ impl<'a> WorkflowManager<'a> {
 
     pub fn get_step_by_id(&self, step_id: &str) -> Result<Option<WorkflowRunStep>> {
         let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
-             FROM workflow_run_steps s \
-             LEFT JOIN agent_runs ar ON s.child_run_id = ar.id \
+            "{} \
              WHERE s.id = ?1",
-            cols = &*STEP_COLUMNS_WITH_PREFIX
+            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
         ))?;
         let mut rows = stmt.query_map(params![step_id], row_to_workflow_step)?;
         match rows.next() {
@@ -1089,13 +1107,9 @@ impl<'a> WorkflowManager<'a> {
     pub fn get_workflow_token_trend(
         &self,
         workflow_name: &str,
-        granularity: &str,
+        granularity: TimeGranularity,
     ) -> Result<Vec<WorkflowTokenTrendRow>> {
-        let fmt = if granularity == "weekly" {
-            "%Y-%W"
-        } else {
-            "%Y-%m-%d"
-        };
+        let fmt = granularity_to_strftime_format(granularity);
         let sql = format!(
             "SELECT strftime('{fmt}', started_at) as period, \
                     COALESCE(SUM(total_input_tokens), 0) as total_input, \
@@ -1127,7 +1141,7 @@ impl<'a> WorkflowManager<'a> {
         workflow_name: &str,
         limit_runs: usize,
     ) -> Result<Vec<StepTokenHeatmapRow>> {
-        let mut stmt = self.conn.prepare_cached(
+        let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT wrs.step_name, \
                     COALESCE(AVG(ar.input_tokens), 0.0) as avg_input, \
                     COALESCE(AVG(ar.output_tokens), 0.0) as avg_output, \
@@ -1138,13 +1152,12 @@ impl<'a> WorkflowManager<'a> {
              JOIN agent_runs ar ON ar.id = wrs.child_run_id \
              WHERE wr.workflow_name = ?1 AND wr.status = 'completed' \
                AND wr.id IN ( \
-                 SELECT id FROM workflow_runs \
-                 WHERE workflow_name = ?1 AND status = 'completed' \
-                 ORDER BY started_at DESC LIMIT ?2 \
+                 {} \
                ) \
              GROUP BY wrs.step_name \
              ORDER BY (AVG(ar.input_tokens) + AVG(ar.output_tokens)) DESC",
-        )?;
+            Self::N_RECENT_COMPLETED_RUNS_SUBQUERY
+        ))?;
         let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
             Ok(StepTokenHeatmapRow {
                 step_name: row.get(0)?,
@@ -1162,13 +1175,9 @@ impl<'a> WorkflowManager<'a> {
     pub fn get_workflow_failure_rate_trend(
         &self,
         workflow_name: &str,
-        granularity: &str,
+        granularity: TimeGranularity,
     ) -> Result<Vec<WorkflowFailureRateTrendRow>> {
-        let fmt = if granularity == "weekly" {
-            "%Y-%W"
-        } else {
-            "%Y-%m-%d"
-        };
+        let fmt = granularity_to_strftime_format(granularity);
         let sql = format!(
             "SELECT strftime('{fmt}', started_at) AS period, \
                     COUNT(*) AS total_runs, \
@@ -1199,7 +1208,7 @@ impl<'a> WorkflowManager<'a> {
         workflow_name: &str,
         limit_runs: usize,
     ) -> Result<Vec<StepFailureHeatmapRow>> {
-        let mut stmt = self.conn.prepare_cached(
+        let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT wrs.step_name, \
                     COUNT(*) AS total_executions, \
                     SUM(CASE WHEN wrs.status='failed' THEN 1 ELSE 0 END) AS failed_executions, \
@@ -1211,13 +1220,12 @@ impl<'a> WorkflowManager<'a> {
                AND wr.status IN ('completed', 'failed') \
                AND wrs.status IN ('completed', 'failed') \
                AND wr.id IN ( \
-                 SELECT id FROM workflow_runs \
-                 WHERE workflow_name = ?1 AND status IN ('completed', 'failed') \
-                 ORDER BY started_at DESC LIMIT ?2 \
+                 {} \
                ) \
              GROUP BY wrs.step_name \
              ORDER BY failure_rate DESC, total_executions DESC",
-        )?;
+            Self::N_RECENT_TERMINAL_RUNS_SUBQUERY
+        ))?;
         let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
             Ok(StepFailureHeatmapRow {
                 step_name: row.get(0)?,
@@ -1237,7 +1245,7 @@ impl<'a> WorkflowManager<'a> {
         workflow_name: &str,
         limit_runs: usize,
     ) -> Result<Vec<StepRetryAnalyticsRow>> {
-        let mut stmt = self.conn.prepare_cached(
+        let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT wrs.step_name, \
                     COUNT(*) AS total_executions, \
                     SUM(CASE WHEN wrs.retry_count > 0 THEN 1 ELSE 0 END) AS executions_with_retries, \
@@ -1258,13 +1266,12 @@ impl<'a> WorkflowManager<'a> {
                AND wr.status IN ('completed', 'failed') \
                AND wrs.status IN ('completed', 'failed') \
                AND wr.id IN ( \
-                 SELECT id FROM workflow_runs \
-                 WHERE workflow_name = ?1 AND status IN ('completed', 'failed') \
-                 ORDER BY started_at DESC LIMIT ?2 \
+                 {} \
                ) \
              GROUP BY wrs.step_name \
              ORDER BY retry_rate DESC, total_executions DESC",
-        )?;
+            Self::N_RECENT_TERMINAL_RUNS_SUBQUERY
+        ))?;
         let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
             Ok(StepRetryAnalyticsRow {
                 step_name: row.get(0)?,
@@ -1293,7 +1300,8 @@ impl<'a> WorkflowManager<'a> {
                AND status = 'completed' \
                AND started_at >= datetime('now', '-' || ?2 || ' days') \
                AND (COALESCE(total_input_tokens, 0) > 0 OR COALESCE(total_output_tokens, 0) > 0 OR COALESCE(total_duration_ms, 0) > 0) \
-             ORDER BY started_at DESC",
+             ORDER BY started_at DESC \
+             LIMIT 10000",
         )?;
         let rows = stmt.query_map(params![workflow_name, days], |row| {
             Ok(WorkflowRunMetricsRow {

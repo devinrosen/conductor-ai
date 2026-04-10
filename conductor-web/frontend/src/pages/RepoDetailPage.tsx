@@ -223,20 +223,6 @@ export function RepoDetailPage() {
     [],
   );
 
-  // Build ticket dependency tree using API-provided deps (all source types)
-  const ticketTree = useMemo(
-    () =>
-      tickets
-        ? buildTicketTree(
-            tickets,
-            worktrees ?? undefined,
-            prs ?? undefined,
-            Object.keys(ticketDependencies).length > 0 ? ticketDependencies : undefined,
-          )
-        : null,
-    [tickets, worktrees, prs, ticketDependencies],
-  );
-
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display
   const ticketSourceIdMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -290,6 +276,20 @@ export function RepoDetailPage() {
     return m;
   }, [worktrees, workflowRunByWorktreeId, tickets]);
 
+  // Build ticket dependency tree using API-provided deps (all source types)
+  const ticketTree = useMemo(
+    () =>
+      tickets
+        ? buildTicketTree(
+            tickets,
+            worktrees ?? undefined,
+            prs ?? undefined,
+            Object.keys(ticketDependencies).length > 0 ? ticketDependencies : undefined,
+          )
+        : null,
+    [tickets, worktrees, prs, ticketDependencies],
+  );
+
   async function handleStartTicketToPr(ticket: Ticket) {
     if (startingWorkflow) return;
     setStartingWorkflow(ticket.id);
@@ -342,12 +342,17 @@ export function RepoDetailPage() {
     }
   }
 
+  const [resumingWorkflowId, setResumingWorkflowId] = useState<string | null>(null);
+
   async function handleResumeWorkflow(runId: string) {
+    setResumingWorkflowId(runId);
     try {
       await api.resumeWorkflow(runId);
       refetchWorkflowRuns();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Resume failed");
+    } finally {
+      setResumingWorkflowId(null);
     }
   }
 
@@ -467,6 +472,8 @@ export function RepoDetailPage() {
           workflowRun={wfRun ?? null}
           onStartWorkflow={handleStartTicketToPr}
           onResumeWorkflow={handleResumeWorkflow}
+          isStarting={startingWorkflow === t.id}
+          isResuming={resumingWorkflowId === wfRun?.id}
           showPipeline={hasVantage}
           hideStateAndLabels={allVantage}
           hasChildren={hasChildren}
@@ -760,10 +767,10 @@ export function RepoDetailPage() {
                 <tr>
                   <th className="px-4 py-2">Branch</th>
                   <th className="px-4 py-2">Ticket</th>
-                  <th className="px-4 py-2">Status</th>
                   <th className="px-4 py-2">Workflow</th>
-                  <th className="px-4 py-2">Created</th>
-                  <th className="px-4 py-2"></th>
+                  <th className="px-3 py-2">Duration</th>
+                  <th className="w-6"></th>
+                  <th className="w-6"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -777,6 +784,8 @@ export function RepoDetailPage() {
                     selected={index === selectedIndex}
                     index={index}
                     ticketSourceId={wt.ticket_id ? ticketSourceIdMap.get(wt.ticket_id) : null}
+                    isMerged={prs?.some((pr) => pr.head_ref_name === wt.branch && pr.state === "MERGED") ?? false}
+                    isResuming={resumingWorkflowId === workflowRunByWorktreeId.get(wt.id)?.id}
                   />
                 ))}
               </tbody>
@@ -841,7 +850,7 @@ export function RepoDetailPage() {
                     {!allVantage && <ColumnHeader label="Labels" columnKey="labels" sortDirection={null} onSort={() => {}} filterOptions={ticketFilterOptions.labels} activeFilters={ticketColumnFilters.labels} onFilter={handleTicketFilter} />}
                     <ColumnHeader label="Assignee" columnKey="assignee" sortDirection={ticketSortDirFor("assignee")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.assignee} activeFilters={ticketColumnFilters.assignee} onFilter={handleTicketFilter} />
                     {hasVantage && <ColumnHeader label="Pipeline" columnKey="pipeline" sortDirection={ticketSortDirFor("pipeline")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.pipeline} activeFilters={ticketColumnFilters.pipeline} onFilter={handleTicketFilter} />}
-                    <th className="px-4 py-2 text-xs font-medium uppercase">Agent</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase">Workflow</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">

@@ -1,5 +1,6 @@
 import type { Ticket, TicketAgentTotals, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
+import { Tooltip } from "../shared/Tooltip";
 import { formatTicketTotalsFull } from "../../utils/agentStats";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 import { formatWorkflowProgress } from "../../utils/workflowProgress";
@@ -19,6 +20,8 @@ interface TicketRowProps {
   workflowRun?: WorkflowRun | null;
   onStartWorkflow?: (ticket: Ticket) => void;
   onResumeWorkflow?: (runId: string) => void;
+  isStarting?: boolean;
+  isResuming?: boolean;
   showPipeline?: boolean;
   hideStateAndLabels?: boolean;
   hasChildren?: boolean;
@@ -64,6 +67,8 @@ export function TicketRow({
   workflowRun,
   onStartWorkflow,
   onResumeWorkflow,
+  isStarting = false,
+  isResuming = false,
   showPipeline = false,
   hideStateAndLabels = false,
   hasChildren = false,
@@ -73,7 +78,7 @@ export function TicketRow({
 }: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
   const isActive = workflowStatus === "running" || workflowStatus === "pending" || workflowStatus === "waiting";
-  const progress = workflowRun ? formatWorkflowProgress(workflowRun) : null;
+  const progressText = workflowRun ? formatWorkflowProgress(workflowRun) : null;
   const canStart =
     (!blocked || unlocked) &&
     !isActive &&
@@ -110,6 +115,8 @@ export function TicketRow({
                 onToggleCollapse(ticket.source_id);
               }}
               className="text-gray-400 hover:text-gray-600 text-[10px] w-3 text-center"
+              aria-label={collapsed ? "Expand children" : "Collapse children"}
+              aria-expanded={!collapsed}
             >
               {collapsed ? "▶" : "▼"}
             </button>
@@ -122,11 +129,11 @@ export function TicketRow({
             </span>
           )}
           {blocked && unlocked && (
-            <span title="Unlocked — parent PR approved">
-              <svg className="w-3 h-3 text-emerald-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5a3 3 0 016 0v.5a.75.75 0 001.5 0v-.5A4.5 4.5 0 0010 1z" />
+            <Tooltip content="Unlocked — parent PR approved">
+              <svg className="w-3 h-3 text-green-500/60 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
               </svg>
-            </span>
+            </Tooltip>
           )}
           <span className={depth > 0 ? "text-indigo-400" : "text-indigo-600"}>{ticket.source_id}</span>
         </span>
@@ -170,42 +177,74 @@ export function TicketRow({
           <PipelineIndicator rawJson={ticket.raw_json} />
         </td>
       )}
-      <td className="px-3 py-1.5 text-xs whitespace-nowrap">
-        {workflowStatus === "failed" ? (
-          <span className="inline-flex items-center gap-1.5 text-red-600">
+      <td className="px-3 py-1.5 text-xs">
+        {workflowStatus === "completed" ? (
+          <span className="inline-flex items-center gap-1.5 text-green-500">
             <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+            </svg>
+            PR Approved by 🚂
+          </span>
+        ) : workflowStatus === "failed" ? (
+          <div className="flex items-start gap-1.5">
+            <svg className="w-3.5 h-3.5 shrink-0 text-red-500 mt-0.5" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
             </svg>
-            <span>
-              Failed{progress && <span className="text-red-400"> &middot; {progress}</span>}
+            <div className="min-w-0">
+              <span className="text-gray-700 dark:text-gray-200 block">Failed</span>
+              {progressText && (
+                <span className="text-[11px] text-gray-500 block">{progressText}</span>
+              )}
               {workflowRun?.result_summary && (
                 <span className="block text-[10px] text-red-400 mt-0.5 whitespace-normal max-w-[200px]" title={workflowRun.result_summary}>
                   {workflowRun.result_summary.length > 60 ? workflowRun.result_summary.slice(0, 60) + "\u2026" : workflowRun.result_summary}
                 </span>
               )}
-            </span>
+            </div>
             {onResumeWorkflow && workflowRun && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onResumeWorkflow(workflowRun.id);
-                }}
-                className="ml-1 px-1.5 py-0.5 text-[10px] rounded bg-red-100 text-red-700 hover:bg-red-200 active:scale-95 transition-transform shrink-0"
-                title="Resume from failed step"
-              >
-                Resume
-              </button>
+              isResuming ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-amber-500 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <Tooltip content="Resume from failed step">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onResumeWorkflow(workflowRun.id);
+                    }}
+                    className="mt-0.5 text-amber-600 hover:text-amber-800 shrink-0"
+                    aria-label="Resume from failed step"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm-10.624-2.85a5.5 5.5 0 019.201-2.465l.312.31H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.534a.75.75 0 00-1.5 0v2.033l-.311-.311A7 7 0 002.63 8.394a.75.75 0 001.449.39z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </Tooltip>
+              )
             )}
-          </span>
+          </div>
         ) : isActive ? (
-          <span className="inline-flex items-center gap-1.5 text-amber-600">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+          <div className="flex items-start gap-1.5">
+            <span className="relative flex h-2 w-2 shrink-0 mt-1">
+              <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
             </span>
-            <span>
-              Running{progress && <span className="text-amber-400"> &middot; {progress}</span>}
-            </span>
+            <div className="min-w-0">
+              <span className="text-gray-700 dark:text-gray-200 block">Running</span>
+              {progressText && (
+                <span className="text-[11px] text-gray-500 block">{progressText}</span>
+              )}
+            </div>
+          </div>
+        ) : isStarting ? (
+          <span className="inline-flex items-center gap-1.5 text-indigo-400 text-xs">
+            <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Starting...
           </span>
         ) : canStart ? (
           <button
