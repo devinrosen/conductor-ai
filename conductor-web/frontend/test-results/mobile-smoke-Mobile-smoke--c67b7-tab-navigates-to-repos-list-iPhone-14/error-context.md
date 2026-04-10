@@ -1,0 +1,155 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary:
+    - generic:
+      - generic:
+        - img "Station clock"
+        - img "Conductor"
+        - heading "Conductor" [level=1]
+      - button "Close menu": ✕
+    - navigation:
+      - link "Home":
+        - /url: /
+      - link "Repos":
+        - /url: /repos
+      - link "Workflows":
+        - /url: /workflows
+      - link "Tickets":
+        - /url: /tickets
+      - generic: Repos
+      - link "conductor-ai":
+        - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+        - generic: conductor-ai
+      - link "docs":
+        - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+        - generic: docs
+      - link "docs-pipeline":
+        - /url: /repos/01KN32V0BE96ABQ37H6YWTA00S
+        - generic: docs-pipeline
+      - link "global-sdlc":
+        - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+        - generic: global-sdlc
+      - link "video-client":
+        - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+        - generic: video-client
+    - generic:
+      - link "Settings":
+        - /url: /settings
+      - link "Getting Started 🚂":
+        - /url: /getting-started
+        - text: Getting Started
+        - generic: 🚂
+      - generic:
+        - generic: ⌘K command palette
+        - generic: "? shortcuts"
+  - main [ref=e4]:
+    - generic [ref=e5]:
+      - button "Open menu" [ref=e6]: ☰
+      - generic [ref=e7]: Conductor
+      - button "Notifications" [ref=e10]:
+        - img [ref=e11]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - heading "Home" [level=2] [ref=e17]
+          - generic [ref=e18]:
+            - generic [ref=e19]: "5"
+            - generic [ref=e21]: R
+            - generic [ref=e22]: E
+            - generic [ref=e23]: P
+            - generic [ref=e24]: O
+            - generic [ref=e25]: S
+            - generic [ref=e28]: "0"
+            - generic [ref=e30]: T
+            - generic [ref=e31]: R
+            - generic [ref=e32]: A
+            - generic [ref=e33]: C
+            - generic [ref=e34]: K
+            - generic [ref=e35]: S
+            - generic [ref=e38]: "0"
+            - generic [ref=e40]: A
+            - generic [ref=e41]: G
+            - generic [ref=e42]: E
+            - generic [ref=e43]: "N"
+            - generic [ref=e44]: T
+            - generic [ref=e45]: S
+        - generic [ref=e51]:
+          - button "Discover" [ref=e52]
+          - button "Register Repo" [ref=e53]
+      - generic [ref=e54]:
+        - generic [ref=e55]:
+          - heading "Active Worktrees(0)" [level=3] [ref=e58]:
+            - text: Active Worktrees
+            - generic [ref=e59]: (0)
+          - generic [ref=e60]: No platforms active. Create a worktree from a repo to lay some track.
+        - generic [ref=e67]:
+          - heading "Stations(5)" [level=3] [ref=e70]:
+            - text: Stations
+            - generic [ref=e71]: (5)
+          - generic [ref=e72]:
+            - link "conductor-ai https://github.com/devinrosen/conductor-ai.git 0 worktrees Created 13 days ago" [ref=e73]:
+              - /url: /repos/01KM3Q6AK8KCQ9KC15N9TVYAN0
+              - generic [ref=e75]:
+                - heading "conductor-ai" [level=3] [ref=e76]
+                - paragraph [ref=e77]: https://github.com/devinrosen/conductor-ai.git
+                - generic [ref=e78]:
+                  - generic [ref=e79]: 0 worktrees
+                  - generic [ref=e81]:
+                    - text: Created
+                    - time [ref=e82]: 13 days ago
+            - link "docs https://github.com/LivelyVideo/docs 0 worktrees Created 9 days ago" [ref=e83]:
+              - /url: /repos/01KME7ZTD00SEA2M2PZHXWH35W
+              - generic [ref=e85]:
+                - heading "docs" [level=3] [ref=e86]
+                - paragraph [ref=e87]: https://github.com/LivelyVideo/docs
+                - generic [ref=e88]:
+                  - generic [ref=e89]: 0 worktrees
+                  - generic [ref=e91]:
+                    - text: Created
+                    - time [ref=e92]: 9 days ago
+            - link "docs-pipeline https://github.com/LivelyVideo/docs-pipeline 0 worktrees Created 19 hours ago" [ref=e93]:
+              - /url: /repos/01KN32V0BE96ABQ37H6YWTA00S
+              - generic [ref=e95]:
+                - heading "docs-pipeline" [level=3] [ref=e96]
+                - paragraph [ref=e97]: https://github.com/LivelyVideo/docs-pipeline
+                - generic [ref=e98]:
+                  - generic [ref=e99]: 0 worktrees
+                  - generic [ref=e101]:
+                    - text: Created
+                    - time [ref=e102]: 19 hours ago
+            - link "global-sdlc https://github.com/LivelyVideo/global-sdlc 0 worktrees Created 9 days ago" [ref=e103]:
+              - /url: /repos/01KME7ZTCX9KCXEA23BDF9E4YQ
+              - generic [ref=e105]:
+                - heading "global-sdlc" [level=3] [ref=e106]
+                - paragraph [ref=e107]: https://github.com/LivelyVideo/global-sdlc
+                - generic [ref=e108]:
+                  - generic [ref=e109]: 0 worktrees
+                  - generic [ref=e111]:
+                    - text: Created
+                    - time [ref=e112]: 9 days ago
+            - link "video-client https://github.com/LivelyVideo/video-client 0 worktrees Created 13 days ago" [ref=e113]:
+              - /url: /repos/01KM3W97YWMDXRSV0HXT52A6KV
+              - generic [ref=e115]:
+                - heading "video-client" [level=3] [ref=e116]
+                - paragraph [ref=e117]: https://github.com/LivelyVideo/video-client
+                - generic [ref=e118]:
+                  - generic [ref=e119]: 0 worktrees
+                  - generic [ref=e121]:
+                    - text: Created
+                    - time [ref=e122]: 13 days ago
+  - generic [ref=e123]:
+    - link "Home" [ref=e124]:
+      - /url: /
+      - img [ref=e125]
+      - text: Home
+    - link "Repos" [ref=e127]:
+      - /url: /repos
+      - img [ref=e128]
+      - text: Repos
+    - link "Workflows" [ref=e130]:
+      - /url: /workflows
+      - img [ref=e131]
+      - text: Workflows
+```

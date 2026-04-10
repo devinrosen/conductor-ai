@@ -8,6 +8,7 @@ interface BaseModalProps {
   children: ReactNode;
   className?: string;
   preventCloseOnBackdrop?: boolean;
+  titleId?: string;
 }
 
 export function BaseModal({
@@ -16,9 +17,11 @@ export function BaseModal({
   children,
   className = "bg-white rounded-lg shadow-lg max-w-lg w-full mx-4 outline-none modal-panel",
   preventCloseOnBackdrop = false,
+  titleId,
 }: BaseModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const titleId = useId();
+  const generatedTitleId = useId();
+  const actualTitleId = titleId || generatedTitleId;
 
   useFocusTrap(dialogRef, open, onClose);
 
@@ -39,7 +42,7 @@ export function BaseModal({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={titleId}
+        aria-labelledby={actualTitleId}
         tabIndex={-1}
         className={className}
         onClick={(e) => e.stopPropagation()}
@@ -50,7 +53,3 @@ export function BaseModal({
   );
 }
 
-// Export the titleId hook for components that need to access the generated ID
-export function useModalTitleId() {
-  return useId();
-}

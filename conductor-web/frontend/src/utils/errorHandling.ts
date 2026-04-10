@@ -37,16 +37,10 @@ export function getErrorMessage(error: unknown, fallbackMessage: string): string
       }
     }
 
-    // Try to stringify if it looks like a structured error
+    // For structured errors, provide a generic fallback instead of raw JSON
     if (Object.keys(errorObj).length > 0) {
-      try {
-        const stringified = JSON.stringify(errorObj);
-        if (stringified !== "{}") {
-          return stringified;
-        }
-      } catch {
-        // Fall through to fallback
-      }
+      // Don't expose internal API structure to users
+      return fallbackMessage;
     }
   }
 

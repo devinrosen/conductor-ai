@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { BaseModal, useModalTitleId } from "./BaseModal";
+import { useEffect, useRef, useId } from "react";
+import { BaseModal } from "./BaseModal";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -19,7 +19,7 @@ export function ConfirmDialog({
   loading = false,
 }: ConfirmDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const titleId = useModalTitleId();
+  const titleId = useId();
 
   const handleClose = () => {
     if (!loading) onCancel();
@@ -35,6 +35,7 @@ export function ConfirmDialog({
     <BaseModal
       open={open}
       onClose={handleClose}
+      titleId={titleId}
       className="bg-white rounded-lg shadow-lg p-6 max-w-sm w-full mx-4 outline-none modal-panel"
       preventCloseOnBackdrop={loading}
     >

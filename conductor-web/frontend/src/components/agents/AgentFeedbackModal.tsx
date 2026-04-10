@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { BaseModal, useModalTitleId } from "../shared/BaseModal";
+import { useState, useEffect, useRef, useCallback, useId } from "react";
+import { BaseModal } from "../shared/BaseModal";
 import { api } from "../../api/client";
 import type { FeedbackRequest } from "../../api/types";
 
@@ -23,7 +23,7 @@ export function AgentFeedbackModal({
   const [error, setError] = useState<string | null>(null);
   const [remainingSecs, setRemainingSecs] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const titleId = useModalTitleId();
+  const titleId = useId();
 
   const handleDismiss = useCallback(async () => {
     if (!feedback) {
@@ -118,6 +118,7 @@ export function AgentFeedbackModal({
     <BaseModal
       open={open}
       onClose={handleDismiss}
+      titleId={titleId}
       className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4 outline-none modal-panel"
     >
       <div>

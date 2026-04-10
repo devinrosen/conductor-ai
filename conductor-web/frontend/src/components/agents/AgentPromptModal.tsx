@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
-import { BaseModal, useModalTitleId } from "../shared/BaseModal";
+import { useState, useEffect, useMemo, useId } from "react";
+import { BaseModal } from "../shared/BaseModal";
 import type { KnownModel } from "../../api/types";
 import { api } from "../../api/client";
 
@@ -44,7 +44,7 @@ export function AgentPromptModal({
   const [prompt, setPrompt] = useState(initialPrompt);
   const [useResume, setUseResume] = useState(!!resumeSessionId);
   const [models, setModels] = useState<KnownModel[]>([]);
-  const titleId = useModalTitleId();
+  const titleId = useId();
 
   useEffect(() => {
     setPrompt(initialPrompt);
@@ -70,6 +70,7 @@ export function AgentPromptModal({
     <BaseModal
       open={open}
       onClose={onCancel}
+      titleId={titleId}
       className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full mx-4 outline-none modal-panel"
     >
       <div>
