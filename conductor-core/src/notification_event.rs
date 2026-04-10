@@ -37,6 +37,9 @@ pub const ALL_EVENTS: &[(&str, &str, bool)] = &[
 const VALID_SYNTHETIC_EVENTS: &[&str] = &[
     "workflow_run.completed",
     "workflow_run.failed",
+    "workflow_run.stale",
+    "workflow_run.reaped",
+    "workflow_run.orphan_resumed",
     "agent_run.completed",
     "agent_run.failed",
     "gate.waiting",

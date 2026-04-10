@@ -356,7 +356,6 @@ export function RepoDetailPage() {
     }
   }
 
-
   async function handleSyncTickets() {
     setSyncing(true);
     setSyncResult(null);

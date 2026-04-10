@@ -54,6 +54,7 @@ pub type StepEstimates = HashMap<String, Estimate>;
 
 // ── Workflow-level estimation (v1) ───────────────────────────────────
 
+
 /// Compute the estimated total workflow duration in milliseconds.
 ///
 /// Blending strategy based on amount of historical data:
@@ -116,6 +117,7 @@ pub fn estimate_with_confidence(
         confidence,
     })
 }
+
 
 /// Compute estimated remaining milliseconds for an in-progress run.
 ///
@@ -240,6 +242,7 @@ pub fn live_remaining_estimate(
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+
 /// Compute the median of a slice of durations.
 fn median(values: &[i64]) -> Option<i64> {
     if values.is_empty() {
@@ -292,11 +295,13 @@ fn compute_confidence(n: usize, values: &[i64]) -> Confidence {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // ── v1 tests ─────────────────────────────────────────────────────
+
 
     #[test]
     fn test_median_odd() {
@@ -330,6 +335,7 @@ mod tests {
 
     #[test]
     fn test_estimate_few_runs_prefers_llm() {
+        // 1-2 runs: LLM preferred over historical
         assert_eq!(
             estimate_duration_ms(Some(600_000), &[900_000]),
             Some(600_000)
@@ -338,34 +344,40 @@ mod tests {
 
     #[test]
     fn test_estimate_few_runs_falls_back_to_historical() {
+        // 1-2 runs, no LLM: use historical median
         assert_eq!(estimate_duration_ms(None, &[900_000]), Some(900_000));
     }
 
     #[test]
     fn test_estimate_blend_3_runs() {
+        // 3-9 runs: 40% LLM + 60% historical median
         let llm = 600_000i64;
-        let hist = vec![800_000, 900_000, 1_000_000];
-        let expected = (0.4 * 600_000.0 + 0.6 * 900_000.0) as i64;
+        let hist = vec![800_000, 900_000, 1_000_000]; // median = 900_000
+        let expected = (0.4 * 600_000.0 + 0.6 * 900_000.0) as i64; // 780_000
         assert_eq!(estimate_duration_ms(Some(llm), &hist), Some(expected));
     }
 
     #[test]
     fn test_estimate_blend_no_llm() {
+        // 3-9 runs, no LLM: historical median only
         let hist = vec![800_000, 900_000, 1_000_000];
         assert_eq!(estimate_duration_ms(None, &hist), Some(900_000));
     }
 
     #[test]
     fn test_estimate_historical_only_10_plus() {
-        let hist: Vec<i64> = (1..=12).map(|i| i * 100_000).collect();
+        // 10+ runs: historical median, LLM ignored
+        let hist: Vec<i64> = (1..=12).map(|i| i * 100_000).collect(); // median ~650_000
         let result = estimate_duration_ms(Some(1), &hist);
         assert_eq!(result, median(&hist));
     }
 
     #[test]
     fn test_remaining_basic() {
+        // Use a start time 5 minutes ago
         let start = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
-        let remaining = estimated_remaining_ms(600_000, &start);
+        let remaining = estimated_remaining_ms(600_000, &start); // 10 min total
+        // Should be roughly 5 minutes remaining (300_000 ms), allow 2s tolerance
         assert!(
             remaining > 298_000 && remaining < 302_000,
             "got {remaining}"

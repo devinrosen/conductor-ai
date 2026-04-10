@@ -83,7 +83,6 @@ export function WorktreeRow({
       ? workflowRun.result_summary.slice(0, 80) + "\u2026"
       : workflowRun.result_summary
     : null;
-
   // Get the deepest active substep name from active_steps
   const activeStep = workflowRun?.active_steps?.find(
     (s) => s.status === "running" || s.status === "waiting",
