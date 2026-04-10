@@ -4,6 +4,41 @@ use std::time::Duration;
 use crate::config::HookConfig;
 use crate::notification_event::NotificationEvent;
 
+/// Result of matching an `on` pattern against an event name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnMatch {
+    /// No sub-pattern matched.
+    None,
+    /// Matched; fires for any workflow (root or child).
+    Any,
+    /// Matched via a `:root` suffix; fires only for root workflows.
+    RootOnly,
+}
+
+/// Match a comma-separated `on` pattern against `event_name`.
+///
+/// Each sub-pattern may have a `:root` suffix (e.g. `"workflow_run.completed:root"`).
+/// Returns [`OnMatch::RootOnly`] if the matching sub-pattern had `:root`,
+/// [`OnMatch::Any`] if it matched without `:root`, or [`OnMatch::None`] if no match.
+pub(crate) fn on_pattern_match(on: &str, event_name: &str) -> OnMatch {
+    for part in on.split(',') {
+        let part = part.trim();
+        if let Some(pat) = part.strip_suffix(":root") {
+            if glob_matches(pat, event_name) {
+                return OnMatch::RootOnly;
+            }
+        } else if glob_matches(part, event_name) {
+            return OnMatch::Any;
+        }
+    }
+    OnMatch::None
+}
+
+/// Convenience wrapper: returns `true` if `on` matches `event_name` (ignoring `:root`).
+pub fn on_pattern_matches(on: &str, event_name: &str) -> bool {
+    on_pattern_match(on, event_name) != OnMatch::None
+}
+
 /// Returns `true` if `pattern` matches `event_name` or `value`.
 ///
 /// Supported cases:
@@ -123,6 +158,31 @@ fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bo
     }
 
     true
+}
+
+/// Returns `true` if the event is a root workflow event (no parent), or is
+/// not a workflow event at all (non-workflow events always pass through).
+fn event_is_root_workflow(event: &NotificationEvent) -> bool {
+    match event {
+        NotificationEvent::WorkflowRunCompleted {
+            parent_workflow_run_id,
+            ..
+        }
+        | NotificationEvent::WorkflowRunFailed {
+            parent_workflow_run_id,
+            ..
+        }
+        | NotificationEvent::WorkflowRunCostSpike {
+            parent_workflow_run_id,
+            ..
+        }
+        | NotificationEvent::WorkflowRunDurationSpike {
+            parent_workflow_run_id,
+            ..
+        } => parent_workflow_run_id.is_none(),
+        // Non-workflow events are always considered "root" (no parent concept).
+        _ => true,
+    }
 }
 
 /// Execute a shell hook for `event`, enforcing the configured timeout.
@@ -302,7 +362,11 @@ impl HookRunner {
     pub fn run_test(&self, event: &NotificationEvent) -> Result<(), String> {
         let event_name = event.event_name();
         for hook in &self.hooks {
-            if !glob_matches(&hook.on, event_name) {
+            let m = on_pattern_match(&hook.on, event_name);
+            if m == OnMatch::None {
+                continue;
+            }
+            if m == OnMatch::RootOnly && !event_is_root_workflow(event) {
                 continue;
             }
             if !hook_event_passes_filters(hook, event) {
@@ -329,7 +393,11 @@ impl HookRunner {
     pub fn fire(&self, event: &NotificationEvent) {
         let event_name = event.event_name();
         for hook in &self.hooks {
-            if !glob_matches(&hook.on, event_name) {
+            let m = on_pattern_match(&hook.on, event_name);
+            if m == OnMatch::None {
+                continue;
+            }
+            if m == OnMatch::RootOnly && !event_is_root_workflow(event) {
                 continue;
             }
             if !hook_event_passes_filters(hook, event) {
@@ -404,6 +472,109 @@ mod tests {
         assert!(!glob_matches("feature/*", "main"));
         assert!(!glob_matches("feature/*", "fix/my-fix"));
         assert!(!glob_matches("feature/*", "feature"));
+    }
+
+    // ── on_pattern_matches (comma-separated) ──────────────────────────
+
+    #[test]
+    fn on_pattern_single_event_matches() {
+        assert!(on_pattern_matches("gate.waiting", "gate.waiting"));
+        assert!(!on_pattern_matches("gate.waiting", "gate.pending_too_long"));
+    }
+
+    #[test]
+    fn on_pattern_comma_separated_matches_any() {
+        assert!(on_pattern_matches(
+            "workflow_run.completed,gate.waiting",
+            "gate.waiting"
+        ));
+        assert!(on_pattern_matches(
+            "workflow_run.completed,gate.waiting",
+            "workflow_run.completed"
+        ));
+        assert!(!on_pattern_matches(
+            "workflow_run.completed,gate.waiting",
+            "agent_run.failed"
+        ));
+    }
+
+    #[test]
+    fn on_pattern_comma_with_spaces_trimmed() {
+        assert!(on_pattern_matches(
+            "workflow_run.completed , gate.waiting",
+            "gate.waiting"
+        ));
+    }
+
+    #[test]
+    fn on_pattern_comma_with_wildcard() {
+        assert!(on_pattern_matches(
+            "workflow_run.*,gate.waiting",
+            "workflow_run.failed"
+        ));
+        assert!(on_pattern_matches(
+            "workflow_run.*,gate.waiting",
+            "gate.waiting"
+        ));
+        assert!(!on_pattern_matches(
+            "workflow_run.*,gate.waiting",
+            "agent_run.completed"
+        ));
+    }
+
+    #[test]
+    fn on_pattern_empty_string_matches_nothing() {
+        assert!(!on_pattern_matches("", "gate.waiting"));
+    }
+
+    // ── on_pattern_match with :root suffix ──────────────────────────────
+
+    #[test]
+    fn on_pattern_root_suffix_returns_root_only() {
+        assert_eq!(
+            on_pattern_match("workflow_run.completed:root", "workflow_run.completed"),
+            OnMatch::RootOnly
+        );
+    }
+
+    #[test]
+    fn on_pattern_no_root_suffix_returns_any() {
+        assert_eq!(
+            on_pattern_match("workflow_run.completed", "workflow_run.completed"),
+            OnMatch::Any
+        );
+    }
+
+    #[test]
+    fn on_pattern_root_suffix_no_match_returns_none() {
+        assert_eq!(
+            on_pattern_match("workflow_run.completed:root", "gate.waiting"),
+            OnMatch::None
+        );
+    }
+
+    #[test]
+    fn on_pattern_comma_mixed_root_and_any() {
+        // "completed" is root-only, "gate.waiting" is any
+        let pat = "workflow_run.completed:root,gate.waiting";
+        assert_eq!(
+            on_pattern_match(pat, "workflow_run.completed"),
+            OnMatch::RootOnly
+        );
+        assert_eq!(on_pattern_match(pat, "gate.waiting"), OnMatch::Any);
+        assert_eq!(on_pattern_match(pat, "agent_run.failed"), OnMatch::None);
+    }
+
+    #[test]
+    fn on_pattern_wildcard_with_root() {
+        assert_eq!(
+            on_pattern_match("workflow_run.*:root", "workflow_run.completed"),
+            OnMatch::RootOnly
+        );
+        assert_eq!(
+            on_pattern_match("workflow_run.*:root", "gate.waiting"),
+            OnMatch::None
+        );
     }
 
     // ── resolve_env_var ──────────────────────────────────────────────────

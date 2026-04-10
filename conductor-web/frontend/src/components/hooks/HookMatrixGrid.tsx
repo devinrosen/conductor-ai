@@ -2,6 +2,7 @@ import { useRef, useEffect } from "react";
 import type { HookSummary, HookEvent } from "../../api/types";
 import { HookTypeIcon } from "./HookTypeIcon";
 import { WildcardBadge } from "./WildcardBadge";
+import { CellToggle, type CellMode } from "./CellToggle";
 
 /** Returns true when `pattern` is a wildcard that covers `eventName`. */
 function wildcardCovers(pattern: string, eventName: string): boolean {
@@ -13,20 +14,40 @@ function wildcardCovers(pattern: string, eventName: string): boolean {
   return false;
 }
 
-interface CellState {
-  /** Hook's current on-pattern after applying draft overrides */
-  on: string;
-  /** Exact match for this event */
-  checked: boolean;
-  /** Covered by a wildcard (read-only display) */
-  wildcard: boolean;
+/** Split comma-separated on-pattern into individual patterns, trimmed. */
+function splitOn(on: string): string[] {
+  return on
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
-function cellState(hook: HookSummary, draft: Map<number, string>, eventName: string): CellState {
+/**
+ * Derive the cell mode for a given (hook, event) pair.
+ *
+ * Checks both `event:root` and plain `event` sub-patterns, plus wildcard coverage.
+ */
+function cellMode(
+  hook: HookSummary,
+  draft: Map<number, string>,
+  eventName: string,
+): { on: string; mode: CellMode; wildcard: boolean } {
   const on = draft.get(hook.index) ?? hook.on;
-  const checked = on === eventName;
-  const wildcard = !checked && wildcardCovers(on, eventName);
-  return { on, checked, wildcard };
+  const parts = splitOn(on);
+
+  // Explicit :root match
+  if (parts.includes(`${eventName}:root`)) {
+    return { on, mode: "root", wildcard: false };
+  }
+  // Explicit exact match
+  if (parts.includes(eventName)) {
+    return { on, mode: "any", wildcard: false };
+  }
+  // Wildcard coverage (read-only)
+  if (parts.some((p) => wildcardCovers(p.replace(/:root$/, ""), eventName))) {
+    return { on, mode: "off", wildcard: true };
+  }
+  return { on, mode: "off", wildcard: false };
 }
 
 interface HookMatrixGridProps {
@@ -34,7 +55,7 @@ interface HookMatrixGridProps {
   events: HookEvent[];
   draft: Map<number, string>;
   inFlight: Set<number>;
-  onCellToggle: (hookIndex: number, eventName: string, currentOn: string) => void;
+  onCellChange: (hookIndex: number, eventName: string, mode: CellMode, currentOn: string) => void;
   onColumnAll: (hookIndex: number, currentOn: string) => void;
 }
 
@@ -75,7 +96,7 @@ export function HookMatrixGrid({
   events,
   draft,
   inFlight,
-  onCellToggle,
+  onCellChange,
   onColumnAll,
 }: HookMatrixGridProps) {
   if (hooks.length === 0) return null;
@@ -86,28 +107,29 @@ export function HookMatrixGrid({
         <thead>
           <tr>
             {/* top-left corner cell */}
-            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200 min-w-[160px]">
+            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600 min-w-[160px]">
               Event
             </th>
             {hooks.map((hook) => {
               const on = draft.get(hook.index) ?? hook.on;
-              const isWildcard = on.includes("*");
-              const allChecked = on === "*";
+              const parts = splitOn(on);
+              const isWildcard = parts.some((p) => p.replace(/:root$/, "").includes("*"));
+              const allChecked = parts.includes("*");
               const isPartialWildcard = isWildcard && !allChecked;
 
               return (
                 <th
                   key={hook.index}
-                  className="px-2 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200 max-w-[120px]"
+                  className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200 dark:border-gray-600 min-w-[100px] max-w-[160px]"
                 >
-                  <div className="flex flex-col items-center gap-1">
-                    <div className="flex items-center gap-1">
+                  <div className="flex flex-col items-center gap-1.5">
+                    <div
+                      className="flex items-center gap-1.5"
+                      title={hook.command ?? ""}
+                    >
                       <HookTypeIcon kind={hook.kind} />
-                      <span
-                        className="font-mono truncate max-w-[80px] inline-block"
-                        title={hook.command ?? ""}
-                      >
-                        {hook.command ?? "—"}
+                      <span className="font-mono truncate max-w-[130px] inline-block">
+                        {hook.label || "—"}
                       </span>
                     </div>
                     <TriCheckbox
@@ -127,15 +149,18 @@ export function HookMatrixGrid({
             })}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
+        <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
           {events.map((event, rowIdx) => (
-            <tr key={event.name} className={rowIdx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-              <td className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap">
+            <tr
+              key={event.name}
+              className={rowIdx % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50 dark:bg-gray-800/50"}
+            >
+              <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 <div>{event.label}</div>
-                <div className="font-mono text-gray-400">{event.name}</div>
+                <div className="font-mono text-gray-400 dark:text-gray-500">{event.name}</div>
               </td>
               {hooks.map((hook) => {
-                const cell = cellState(hook, draft, event.name);
+                const cell = cellMode(hook, draft, event.name);
                 return (
                   <td key={hook.index} className="px-2 py-2 text-center">
                     {cell.wildcard ? (
@@ -143,14 +168,12 @@ export function HookMatrixGrid({
                         <WildcardBadge pattern={cell.on} />
                       </div>
                     ) : (
-                      <TriCheckbox
-                        checked={cell.checked}
+                      <CellToggle
+                        mode={cell.mode}
+                        isWorkflow={event.is_workflow}
                         disabled={inFlight.has(hook.index)}
-                        onChange={() => onCellToggle(hook.index, event.name, cell.on)}
-                        title={
-                          cell.checked
-                            ? `Unset — hook currently fires on "${cell.on}"`
-                            : `Set hook to fire on "${event.name}"`
+                        onChange={(mode) =>
+                          onCellChange(hook.index, event.name, mode, cell.on)
                         }
                       />
                     )}
@@ -165,7 +188,7 @@ export function HookMatrixGrid({
       <p className="mt-2 text-xs text-gray-400">
         Wildcard badges indicate the hook fires on all matching events via a glob pattern.
         Edit the pattern directly in{" "}
-        <code className="bg-gray-100 px-1 py-0.5 rounded">~/.conductor/config.toml</code>{" "}
+        <code className="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded">~/.conductor/config.toml</code>{" "}
         to use threshold-based events (cost spike, duration spike).
       </p>
     </div>

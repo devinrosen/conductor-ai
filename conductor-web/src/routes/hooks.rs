@@ -4,7 +4,7 @@ use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use conductor_core::config::{save_config, HookConfig};
+use conductor_core::config::{hooks_dir, save_config, HookConfig};
 use conductor_core::notification_event::{NotificationEvent, ALL_EVENTS};
 use conductor_core::notification_hooks::HookRunner;
 
@@ -21,6 +21,8 @@ pub struct HookSummary {
     pub on: String,
     /// `"shell"` when a `run` command is configured, `"http"` otherwise.
     pub kind: &'static str,
+    /// Short display name: filename (for file-path commands) or truncated command/URL.
+    pub label: String,
     /// First 80 characters of `run` (shell) or `url` (HTTP), with `…` appended if truncated.
     pub command: Option<String>,
     /// `true` when `on` contains a wildcard `*` character (e.g. `"*"` or `"workflow_run.*"`).
@@ -45,23 +47,62 @@ pub struct PatchHookOnRequest {
 pub struct HookEventEntry {
     pub name: &'static str,
     pub label: &'static str,
+    /// `true` for workflow events that support the `:root` modifier.
+    pub is_workflow: bool,
 }
 
 fn hook_to_summary(index: usize, hook: &HookConfig) -> HookSummary {
     let kind = if hook.run.is_some() { "shell" } else { "http" };
-    let command = hook
-        .run
-        .as_deref()
-        .or(hook.url.as_deref())
-        .map(truncate_command);
+    let raw = hook.run.as_deref().or(hook.url.as_deref());
+    let label = raw.map(extract_label).unwrap_or_default();
+    let command = raw.map(truncate_command);
     let on = hook.on.clone();
-    let is_wildcard = on.contains('*');
+    let is_wildcard = on.split(',').any(|p| p.trim().contains('*'));
     HookSummary {
         index,
         on,
         kind,
+        label,
         command,
         is_wildcard,
+    }
+}
+
+/// Extract a short display label from a command or URL string.
+///
+/// - File-like paths (`/foo/bar/notify.sh`, `~/.conductor/hooks/slack.py`) → filename (`notify.sh`, `slack.py`)
+/// - URLs (`https://hooks.example.com/conductor`) → hostname + first path segment
+/// - Inline commands (`echo hello && curl ...`) → first 30 chars
+fn extract_label(s: &str) -> String {
+    // URL: extract hostname
+    if s.starts_with("http://") || s.starts_with("https://") {
+        if let Some(after_scheme) = s.split("://").nth(1) {
+            let host_and_path = after_scheme
+                .split('/')
+                .take(2)
+                .collect::<Vec<_>>()
+                .join("/");
+            return truncate_label(&host_and_path);
+        }
+    }
+    // File path: extract filename
+    if let Some(filename) = std::path::Path::new(s).file_name() {
+        let name = filename.to_string_lossy();
+        if name.contains('.') || s.contains('/') {
+            return name.to_string();
+        }
+    }
+    // Inline command: truncate
+    truncate_label(s)
+}
+
+fn truncate_label(s: &str) -> String {
+    let max = 30;
+    if s.chars().count() > max {
+        let boundary = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+        format!("{}…", &s[..boundary])
+    } else {
+        s.to_string()
     }
 }
 
@@ -75,7 +116,61 @@ fn truncate_command(s: &str) -> String {
     }
 }
 
+/// Scan `~/.conductor/hooks/` for script files and add any that aren't already
+/// referenced by an existing `[[notify.hooks]]` entry. Returns `true` if new
+/// hooks were added (caller should save config).
+fn discover_hook_scripts(hooks: &mut Vec<HookConfig>) -> bool {
+    let dir = hooks_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return false, // directory doesn't exist yet — nothing to discover
+    };
+
+    let known_runs: std::collections::HashSet<String> = hooks
+        .iter()
+        .filter_map(|h| h.run.as_ref())
+        .cloned()
+        .collect();
+
+    let mut added = false;
+    let mut scripts: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let path = e.path();
+            let is_file = path.is_file();
+            let has_ext = matches!(
+                path.extension().and_then(|s| s.to_str()),
+                Some("sh" | "py" | "rb" | "js" | "ts" | "bash" | "zsh" | "fish")
+            );
+            is_file && has_ext
+        })
+        .collect();
+    scripts.sort_by_key(|e| e.file_name());
+
+    for entry in scripts {
+        let path = entry.path();
+        let path_str = path.to_string_lossy().to_string();
+        // Also check by filename in case the run field uses a relative path
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let already_registered = known_runs
+            .iter()
+            .any(|r| r == &path_str || r.ends_with(&format!("/{file_name}")));
+        if !already_registered {
+            hooks.push(HookConfig {
+                on: String::new(),
+                run: Some(path_str),
+                ..Default::default()
+            });
+            added = true;
+        }
+    }
+    added
+}
+
 /// `GET /api/config/hooks` — return all configured notification hooks.
+///
+/// Also discovers script files in `~/.conductor/hooks/` and auto-registers
+/// any that aren't already referenced by an existing hook entry.
 #[utoipa::path(
     get,
     path = "/api/config/hooks",
@@ -85,6 +180,22 @@ fn truncate_command(s: &str) -> String {
     tag = "hooks",
 )]
 pub async fn list_hooks(State(state): State<AppState>) -> Result<Json<Vec<HookSummary>>, ApiError> {
+    // Discover hook scripts from ~/.conductor/hooks/ and auto-register new ones.
+    let needs_save = {
+        let mut config = state.config.write().await;
+        let added = discover_hook_scripts(&mut config.notify.hooks);
+        if added {
+            let snapshot = config.clone();
+            drop(config);
+            Some(snapshot)
+        } else {
+            None
+        }
+    };
+    if let Some(snapshot) = needs_save {
+        save_config(&snapshot)?;
+    }
+
     let config = state.config.read().await;
     let summaries = config
         .notify
@@ -152,7 +263,11 @@ pub async fn test_hook(
 pub async fn list_hook_events() -> Json<Vec<HookEventEntry>> {
     let events = ALL_EVENTS
         .iter()
-        .map(|(name, label)| HookEventEntry { name, label })
+        .map(|(name, label, is_workflow)| HookEventEntry {
+            name,
+            label,
+            is_workflow: *is_workflow,
+        })
         .collect();
     Json(events)
 }
