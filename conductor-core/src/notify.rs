@@ -853,6 +853,154 @@ pub fn detect_agent_terminal_transitions<'a>(
     transitions
 }
 
+/// Fire a notification when a workflow step has been running longer than the
+/// configured threshold (stale watchdog).
+///
+/// Uses `(run_id, "workflow_stale")` as the dedup key so each stale run fires
+/// at most one notification per process lifetime.
+pub fn fire_stale_workflow_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    run_id: &str,
+    workflow_name: &str,
+    target_label: Option<&str>,
+    step_name: &str,
+    running_minutes: i64,
+) {
+    let Some(wf) = &config.workflows else {
+        return;
+    };
+    if !config.enabled || !wf.on_stale {
+        return;
+    }
+
+    let title = "Conductor \u{2014} Workflow Stale";
+    let body = match target_label {
+        Some(label) => format!(
+            "{workflow_name} on {label}: step \"{step_name}\" running for {running_minutes}m with no progress"
+        ),
+        None => format!(
+            "{workflow_name}: step \"{step_name}\" running for {running_minutes}m with no progress"
+        ),
+    };
+
+    dispatch_notification(
+        conn,
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: "workflow_stale",
+            notification: &CreateNotification {
+                kind: "workflow_stale",
+                title,
+                body: &body,
+                severity: NotificationSeverity::Warning,
+                entity_id: Some(run_id),
+                entity_type: Some("workflow_run"),
+            },
+            hooks: &[],
+            event: None,
+        },
+    );
+}
+
+/// Fire a notification when orphaned/stuck workflow runs are auto-resumed on
+/// startup or during periodic recovery.
+pub fn fire_orphan_resumed_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    run_ids: &[String],
+) {
+    let Some(wf) = &config.workflows else {
+        return;
+    };
+    if !config.enabled || !wf.on_stale {
+        return;
+    }
+    if run_ids.is_empty() {
+        return;
+    }
+
+    // Use a synthetic dedup key so we don't spam on every poll tick.
+    // One notification per batch of resumed runs.
+    let dedup_key = format!("orphan_resumed_{}", run_ids.first().unwrap());
+
+    let n = run_ids.len();
+    let title = "Conductor \u{2014} Orphaned Workflows Recovered";
+    let body = if n == 1 {
+        "1 stuck workflow run was automatically resumed".to_string()
+    } else {
+        format!("{n} stuck workflow runs were automatically resumed")
+    };
+
+    dispatch_notification(
+        conn,
+        &DispatchParams {
+            dedup_entity_id: &dedup_key,
+            dedup_event_type: "workflow_orphan_resumed",
+            notification: &CreateNotification {
+                kind: "workflow_orphan_resumed",
+                title,
+                body: &body,
+                severity: NotificationSeverity::Warning,
+                entity_id: None,
+                entity_type: None,
+            },
+            hooks: &[],
+            event: None,
+        },
+    );
+}
+
+/// Fire a notification when a stale workflow run's agent was confirmed dead
+/// and the run was marked as failed (and optionally auto-restarted).
+pub fn fire_stale_reaped_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    run_id: &str,
+    workflow_name: &str,
+    target_label: Option<&str>,
+    step_name: &str,
+    auto_restarted: bool,
+) {
+    let Some(wf) = &config.workflows else {
+        return;
+    };
+    if !config.enabled || !wf.on_stale {
+        return;
+    }
+
+    let action = if auto_restarted {
+        "marked as failed and auto-restarted"
+    } else {
+        "marked as failed"
+    };
+    let title = "Conductor \u{2014} Dead Workflow Detected";
+    let body = match target_label {
+        Some(label) => format!(
+            "{workflow_name} on {label}: agent for step \"{step_name}\" was dead — {action}"
+        ),
+        None => format!("{workflow_name}: agent for step \"{step_name}\" was dead — {action}"),
+    };
+
+    dispatch_notification(
+        conn,
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: "workflow_stale_reaped",
+            notification: &CreateNotification {
+                kind: "workflow_stale_reaped",
+                title,
+                body: &body,
+                severity: NotificationSeverity::Warning,
+                entity_id: Some(run_id),
+                entity_type: Some("workflow_run"),
+            },
+            hooks: &[],
+            event: None,
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,6 +1016,7 @@ mod tests {
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
+                on_stale: true,
             }),
             slack: SlackConfig::default(),
             web_url: None,
@@ -888,6 +1037,7 @@ mod tests {
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
+                on_stale: true,
             }),
             slack: SlackConfig::default(),
             web_url: Some(web_url.to_string()),

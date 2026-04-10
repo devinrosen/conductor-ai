@@ -221,7 +221,6 @@ impl<'a> WorkflowManager<'a> {
                   WHERE wrs2.workflow_run_id = wr.id) AS last_step_ended \
                FROM workflow_runs wr \
                WHERE wr.status = 'running' \
-                 AND wr.parent_workflow_run_id IS NULL \
                  AND NOT EXISTS ( \
                    SELECT 1 FROM workflow_run_steps wrs \
                    WHERE wrs.workflow_run_id = wr.id \

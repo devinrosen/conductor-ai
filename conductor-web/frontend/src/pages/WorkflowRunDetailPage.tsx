@@ -9,6 +9,7 @@ import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
 import { formatDuration, liveElapsedMs } from "../utils/agentStats";
 import { StepDetailPanel } from "../components/workflows/StepDetailPanel";
 import { StatusBadge } from "../components/shared/StatusBadge";
+import { getWorkflowDisplayName } from "../utils/workflow";
 
 function StepStatusIcon({ status }: { status: string }) {
   if (status === "completed") {
@@ -266,13 +267,13 @@ export function WorkflowRunDetailPage() {
         { label: "Home", href: "/" },
         { label: run.target_label?.split("/")[0] ?? "Repo", href: `/repos/${repoId}` },
         { label: run.target_label?.split("/").slice(1).join("/") ?? "Worktree", href: `/repos/${repoId}/worktrees/${worktreeId}` },
-        { label: run.workflow_title ?? run.workflow_name, current: true },
+        { label: getWorkflowDisplayName(run), current: true },
       ]} />
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3 flex-wrap">
-          <h2 className="text-xl font-bold text-gray-900">{run.workflow_title ?? run.workflow_name}</h2>
+          <h2 className="text-xl font-bold text-gray-900">{getWorkflowDisplayName(run)}</h2>
           <StatusBadge status={run.status} />
           {run.dry_run && (
             <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded border border-yellow-200">

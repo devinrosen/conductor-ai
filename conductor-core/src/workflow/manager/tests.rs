@@ -2,7 +2,7 @@ use super::*;
 use crate::agent::AgentManager;
 use crate::db::{sql_placeholders, sql_placeholders_from};
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::WorkflowRun;
+use crate::workflow::types::{TimeGranularity, WorkflowRun};
 use crate::workflow_dsl::GateType;
 
 fn setup_db() -> rusqlite::Connection {
@@ -2071,7 +2071,7 @@ fn test_token_aggregates_ordered_by_total_desc() {
 fn test_token_trend_empty_for_unknown_workflow() {
     let conn = setup_db();
     let result = WorkflowManager::new(&conn)
-        .get_workflow_token_trend("no-such-wf", "daily")
+        .get_workflow_token_trend("no-such-wf", TimeGranularity::Daily)
         .unwrap();
     assert!(result.is_empty());
 }
@@ -2089,7 +2089,9 @@ fn test_token_trend_excludes_non_completed_and_null_token_runs() {
     mgr.update_workflow_status(&no_tokens.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
-    let result = mgr.get_workflow_token_trend("trend-wf", "daily").unwrap();
+    let result = mgr
+        .get_workflow_token_trend("trend-wf", TimeGranularity::Daily)
+        .unwrap();
     assert!(result.is_empty());
 }
 
@@ -2115,7 +2117,7 @@ fn test_token_trend_daily_granularity() {
     .unwrap();
 
     let result = WorkflowManager::new(&conn)
-        .get_workflow_token_trend("trend-wf", "daily")
+        .get_workflow_token_trend("trend-wf", TimeGranularity::Daily)
         .unwrap();
 
     assert_eq!(result.len(), 1);
@@ -2145,7 +2147,7 @@ fn test_token_trend_daily_multiple_periods_ordered_desc() {
     .unwrap();
 
     let result = WorkflowManager::new(&conn)
-        .get_workflow_token_trend("trend-wf", "daily")
+        .get_workflow_token_trend("trend-wf", TimeGranularity::Daily)
         .unwrap();
 
     assert_eq!(result.len(), 2);
@@ -2176,7 +2178,7 @@ fn test_token_trend_weekly_granularity() {
     .unwrap();
 
     let result = WorkflowManager::new(&conn)
-        .get_workflow_token_trend("trend-wf", "weekly")
+        .get_workflow_token_trend("trend-wf", TimeGranularity::Weekly)
         .unwrap();
 
     assert_eq!(result.len(), 1);
@@ -2498,7 +2500,7 @@ fn test_run_metrics_includes_worktree_and_repo_id() {
 fn test_failure_rate_trend_empty_when_no_terminal_runs() {
     let conn = setup_db();
     let result = WorkflowManager::new(&conn)
-        .get_workflow_failure_rate_trend("no-such-wf", "daily")
+        .get_workflow_failure_rate_trend("no-such-wf", TimeGranularity::Daily)
         .unwrap();
     assert!(result.is_empty());
 }
@@ -2517,7 +2519,7 @@ fn test_failure_rate_trend_excludes_non_terminal_runs() {
         .unwrap();
 
     let result = mgr
-        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .get_workflow_failure_rate_trend("trend-wf", TimeGranularity::Daily)
         .unwrap();
     assert!(result.is_empty());
 }
@@ -2538,7 +2540,7 @@ fn test_failure_rate_trend_completed_only_period() {
     .unwrap();
 
     let result = mgr
-        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .get_workflow_failure_rate_trend("trend-wf", TimeGranularity::Daily)
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].period, "2024-03-15");
@@ -2573,7 +2575,7 @@ fn test_failure_rate_trend_mixed_completed_and_failed() {
     .unwrap();
 
     let result = mgr
-        .get_workflow_failure_rate_trend("trend-wf", "daily")
+        .get_workflow_failure_rate_trend("trend-wf", TimeGranularity::Daily)
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].total_runs, 3);
@@ -2596,7 +2598,7 @@ fn test_failure_rate_trend_filters_by_workflow_name() {
         .unwrap();
 
     let result = mgr
-        .get_workflow_failure_rate_trend("wf-a", "daily")
+        .get_workflow_failure_rate_trend("wf-a", TimeGranularity::Daily)
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].failed_runs, 1);
@@ -2621,7 +2623,7 @@ fn test_failure_rate_trend_weekly_granularity() {
     }
 
     let result = mgr
-        .get_workflow_failure_rate_trend("trend-wf", "weekly")
+        .get_workflow_failure_rate_trend("trend-wf", TimeGranularity::Weekly)
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].total_runs, 2);
