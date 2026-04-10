@@ -37,10 +37,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkflowCommands,
     },
-    /// Manage Claude Code status line integration
-    Statusline {
+    /// Set up Claude Code integration (MCP server registration)
+    Setup {
         #[command(subcommand)]
-        command: StatuslineCommands,
+        command: SetupCommands,
     },
     /// Manage features (multi-worktree coordination branches)
     Feature {
@@ -56,6 +56,22 @@ pub enum Commands {
     Dev {
         #[command(subcommand)]
         command: DevCommands,
+    },
+    /// Manage notification hooks
+    Notifications {
+        #[command(subcommand)]
+        command: NotificationsCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum NotificationsCommands {
+    /// Fire a synthetic notification event through all configured hooks (for testing)
+    Test {
+        /// Event name to fire. Valid values: workflow_run.completed, workflow_run.failed,
+        /// agent_run.completed, agent_run.failed, gate.waiting, feedback.requested
+        #[arg(default_value = "workflow_run.completed")]
+        event: String,
     },
 }
 
@@ -76,10 +92,10 @@ pub enum McpCommands {
 }
 
 #[derive(Subcommand)]
-pub enum StatuslineCommands {
-    /// Install the conductor status line into Claude Code
+pub enum SetupCommands {
+    /// Register the conductor MCP server in Claude Code
     Install,
-    /// Uninstall the conductor status line from Claude Code
+    /// Unregister the conductor MCP server from Claude Code
     Uninstall,
 }
 
@@ -108,7 +124,7 @@ pub enum AgentCommands {
         /// Named GitHub App bot identity to use (matches [github.apps.<name>] in config).
         #[arg(long)]
         bot_name: Option<String>,
-        /// Override the permission mode for this run (e.g. "plan" for read-only repo agents).
+        /// Override the permission mode for this run. Valid values: "plan", "repo-safe" (read-only repo agents using --allowedTools restriction).
         #[arg(long)]
         permission_mode: Option<String>,
         /// Additional plugin directories to pass to the Claude CLI
@@ -149,6 +165,8 @@ pub enum AgentCommands {
 
 #[derive(Subcommand)]
 pub enum WorkflowCommands {
+    /// List active workflow runs across all repos
+    Active,
     /// List workflow run history for a repository
     Runs {
         /// Repository slug
@@ -446,6 +464,9 @@ pub enum WorktreeCommands {
         /// Auto-start an agent after creation (requires --ticket)
         #[arg(long)]
         auto_agent: bool,
+        /// Proceed even if the base branch has uncommitted changes
+        #[arg(long)]
+        force: bool,
     },
     /// List worktrees
     List {
@@ -585,6 +606,9 @@ pub enum TicketCommands {
         /// Agent map JSON (pre-resolved agent assignments)
         #[arg(long)]
         agent_map: Option<String>,
+        /// Source ID of the parent ticket within the same source_type (replaces any existing parent)
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// Update a ticket's state, workflow, or agent_map
     Update {

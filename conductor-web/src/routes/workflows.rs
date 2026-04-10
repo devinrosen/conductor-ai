@@ -10,15 +10,19 @@ use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::estimation;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
-    RunIdSlot, WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
+    GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
+    StepRetryAnalyticsRow, StepTokenHeatmapRow, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
+    WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
-use crate::notify::fire_workflow_notification;
+use crate::notify::{fire_workflow_notification, WorkflowNotificationArgs};
 use crate::state::AppState;
 
 /// Resolve the run ID to use for error-path notifications.
@@ -83,19 +87,17 @@ async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
 fn notify_workflow(
     conn: &rusqlite::Connection,
     notifications: &conductor_core::config::NotificationConfig,
-    run_id: &str,
-    workflow_name: &str,
-    label: Option<&str>,
-    succeeded: bool,
+    notify_hooks: &[conductor_core::config::HookConfig],
+    params: &WorkflowNotificationArgs<'_>,
 ) {
-    fire_workflow_notification(conn, notifications, run_id, workflow_name, label, succeeded);
+    fire_workflow_notification(conn, notifications, notify_hooks, params);
 }
 
 // ── Response types ────────────────────────────────────────────────────
 
 /// Web-layer wrapper that attaches active steps to a `WorkflowRun` for the list endpoint.
 /// Preserves the exact JSON shape the frontend expects (active_steps is omitted when empty).
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct WorkflowRunResponse {
     #[serde(flatten)]
     run: WorkflowRun,
@@ -140,7 +142,7 @@ pub struct WorkflowRunResponse {
     step_estimates: Option<HashMap<String, conductor_core::workflow::Estimate>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct InputDeclSummary {
     pub name: String,
     pub required: bool,
@@ -167,9 +169,10 @@ impl From<&InputDecl> for InputDeclSummary {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct WorkflowDefSummary {
     pub name: String,
+    pub title: Option<String>,
     pub description: String,
     pub trigger: String,
     pub inputs: Vec<InputDeclSummary>,
@@ -182,6 +185,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
     fn from(def: &WorkflowDef) -> Self {
         Self {
             name: def.name.clone(),
+            title: def.title.clone(),
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
@@ -194,7 +198,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
 
 // ── Request types ─────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct RunWorkflowRequest {
     pub name: String,
     pub model: Option<String>,
@@ -203,7 +207,7 @@ pub struct RunWorkflowRequest {
     pub feature: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct PostWorkflowRunRequest {
     pub repo: String,
     pub workflow: String,
@@ -215,14 +219,14 @@ pub struct PostWorkflowRunRequest {
     pub feature: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct ResumeWorkflowRequest {
     pub from_step: Option<String>,
     pub model: Option<String>,
     pub restart: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct GateActionRequest {
     pub feedback: Option<String>,
     pub selections: Option<Vec<String>>,
@@ -230,6 +234,18 @@ pub struct GateActionRequest {
 
 // ── Endpoints ─────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/workflows",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow definitions for repo", body = Vec<WorkflowDefSummary>),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/repos/{id}/workflows
 pub async fn list_repo_workflow_defs(
     State(state): State<AppState>,
@@ -247,6 +263,18 @@ pub async fn list_repo_workflow_defs(
     Ok(Json(summaries))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/workflows/defs",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow definitions for worktree", body = Vec<WorkflowDefSummary>),
+        (status = 404, description = "Worktree not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/worktrees/{id}/workflows/defs
 pub async fn list_workflow_defs(
     State(state): State<AppState>,
@@ -267,6 +295,19 @@ pub async fn list_workflow_defs(
     Ok(Json(summaries))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/workflows/defs/{name}",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+        ("name" = String, Path, description = "Workflow definition name"),
+    ),
+    responses(
+        (status = 200, description = "Workflow definition"),
+        (status = 404, description = "Worktree or workflow not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/worktrees/{id}/workflows/defs/{name}
 pub async fn get_workflow_def(
     State(state): State<AppState>,
@@ -294,6 +335,19 @@ pub async fn get_workflow_def(
     Ok(Json(def))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/worktrees/{id}/workflows/run",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    request_body(content = RunWorkflowRequest, description = "Workflow run parameters"),
+    responses(
+        (status = 202, description = "Workflow started"),
+        (status = 404, description = "Worktree or workflow not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/worktrees/{id}/workflows/run
 pub async fn run_workflow(
     State(state): State<AppState>,
@@ -301,7 +355,7 @@ pub async fn run_workflow(
     Json(req): Json<RunWorkflowRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate inputs while holding the lock
-    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, model, feature_id) = {
+    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, model, feature_id) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let wt_mgr = WorktreeManager::new(&db, &config);
@@ -344,6 +398,7 @@ pub async fn run_workflow(
             wt.ticket_id.clone(),
             repo.local_path.clone(),
             repo.slug.clone(),
+            repo.id.clone(),
             model,
             feature_id,
         )
@@ -360,6 +415,7 @@ pub async fn run_workflow(
     let wt_target_label = format!("{repo_slug}/{wt_slug}");
     let config = state.config.read().await.clone();
     let notifications = config.notifications.clone();
+    let notify_hooks = config.notify.hooks.clone();
     // Slot receives the real workflow run ULID once execute_workflow creates the
     // DB record. On the error path we prefer the real ULID (so dedup aligns with
     // any concurrent TUI notification keyed on the same ID); we fall back to the
@@ -424,10 +480,21 @@ pub async fn run_workflow(
                     notify_workflow(
                         conn,
                         &notifications,
-                        &res.workflow_run_id,
-                        &workflow_name,
-                        Some(&wt_target_label),
-                        succeeded,
+                        &notify_hooks,
+                        &WorkflowNotificationArgs {
+                            run_id: &res.workflow_run_id,
+                            workflow_name: &workflow_name,
+                            target_label: Some(&wt_target_label),
+                            succeeded,
+                            parent_workflow_run_id: None, // workflows launched from web are always root runs
+                            repo_slug: &repo_slug,
+                            branch: &wt_slug,
+                            duration_ms: None,
+                            ticket_url: None,
+                            error: None,
+                            repo_id: Some(&repo_id),
+                            worktree_id: params.worktree_id.as_deref(),
+                        },
                     );
                 } else if let Err(e) = &notification_conn {
                     tracing::error!("notify: DB open failed, skipping notification: {e}");
@@ -451,10 +518,21 @@ pub async fn run_workflow(
                     notify_workflow(
                         conn,
                         &notifications,
-                        &error_run_id,
-                        &workflow_name,
-                        Some(&wt_target_label),
-                        false,
+                        &notify_hooks,
+                        &WorkflowNotificationArgs {
+                            run_id: &error_run_id,
+                            workflow_name: &workflow_name,
+                            target_label: Some(&wt_target_label),
+                            succeeded: false,
+                            parent_workflow_run_id: None, // workflows launched from web are always root runs
+                            repo_slug: &repo_slug,
+                            branch: &wt_slug,
+                            duration_ms: None,
+                            ticket_url: None,
+                            error: None,
+                            repo_id: Some(&repo_id),
+                            worktree_id: params.worktree_id.as_deref(),
+                        },
                     );
                 } else if let Err(e) = &notification_conn {
                     tracing::error!("notify: DB open failed, skipping notification: {e}");
@@ -479,6 +557,25 @@ pub async fn run_workflow(
     ))
 }
 
+fn check_no_active_run(wf_mgr: &WorkflowManager<'_>, wt_id: &str) -> Result<(), ApiError> {
+    if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
+        return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
+            name: active.workflow_name,
+        }));
+    }
+    Ok(())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs",
+    request_body(content = PostWorkflowRunRequest, description = "Workflow run parameters"),
+    responses(
+        (status = 202, description = "Workflow started"),
+        (status = 404, description = "Repo or workflow not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs
 pub async fn post_workflow_run(
     State(state): State<AppState>,
@@ -512,18 +609,14 @@ pub async fn post_workflow_run(
         };
 
         // Route based on which target fields are present
+        let wf_mgr = WorkflowManager::new(&db);
         let (wt_path, wt_slug, wt_ticket_id, resolved_wt_id, wt_model) =
             if let Some(ref wt_id) = req.worktree {
                 // Worktree path: validate ownership
                 let wt = wt_mgr.get_by_id_for_repo(wt_id, &repo.id)?;
 
                 // Reject if a top-level workflow run is already active on this worktree
-                let wf_mgr = WorkflowManager::new(&db);
-                if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
-                    return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
-                        name: active.workflow_name,
-                    }));
-                }
+                check_no_active_run(&wf_mgr, wt_id)?;
 
                 let path = wt.path.clone();
                 let slug = wt.slug.clone();
@@ -545,12 +638,7 @@ pub async fn post_workflow_run(
                     })?;
 
                 // Reject if a top-level workflow run is already active on this worktree
-                let wf_mgr = WorkflowManager::new(&db);
-                if let Some(active) = wf_mgr.get_active_run_for_worktree(&active_wt.id)? {
-                    return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
-                        name: active.workflow_name,
-                    }));
-                }
+                check_no_active_run(&wf_mgr, &active_wt.id)?;
 
                 let path = active_wt.path.clone();
                 let slug = active_wt.slug.clone();
@@ -609,8 +697,10 @@ pub async fn post_workflow_run(
     let run_id_slot: RunIdSlot =
         std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
     let response_slot = std::sync::Arc::clone(&run_id_slot);
+    let config = state.config.read().await.clone();
+    let db_path = state.db_path.clone();
     let state_clone = state.clone();
-    tokio::task::spawn(async move {
+    tokio::task::spawn_blocking(move || {
         // Helper: emit a failed WorkflowRunStatusChanged event and return the run_id used.
         let emit_failed = |run_id_slot: &RunIdSlot, wt_id: Option<String>| -> String {
             let error_run_id = resolve_error_run_id(run_id_slot, &workflow_name, &target_label);
@@ -624,85 +714,91 @@ pub async fn post_workflow_run(
             error_run_id
         };
 
-        let result = {
-            let db = state_clone.db.lock().await;
-            let config = state_clone.config.read().await;
-
-            if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
-                tracing::error!("Workflow input validation failed workflow={workflow_name}: {e}");
+        let conn = match conductor_core::db::open_database(&db_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("DB open failed workflow={workflow_name}: {e}");
                 emit_failed(&run_id_slot, wt_id_clone.clone());
                 if let Some(notify) = &state_clone.workflow_done_notify {
                     notify.notify_one();
                 }
                 return;
             }
-
-            let exec_config = WorkflowExecConfig {
-                dry_run,
-                ..Default::default()
-            };
-
-            let input = WorkflowExecInput {
-                conn: &db,
-                config: &config,
-                workflow: &def,
-                worktree_id: wt_id_clone.as_deref(),
-                working_dir: &wt_path,
-                repo_path: &repo_path,
-                ticket_id: wt_ticket_id.as_deref(),
-                repo_id: if wt_id_clone.is_none() {
-                    Some(&repo_id)
-                } else {
-                    None
-                },
-                model: model.as_deref(),
-                exec_config: &exec_config,
-                inputs: inputs.clone(),
-                depth: 0,
-                parent_workflow_run_id: None,
-                target_label: Some(&target_label),
-                default_bot_name: None,
-                feature_id: feature_id.as_deref(),
-                iteration: 0,
-                run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
-                triggered_by_hook: false,
-                conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                extra_plugin_dirs: vec![],
-                force: false,
-            };
-
-            execute_workflow(&input)
         };
 
-        let notifications = state_clone.config.read().await.notifications.clone();
-        let db_path = state_clone.db_path.clone();
+        if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
+            tracing::error!("Workflow input validation failed workflow={workflow_name}: {e}");
+            emit_failed(&run_id_slot, wt_id_clone.clone());
+            if let Some(notify) = &state_clone.workflow_done_notify {
+                notify.notify_one();
+            }
+            return;
+        }
+
+        let exec_config = WorkflowExecConfig {
+            dry_run,
+            ..Default::default()
+        };
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &def,
+            worktree_id: wt_id_clone.as_deref(),
+            working_dir: &wt_path,
+            repo_path: &repo_path,
+            ticket_id: wt_ticket_id.as_deref(),
+            repo_id: if wt_id_clone.is_none() {
+                Some(&repo_id)
+            } else {
+                None
+            },
+            model: model.as_deref(),
+            exec_config: &exec_config,
+            inputs: inputs.clone(),
+            depth: 0,
+            parent_workflow_run_id: None,
+            target_label: Some(&target_label),
+            default_bot_name: None,
+            feature_id: feature_id.as_deref(),
+            iteration: 0,
+            run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
+            triggered_by_hook: false,
+            conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+            extra_plugin_dirs: vec![],
+            force: false,
+        };
+
+        let result = execute_workflow(&input);
+        let notifications = config.notifications.clone();
+        let notify_hooks = config.notify.hooks.clone();
 
         match result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                let wf_name = workflow_name.clone();
-                let label = target_label.clone();
-                let notify_run_id = res.workflow_run_id.clone();
-                let db_path_ok = db_path.clone();
-                tokio::task::spawn_blocking(move || {
-                    let conn = match conductor_core::db::open_database(&db_path_ok) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::error!("notify: DB open failed: {e}");
-                            return;
-                        }
-                    };
-                    notify_workflow(
-                        &conn,
-                        &notifications,
-                        &notify_run_id,
-                        &wf_name,
-                        Some(&label),
+                let (notify_repo_slug, notify_branch) =
+                    conductor_core::notify::parse_target_label(Some(&target_label));
+                notify_workflow(
+                    &conn,
+                    &notifications,
+                    &notify_hooks,
+                    &WorkflowNotificationArgs {
+                        run_id: &res.workflow_run_id,
+                        workflow_name: &workflow_name,
+                        target_label: Some(&target_label),
                         succeeded,
-                    );
-                });
+                        parent_workflow_run_id: None, // workflows launched from web are always root runs
+                        repo_slug: notify_repo_slug,
+                        branch: notify_branch,
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
+                        repo_id: Some(&repo_id),
+                        worktree_id: wt_id_clone.as_deref(),
+                    },
+                );
 
                 state_clone
                     .events
@@ -716,26 +812,28 @@ pub async fn post_workflow_run(
                 tracing::error!(
                     "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
                 );
-                let error_run_id = emit_failed(&run_id_slot, wt_id_clone);
-                let wf_name = workflow_name.clone();
-                let label = target_label.clone();
-                tokio::task::spawn_blocking(move || {
-                    let conn = match conductor_core::db::open_database(&db_path) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::error!("notify: DB open failed: {e}");
-                            return;
-                        }
-                    };
-                    notify_workflow(
-                        &conn,
-                        &notifications,
-                        &error_run_id,
-                        &wf_name,
-                        Some(&label),
-                        false,
-                    );
-                });
+                let error_run_id = emit_failed(&run_id_slot, wt_id_clone.clone());
+                let (notify_repo_slug, notify_branch) =
+                    conductor_core::notify::parse_target_label(Some(&target_label));
+                notify_workflow(
+                    &conn,
+                    &notifications,
+                    &notify_hooks,
+                    &WorkflowNotificationArgs {
+                        run_id: &error_run_id,
+                        workflow_name: &workflow_name,
+                        target_label: Some(&target_label),
+                        succeeded: false,
+                        parent_workflow_run_id: None, // workflows launched from web are always root runs
+                        repo_slug: notify_repo_slug,
+                        branch: notify_branch,
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
+                        repo_id: Some(&repo_id),
+                        worktree_id: wt_id_clone.as_deref(),
+                    },
+                );
             }
         }
 
@@ -758,7 +856,7 @@ pub async fn post_workflow_run(
 }
 
 /// Query params for GET /api/workflows/runs
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct ListAllRunsQuery {
     /// Comma-separated list of statuses. Defaults to running, waiting, pending (owned by the manager layer).
     pub status: Option<String>,
@@ -766,6 +864,15 @@ pub struct ListAllRunsQuery {
     pub repo: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs",
+    params(ListAllRunsQuery),
+    responses(
+        (status = 200, description = "List of workflow runs", body = Vec<WorkflowRunResponse>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs?status=<csv>
 pub async fn list_all_workflow_runs_handler(
     State(state): State<AppState>,
@@ -1010,6 +1117,17 @@ pub async fn list_all_workflow_runs_handler(
     Ok(Json(responses))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/worktrees/{id}/workflows/runs",
+    params(
+        ("id" = String, Path, description = "Worktree ID"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow runs for worktree", body = Vec<WorkflowRun>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/worktrees/{id}/workflows/runs
 pub async fn list_workflow_runs(
     State(state): State<AppState>,
@@ -1021,6 +1139,18 @@ pub async fn list_workflow_runs(
     Ok(Json(runs))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "Workflow run", body = WorkflowRun),
+        (status = 404, description = "Workflow run not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs/{id}
 pub async fn get_workflow_run(
     State(state): State<AppState>,
@@ -1034,6 +1164,18 @@ pub async fn get_workflow_run(
     Ok(Json(run))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}/steps",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow run steps", body = Vec<WorkflowRunStep>),
+        (status = 404, description = "Workflow run not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs/{id}/steps
 pub async fn get_workflow_steps(
     State(state): State<AppState>,
@@ -1045,6 +1187,296 @@ pub async fn get_workflow_steps(
     Ok(Json(steps))
 }
 
+/// GET /api/workflows/analytics/aggregates?repo_id=
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct AggregatesQuery {
+    pub repo_id: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/aggregates",
+    params(AggregatesQuery),
+    responses(
+        (status = 200, description = "Token aggregates per workflow", body = Vec<WorkflowTokenAggregate>),
+    ),
+    tag = "workflows",
+)]
+pub async fn get_token_aggregates(
+    State(state): State<AppState>,
+    Query(q): Query<AggregatesQuery>,
+) -> Result<Json<Vec<WorkflowTokenAggregate>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let rows = mgr.get_workflow_token_aggregates(q.repo_id.as_deref())?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/trend?workflow_name=&granularity=daily|weekly
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct TrendQuery {
+    pub workflow_name: String,
+    pub granularity: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/trend",
+    params(TrendQuery),
+    responses(
+        (status = 200, description = "Token usage trend over time", body = Vec<WorkflowTokenTrendRow>),
+    ),
+    tag = "workflows",
+)]
+pub async fn get_token_trend(
+    State(state): State<AppState>,
+    Query(q): Query<TrendQuery>,
+) -> Result<Json<Vec<WorkflowTokenTrendRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let granularity = q.granularity.as_deref().unwrap_or("daily");
+    let rows = mgr.get_workflow_token_trend(&q.workflow_name, granularity)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/heatmap?workflow_name=&runs=20
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct HeatmapQuery {
+    pub workflow_name: String,
+    pub runs: Option<usize>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/heatmap",
+    params(HeatmapQuery),
+    responses(
+        (status = 200, description = "Step token usage heatmap", body = Vec<StepTokenHeatmapRow>),
+    ),
+    tag = "workflows",
+)]
+pub async fn get_step_heatmap(
+    State(state): State<AppState>,
+    Query(q): Query<HeatmapQuery>,
+) -> Result<Json<Vec<StepTokenHeatmapRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_token_heatmap(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/runs?workflow_name=&days=30
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct RunMetricsQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/runs",
+    params(RunMetricsQuery),
+    responses(
+        (status = 200, description = "Workflow run metrics", body = Vec<WorkflowRunMetricsRow>),
+    ),
+    tag = "workflows",
+)]
+pub async fn get_run_metrics(
+    State(state): State<AppState>,
+    Query(q): Query<RunMetricsQuery>,
+) -> Result<Json<Vec<WorkflowRunMetricsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let rows = mgr.get_run_metrics(&q.workflow_name, days)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/failure-trend?workflow_name=&granularity=daily|weekly
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct FailureTrendQuery {
+    pub workflow_name: String,
+    pub granularity: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/failure-trend",
+    params(FailureTrendQuery),
+    responses(
+        (status = 200, description = "Workflow failure rate trend", body = Vec<WorkflowFailureRateTrendRow>),
+    ),
+    tag = "workflows",
+)]
+pub async fn get_failure_trend(
+    State(state): State<AppState>,
+    Query(q): Query<FailureTrendQuery>,
+) -> Result<Json<Vec<WorkflowFailureRateTrendRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let granularity = q.granularity.as_deref().unwrap_or("daily");
+    let rows = mgr.get_workflow_failure_rate_trend(&q.workflow_name, granularity)?;
+    Ok(Json(rows))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/failure-heatmap",
+    params(HeatmapQuery),
+    responses(
+        (status = 200, description = "Step failure heatmap", body = Vec<StepFailureHeatmapRow>),
+    ),
+    tag = "workflows",
+)]
+/// GET /api/workflows/analytics/failure-heatmap?workflow_name=&runs=20
+pub async fn get_failure_heatmap(
+    State(state): State<AppState>,
+    Query(q): Query<HeatmapQuery>,
+) -> Result<Json<Vec<StepFailureHeatmapRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_failure_heatmap(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/step-retries",
+    params(HeatmapQuery),
+    responses(
+        (status = 200, description = "Step retry analytics", body = Vec<StepRetryAnalyticsRow>),
+    ),
+    tag = "workflows",
+)]
+/// GET /api/workflows/analytics/step-retries?workflow_name=&runs=20
+pub async fn get_step_retry_analytics(
+    State(state): State<AppState>,
+    Query(q): Query<HeatmapQuery>,
+) -> Result<Json<Vec<StepRetryAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let limit = q.runs.unwrap_or(20);
+    let rows = mgr.get_step_retry_analytics(&q.workflow_name, limit)?;
+    Ok(Json(rows))
+}
+
+/// GET /api/workflows/analytics/percentiles?workflow_name=&days=30
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct PercentilesQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/percentiles",
+    params(PercentilesQuery),
+    responses(
+        (status = 200, description = "Workflow percentile statistics"),
+    ),
+    tag = "workflows",
+)]
+pub async fn get_workflow_percentiles(
+    State(state): State<AppState>,
+    Query(q): Query<PercentilesQuery>,
+) -> Result<Json<Option<WorkflowPercentiles>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let result = mgr.get_workflow_percentiles(&q.workflow_name, days)?;
+    Ok(Json(result))
+}
+
+/// GET /api/workflows/analytics/regressions?recent_days=7&baseline_days=30&min_runs=5
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct RegressionsQuery {
+    pub recent_days: Option<i64>,
+    pub baseline_days: Option<i64>,
+    pub min_runs: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/regressions",
+    params(RegressionsQuery),
+    responses(
+        (status = 200, description = "Workflow regression signals", body = Vec<WorkflowRegressionSignal>),
+    ),
+    tag = "workflows",
+)]
+pub async fn get_workflow_regressions(
+    State(state): State<AppState>,
+    Query(q): Query<RegressionsQuery>,
+) -> Result<Json<Vec<WorkflowRegressionSignal>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let recent_days = q.recent_days.unwrap_or(7);
+    let baseline_days = q.baseline_days.unwrap_or(30);
+    let min_runs = q.min_runs.unwrap_or(REGRESSION_MIN_RECENT_RUNS);
+    let signals = mgr.get_workflow_regression_signals(min_runs, recent_days, baseline_days)?;
+    Ok(Json(signals))
+}
+
+/// GET /api/workflows/analytics/gates?workflow_name=&days=30
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct GateAnalyticsQuery {
+    pub workflow_name: String,
+    pub days: Option<u32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/gates",
+    params(GateAnalyticsQuery),
+    responses(
+        (status = 200, description = "Gate analytics", body = Vec<GateAnalyticsRow>),
+    ),
+    tag = "workflows",
+)]
+pub async fn get_gate_analytics(
+    State(state): State<AppState>,
+    Query(q): Query<GateAnalyticsQuery>,
+) -> Result<Json<Vec<GateAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let days = q.days.unwrap_or(30);
+    let rows = mgr.get_gate_analytics(&q.workflow_name, days)?;
+    Ok(Json(rows))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/analytics/gates/pending",
+    responses(
+        (status = 200, description = "List of pending gates across all workflow runs", body = Vec<PendingGateAnalyticsRow>),
+    ),
+    tag = "workflows",
+)]
+/// GET /api/workflows/analytics/gates/pending
+pub async fn get_pending_gates(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PendingGateAnalyticsRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let rows = mgr.get_all_pending_gates()?;
+    Ok(Json(rows))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}/steps/{step_name}/log",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+        ("step_name" = String, Path, description = "Workflow step name"),
+    ),
+    responses(
+        (status = 200, description = "Step log content"),
+        (status = 404, description = "Run or step not found"),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs/{id}/steps/{step_name}/log
 pub async fn get_workflow_step_log(
     State(state): State<AppState>,
@@ -1101,6 +1533,17 @@ pub async fn get_workflow_step_log(
     Ok(Json(serde_json::json!({ "log": log })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}/children",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "List of child workflow runs", body = Vec<WorkflowRun>),
+    ),
+    tag = "workflows",
+)]
 /// GET /api/workflows/runs/{id}/children
 pub async fn get_child_workflow_runs(
     State(state): State<AppState>,
@@ -1112,6 +1555,18 @@ pub async fn get_child_workflow_runs(
     Ok(Json(children))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs/{id}/cancel",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "Workflow cancelled"),
+        (status = 404, description = "Workflow run not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs/{id}/cancel
 pub async fn cancel_workflow(
     State(state): State<AppState>,
@@ -1125,7 +1580,12 @@ pub async fn cancel_workflow(
         .get_workflow_run(&id)?
         .ok_or_else(|| ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
 
-    mgr.update_workflow_status(&id, WorkflowRunStatus::Cancelled, Some("Cancelled by user"))?;
+    mgr.update_workflow_status(
+        &id,
+        WorkflowRunStatus::Cancelled,
+        Some("Cancelled by user"),
+        None,
+    )?;
 
     state.events.emit(ConductorEvent::WorkflowRunStatusChanged {
         run_id: id.clone(),
@@ -1138,6 +1598,19 @@ pub async fn cancel_workflow(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs/{id}/resume",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    request_body(content = ResumeWorkflowRequest, description = "Resume parameters"),
+    responses(
+        (status = 202, description = "Workflow resume started"),
+        (status = 404, description = "Workflow run not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs/{id}/resume
 pub async fn resume_workflow_endpoint(
     State(state): State<AppState>,
@@ -1151,7 +1624,7 @@ pub async fn resume_workflow_endpoint(
 
     // Validate the run exists and is in a resumable state before spawning.
     // Also capture the workflow name and target label for the completion notification.
-    let (workflow_name, target_label) = {
+    let (workflow_name, target_label, run_repo_id, run_worktree_id) = {
         let db = state.db.lock().await;
         let mgr = WorkflowManager::new(&db);
         let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
@@ -1159,13 +1632,19 @@ pub async fn resume_workflow_endpoint(
         })?;
         validate_resume_preconditions(&run.status, restart, from_step.as_deref())
             .map_err(ApiError::Core)?;
-        (run.workflow_name.clone(), run.target_label.clone())
+        (
+            run.workflow_name.clone(),
+            run.target_label.clone(),
+            run.repo_id.clone(),
+            run.worktree_id.clone(),
+        )
     }; // DB lock released here
 
     // Spawn blocking task with its own DB connection (same pattern as run_workflow)
     let state_clone = state.clone();
     let run_id = id.clone();
     let notifications = config.notifications.clone();
+    let notify_hooks = config.notify.hooks.clone();
     let db_path = state.db_path.clone();
     tokio::task::spawn_blocking(move || {
         let params = WorkflowResumeStandalone {
@@ -1188,6 +1667,9 @@ pub async fn resume_workflow_endpoint(
             }
         };
 
+        let (resume_repo_slug, resume_branch) =
+            conductor_core::notify::parse_target_label(target_label.as_deref());
+
         match result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
@@ -1196,10 +1678,21 @@ pub async fn resume_workflow_endpoint(
                 notify_workflow(
                     &conn,
                     &notifications,
-                    &res.workflow_run_id,
-                    &workflow_name,
-                    target_label.as_deref(),
-                    succeeded,
+                    &notify_hooks,
+                    &WorkflowNotificationArgs {
+                        run_id: &res.workflow_run_id,
+                        workflow_name: &workflow_name,
+                        target_label: target_label.as_deref(),
+                        succeeded,
+                        parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                        repo_slug: resume_repo_slug,
+                        branch: resume_branch,
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
+                        repo_id: run_repo_id.as_deref(),
+                        worktree_id: run_worktree_id.as_deref(),
+                    },
                 );
 
                 state_clone
@@ -1215,10 +1708,21 @@ pub async fn resume_workflow_endpoint(
                 notify_workflow(
                     &conn,
                     &notifications,
-                    &params.workflow_run_id,
-                    &workflow_name,
-                    target_label.as_deref(),
-                    false,
+                    &notify_hooks,
+                    &WorkflowNotificationArgs {
+                        run_id: &params.workflow_run_id,
+                        workflow_name: &workflow_name,
+                        target_label: target_label.as_deref(),
+                        succeeded: false,
+                        parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                        repo_slug: resume_repo_slug,
+                        branch: resume_branch,
+                        duration_ms: None,
+                        ticket_url: None,
+                        error: None,
+                        repo_id: run_repo_id.as_deref(),
+                        worktree_id: run_worktree_id.as_deref(),
+                    },
                 );
             }
         }
@@ -1233,6 +1737,19 @@ pub async fn resume_workflow_endpoint(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs/{id}/gate/approve",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    request_body(content = GateActionRequest, description = "Gate approval details"),
+    responses(
+        (status = 200, description = "Gate approved"),
+        (status = 404, description = "Workflow run or waiting gate not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs/{id}/gate/approve
 pub async fn approve_gate(
     State(state): State<AppState>,
@@ -1269,6 +1786,18 @@ pub async fn approve_gate(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/workflows/runs/{id}/gate/reject",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "Gate rejected"),
+        (status = 404, description = "Workflow run or waiting gate not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/workflows/runs/{id}/gate/reject
 pub async fn reject_gate(
     State(state): State<AppState>,
@@ -1302,6 +1831,14 @@ pub async fn reject_gate(
 // ── Template endpoints ────────────────────────────────────────────────
 
 /// GET /api/templates — list all embedded workflow templates.
+#[utoipa::path(
+    get,
+    path = "/api/templates",
+    responses(
+        (status = 200, description = "List of embedded workflow templates"),
+    ),
+    tag = "workflows",
+)]
 pub async fn list_templates() -> Json<Vec<conductor_core::workflow_template::TemplateFrontmatter>> {
     use conductor_core::workflow_template::list_embedded_templates;
 
@@ -1309,14 +1846,14 @@ pub async fn list_templates() -> Json<Vec<conductor_core::workflow_template::Tem
     Json(templates.into_iter().map(|t| t.metadata).collect())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct InstantiateTemplateRequest {
     pub template: String,
     pub repo: String,
     pub worktree: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct InstantiateTemplateResponse {
     pub template_name: String,
     pub template_version: String,
@@ -1324,6 +1861,16 @@ pub struct InstantiateTemplateResponse {
     pub prompt: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/templates/instantiate",
+    request_body(content = InstantiateTemplateRequest, description = "Template instantiation parameters"),
+    responses(
+        (status = 200, description = "Template instantiation prompt", body = InstantiateTemplateResponse),
+        (status = 404, description = "Template or repo not found"),
+    ),
+    tag = "workflows",
+)]
 /// POST /api/templates/instantiate — build the agent instantiation prompt for a template.
 pub async fn instantiate_template(
     State(state): State<AppState>,
@@ -1515,7 +2062,7 @@ mod tests {
             let run = mgr
                 .create_workflow_run("test-wf", Some("wt1"), "ar1", false, "manual", None)
                 .unwrap();
-            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
                 .unwrap();
         }
 
@@ -1548,7 +2095,7 @@ mod tests {
             let run = mgr
                 .create_workflow_run("test-wf", None, "ar1", false, "manual", None)
                 .unwrap();
-            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
                 .unwrap();
 
             // Insert 4 steps with mixed statuses
@@ -1639,7 +2186,25 @@ mod tests {
         let notifications = conductor_core::config::NotificationConfig::default(); // enabled=false
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, "test-run-id", "test-wf", None, false);
+            notify_workflow(
+                &conn,
+                &notifications,
+                &[],
+                &WorkflowNotificationArgs {
+                    run_id: "test-run-id",
+                    workflow_name: "test-wf",
+                    target_label: None,
+                    succeeded: false,
+                    parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
+                    repo_id: None,
+                    worktree_id: None,
+                },
+            );
         })
         .await
         .unwrap();
@@ -1648,15 +2213,16 @@ mod tests {
     fn test_notification_config() -> conductor_core::config::NotificationConfig {
         conductor_core::config::NotificationConfig {
             enabled: true,
-            workflows: conductor_core::config::WorkflowNotificationConfig {
+            workflows: Some(conductor_core::config::WorkflowNotificationConfig {
                 on_success: true,
                 on_failure: true,
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
                 on_stale: true,
-            },
+            }),
             slack: conductor_core::config::SlackConfig::default(),
+            web_url: None,
         }
     }
 
@@ -1682,10 +2248,21 @@ mod tests {
             notify_workflow(
                 &conn,
                 &notifications1,
-                &key1,
-                "my-workflow",
-                Some("repo/wt"),
-                false,
+                &[],
+                &WorkflowNotificationArgs {
+                    run_id: &key1,
+                    workflow_name: "my-workflow",
+                    target_label: Some("repo/wt"),
+                    succeeded: false,
+                    parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
+                    repo_id: None,
+                    worktree_id: None,
+                },
             );
         })
         .await
@@ -1699,10 +2276,21 @@ mod tests {
             notify_workflow(
                 &conn,
                 &notifications,
-                &key2,
-                "my-workflow",
-                Some("repo/wt"),
-                false,
+                &[],
+                &WorkflowNotificationArgs {
+                    run_id: &key2,
+                    workflow_name: "my-workflow",
+                    target_label: Some("repo/wt"),
+                    succeeded: false,
+                    parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
+                    repo_id: None,
+                    worktree_id: None,
+                },
             );
         })
         .await
@@ -1730,7 +2318,7 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, "run-notify-1", "my-workflow", None, true);
+            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn
@@ -1981,9 +2569,12 @@ mod tests {
         let repo_path = tmp.path().to_str().unwrap().to_string();
 
         let notify = Arc::new(tokio::sync::Notify::new());
+        // Hold the NamedTempFile alive so db_path remains valid for the
+        // spawn_blocking closure that opens a fresh DB connection.
+        let (base_state, _db_file) = th::empty_state();
         let state = AppState {
             workflow_done_notify: Some(Arc::clone(&notify)),
-            ..empty_state()
+            ..base_state
         };
         {
             let db = state.db.lock().await;
@@ -2495,6 +3086,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "test-wf".to_string(),
+            title: None,
             description: "A test workflow".to_string(),
             trigger: WorkflowTrigger::Manual,
             targets: vec!["repo".to_string(), "worktree".to_string()],
@@ -2518,6 +3110,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "all-contexts-wf".to_string(),
+            title: None,
             description: "Applies to all contexts".to_string(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],

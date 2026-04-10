@@ -40,7 +40,7 @@ function WorkflowCard({
   return (
     <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
       <div className="flex items-center justify-between mb-2">
-        <h4 className="font-medium text-gray-200">{def.name}</h4>
+        <h4 className="font-medium text-gray-200">{def.title ?? def.name}</h4>
         <span className="text-xs px-2 py-0.5 bg-gray-700 rounded text-gray-400">
           {def.trigger}
         </span>
@@ -192,7 +192,7 @@ export function WorkflowPanel({ repoId, worktreeId, ticketId }: WorkflowPanelPro
                     to={`/repos/${repoId}/worktrees/${worktreeId}/workflows/runs/${run.id}`}
                     className="flex items-center gap-3 hover:opacity-80 min-w-0"
                   >
-                    <span className="font-medium text-gray-200 truncate">{run.workflow_name}</span>
+                    <span className="font-medium text-gray-200 truncate">{run.workflow_title ?? run.workflow_name}</span>
                     <StatusBadge status={run.status} />
                     {run.dry_run && (
                       <span className="text-xs px-1.5 py-0.5 bg-yellow-900 text-yellow-300 rounded shrink-0">

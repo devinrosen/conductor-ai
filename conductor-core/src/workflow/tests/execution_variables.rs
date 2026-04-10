@@ -140,6 +140,66 @@ fn test_resolve_child_inputs_substitutes_variables() {
 }
 
 #[test]
+fn test_resolve_child_inputs_preserves_unresolved_braces() {
+    // Regression test for #1907: when a substituted value itself contains
+    // {{…}} text (e.g. JSON with template-like keys), those patterns must
+    // not be stripped from the child input.
+    use crate::workflow_dsl::InputDecl;
+
+    let json_value = r#"{"risks":["{{deterministic-review.score}}","other"]}"#.to_string();
+
+    let mut raw = HashMap::new();
+    raw.insert("prior_output".to_string(), "{{prior_output}}".to_string());
+
+    let mut vars: HashMap<&str, String> = HashMap::new();
+    vars.insert("prior_output", json_value.clone());
+
+    let decls = vec![InputDecl {
+        name: "prior_output".to_string(),
+        required: true,
+        default: None,
+        description: None,
+        input_type: Default::default(),
+    }];
+
+    let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+    // The embedded {{…}} inside the JSON value must survive intact.
+    assert_eq!(result.get("prior_output").unwrap(), &json_value);
+}
+
+#[test]
+fn test_resolve_child_inputs_keeps_unresolved_pattern() {
+    // Regression for #1907 / #1935: when a raw input template contains
+    // {{var}} and that variable is not in the vars map, the placeholder
+    // must survive intact rather than be stripped.
+    use crate::workflow_dsl::InputDecl;
+
+    let mut raw = HashMap::new();
+    raw.insert(
+        "query".to_string(),
+        "Search for {{unknown_var}} results".to_string(),
+    );
+
+    // vars map does NOT contain "unknown_var"
+    let vars: HashMap<&str, String> = HashMap::new();
+
+    let decls = vec![InputDecl {
+        name: "query".to_string(),
+        required: true,
+        default: None,
+        description: None,
+        input_type: Default::default(),
+    }];
+
+    let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+    // {{unknown_var}} must be preserved, not stripped
+    assert_eq!(
+        result.get("query").unwrap(),
+        "Search for {{unknown_var}} results"
+    );
+}
+
+#[test]
 fn test_resolve_child_inputs_applies_defaults() {
     use crate::workflow_dsl::InputDecl;
 

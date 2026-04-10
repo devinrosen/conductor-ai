@@ -26,7 +26,8 @@ impl App {
             // Ticket-aware path: derive repo and name from the ticket
             let repo_slug = self.state.data.repo_slug_map.get(&ticket.repo_id).cloned();
             if let Some(slug) = repo_slug {
-                let suggested = derive_worktree_slug(&ticket.source_id, &ticket.title);
+                let labels: Vec<String> = serde_json::from_str(&ticket.labels).unwrap_or_default();
+                let suggested = derive_worktree_slug(&ticket.source_id, &ticket.title, &labels);
                 self.state.modal = Modal::Input {
                     title: "Create Worktree".to_string(),
                     prompt: format!("Worktree for #{} ({}):", ticket.source_id, slug),
@@ -526,6 +527,47 @@ impl App {
             self.state.status_message = Some("Select a worktree first".to_string());
         }
     }
+
+    /// Spawn a background thread to run `check_main_health()` before creating a worktree.
+    ///
+    /// Shows a non-dismissable `Modal::Progress`. On completion, sends
+    /// `Action::MainHealthCheckComplete` which `action_dispatch.rs` handles.
+    pub(super) fn spawn_main_health_check(
+        &mut self,
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        from_pr: Option<u32>,
+        from_branch: Option<String>,
+    ) {
+        let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: super::BG_TX_NOT_READY.into(),
+            };
+            return;
+        };
+        self.state.modal = Modal::Progress {
+            message: "Checking main branch status\u{2026}".into(),
+        };
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let status = (|| -> Result<_, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                conductor_core::worktree::WorktreeManager::new(&conn, &config)
+                    .check_main_health(&repo_slug, from_branch.as_deref())
+                    .map_err(|e| e.to_string())
+            })();
+            let _ = bg_tx.send(crate::action::Action::MainHealthCheckComplete {
+                repo_slug,
+                wt_name,
+                ticket_id,
+                from_pr,
+                from_branch,
+                status,
+            });
+        });
+    }
 }
 
 #[cfg(test)]
@@ -842,6 +884,16 @@ mod tests {
         app.state.view = View::Dashboard;
         app.handle_delete();
         assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    // ── spawn_main_health_check ───────────────────────────────────────
+
+    #[test]
+    fn spawn_main_health_check_no_bg_tx_shows_error_modal() {
+        let mut app = make_test_app(); // bg_tx is None by default
+        app.state.data.repos = vec![make_test_repo("r1", "my-repo")];
+        app.spawn_main_health_check("my-repo".into(), "my-wt".into(), None, None, None);
+        assert!(matches!(app.state.modal, Modal::Error { .. }));
     }
 
     #[test]

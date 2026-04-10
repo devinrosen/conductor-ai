@@ -1,6 +1,5 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
-assertion_line: 568
 expression: render_to_string(&state)
 ---
 "┌ Repos & Worktrees (0 active) ──────────────────────────────────────────────┐┌ All Workflow Runs (H: show history) ───┐"
@@ -42,4 +41,4 @@ expression: render_to_string(&state)
 "│                                                                            │┌ All Workflow Definitions ──────────────┐"
 "│                                                                            ││                                        │"
 "└────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────┘"
-"[Dashboard]  Tab:panel  [/]:column  \:workflows  q:quit                                                                 "
+"[Dashboard]  Tab:panel  [/]:column  \:workflows  [S]:settings  q:quit                                                   "

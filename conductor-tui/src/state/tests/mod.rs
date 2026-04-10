@@ -93,6 +93,7 @@ pub(crate) fn make_wf_run_full(
         started_at: "2026-01-01T00:00:00Z".into(),
         ended_at: None,
         result_summary: None,
+        error: None,
         definition_snapshot: None,
         inputs: std::collections::HashMap::new(),
         ticket_id: None,
@@ -103,6 +104,7 @@ pub(crate) fn make_wf_run_full(
         iteration: 0,
         blocked_on: None,
         feature_id: None,
+        workflow_title: None,
         total_input_tokens: None,
         total_output_tokens: None,
         total_cache_read_input_tokens: None,
@@ -163,6 +165,10 @@ pub(crate) fn make_wf_step(
         output_file: None,
         gate_options: None,
         gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -207,6 +213,7 @@ pub(crate) fn make_workflow_run(
     run.workflow_name = "test".to_string();
     run.parent_run_id = String::new();
     run.result_summary = summary.map(|s| s.to_string());
+    run.error = summary.map(|s| s.to_string());
     run
 }
 
@@ -245,6 +252,10 @@ pub(crate) fn make_iter_step(
         output_file: None,
         gate_options: None,
         gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 

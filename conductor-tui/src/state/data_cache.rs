@@ -5,7 +5,7 @@ use conductor_core::agent::{
 };
 use conductor_core::feature::FeatureRow;
 use conductor_core::repo::Repo;
-use conductor_core::tickets::{Ticket, TicketLabel};
+use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
     InputDecl, LiveEstimate, WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary,
 };
@@ -18,6 +18,8 @@ pub struct DataCache {
     pub tickets: Vec<Ticket>,
     /// ticket_id -> labels with colors (populated by DB poller)
     pub ticket_labels: HashMap<String, Vec<TicketLabel>>,
+    /// ticket_id -> dependency relationships (populated by DB poller)
+    pub ticket_dependencies: HashMap<String, TicketDependencies>,
     /// repo_id -> slug for display
     pub repo_slug_map: HashMap<String, String>,
     /// ticket_id -> Ticket for lookups

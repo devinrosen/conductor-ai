@@ -1,5 +1,7 @@
 use crate::db::sql_placeholders;
-use crate::workflow::types::{BlockedOn, PendingGateRow, WorkflowRun, WorkflowRunStep};
+use crate::workflow::types::{
+    extract_workflow_title, BlockedOn, PendingGateRow, WorkflowRun, WorkflowRunStep,
+};
 
 /// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
 /// elements bind to the positional placeholders in the clause.
@@ -62,6 +64,9 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let total_cost_usd: Option<f64> = row.get(25)?;
     let total_duration_ms: Option<i64> = row.get(26)?;
     let model: Option<String> = row.get(27)?;
+    let error: Option<String> = row.get(28)?;
+    let definition_snapshot: Option<String> = row.get(10)?;
+    let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
     Ok(WorkflowRun {
         id,
         workflow_name: row.get(1)?,
@@ -73,7 +78,8 @@ pub(in crate::workflow) fn row_to_workflow_run(
         started_at: row.get(7)?,
         ended_at: row.get(8)?,
         result_summary: row.get(9)?,
-        definition_snapshot: row.get(10)?,
+        error,
+        definition_snapshot,
         inputs,
         ticket_id,
         repo_id,
@@ -83,6 +89,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
         iteration,
         blocked_on,
         feature_id,
+        workflow_title,
         total_input_tokens,
         total_output_tokens,
         total_cache_read_input_tokens,
@@ -109,12 +116,15 @@ pub(super) fn pending_gate_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Resu
     let target_label: Option<String> = row.get("target_label")?;
     let branch: Option<String> = row.get("branch")?;
     let ticket_ref: Option<String> = row.get("ticket_ref")?;
+    let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
+    let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
     Ok(PendingGateRow {
         step,
         workflow_name,
         target_label,
         branch,
         ticket_ref,
+        workflow_title,
     })
 }
 
@@ -152,5 +162,13 @@ pub(in crate::workflow) fn row_to_workflow_step(
         output_file: row.get("output_file")?,
         gate_options: row.get("gate_options")?,
         gate_selections: row.get("gate_selections")?,
+        input_tokens: row.get::<_, Option<i64>>("input_tokens").unwrap_or(None),
+        output_tokens: row.get::<_, Option<i64>>("output_tokens").unwrap_or(None),
+        cache_read_input_tokens: row
+            .get::<_, Option<i64>>("cache_read_input_tokens")
+            .unwrap_or(None),
+        cache_creation_input_tokens: row
+            .get::<_, Option<i64>>("cache_creation_input_tokens")
+            .unwrap_or(None),
     })
 }

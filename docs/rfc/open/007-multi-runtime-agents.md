@@ -88,13 +88,13 @@ pub struct AgentDef {
 ```toml
 # ~/.conductor/config.toml
 
-# CLI-based runtimes (tmux spawn + exit polling, same pattern as Claude)
+# CLI-based runtimes (tmux spawn + stdout-redirect + file poll, same pattern as Claude)
 [runtimes.gemini]
 type = "cli"
 binary = "gemini"
-args = ["-m", "{{model}}", "-p", "{{prompt}}", "--output-format", "json", "--approval-mode=yolo"]
+args = ["-m", "{{model}}", "-p", "{{prompt}}", "--approval-mode=yolo"]
 default_model = "gemini-2.5-flash"
-result_field = "response"
+result_field = "response"        # dot-path into JSON stdout
 token_fields = "stats.models.*.tokens.total"
 
 # API-based runtimes (synchronous HTTP, no tmux)
@@ -208,22 +208,26 @@ Config for a `CliRuntime` entry specifies the binary, arg template, output forma
 [runtimes.gemini]
 type = "cli"
 binary = "gemini"
-args = ["-m", "{{model}}", "-p", "{{prompt}}", "--output-format", "json", "--approval-mode=yolo"]
+args = ["-m", "{{model}}", "-p", "{{prompt}}", "--approval-mode=yolo"]
 default_model = "gemini-2.5-flash"
-result_field = "response"                        # jq-style path into JSON output
+result_field = "response"                        # jq-style path into JSON stdout
 token_fields = "stats.models.*.tokens.total"     # optional, for cost tracking
 ```
 
 `{{prompt}}` and `{{model}}` are the only substitution variables. If `prompt_via = "stdin"`, the prompt is written to the process's stdin instead of substituted into args.
 
-**Gemini CLI invocation shape** (researched 2026-03-28):
+`CliRuntime` always redirects stdout to `~/.conductor/workspaces/<run-id>/output.json` — no `output-format` flag needed in `args`; the runtime handles capture transparently. `result_field` and `token_fields` are dot-paths into the parsed JSON file.
+
+**Gemini CLI invocation shape** (confirmed via headless docs 2026-04-05):
 - Binary: `gemini` (npm: `@google/gemini-cli`)
-- Prompt flag: `-p "<prompt>"` — forces headless mode, process exits after response
-- Model flag: `-m gemini-2.5-flash`
-- Output: `--output-format json` → `{ "response": "...", "stats": { "models": { "gemini-2.5-flash": { "tokens": { "total": N } } } } }`
-- Tool approval: `--approval-mode=yolo` to suppress interactive prompts
-- Exit codes: `0` success, `1` error, `42` input error, `53` turn limit exceeded
+- Prompt flag: `-p`/`--prompt` — activates headless mode automatically (non-TTY also triggers it); process exits after response
+- Model flag: `-m <model-id>`
+- Output: JSON to **stdout** → `{ "response": "...", "stats": { "models": { "gemini-2.5-flash": { "tokens": { "total": N } } } } }`
+- `CliRuntime` captures output by redirecting stdout to a file in the tmux command: `gemini -m {{model}} -p {{prompt}} > ~/.conductor/workspaces/<run-id>/output.json`; polls for file existence to detect completion — same mechanism as `ClaudeRuntime`
+- Tool approval: `--approval-mode=yolo` to suppress interactive prompts (flag name to be verified against CLI reference during implementation)
+- Exit codes: `0` success, `1` general/API error, `42` invalid input, `53` turn limit exceeded — `42` and `53` map to `failed` status
 - No dollar cost in output — token counts only
+- **Future:** Gemini CLI also supports JSONL streaming output (newline-delimited events including tool invocations and results), which could enable live tool-call display in the TUI. Deferred — plain JSON is sufficient for now.
 
 **OpenAIRuntime** — API-based, no tmux:
 - `spawn()` → synchronous HTTP POST to OpenAI API, writes result to DB
@@ -274,10 +278,47 @@ call research:       # uses gemini (defined in research.md frontmatter)
 call implement:      # uses claude (defined in implement.md frontmatter)
 ```
 
-### 7. DB Migration
+### 7. Per-Repo Runtime Overrides
+
+Runtime settings can be overridden on a per-repo basis via a `runtime_overrides` JSON column on the `repos` table. This is stored locally in each user's SQLite DB (`~/.conductor/conductor.db`) and does not affect other developers.
+
+```json
+{
+  "claude": { "config_dir": "~/.claude-personal" },
+  "gemini": { "config_dir": "~/.gemini-work" }
+}
+```
+
+**Resolution chain** for any runtime setting:
+
+```
+per-repo SQLite runtime_overrides
+  → global config.toml [runtimes.<name>]
+    → compiled-in defaults
+```
+
+`RepoManager` exposes a typed accessor for reading these overrides:
+
+```rust
+impl RepoManager<'_> {
+    /// Returns the resolved config_dir for a given runtime, checking
+    /// per-repo overrides first, then global config, then the default.
+    pub fn runtime_config_dir(
+        &self,
+        repo_id: &str,
+        runtime: &str,
+        global_config: &Config,
+    ) -> Option<PathBuf>;
+}
+```
+
+This design intentionally defers per-repo override *writes* (CLI/TUI surface) to the RFC 007 implementation, as the full runtime abstraction is needed to make the UX coherent.
+
+### 8. DB Migrations
 
 ```sql
 ALTER TABLE agent_runs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude';
+ALTER TABLE repos ADD COLUMN runtime_overrides TEXT;  -- JSON, nullable
 ```
 
 ---
@@ -297,6 +338,10 @@ ALTER TABLE agent_runs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude';
 6. **`script` runtime as escape hatch.** Wraps any CLI tool (ADK, Codex, custom scripts) without needing native conductor support for each one.
 
 7. **CLI-based runtimes use a single generic `CliRuntime`**, not per-tool implementations. Any CLI agent that accepts a prompt (via flag or stdin) and exits on completion can be configured via `[runtimes.<name>]` with `type = "cli"` — no code changes required to add a new CLI tool. `ClaudeRuntime` stays separate because it has deep conductor integration (`--run-id`, resume, event parsing) that doesn't generalize.
+
+8. **Per-repo runtime overrides live in SQLite**, not in a checked-in config file. A nullable `runtime_overrides TEXT` (JSON) column on `repos` stores a map of runtime name → override settings. Because `~/.conductor/conductor.db` is local to each user, this is safe for multi-developer repos — no shared state. The resolution chain is: per-repo SQLite → global `config.toml [runtimes.<name>]` → compiled-in defaults. `RepoManager` exposes a typed accessor so callers never parse JSON directly.
+
+9. **CliRuntime output capture via stdout redirect.** Confirmed via Gemini CLI headless docs: CLI runtimes write their JSON result to stdout and exit. `CliRuntime` captures this by appending `> <output-file>` to the tmux command (e.g. `gemini ... > ~/.conductor/workspaces/<run-id>/output.json`) and polling for that file's existence to detect completion. This is the same file-based polling mechanism `ClaudeRuntime` uses today — no new polling infrastructure required.
 
 ---
 
@@ -322,13 +367,14 @@ ALTER TABLE agent_runs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude';
 2. Add `RuntimeConfig` to `Config` (with `type`, `binary`, `args`, `prompt_via`, `result_field`, etc.)
 3. Define `AgentRuntime` trait (`spawn`, `poll`, `is_alive`, `cancel`)
 4. Extract existing tmux logic into `ClaudeRuntime` (pure refactor, no behavior change)
-5. Add DB migration for `runtime` column
-6. Wire runtime dispatch into `execute_call_with_schema`
-7. Implement `CliRuntime` (generic tmux-based runner — covers Gemini CLI, Codex CLI, etc.)
-8. Implement `ScriptRuntime` (escape hatch for arbitrary shell commands)
-9. Implement `OpenAIRuntime` (API-based, optional — only if there's a concrete use case)
+5. Add DB migrations for `runtime` column on `agent_runs` and `runtime_overrides` column on `repos`
+6. Add `RepoManager::runtime_config_dir()` typed accessor for per-repo override resolution
+7. Wire runtime dispatch into `execute_call_with_schema`
+8. Implement `CliRuntime` (generic tmux-based runner — covers Gemini CLI, Codex CLI, etc.)
+9. Implement `ScriptRuntime` (escape hatch for arbitrary shell commands)
+10. Implement `OpenAIRuntime` (API-based, optional — only if there's a concrete use case)
 
-Steps 1–6 land as a single PR with no functional change (Claude-only, but via the trait). Steps 7–8 are independent and can land separately. Step 9 is deferred until there's a concrete use case.
+Steps 1–7 land as a single PR with no functional change (Claude-only, but via the trait). Steps 8–9 are independent and can land separately. Step 10 is deferred until there's a concrete use case.
 
 ---
 

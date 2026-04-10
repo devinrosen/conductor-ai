@@ -108,6 +108,7 @@ fn data_refreshed_updates_repos() {
             worktrees: vec![],
             tickets: vec![],
             ticket_labels: std::collections::HashMap::new(),
+            ticket_dependencies: std::collections::HashMap::new(),
             latest_agent_runs: std::collections::HashMap::new(),
             ticket_agent_totals: std::collections::HashMap::new(),
             latest_workflow_runs_by_worktree: std::collections::HashMap::new(),
@@ -466,6 +467,7 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
             bot_name: None,
+            conversation_id: None,
         },
     );
     app.show_confirm_quit();
@@ -487,8 +489,8 @@ fn delete_worktree_no_bg_tx_no_crash() {
         repo_slug: "test".into(),
         wt_slug: "test-wt".into(),
     });
-    // No crash, modal should not change to Progress (because bg_tx is None → early return)
-    assert!(matches!(app.state.modal, Modal::None));
+    // No crash, modal should show error (bg_tx is None → user gets feedback)
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
 }
 
 #[test]
@@ -498,7 +500,133 @@ fn unregister_repo_no_bg_tx_no_crash() {
     app.execute_confirm_action(crate::state::ConfirmAction::UnregisterRepo {
         repo_slug: "test".into(),
     });
-    assert!(matches!(app.state.modal, Modal::None));
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn push_no_bg_tx_shows_error() {
+    let mut app = make_app();
+    assert!(app.bg_tx.is_none());
+
+    // Set up a worktree with a known repo_id and a slug map entry so the
+    // bg_tx guard is actually reached (no early-return on missing repo).
+    app.state.data.worktrees = vec![conductor_core::worktree::Worktree {
+        id: "w1".into(),
+        repo_id: "r1".into(),
+        slug: "feat-a".into(),
+        branch: "feat/a".into(),
+        path: "/tmp/ws/feat-a".into(),
+        ticket_id: None,
+        status: conductor_core::worktree::WorktreeStatus::Active,
+        created_at: "2024-01-01T00:00:00Z".into(),
+        completed_at: None,
+        model: None,
+        base_branch: None,
+    }];
+    app.state
+        .data
+        .repo_slug_map
+        .insert("r1".into(), "my-repo".into());
+    app.state.selected_worktree_id = Some("w1".into());
+
+    app.update(Action::Push);
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn create_pr_no_bg_tx_shows_error() {
+    let mut app = make_app();
+    assert!(app.bg_tx.is_none());
+
+    app.state.data.worktrees = vec![conductor_core::worktree::Worktree {
+        id: "w1".into(),
+        repo_id: "r1".into(),
+        slug: "feat-a".into(),
+        branch: "feat/a".into(),
+        path: "/tmp/ws/feat-a".into(),
+        ticket_id: None,
+        status: conductor_core::worktree::WorktreeStatus::Active,
+        created_at: "2024-01-01T00:00:00Z".into(),
+        completed_at: None,
+        model: None,
+        base_branch: None,
+    }];
+    app.state
+        .data
+        .repo_slug_map
+        .insert("r1".into(), "my-repo".into());
+    app.state.selected_worktree_id = Some("w1".into());
+
+    app.update(Action::CreatePr);
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn settings_test_hook_no_bg_tx_shows_error() {
+    let mut app = make_app();
+    assert!(app.bg_tx.is_none());
+
+    // Add a hook so the hook-not-found guard doesn't fire first.
+    app.config.notify = conductor_core::config::NotifyConfig {
+        hooks: vec![conductor_core::config::HookConfig {
+            on: "agent.completed".into(),
+            run: Some("echo test".into()),
+            ..Default::default()
+        }],
+    };
+
+    app.update(Action::SettingsTestHook { hook_index: 0 });
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn import_repos_no_bg_tx_shows_error() {
+    use conductor_core::github::DiscoveredRepo;
+
+    let mut app = make_app();
+    assert!(app.bg_tx.is_none());
+
+    // Set up a GithubDiscover modal with one selected repo that isn't yet registered.
+    app.state.modal = Modal::GithubDiscover {
+        owner: "my-org".into(),
+        repos: vec![DiscoveredRepo {
+            name: "my-repo".into(),
+            full_name: "my-org/my-repo".into(),
+            description: String::new(),
+            clone_url: "https://github.com/my-org/my-repo.git".into(),
+            ssh_url: "git@github.com:my-org/my-repo.git".into(),
+            default_branch: "main".into(),
+            private: false,
+        }],
+        registered_urls: vec![],
+        selected: vec![true],
+        cursor: 0,
+        loading: false,
+        error: None,
+    };
+
+    app.update(Action::GithubDiscoverImport);
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn spawn_worktree_create_no_bg_tx_shows_error() {
+    let mut app = make_app();
+    assert!(app.bg_tx.is_none());
+    app.spawn_worktree_create(
+        "my-repo".into(),
+        "feat-new".into(),
+        conductor_core::worktree::WorktreeCreateOptions::default(),
+    );
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn spawn_main_health_check_no_bg_tx_shows_error() {
+    let mut app = make_app();
+    assert!(app.bg_tx.is_none());
+    app.spawn_main_health_check("my-repo".into(), "feat-new".into(), None, None, None);
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1252,6 +1380,7 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
 fn make_workflow_def(name: &str, target: &str) -> conductor_core::workflow::WorkflowDef {
     conductor_core::workflow::WorkflowDef {
         name: name.to_string(),
+        title: None,
         description: String::new(),
         trigger: conductor_core::workflow::WorkflowTrigger::Manual,
         targets: vec![target.to_string()],

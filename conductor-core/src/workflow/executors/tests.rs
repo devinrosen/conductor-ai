@@ -144,6 +144,126 @@ fn test_execute_script_failure_captures_stdout() {
 }
 
 // -----------------------------------------------------------------------
+// execute_script — env var substitution preserves {{…}} in values
+// -----------------------------------------------------------------------
+
+/// Regression test for #1907: env var values that expand to JSON containing
+/// {{…}} text must not be stripped.  The script echoes PRIOR_OUTPUT back into
+/// the CONDUCTOR_OUTPUT context; the test asserts the {{…}} survived intact.
+#[test]
+fn test_execute_script_env_var_preserves_literal_braces() {
+    let dir = tempfile::tempdir().unwrap();
+    // Script: echo PRIOR_OUTPUT value into the conductor context field so we
+    // can assert it after execute_script returns.
+    let script_path = write_script(
+        &dir.path().join("env_check.sh"),
+        r#"#!/bin/sh
+echo "<<<CONDUCTOR_OUTPUT>>>"
+printf '{"markers":[],"context":"%s"}\n' "$PRIOR_OUTPUT"
+echo "<<<END_CONDUCTOR_OUTPUT>>>"
+"#,
+    );
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+
+    // Simulate prior_output holding text that itself contains {{…}} tokens.
+    // Use a value without JSON special characters so printf embeds it safely.
+    let literal_braces_value = "score:{{deterministic-score}}".to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
+    state
+        .inputs
+        .insert("prior_output".to_string(), literal_braces_value.clone());
+
+    let mut env = std::collections::HashMap::new();
+    env.insert("PRIOR_OUTPUT".to_string(), "{{prior_output}}".to_string());
+
+    let node = crate::workflow_dsl::ScriptNode {
+        name: "env_check".into(),
+        run: script_path,
+        env,
+        timeout: Some(10),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+    };
+
+    let result = execute_script(&mut state, &node, 0);
+    assert!(result.is_ok(), "execute_script should succeed: {result:?}");
+    // The context echoed back by the script should contain the {{…}} token
+    // exactly as it was in the original value — not stripped.
+    let ctx = state
+        .contexts
+        .last()
+        .map(|c| c.context.as_str())
+        .unwrap_or("");
+    assert!(
+        ctx.contains("{{deterministic-score}}"),
+        "{{{{deterministic-score}}}} should be preserved in env var value, got context: {ctx}"
+    );
+}
+
+/// Regression test for #1936: env var template strings that contain an
+/// unresolvable `{{pattern}}` (no matching key in the variable map) must
+/// be preserved as-is, not stripped to empty string.
+#[test]
+fn test_execute_script_env_var_unresolved_pattern_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = write_script(
+        &dir.path().join("env_unresolved.sh"),
+        r#"#!/bin/sh
+echo "<<<CONDUCTOR_OUTPUT>>>"
+printf '{"markers":[],"context":"%s"}\n' "$TEMPLATE_VAR"
+echo "<<<END_CONDUCTOR_OUTPUT>>>"
+"#,
+    );
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+
+    // No inputs — so {{unknown_ref}} is unresolvable.
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let mut env = std::collections::HashMap::new();
+    env.insert(
+        "TEMPLATE_VAR".to_string(),
+        "prefix-{{unknown_ref}}-suffix".to_string(),
+    );
+
+    let node = crate::workflow_dsl::ScriptNode {
+        name: "env_unresolved".into(),
+        run: script_path,
+        env,
+        timeout: Some(10),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+    };
+
+    let result = execute_script(&mut state, &node, 0);
+    assert!(result.is_ok(), "execute_script should succeed: {result:?}");
+    let ctx = state
+        .contexts
+        .last()
+        .map(|c| c.context.as_str())
+        .unwrap_or("");
+    assert!(
+        ctx.contains("prefix-{{unknown_ref}}-suffix"),
+        "unresolved {{{{unknown_ref}}}} should be preserved verbatim, got context: {ctx}"
+    );
+}
+
+// -----------------------------------------------------------------------
 // poll_script_child unit tests — timeout and cancellation
 // -----------------------------------------------------------------------
 

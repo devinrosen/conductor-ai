@@ -7,7 +7,7 @@ use ratatui::Frame;
 use conductor_core::github::GithubPr;
 
 use super::helpers::{shorten_paths, visual_idx_with_headers};
-use crate::state::{AppState, ColumnFocus, RepoDetailFocus, VisualRow};
+use crate::state::{AppState, ColumnFocus, RepoDetailFocus, TreePosition, VisualRow};
 
 fn pr_group_key(pr: &GithubPr) -> &'static str {
     if pr.is_draft {
@@ -237,18 +237,104 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(state.theme.border_inactive)
     };
     let detail_filter = state.detail_ticket_filter.as_query();
+
+    // Compute column widths from the same closed-ticket-filtered set that is
+    // shown, but ignoring the text query so widths stay stable while typing.
+    const MAX_ASSIGNEE_DISPLAY: usize = 20;
+    let width_tickets = state
+        .detail_tickets
+        .iter()
+        .filter(|t| state.show_closed_tickets || t.state != "closed");
+    let id_width = width_tickets
+        .clone()
+        .map(|t| t.source_id.len())
+        .max()
+        .unwrap_or(4);
+    let assignee_width = width_tickets
+        .map(|t| match t.assignee.as_deref() {
+            Some(login) => (login.len() + 1).min(MAX_ASSIGNEE_DISPLAY), // +1 for @
+            None => "unclaimed".len(),
+        })
+        .max()
+        .unwrap_or("unclaimed".len());
+
     let ticket_items: Vec<ListItem> = state
         .filtered_detail_tickets
         .iter()
-        .map(|t| {
-            let mut spans = vec![
-                super::common::ticket_worktree_dot_span(state, &t.id),
-                Span::styled(
-                    format!("#{} ", t.source_id),
-                    Style::default().fg(state.theme.group_header),
-                ),
-                Span::raw(&t.title),
-            ];
+        .enumerate()
+        .map(|(i, t)| {
+            let default_pos = TreePosition::default();
+            let pos = state
+                .detail_ticket_tree_positions
+                .get(i)
+                .unwrap_or(&default_pos);
+
+            let is_parent = pos.is_parent;
+            let is_collapsed = state.collapsed_ticket_ids.contains(&t.id);
+
+            let is_blocked = state
+                .data
+                .ticket_dependencies
+                .get(&t.id)
+                .is_some_and(|d| d.is_actively_blocked());
+
+            let tree_prefix = pos.to_prefix();
+            let toggle_glyph = if is_parent {
+                if is_collapsed {
+                    "▶ "
+                } else {
+                    "▼ "
+                }
+            } else {
+                ""
+            };
+
+            let mut spans: Vec<Span> = Vec::new();
+
+            if !tree_prefix.is_empty() {
+                spans.push(Span::styled(
+                    tree_prefix,
+                    Style::default().fg(state.theme.label_secondary),
+                ));
+            }
+            if !toggle_glyph.is_empty() {
+                spans.push(Span::raw(toggle_glyph));
+            }
+            if is_blocked {
+                spans.push(Span::styled(
+                    "⊘ ",
+                    Style::default().fg(state.theme.label_error),
+                ));
+            } else {
+                spans.push(super::common::ticket_worktree_dot_span(state, &t.id));
+            }
+            let id_str = super::common::truncate(&t.source_id, id_width);
+            spans.push(Span::styled(
+                format!("#{:<width$} ", id_str, width = id_width),
+                Style::default().fg(state.theme.group_header),
+            ));
+
+            match &t.assignee {
+                Some(login) => {
+                    let login_str =
+                        super::common::truncate(login, assignee_width.saturating_sub(1));
+                    spans.push(Span::styled(
+                        format!(
+                            "@{:<width$} ",
+                            login_str,
+                            width = assignee_width.saturating_sub(1)
+                        ),
+                        Style::default().fg(state.theme.label_secondary),
+                    ));
+                }
+                None => {
+                    spans.push(Span::styled(
+                        format!("{:<width$} ", "unclaimed", width = assignee_width),
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
+            }
+            spans.push(Span::raw(&t.title));
             let labels = state
                 .data
                 .ticket_labels

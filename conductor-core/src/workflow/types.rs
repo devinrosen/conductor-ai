@@ -11,6 +11,7 @@ use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 ///
 /// Uses internally-tagged JSON (`{"type":"human_approval",...}`) for forward-compatibility
 /// with future blocker types and easy consumption by non-Rust consumers.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BlockedOn {
@@ -45,6 +46,7 @@ pub(super) type StepKey = (String, u32);
 pub type RunIdSlot = std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>;
 
 /// A workflow run record from the database.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowRun {
     pub id: String,
@@ -58,6 +60,9 @@ pub struct WorkflowRun {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub result_summary: Option<String>,
+    /// Dedicated error message populated only on `Failed` transitions.
+    /// Mirrors `AgentRun.result_text` as a focused failure context field.
+    pub error: Option<String>,
     pub definition_snapshot: Option<String>,
     pub inputs: HashMap<String, String>,
     pub ticket_id: Option<String>,
@@ -76,6 +81,9 @@ pub struct WorkflowRun {
     pub blocked_on: Option<BlockedOn>,
     /// Optional feature ID linking this run to a feature branch.
     pub feature_id: Option<String>,
+    /// Human-readable title extracted from `definition_snapshot` at load time.
+    /// `None` when no title is present in the snapshot. Use `display_name()` for rendering.
+    pub workflow_title: Option<String>,
     // Aggregated metrics (populated at run completion)
     pub total_input_tokens: Option<i64>,
     pub total_output_tokens: Option<i64>,
@@ -87,15 +95,42 @@ pub struct WorkflowRun {
     pub model: Option<String>,
 }
 
+/// Extract the human-readable title from a workflow definition snapshot JSON string.
+///
+/// Returns `None` if the snapshot is absent, malformed, or has no `title` field.
+/// Logs a warning when JSON is present but cannot be parsed.
+pub(in crate::workflow) fn extract_workflow_title(snapshot: Option<&str>) -> Option<String> {
+    let s = snapshot?;
+    match serde_json::from_str::<serde_json::Value>(s) {
+        Ok(v) => v["title"].as_str().map(String::from),
+        Err(e) => {
+            tracing::warn!(
+                "Malformed definition_snapshot JSON — could not extract workflow title: {e}"
+            );
+            None
+        }
+    }
+}
+
 impl WorkflowRun {
     /// Whether this run was triggered by a workflow hook (prevents infinite chains).
     /// Derived from `trigger == "hook"` rather than stored separately.
     pub fn is_triggered_by_hook(&self) -> bool {
         self.trigger == "hook"
     }
+
+    /// Returns the human-readable display name for this run.
+    /// Uses `workflow_title` (extracted from `definition_snapshot` at load time) if present;
+    /// falls back to `workflow_name`.
+    pub fn display_name(&self) -> &str {
+        self.workflow_title
+            .as_deref()
+            .unwrap_or(&self.workflow_name)
+    }
 }
 
 /// A workflow step execution record from the database.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowRunStep {
     pub id: String,
@@ -130,6 +165,10 @@ pub struct WorkflowRunStep {
     pub gate_options: Option<String>,
     /// User-selected gate option values as JSON `["val1","val2"]` (set on approval).
     pub gate_selections: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
 }
 
 /// Lightweight summary of the currently-running step for a workflow run.
@@ -328,6 +367,18 @@ pub struct PendingGateRow {
     pub branch: Option<String>,
     /// Ticket source_id (e.g. "1151") from the linked ticket, if any.
     pub ticket_ref: Option<String>,
+    /// Human-readable title extracted from `definition_snapshot`. Use `display_name()` for rendering.
+    pub workflow_title: Option<String>,
+}
+
+impl PendingGateRow {
+    /// Returns the human-readable display name for this gate's workflow.
+    /// Uses `workflow_title` if present; falls back to `workflow_name`.
+    pub fn display_name(&self) -> &str {
+        self.workflow_title
+            .as_deref()
+            .unwrap_or(&self.workflow_name)
+    }
 }
 
 /// Counts of active workflow runs (pending / running / waiting) for a single repo.
@@ -463,4 +514,251 @@ pub fn resolve_conductor_bin_dir() -> Option<std::path::PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+}
+
+/// Per-workflow aggregate token usage, averaged across completed runs.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowTokenAggregate {
+    pub workflow_name: String,
+    pub avg_input: f64,
+    pub avg_output: f64,
+    pub avg_cache_read: f64,
+    pub avg_cache_creation: f64,
+    pub run_count: i64,
+    /// Percentage of terminal runs (completed or failed) that completed successfully.
+    /// Range: 0.0–100.0.
+    pub success_rate: f64,
+    /// Human-readable title extracted from any definition_snapshot for this workflow.
+    pub workflow_title: Option<String>,
+}
+
+/// Token totals for a time-series trend row (daily or weekly bucket).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowTokenTrendRow {
+    pub period: String,
+    pub total_input: i64,
+    pub total_output: i64,
+    pub total_cache_read: i64,
+    pub total_cache_creation: i64,
+}
+
+/// Per-step token averages across recent runs of the same workflow.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct StepTokenHeatmapRow {
+    pub step_name: String,
+    pub avg_input: f64,
+    pub avg_output: f64,
+    pub avg_cache_read: f64,
+    pub run_count: i64,
+}
+
+/// Failure rate per time period for a specific workflow.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowFailureRateTrendRow {
+    pub period: String,
+    pub total_runs: i64,
+    pub failed_runs: i64,
+    /// Percentage of runs in this period that completed successfully. Range: 0.0–100.0.
+    pub success_rate: f64,
+}
+
+/// Per-step failure statistics across recent terminal runs of a workflow.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct StepFailureHeatmapRow {
+    pub step_name: String,
+    pub total_executions: i64,
+    pub failed_executions: i64,
+    /// Percentage of executions that failed. Range: 0.0–100.0.
+    pub failure_rate: f64,
+    pub avg_retry_count: f64,
+}
+
+/// Per-step retry statistics across recent terminal runs of a workflow.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct StepRetryAnalyticsRow {
+    pub step_name: String,
+    pub total_executions: i64,
+    pub executions_with_retries: i64,
+    /// Percentage of executions that needed at least one retry. Range: 0.0–100.0.
+    pub retry_rate: f64,
+    /// Average retry count among executions that had at least one retry.
+    pub avg_retry_count: f64,
+    /// Percentage of retried executions that completed successfully. Range: 0.0–100.0.
+    pub retry_success_rate: f64,
+}
+
+/// P50/P75/P95/P99 percentile distributions for duration, cost, and tokens.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowPercentiles {
+    // Duration percentiles (milliseconds)
+    pub p50_duration_ms: Option<f64>,
+    pub p75_duration_ms: Option<f64>,
+    pub p95_duration_ms: Option<f64>,
+    pub p99_duration_ms: Option<f64>,
+    // Cost percentiles (USD)
+    pub p50_cost_usd: Option<f64>,
+    pub p75_cost_usd: Option<f64>,
+    pub p95_cost_usd: Option<f64>,
+    pub p99_cost_usd: Option<f64>,
+    // Total token percentiles (input + output)
+    pub p50_total_tokens: Option<f64>,
+    pub p75_total_tokens: Option<f64>,
+    pub p95_total_tokens: Option<f64>,
+    pub p99_total_tokens: Option<f64>,
+    pub run_count: i64,
+}
+
+/// Passive regression signal for a single workflow.
+///
+/// Compares a recent window (last N days) against a baseline window (prior M days)
+/// across three signals: P75 duration, P75 cost, and failure rate.
+/// Boolean regression flags are set in Rust after the query, using threshold constants.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowRegressionSignal {
+    pub workflow_name: String,
+    pub workflow_title: Option<String>,
+    pub recent_runs: i64,
+    pub baseline_runs: i64,
+    // Duration (ms) — P75
+    pub recent_p75_duration_ms: Option<f64>,
+    pub baseline_p75_duration_ms: Option<f64>,
+    pub duration_change_pct: Option<f64>,
+    // Cost (USD) — P75
+    pub recent_p75_cost_usd: Option<f64>,
+    pub baseline_p75_cost_usd: Option<f64>,
+    pub cost_change_pct: Option<f64>,
+    // Failure rate (0–100 %)
+    pub recent_failure_rate: f64,
+    pub baseline_failure_rate: f64,
+    pub failure_rate_change_pp: f64,
+    // Regression flags
+    pub duration_regressed: bool,
+    pub cost_regressed: bool,
+    pub failure_rate_regressed: bool,
+}
+
+/// Per-gate-step aggregate analytics for a workflow (one row per step_name).
+/// Approval is inferred from status: completed = approved, failed = rejected.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GateAnalyticsRow {
+    pub step_name: String,
+    pub total_gate_hits: i64,
+    pub approved_count: i64,
+    pub rejected_count: i64,
+    pub approval_rate: f64, // 0–100 %
+    pub avg_wait_ms: Option<f64>,
+    pub p50_wait_ms: Option<f64>,
+    pub p95_wait_ms: Option<f64>,
+    pub avg_feedback_length: Option<f64>, // proxy for feedback quality
+}
+
+/// Cross-workflow snapshot of all currently-waiting gate steps (one row per step).
+/// Distinct from `PendingGateRow` which is TUI-enriched and repo-scoped.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingGateAnalyticsRow {
+    pub step_id: String,
+    pub step_name: String,
+    pub gate_type: String,
+    pub gate_prompt: Option<String>,
+    pub workflow_name: String,
+    pub workflow_run_id: String,
+    pub started_at: String,
+    pub wait_ms_so_far: i64,
+}
+
+/// Raw per-run metrics for histogram distribution (one row per completed run).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowRunMetricsRow {
+    pub run_id: String,
+    pub started_at: String,
+    pub duration_ms: Option<i64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub worktree_id: Option<String>,
+    pub repo_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_run(workflow_name: &str, definition_snapshot: Option<&str>) -> WorkflowRun {
+        let workflow_title = super::extract_workflow_title(definition_snapshot);
+        WorkflowRun {
+            id: "test-id".into(),
+            workflow_name: workflow_name.into(),
+            worktree_id: None,
+            parent_run_id: String::new(),
+            status: WorkflowRunStatus::Completed,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: String::new(),
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: definition_snapshot.map(String::from),
+            inputs: HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            feature_id: None,
+            workflow_title,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn display_name_falls_back_to_workflow_name_when_no_snapshot() {
+        let run = make_run("my-workflow", None);
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_returns_title_from_snapshot() {
+        let snapshot = r#"{"title": "My Nice Workflow", "steps": []}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "My Nice Workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_snapshot_has_no_title() {
+        let snapshot = r#"{"steps": [], "description": "no title here"}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_snapshot_is_malformed_json() {
+        let run = make_run("my-workflow", Some("{not valid json"));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn display_name_falls_back_when_title_is_non_string() {
+        let snapshot = r#"{"title": 42}"#;
+        let run = make_run("my-workflow", Some(snapshot));
+        assert_eq!(run.display_name(), "my-workflow");
+    }
 }

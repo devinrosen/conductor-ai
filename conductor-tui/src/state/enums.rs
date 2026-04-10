@@ -5,6 +5,44 @@ pub enum View {
     WorktreeDetail,
     WorkflowRunDetail,
     WorkflowDefDetail,
+    Settings,
+}
+
+/// Which pane of the Settings view has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsFocus {
+    /// Left pane: category list.
+    #[default]
+    CategoryList,
+    /// Right pane: settings rows for the selected category.
+    SettingsList,
+}
+
+/// Top-level categories in the Settings view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsCategory {
+    #[default]
+    General,
+    Appearance,
+    Notifications,
+}
+
+impl SettingsCategory {
+    pub fn all() -> &'static [SettingsCategory] {
+        &[
+            SettingsCategory::General,
+            SettingsCategory::Appearance,
+            SettingsCategory::Notifications,
+        ]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Appearance => "Appearance",
+            Self::Notifications => "Notifications",
+        }
+    }
 }
 
 /// A row in the unified dashboard list — repo header or worktree entry.
@@ -256,7 +294,7 @@ impl WorkflowPickerItem {
 
     pub fn name(&self) -> &str {
         match self {
-            WorkflowPickerItem::Workflow(def) => &def.name,
+            WorkflowPickerItem::Workflow(def) => def.display_name(),
             WorkflowPickerItem::Header(label) => label.as_str(),
             WorkflowPickerItem::StartAgent => "Start agent",
             WorkflowPickerItem::Skip => "Skip",
@@ -389,6 +427,9 @@ pub enum ConfirmAction {
         ticket_id: Option<String>,
         from_pr: Option<u32>,
         from_branch: Option<String>,
+        /// When true, skip the dirty-state error in `ensure_base_up_to_date()`.
+        /// Set after the user confirms they want to proceed despite uncommitted changes.
+        force_dirty: bool,
     },
     DeleteWorktree {
         repo_slug: String,
@@ -513,4 +554,8 @@ pub enum InputAction {
         action: Box<RunWorkflowAction>,
         inputs: std::collections::HashMap<String, String>,
     },
+    /// Settings view: set the global model string (blank to clear).
+    SettingsSetModel,
+    /// Settings view: set the sync interval in minutes.
+    SettingsSetSyncInterval,
 }

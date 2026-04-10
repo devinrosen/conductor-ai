@@ -32,6 +32,10 @@ fn test_metadata_fields_basic() {
         output_file: None,
         gate_options: None,
         gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     };
     let entries = step.metadata_fields();
     assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
@@ -114,6 +118,10 @@ fn test_metadata_fields_optional_sections() {
         output_file: None,
         gate_options: None,
         gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     };
     let entries = step.metadata_fields();
     assert!(entries.contains(&MetadataEntry::Field {
@@ -349,18 +357,6 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
 // evaluate_hooks integration tests
 // ---------------------------------------------------------------------------
 
-/// Helper: set up a temp dir with `.conductor/config.toml` and optional workflow files.
-fn setup_hooks_dir(config_toml: &str, workflows: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let conductor_dir = dir.path().join(".conductor");
-    std::fs::create_dir_all(conductor_dir.join("workflows")).unwrap();
-    std::fs::write(conductor_dir.join("config.toml"), config_toml).unwrap();
-    for (name, content) in workflows {
-        std::fs::write(conductor_dir.join("workflows").join(name), content).unwrap();
-    }
-    dir
-}
-
 #[test]
 fn test_hook_chain_prevention_when_triggered_by_hook() {
     // When triggered_by_hook is true, hooks should NOT fire (prevents infinite chains).
@@ -581,7 +577,12 @@ fn test_execute_nodes_stops_on_external_cancel() {
 
     // Mark the run as cancelled before any nodes execute.
     WorkflowManager::new(&conn)
-        .update_workflow_status(&state.workflow_run_id, WorkflowRunStatus::Cancelled, None)
+        .update_workflow_status(
+            &state.workflow_run_id,
+            WorkflowRunStatus::Cancelled,
+            None,
+            None,
+        )
         .unwrap();
 
     // Any node will do — cancellation is detected before execute_single_node is called.
@@ -590,7 +591,7 @@ fn test_execute_nodes_stops_on_external_cancel() {
         body: vec![],
     })];
 
-    let result = execute_nodes(&mut state, &nodes);
+    let result = execute_nodes(&mut state, &nodes, true);
     assert!(result.is_err(), "cancelled run should return Err");
     assert!(
         result.unwrap_err().to_string().contains("cancelled"),

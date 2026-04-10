@@ -9,7 +9,7 @@ use crate::error::{ConductorError, Result};
 
 use super::WorkflowManager;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::WorkflowRun;
+use crate::workflow::types::{extract_workflow_title, WorkflowRun};
 
 impl<'a> WorkflowManager<'a> {
     pub fn create_workflow_run(
@@ -78,6 +78,7 @@ impl<'a> WorkflowManager<'a> {
             ],
         )?;
 
+        let workflow_title = extract_workflow_title(definition_snapshot);
         Ok(WorkflowRun {
             id,
             workflow_name: workflow_name.to_string(),
@@ -89,6 +90,7 @@ impl<'a> WorkflowManager<'a> {
             started_at: now,
             ended_at: None,
             result_summary: None,
+            error: None,
             definition_snapshot: definition_snapshot.map(String::from),
             inputs: HashMap::new(),
             ticket_id: ticket_id.map(String::from),
@@ -99,6 +101,7 @@ impl<'a> WorkflowManager<'a> {
             iteration: 0,
             blocked_on: None,
             feature_id: feature_id.map(String::from),
+            workflow_title,
             total_input_tokens: None,
             total_output_tokens: None,
             total_cache_read_input_tokens: None,
@@ -154,6 +157,7 @@ impl<'a> WorkflowManager<'a> {
         workflow_run_id: &str,
         status: WorkflowRunStatus,
         result_summary: Option<&str>,
+        error: Option<&str>,
     ) -> Result<()> {
         if matches!(status, WorkflowRunStatus::Waiting) {
             return Err(ConductorError::InvalidInput(
@@ -175,8 +179,8 @@ impl<'a> WorkflowManager<'a> {
         // Always clear blocked_on — the only way to enter Waiting (which sets
         // blocked_on) is through set_waiting_blocked_on().
         self.conn.execute(
-            "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3, blocked_on = NULL WHERE id = ?4",
-            params![status, result_summary, ended_at, workflow_run_id],
+            "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3, blocked_on = NULL, error = ?5 WHERE id = ?4",
+            params![status, result_summary, ended_at, workflow_run_id, error],
         )?;
         Ok(())
     }
@@ -258,7 +262,7 @@ impl<'a> WorkflowManager<'a> {
             }
         }
 
-        self.update_workflow_status(run_id, WorkflowRunStatus::Cancelled, Some(reason))
+        self.update_workflow_status(run_id, WorkflowRunStatus::Cancelled, Some(reason), None)
     }
 
     /// Persist aggregated metrics for a completed (or failed) workflow run.
@@ -315,7 +319,12 @@ impl<'a> WorkflowManager<'a> {
     /// Returns the parent agent run ID so callers can handle updating it
     /// separately to avoid cross-manager coupling.
     pub fn fail_workflow_run(&self, workflow_run_id: &str, error_msg: &str) -> Result<String> {
-        self.update_workflow_status(workflow_run_id, WorkflowRunStatus::Failed, Some(error_msg))?;
+        self.update_workflow_status(
+            workflow_run_id,
+            WorkflowRunStatus::Failed,
+            Some(error_msg),
+            Some(error_msg),
+        )?;
         if let Ok(Some(run)) = self.get_workflow_run(workflow_run_id) {
             Ok(run.parent_run_id)
         } else {

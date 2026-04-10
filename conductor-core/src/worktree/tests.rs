@@ -123,7 +123,8 @@ fn test_ensure_base_up_to_date_clean_fast_forward() {
     git(&["push", "origin", "main"], &other);
 
     // Local is now behind origin/main
-    let warnings = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main").unwrap();
+    let warnings =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
     assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 
     // Verify local main now has the new file
@@ -137,7 +138,7 @@ fn test_ensure_base_up_to_date_dirty_working_tree() {
     // Make the working tree dirty
     fs::write(local.join("dirty.txt"), "uncommitted").unwrap();
 
-    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main");
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
@@ -170,11 +171,114 @@ fn test_ensure_base_up_to_date_diverged_branch() {
     git(&["commit", "-m", "local diverge"], &local);
 
     // Now ensure_base_up_to_date should warn about divergence
-    let warnings = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main").unwrap();
+    let warnings =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
     assert!(
         warnings.iter().any(|w| w.contains("diverged")),
         "expected divergence warning, got: {:?}",
         warnings
+    );
+}
+
+#[test]
+fn test_check_main_health_clean_repo() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert!(!health.is_dirty, "clean repo should not be dirty");
+    assert!(health.dirty_files.is_empty());
+    assert_eq!(
+        health.commits_behind, 0,
+        "clean repo should be 0 commits behind"
+    );
+}
+
+#[test]
+fn test_check_main_health_dirty_repo() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Make the working tree dirty
+    fs::write(local.join("dirty_health.txt"), "uncommitted").unwrap();
+
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert!(health.is_dirty, "repo with untracked file should be dirty");
+    assert!(
+        !health.dirty_files.is_empty(),
+        "dirty_files should be non-empty"
+    );
+}
+
+#[test]
+fn test_check_main_health_no_remote_ref_commits_behind_zero() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Remove the remote so origin/<branch> ref doesn't exist — commits_behind must be 0.
+    git(&["remote", "remove", "origin"], &local);
+
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert_eq!(
+        health.commits_behind, 0,
+        "commits_behind should be 0 when remote tracking ref is absent"
+    );
+}
+
+#[test]
+fn test_check_main_health_commits_behind_positive() {
+    let (_tmp, remote, local) = setup_repo_with_remote();
+
+    // Clone the remote to a second directory, commit a new file, and push
+    let tmp2 = TempDir::new().unwrap();
+    let other = tmp2.path().join("other");
+    git(
+        &["clone", &remote.to_string_lossy(), &other.to_string_lossy()],
+        tmp2.path(),
+    );
+    git(&["config", "user.email", "test@test.com"], &other);
+    git(&["config", "user.name", "Test"], &other);
+    fs::write(other.join("behind.txt"), "behind").unwrap();
+    git(&["add", "behind.txt"], &other);
+    git(&["commit", "-m", "remote-only commit"], &other);
+    git(&["push", "origin", "main"], &other);
+
+    // Fetch in local so origin/main tracking ref is updated, but do NOT merge
+    git(&["fetch", "origin"], &local);
+
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert_eq!(
+        health.commits_behind, 1,
+        "local should be 1 commit behind origin/main after remote push + fetch"
+    );
+}
+
+#[test]
+fn test_ensure_base_up_to_date_force_dirty_skips_check() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Make the working tree dirty
+    fs::write(local.join("dirty_force.txt"), "uncommitted").unwrap();
+
+    // With force_dirty=true, the dirty check is skipped — should succeed
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", true, false);
+    assert!(
+        result.is_ok(),
+        "force_dirty=true should skip dirty check; got: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_ensure_base_up_to_date_skips_status_when_pre_verified_clean() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Make the working tree dirty — would normally cause an error
+    fs::write(local.join("dirty_pre_verified.txt"), "uncommitted").unwrap();
+
+    // With pre_verified_clean=true, the git status check is skipped
+    // (the fetch may fail too since there's no network, but that's a soft warning)
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, true);
+    assert!(
+        result.is_ok(),
+        "pre_verified_clean=true should skip dirty check; got: {:?}",
+        result.err()
     );
 }
 
@@ -251,7 +355,8 @@ fn test_ensure_base_up_to_date_detached_head() {
     // Detach HEAD in local
     git(&["checkout", "--detach", "HEAD"], &local);
 
-    let warnings = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main").unwrap();
+    let warnings =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
     // Should succeed (checkout main, then ff) with no warnings
     assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 
@@ -625,7 +730,7 @@ fn test_create_auto_clones_missing_local_path() {
         .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("myrepo", "feat-auto-clone", None, None, None);
+    let result = mgr.create("myrepo", "feat-auto-clone", Default::default());
     assert!(
         result.is_ok(),
         "expected Ok, got: {:?}",
@@ -664,7 +769,7 @@ fn test_create_clone_fails_with_bad_remote() {
         .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("badrepo", "feat-should-fail", None, None, None);
+    let result = mgr.create("badrepo", "feat-should-fail", Default::default());
     assert!(result.is_err(), "expected Err for bad remote");
     match result.unwrap_err() {
         ConductorError::Git(_) => {}
@@ -860,7 +965,14 @@ fn test_create_from_pr_propagates_fetch_error() {
     .unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
-    let result = mgr.create("test-repo", "from-pr-test", None, None, Some(42));
+    let result = mgr.create(
+        "test-repo",
+        "from-pr-test",
+        WorktreeCreateOptions {
+            from_pr: Some(42),
+            ..Default::default()
+        },
+    );
     // fetch_pr_branch will fail because the local repo has no GitHub remote
     let err = result.unwrap_err();
     assert!(
@@ -1082,7 +1194,14 @@ fn test_create_auto_registers_feature_for_non_default_base() {
 
     let mgr = WorktreeManager::new(&conn, &config);
     let (wt, _warnings) = mgr
-        .create("myrepo", "feat-child", Some("feat/parent"), None, None)
+        .create(
+            "myrepo",
+            "feat-child",
+            WorktreeCreateOptions {
+                from_branch: Some("feat/parent".to_string()),
+                ..Default::default()
+            },
+        )
         .expect("create should succeed");
 
     // Worktree should have feat/parent as its base branch
@@ -1137,9 +1256,11 @@ fn test_create_links_ticket_to_auto_registered_feature() {
         .create(
             "myrepo",
             "feat-child",
-            Some("feat/parent"),
-            Some("t1"),
-            None,
+            WorktreeCreateOptions {
+                from_branch: Some("feat/parent".to_string()),
+                ticket_id: Some("t1".to_string()),
+                ..Default::default()
+            },
         )
         .expect("create should succeed");
 
@@ -1184,7 +1305,7 @@ fn test_create_skips_auto_registration_for_default_branch() {
     // Create a worktree from main (default branch)
     let mgr = WorktreeManager::new(&conn, &config);
     let (wt, _warnings) = mgr
-        .create("myrepo", "feat-on-main", None, None, None)
+        .create("myrepo", "feat-on-main", Default::default())
         .expect("create should succeed");
 
     // base_branch should be "main" (default) — auto-registration should skip it
@@ -1427,6 +1548,283 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
         .unwrap();
     assert_eq!(s1, "merged");
     assert_eq!(s2, "merged");
+}
+
+// -----------------------------------------------------------------------
+// label_to_branch_prefix tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_label_prefix_bug_maps_to_fix() {
+    assert_eq!(manager::label_to_branch_prefix(&["bug"]), "fix");
+}
+
+#[test]
+fn test_label_prefix_fix_maps_to_fix() {
+    assert_eq!(manager::label_to_branch_prefix(&["fix"]), "fix");
+}
+
+#[test]
+fn test_label_prefix_security_maps_to_fix() {
+    assert_eq!(manager::label_to_branch_prefix(&["security"]), "fix");
+}
+
+#[test]
+fn test_label_prefix_enhancement_maps_to_feat() {
+    assert_eq!(manager::label_to_branch_prefix(&["enhancement"]), "feat");
+}
+
+#[test]
+fn test_label_prefix_feature_maps_to_feat() {
+    assert_eq!(manager::label_to_branch_prefix(&["feature"]), "feat");
+}
+
+#[test]
+fn test_label_prefix_chore_maps_to_chore() {
+    assert_eq!(manager::label_to_branch_prefix(&["chore"]), "chore");
+}
+
+#[test]
+fn test_label_prefix_maintenance_maps_to_chore() {
+    assert_eq!(manager::label_to_branch_prefix(&["maintenance"]), "chore");
+}
+
+#[test]
+fn test_label_prefix_documentation_maps_to_docs() {
+    assert_eq!(manager::label_to_branch_prefix(&["documentation"]), "docs");
+}
+
+#[test]
+fn test_label_prefix_docs_maps_to_docs() {
+    assert_eq!(manager::label_to_branch_prefix(&["docs"]), "docs");
+}
+
+#[test]
+fn test_label_prefix_refactor_maps_to_refactor() {
+    assert_eq!(manager::label_to_branch_prefix(&["refactor"]), "refactor");
+}
+
+#[test]
+fn test_label_prefix_test_maps_to_test() {
+    assert_eq!(manager::label_to_branch_prefix(&["test"]), "test");
+}
+
+#[test]
+fn test_label_prefix_testing_maps_to_test() {
+    assert_eq!(manager::label_to_branch_prefix(&["testing"]), "test");
+}
+
+#[test]
+fn test_label_prefix_ci_maps_to_ci() {
+    assert_eq!(manager::label_to_branch_prefix(&["ci"]), "ci");
+}
+
+#[test]
+fn test_label_prefix_build_maps_to_ci() {
+    assert_eq!(manager::label_to_branch_prefix(&["build"]), "ci");
+}
+
+#[test]
+fn test_label_prefix_perf_maps_to_perf() {
+    assert_eq!(manager::label_to_branch_prefix(&["perf"]), "perf");
+}
+
+#[test]
+fn test_label_prefix_performance_maps_to_perf() {
+    assert_eq!(manager::label_to_branch_prefix(&["performance"]), "perf");
+}
+
+#[test]
+fn test_label_prefix_case_insensitive() {
+    assert_eq!(manager::label_to_branch_prefix(&["Bug"]), "fix");
+    assert_eq!(manager::label_to_branch_prefix(&["BUG"]), "fix");
+    assert_eq!(manager::label_to_branch_prefix(&["CHORE"]), "chore");
+    assert_eq!(manager::label_to_branch_prefix(&["Docs"]), "docs");
+}
+
+#[test]
+fn test_label_prefix_empty_slice_falls_back_to_feat() {
+    assert_eq!(manager::label_to_branch_prefix(&[]), "feat");
+}
+
+#[test]
+fn test_label_prefix_unknown_label_falls_back_to_feat() {
+    assert_eq!(manager::label_to_branch_prefix(&["foobar"]), "feat");
+    assert_eq!(manager::label_to_branch_prefix(&["wontfix"]), "feat");
+}
+
+#[test]
+fn test_label_prefix_first_match_wins() {
+    // "bug" should win over "enhancement"
+    assert_eq!(
+        manager::label_to_branch_prefix(&["bug", "enhancement"]),
+        "fix"
+    );
+}
+
+// -----------------------------------------------------------------------
+// WorktreeManager::create prefix normalization tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_create_chore_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "chore-123-cleanup", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "chore-123-cleanup");
+    assert_eq!(wt.branch, "chore/123-cleanup");
+}
+
+#[test]
+fn test_create_docs_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "docs-456-readme", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "docs-456-readme");
+    assert_eq!(wt.branch, "docs/456-readme");
+}
+
+#[test]
+fn test_create_bug_prefix_maps_to_fix_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "bug-789-null-crash", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "bug-789-null-crash");
+    assert_eq!(wt.branch, "fix/789-null-crash");
+}
+
+#[test]
+fn test_create_refactor_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "refactor-10-extract-fn", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "refactor-10-extract-fn");
+    assert_eq!(wt.branch, "refactor/10-extract-fn");
+}
+
+#[test]
+fn test_create_test_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "test-11-add-coverage", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "test-11-add-coverage");
+    assert_eq!(wt.branch, "test/11-add-coverage");
+}
+
+#[test]
+fn test_create_ci_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "ci-12-update-actions", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "ci-12-update-actions");
+    assert_eq!(wt.branch, "ci/12-update-actions");
+}
+
+#[test]
+fn test_create_perf_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "perf-13-cache-results", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "perf-13-cache-results");
+    assert_eq!(wt.branch, "perf/13-cache-results");
 }
 
 #[test]

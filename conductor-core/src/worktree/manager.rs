@@ -14,6 +14,26 @@ use super::git_helpers::*;
 use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
 use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W, WORKTREE_COLUMN_COUNT};
 
+/// Map a ticket label to the conventional-commit branch prefix it implies.
+///
+/// Matching is case-insensitive and exact (no substring matching).
+/// First matching label wins. Returns `"feat"` when no label matches.
+pub fn label_to_branch_prefix(labels: &[&str]) -> &'static str {
+    for label in labels {
+        match label.to_lowercase().as_str() {
+            "bug" | "fix" | "security" => return "fix",
+            "chore" | "maintenance" => return "chore",
+            "documentation" | "docs" => return "docs",
+            "refactor" => return "refactor",
+            "test" | "testing" => return "test",
+            "ci" | "build" => return "ci",
+            "perf" | "performance" => return "perf",
+            _ => {}
+        }
+    }
+    "feat"
+}
+
 fn worktree_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
     let slug = slug.into();
     move |e| match e {
@@ -62,35 +82,45 @@ fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithSta
     })
 }
 
-/// Look up a ticket's Vantage dependencies and return the branch of the first
-/// parent that has an active worktree.  Returns `None` if the ticket has no
-/// resolvable parent branch (non-Vantage, no deps, or no parent worktree).
+/// Look up a ticket's dependencies and return the branch of the first parent that has
+/// an active worktree.  Returns `None` if the ticket has no resolvable parent branch
+/// (no dependency metadata for its source type, no deps, or no parent worktree).
 ///
-/// This function parses `raw_json` directly; swap to a `ticket_dependencies`
-/// table query once RFC 009 lands.
+/// Dependency IDs are extracted via [`crate::ticket_source::get_dependency_ids`];
+/// swap to a `ticket_dependencies` table query once RFC 009 lands.
 fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> Option<String> {
     let syncer = TicketSyncer::new(conn);
-    let ticket = syncer.get_by_id(ticket_id).ok()?;
+    let ticket = match syncer.get_by_id(ticket_id) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("resolve_parent_branch: failed to look up ticket {ticket_id}: {e}");
+            return None;
+        }
+    };
 
-    if ticket.source_type != "vantage" {
+    let dep_ids = crate::ticket_source::get_dependency_ids(&ticket.raw_json, &ticket.source_type);
+    if dep_ids.is_empty() {
         return None;
     }
 
-    let raw: serde_json::Value = serde_json::from_str(&ticket.raw_json).ok()?;
-    let deps = raw.get("dependencies")?.as_array()?;
-
-    for dep_id in deps.iter().filter_map(|v| v.as_str()) {
+    for dep_id in &dep_ids {
         let parent = match syncer.get_by_source_id(repo_id, dep_id) {
             Ok(t) => t,
             Err(_) => continue,
         };
         // Find an active worktree for this parent ticket
-        let worktrees: Vec<Worktree> = query_collect(
+        let worktrees: Vec<Worktree> = match query_collect(
             conn,
             &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
             params![&parent.id],
             map_worktree_row,
-        ).ok().unwrap_or_default();
+        ) {
+            Ok(wts) => wts,
+            Err(e) => {
+                tracing::warn!("resolve_parent_branch: DB query failed for ticket {}: {e}", parent.id);
+                continue;
+            }
+        };
         if let Some(wt) = worktrees
             .iter()
             .find(|w| w.status == WorktreeStatus::Active)
@@ -100,6 +130,29 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
     }
 
     None
+}
+
+/// Options for creating a new worktree.
+///
+/// Passed to [`WorktreeManager::create`] to avoid a long positional argument list.
+/// All fields are optional and default to `None` / `false`.
+#[derive(Debug, Default)]
+pub struct WorktreeCreateOptions {
+    /// When `Some(n)`, the worktree is backed by the branch of PR #n instead
+    /// of a newly-created branch. `from_branch` is ignored in that case.
+    pub from_pr: Option<u32>,
+    /// Start the worktree from an existing branch name instead of creating a
+    /// new one.  Ignored when `from_pr` is set.
+    pub from_branch: Option<String>,
+    /// Associate the new worktree with this ticket ID.
+    pub ticket_id: Option<String>,
+    /// When `true`, skip the dirty-state check. Use only after the caller has
+    /// explicitly confirmed the user wants to proceed with uncommitted changes.
+    pub force_dirty: bool,
+    /// Pre-computed health status from a prior `check_main_health()` call.
+    /// When `Some` and the working tree is clean, the redundant `git status`
+    /// inside `ensure_base_up_to_date()` is skipped.
+    pub pre_health: Option<super::git_helpers::MainHealthStatus>,
 }
 
 pub struct WorktreeManager<'a> {
@@ -112,6 +165,23 @@ impl<'a> WorktreeManager<'a> {
         Self { conn, config }
     }
 
+    /// Run a read-only health check on the base branch of `repo_slug`.
+    ///
+    /// Resolves the base branch in the same priority order as `create()`.
+    /// Returns a `MainHealthStatus` describing dirty state and staleness.
+    pub fn check_main_health(
+        &self,
+        repo_slug: &str,
+        base_branch: Option<&str>,
+    ) -> Result<super::git_helpers::MainHealthStatus> {
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_slug(repo_slug)?;
+        let base = base_branch
+            .map(|b| b.to_string())
+            .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
+        Ok(check_main_health(&repo.local_path, &base))
+    }
+
     /// Create a new worktree, ensuring the base branch is up to date first.
     ///
     /// Returns the created worktree and a list of non-fatal warnings
@@ -119,25 +189,50 @@ impl<'a> WorktreeManager<'a> {
     ///
     /// When `from_pr` is `Some(n)`, the worktree is backed by the branch of PR #n
     /// instead of a newly-created branch.  `from_branch` is ignored in that case.
+    ///
+    /// When `force_dirty` is `true`, the dirty-state check inside
+    /// `ensure_base_up_to_date()` is skipped. Use this only after the caller has
+    /// explicitly confirmed the user wants to proceed with uncommitted changes.
+    ///
+    /// When `opts.pre_health` is `Some` and the health status shows a clean working tree,
+    /// the redundant `git status --porcelain` call inside `ensure_base_up_to_date()` is
+    /// skipped. Callers that already ran `check_main_health()` should pass the result here.
     pub fn create(
         &self,
         repo_slug: &str,
         name: &str,
-        from_branch: Option<&str>,
-        ticket_id: Option<&str>,
-        from_pr: Option<u32>,
+        opts: WorktreeCreateOptions,
     ) -> Result<(Worktree, Vec<String>)> {
+        let WorktreeCreateOptions {
+            from_pr,
+            from_branch,
+            ticket_id,
+            force_dirty,
+            pre_health,
+        } = opts;
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
-        // Determine branch name and worktree slug
-        let (wt_slug, branch) = if name.starts_with("fix-") {
-            let clean = name.strip_prefix("fix-").unwrap();
-            (format!("fix-{clean}"), format!("fix/{clean}"))
-        } else {
-            let clean = name.strip_prefix("feat-").unwrap_or(name);
-            (format!("feat-{clean}"), format!("feat/{clean}"))
-        };
+        // Determine branch name and worktree slug.
+        // "bug-" slugs are preserved as-is but map to "fix/" in git.
+        const SLUG_PREFIXES: &[(&str, &str)] = &[
+            ("fix-", "fix"),
+            ("bug-", "fix"),
+            ("feat-", "feat"),
+            ("chore-", "chore"),
+            ("docs-", "docs"),
+            ("refactor-", "refactor"),
+            ("test-", "test"),
+            ("ci-", "ci"),
+            ("perf-", "perf"),
+        ];
+        let (wt_slug, branch) =
+            if let Some(&(dash, slash)) = SLUG_PREFIXES.iter().find(|(d, _)| name.starts_with(d)) {
+                let clean = name.strip_prefix(dash).unwrap();
+                (format!("{dash}{clean}"), format!("{slash}/{clean}"))
+            } else {
+                (format!("feat-{name}"), format!("feat/{name}"))
+            };
 
         // Check for existing worktree with same slug
         let existing_status: Option<WorktreeStatus> = self
@@ -185,8 +280,9 @@ impl<'a> WorktreeManager<'a> {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
             let base = if let Some(b) = from_branch {
                 b.to_string()
-            } else if let Some(parent_branch) =
-                ticket_id.and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
+            } else if let Some(parent_branch) = ticket_id
+                .as_deref()
+                .and_then(|tid| resolve_parent_branch(self.conn, tid, &repo.id))
             {
                 parent_branch
             } else {
@@ -217,7 +313,11 @@ impl<'a> WorktreeManager<'a> {
                     }
                 }
             }
-            let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
+            let pre_verified_clean = pre_health
+                .map(|h| !h.is_dirty && !h.status_check_failed)
+                .unwrap_or(false);
+            let warnings =
+                ensure_base_up_to_date(&repo.local_path, &base, force_dirty, pre_verified_clean)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",
@@ -252,7 +352,7 @@ impl<'a> WorktreeManager<'a> {
             slug: wt_slug,
             branch,
             path: wt_path.to_string_lossy().to_string(),
-            ticket_id: ticket_id.map(|s| s.to_string()),
+            ticket_id,
             status: WorktreeStatus::Active,
             created_at: now,
             completed_at: None,
@@ -1008,5 +1108,100 @@ impl<'a> WorktreeManager<'a> {
         }
 
         Ok(cleaned)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::create_test_conn;
+
+    fn insert_ticket(conn: &Connection, id: &str, repo_id: &str, source_id: &str, raw_json: &str) {
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES (?1, ?2, 'vantage', ?3, 'Test', '', 'open', '[]', '', '2024-01-01T00:00:00Z', ?4)",
+            rusqlite::params![id, repo_id, source_id, raw_json],
+        ).unwrap();
+    }
+
+    fn insert_worktree_with_ticket(
+        conn: &Connection,
+        id: &str,
+        repo_id: &str,
+        ticket_id: &str,
+        status: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, ticket_id, created_at) \
+             VALUES (?1, ?2, ?1, 'feat/dep', '/tmp/dep', ?3, ?4, '2024-01-01T00:00:00Z')",
+            rusqlite::params![id, repo_id, status, ticket_id],
+        ).unwrap();
+    }
+
+    #[test]
+    fn resolve_parent_branch_returns_none_for_non_vantage_ticket() {
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) VALUES ('r1','repo','/p','u','/w','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'github', '42', 'Issue', '', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+        assert!(resolve_parent_branch(&conn, "t1", "r1").is_none());
+    }
+
+    #[test]
+    fn resolve_parent_branch_returns_none_when_no_dependencies() {
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) VALUES ('r1','repo','/p','u','/w','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        insert_ticket(&conn, "t1", "r1", "D-001", r#"{"id":"D-001"}"#);
+        assert!(resolve_parent_branch(&conn, "t1", "r1").is_none());
+    }
+
+    #[test]
+    fn resolve_parent_branch_finds_active_parent_worktree() {
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) VALUES ('r1','repo','/p','u','/w','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        // Parent ticket (dep D-000) with an active worktree
+        insert_ticket(&conn, "parent", "r1", "D-000", r#"{"id":"D-000"}"#);
+        insert_worktree_with_ticket(&conn, "wt-parent", "r1", "parent", "active");
+        // Child ticket depending on D-000
+        insert_ticket(
+            &conn,
+            "child",
+            "r1",
+            "D-001",
+            r#"{"id":"D-001","dependencies":["D-000"]}"#,
+        );
+        let branch = resolve_parent_branch(&conn, "child", "r1");
+        assert_eq!(branch, Some("feat/dep".to_string()));
+    }
+
+    #[test]
+    fn resolve_parent_branch_returns_none_when_parent_worktree_not_active() {
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) VALUES ('r1','repo','/p','u','/w','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        insert_ticket(&conn, "parent", "r1", "D-000", r#"{"id":"D-000"}"#);
+        insert_worktree_with_ticket(&conn, "wt-parent", "r1", "parent", "merged");
+        insert_ticket(
+            &conn,
+            "child",
+            "r1",
+            "D-001",
+            r#"{"id":"D-001","dependencies":["D-000"]}"#,
+        );
+        assert!(resolve_parent_branch(&conn, "child", "r1").is_none());
     }
 }

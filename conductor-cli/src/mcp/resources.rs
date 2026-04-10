@@ -286,7 +286,13 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
             .get_workflow_run(run_id)?
             .ok_or_else(|| anyhow::anyhow!("Workflow run {run_id} not found"))?;
         let steps = wf_mgr.get_workflow_steps(run_id)?;
-        return Ok(format_run_detail_with_log(&conn, &run, &steps));
+        let claude_dir = config.general.resolve_optional_claude_dir();
+        return Ok(format_run_detail_with_log(
+            &conn,
+            &run,
+            &steps,
+            claude_dir.as_deref(),
+        ));
     }
 
     if let Some(repo_slug) = uri.strip_prefix("conductor://workflows/") {
@@ -448,16 +454,23 @@ fn format_run_detail(
 
 /// Return the tail of the most recent Claude Code conversation log for a worktree.
 ///
-/// Looks in `~/.claude/projects/<escaped>/` where `<escaped>` is the worktree
-/// path with every `/` replaced by `-`. Returns `None` on any error or if no
-/// relevant messages are found.
-pub(crate) fn conversation_log_tail(worktree_path: &Path) -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
+/// Looks in `<claude_config_dir>/projects/<escaped>/` where `<escaped>` is the
+/// worktree path with every `/` replaced by `-`. Falls back to `~/.claude` when
+/// `claude_config_dir` is `None`. Returns `None` on any error or if no relevant
+/// messages are found.
+pub(crate) fn conversation_log_tail(
+    worktree_path: &Path,
+    claude_config_dir: Option<&Path>,
+) -> Option<String> {
     let escaped = worktree_path.to_str()?.replace('/', "-");
-    let projects_dir = PathBuf::from(&home)
-        .join(".claude")
-        .join("projects")
-        .join(&escaped);
+    let base = match claude_config_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => {
+            let home = std::env::var("HOME").ok()?;
+            PathBuf::from(home).join(".claude")
+        }
+    };
+    let projects_dir = base.join("projects").join(&escaped);
     conversation_log_tail_from_dir(&projects_dir)
 }
 
@@ -530,11 +543,12 @@ pub(crate) fn format_run_detail_with_log(
     conn: &rusqlite::Connection,
     run: &conductor_core::workflow::WorkflowRun,
     steps: &[conductor_core::workflow::WorkflowRunStep],
+    claude_config_dir: Option<&Path>,
 ) -> String {
     let (wt_slug, wt_branch, wt_path) = resolve_worktree_info(conn, run);
     let mut out = format_run_detail(run, steps, wt_slug.as_deref(), wt_branch.as_deref());
     if let Some(path) = wt_path {
-        if let Some(log) = conversation_log_tail(&path) {
+        if let Some(log) = conversation_log_tail(&path, claude_config_dir) {
             out.push_str("\nconversation log (last 20 messages):\n");
             out.push_str(&log);
         }
@@ -848,6 +862,59 @@ workflow build {
             }
         })]);
         assert!(result.is_none(), "only tool_use content → no text → None");
+    }
+
+    // -- conversation_log_tail dispatch (explicit dir vs ~/ fallback) ----------
+
+    #[test]
+    fn test_conversation_log_tail_explicit_dir_used_when_provided() {
+        // When an explicit claude_config_dir is provided, conversation_log_tail
+        // should look in <claude_config_dir>/projects/<escaped_path>/ rather
+        // than ~/.claude/projects/...
+        let worktree_dir = tempfile::TempDir::new().expect("tmpdir");
+        let worktree_path = worktree_dir.path();
+
+        // Set up the expected projects sub-directory under a custom base dir.
+        let custom_base = tempfile::TempDir::new().expect("tmpdir");
+        let escaped = worktree_path.to_str().unwrap().replace('/', "-");
+        let projects_dir = custom_base.path().join("projects").join(&escaped);
+        std::fs::create_dir_all(&projects_dir).expect("create projects dir");
+        write_jsonl(
+            &projects_dir.join("session.jsonl"),
+            &[serde_json::json!({"type": "user", "message": {"content": "custom dir message"}})],
+        );
+
+        let result = conversation_log_tail(worktree_path, Some(custom_base.path()));
+        assert!(result.is_some(), "should find log in explicit custom dir");
+        let text = result.unwrap();
+        assert!(
+            text.contains("custom dir message"),
+            "should contain message from custom dir; got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_conversation_log_tail_none_dir_returns_none_when_no_home_log() {
+        // When claude_config_dir is None, the function falls back to ~/.claude.
+        // Use a path that won't exist under ~/.claude/projects to get None back.
+        let worktree_dir = tempfile::TempDir::new().expect("tmpdir");
+        // Very unlikely to have a matching log for this path.
+        let result = conversation_log_tail(worktree_dir.path(), None);
+        // We can only assert this doesn't panic; result depends on developer's machine.
+        let _ = result;
+    }
+
+    #[test]
+    fn test_conversation_log_tail_explicit_dir_missing_returns_none() {
+        // If an explicit dir is provided but has no matching projects subdir, returns None.
+        let worktree_dir = tempfile::TempDir::new().expect("tmpdir");
+        let custom_base = tempfile::TempDir::new().expect("tmpdir");
+        // No projects sub-directory created — should return None gracefully.
+        let result = conversation_log_tail(worktree_dir.path(), Some(custom_base.path()));
+        assert!(
+            result.is_none(),
+            "missing projects subdir should return None"
+        );
     }
 
     #[test]

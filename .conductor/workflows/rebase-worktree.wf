@@ -1,5 +1,6 @@
 workflow rebase-worktree {
   meta {
+    title       = "Rebase Worktree"
     description = "Fetch latest base branch, resolve any conflicts, and force-push the branch"
     trigger     = "manual"
     targets     = ["worktree"]

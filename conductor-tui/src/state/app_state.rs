@@ -11,10 +11,10 @@ use ratatui::widgets::ListState;
 
 use super::workflow_rows::{count_children_rows, count_steps_for_run, max_iteration_for_run};
 use super::{
-    build_worktree_tree, build_worktree_tree_indices, parse_target_label, push_children,
-    push_steps_for_run, ColumnFocus, DashboardRow, DataCache, FilterState, Modal, RepoDetailFocus,
-    TargetType, TreePosition, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow,
-    WorkflowsFocus,
+    build_ticket_tree_indices, build_worktree_tree, build_worktree_tree_indices,
+    parse_target_label, push_children, push_steps_for_run, ColumnFocus, DashboardRow, DataCache,
+    FilterState, Modal, RepoDetailFocus, SettingsCategory, SettingsFocus, TargetType, TreePosition,
+    View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
 };
 use crate::theme::Theme;
 
@@ -51,6 +51,10 @@ pub struct AppState {
     // Pre-filtered ticket lists (closed + text filter applied); index into these for nav/actions
     pub filtered_tickets: Vec<Ticket>,
     pub filtered_detail_tickets: Vec<Ticket>,
+    /// Parallel tree-position metadata for `filtered_detail_tickets` (same length).
+    pub detail_ticket_tree_positions: Vec<TreePosition>,
+    /// Set of ticket IDs whose children are currently collapsed in the ticket list.
+    pub collapsed_ticket_ids: HashSet<String>,
 
     // Agent activity list navigation (replaces the old Paragraph scroll offset)
     pub agent_list_state: RefCell<ListState>,
@@ -144,6 +148,34 @@ pub struct AppState {
     /// Set of dot-path strings identifying expanded `CallWorkflow` nodes in the step tree.
     /// Cleared whenever `workflow_def_index` changes.
     pub workflow_def_expanded_calls: HashSet<String>,
+
+    // ── Settings view ────────────────────────────────────────────────────────
+    /// Which pane of the Settings view has keyboard focus.
+    pub settings_focus: SettingsFocus,
+    /// Which category is selected in the left pane.
+    pub settings_category: SettingsCategory,
+    /// Selected row in the left-pane category list.
+    pub settings_category_index: usize,
+    /// Selected row index in the right-pane settings list.
+    pub settings_row_index: usize,
+    /// Per-hook last test result: `Ok(())` = fired, `Err(msg)` = error.
+    pub settings_hook_test_results: HashMap<usize, Result<(), String>>,
+    /// Snapshot of config values for display in the Settings view.
+    /// Refreshed whenever Settings is opened or a value is changed.
+    pub settings_display: SettingsDisplayCache,
+}
+
+/// Displayable snapshot of conductor config values for the Settings view.
+#[derive(Debug, Clone, Default)]
+pub struct SettingsDisplayCache {
+    pub model: String,
+    pub permission_mode: String,
+    pub auto_start: String,
+    pub sync_interval: String,
+    pub auto_cleanup: String,
+    pub theme: String,
+    /// (on_pattern, run_or_url) pairs for each configured hook.
+    pub hooks: Vec<(String, String)>,
 }
 
 impl Default for AppState {
@@ -177,6 +209,8 @@ impl AppState {
             pr_last_fetched_at: None,
             filtered_tickets: Vec::new(),
             filtered_detail_tickets: Vec::new(),
+            detail_ticket_tree_positions: Vec::new(),
+            collapsed_ticket_ids: HashSet::new(),
             agent_list_state: RefCell::new(ListState::default()),
             repo_agent_list_state: RefCell::new(ListState::default()),
             worktree_detail_focus: super::WorktreeDetailFocus::InfoPanel,
@@ -218,6 +252,12 @@ impl AppState {
             workflow_def_focus: WorkflowDefFocus::List,
             workflow_def_step_index: 0,
             workflow_def_expanded_calls: HashSet::new(),
+            settings_focus: SettingsFocus::CategoryList,
+            settings_category: SettingsCategory::General,
+            settings_category_index: 0,
+            settings_row_index: 0,
+            settings_hook_test_results: HashMap::new(),
+            settings_display: SettingsDisplayCache::default(),
         }
     }
 
@@ -327,16 +367,73 @@ impl AppState {
         });
 
         let detail_filter_query = self.detail_ticket_filter.as_query();
-        self.filtered_detail_tickets = self
-            .detail_tickets
-            .iter()
-            .filter(|t| self.show_closed_tickets || t.state != "closed")
-            .filter(|t| match detail_filter_query.as_deref() {
-                Some(f) if !f.is_empty() => t.matches_filter(f),
-                _ => true,
-            })
-            .cloned()
-            .collect();
+
+        // Build DFS tree order for detail tickets; also get child→parent map for
+        // ancestor promotion during text filter (reuse instead of rebuilding).
+        let (dfs_indices, dfs_positions, child_to_parent) =
+            build_ticket_tree_indices(&self.detail_tickets, &self.data.ticket_dependencies);
+
+        // When a text filter is active, find all ticket IDs that match plus their ancestors.
+        let include_set: Option<std::collections::HashSet<&str>> =
+            if let Some(f) = detail_filter_query.as_deref() {
+                if !f.is_empty() {
+                    let mut set = std::collections::HashSet::new();
+                    for t in &self.detail_tickets {
+                        if t.matches_filter(f) {
+                            set.insert(t.id.as_str());
+                            // Walk up the ancestor chain.
+                            let mut cur = t.id.as_str();
+                            while let Some(&parent) = child_to_parent.get(cur) {
+                                if !set.insert(parent) {
+                                    break; // already added this ancestor
+                                }
+                                cur = parent;
+                            }
+                        }
+                    }
+                    Some(set)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        let mut filtered = Vec::with_capacity(self.detail_tickets.len());
+        let mut positions = Vec::with_capacity(self.detail_tickets.len());
+
+        // Walk DFS order; track whether each ancestor is collapsed to skip subtrees.
+        // We use the `child_to_parent` map to check collapse status up the chain.
+        'outer: for (dfs_idx, pos) in dfs_indices.iter().zip(dfs_positions.iter()) {
+            let t = &self.detail_tickets[*dfs_idx];
+
+            // Check if any ancestor is collapsed.
+            let mut cur = t.id.as_str();
+            while let Some(&parent) = child_to_parent.get(cur) {
+                if self.collapsed_ticket_ids.contains(parent) {
+                    continue 'outer;
+                }
+                cur = parent;
+            }
+
+            // Apply show_closed filter.
+            if !self.show_closed_tickets && t.state == "closed" {
+                continue;
+            }
+
+            // Apply text/include filter.
+            if let Some(ref set) = include_set {
+                if !set.contains(t.id.as_str()) {
+                    continue;
+                }
+            }
+
+            filtered.push(t.clone());
+            positions.push(pos.clone());
+        }
+
+        self.filtered_detail_tickets = filtered;
+        self.detail_ticket_tree_positions = positions;
     }
 
     /// Returns (current_index, list_length) for the currently focused pane.
@@ -385,6 +482,7 @@ impl AppState {
                 ),
             },
             View::WorkflowDefDetail => (self.workflow_def_detail_scroll, 0),
+            View::Settings => (self.settings_row_index, 0),
         }
     }
 
@@ -421,6 +519,9 @@ impl AppState {
             },
             View::WorkflowDefDetail => {
                 self.workflow_def_detail_scroll = index;
+            }
+            View::Settings => {
+                self.settings_row_index = index;
             }
         }
     }
@@ -1063,14 +1164,14 @@ impl AppState {
         self.data.tickets.get(self.ticket_index)
     }
 
-    /// Returns true if the selected workflow run has failed with a non-empty result_summary.
+    /// Returns true if the selected workflow run has failed with a non-empty error field.
     pub fn selected_run_has_error(&self) -> bool {
         self.selected_workflow_run_id
             .as_ref()
             .and_then(|id| self.data.workflow_runs.iter().find(|r| &r.id == id))
             .map(|run| {
                 run.status == WorkflowRunStatus::Failed
-                    && run.result_summary.as_ref().is_some_and(|s| !s.is_empty())
+                    && run.error.as_ref().is_some_and(|s| !s.is_empty())
             })
             .unwrap_or(false)
     }

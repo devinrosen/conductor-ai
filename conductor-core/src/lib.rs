@@ -29,7 +29,9 @@ pub(crate) use impl_sql_enum;
 pub mod agent;
 pub mod agent_config;
 pub mod agent_runtime;
+pub mod attachments;
 pub mod config;
+pub mod conversation;
 pub mod db;
 pub mod error;
 pub mod feature;
@@ -40,6 +42,8 @@ pub mod hooks;
 pub mod issue_source;
 pub mod jira_acli;
 pub mod models;
+pub mod notification_event;
+pub mod notification_hooks;
 pub mod notification_manager;
 pub mod notify;
 pub mod orchestrator;
@@ -59,8 +63,20 @@ pub mod workflow_template;
 pub mod worktree;
 
 /// Generate a new ULID-based unique ID string.
+///
+/// Uses a thread-local monotonic generator so IDs created within the
+/// same millisecond are guaranteed to sort in creation order.
 pub fn new_id() -> String {
-    ulid::Ulid::new().to_string()
+    use std::cell::RefCell;
+    thread_local! {
+        static GEN: RefCell<ulid::Generator> = const { RefCell::new(ulid::Generator::new()) };
+    }
+    GEN.with(|g| {
+        g.borrow_mut()
+            .generate()
+            .unwrap_or_else(|_| ulid::Ulid::new())
+            .to_string()
+    })
 }
 
 #[cfg(feature = "test-helpers")]

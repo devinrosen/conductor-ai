@@ -3,6 +3,7 @@ use conductor_core::worktree::WorktreeManager;
 use crate::action::Action;
 use crate::background;
 use crate::state::Modal;
+use crate::state::View;
 
 use super::App;
 
@@ -24,6 +25,9 @@ impl App {
                 }
             };
             let Some(bg_tx) = self.bg_tx.clone() else {
+                self.state.modal = Modal::Error {
+                    message: "Cannot push: background sender not ready.".into(),
+                };
                 return;
             };
             self.state.modal = Modal::Progress {
@@ -64,6 +68,9 @@ impl App {
                 }
             };
             let Some(bg_tx) = self.bg_tx.clone() else {
+                self.state.modal = Modal::Error {
+                    message: "Cannot create PR: background sender not ready.".into(),
+                };
                 return;
             };
             self.state.modal = Modal::Progress {
@@ -98,6 +105,32 @@ impl App {
             return;
         };
         self.state.ticket_sync_in_progress = true;
+
+        // In RepoDetail view, scope sync to the currently focused repo.
+        if self.state.view == View::RepoDetail {
+            if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
+                if let Some(repo) = self
+                    .state
+                    .data
+                    .repos
+                    .iter()
+                    .find(|r| &r.id == repo_id)
+                    .cloned()
+                {
+                    self.state.status_message =
+                        Some(format!("Syncing tickets for {}...", repo.slug));
+                    background::spawn_ticket_sync_for_repo(
+                        tx.clone(),
+                        repo.id,
+                        repo.slug,
+                        repo.remote_url,
+                        true,
+                    );
+                    return;
+                }
+            }
+        }
+
         self.state.status_message = Some("Syncing tickets...".to_string());
         background::spawn_ticket_sync_once(tx.clone());
     }

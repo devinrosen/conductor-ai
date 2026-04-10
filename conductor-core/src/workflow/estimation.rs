@@ -18,6 +18,7 @@ use super::types::WorkflowRunStep;
 
 /// Confidence level for a time estimate, derived from sample size and variance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
     High,
@@ -27,6 +28,7 @@ pub enum Confidence {
 
 /// A time estimate with confidence bounds.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Estimate {
     /// Best-guess duration in milliseconds.
     pub point_ms: i64,
@@ -564,6 +566,10 @@ mod tests {
             output_file: None,
             gate_options: None,
             gate_selections: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         }
     }
 

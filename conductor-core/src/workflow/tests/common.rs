@@ -172,6 +172,7 @@ pub(in crate::workflow) fn make_loop_test_state<'a>(
 pub(super) fn make_empty_workflow() -> WorkflowDef {
     WorkflowDef {
         name: "test-wf".into(),
+        title: None,
         description: "test".into(),
         trigger: WorkflowTrigger::Manual,
         targets: vec![],
@@ -284,6 +285,10 @@ pub(super) fn make_test_step(
         output_file: None,
         gate_options: None,
         gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -310,6 +315,7 @@ pub(super) fn make_workflow_def_with_inputs(
 ) -> crate::workflow_dsl::WorkflowDef {
     crate::workflow_dsl::WorkflowDef {
         name: "test-wf".to_string(),
+        title: None,
         description: String::new(),
         trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
         targets: vec![],
@@ -452,4 +458,64 @@ pub(super) fn make_workflow_run(
         .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     (mgr, parent, run)
+}
+
+/// Helper: set up a temp dir with `.conductor/config.toml` and optional workflow files.
+pub(super) fn setup_hooks_dir(config_toml: &str, workflows: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let conductor_dir = dir.path().join(".conductor");
+    std::fs::create_dir_all(conductor_dir.join("workflows")).unwrap();
+    std::fs::write(conductor_dir.join("config.toml"), config_toml).unwrap();
+    for (name, content) in workflows {
+        std::fs::write(conductor_dir.join("workflows").join(name), content).unwrap();
+    }
+    dir
+}
+
+/// Helper: create a running workflow run with a parent agent run.
+pub(super) fn make_running_wf(conn: &Connection, name: &str) -> (String, String) {
+    let agent_mgr = AgentManager::new(conn);
+    let wf_mgr = WorkflowManager::new(conn);
+    let parent = agent_mgr.create_run(Some("w1"), name, None, None).unwrap();
+    let run = wf_mgr
+        .create_workflow_run(name, Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+    wf_mgr
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+        .unwrap();
+    (run.id, parent.id)
+}
+
+/// Helper: insert a terminal step into a workflow run (auto-generates step ID via WorkflowManager).
+pub(super) fn insert_terminal_step(
+    conn: &Connection,
+    wf_run_id: &str,
+    status: WorkflowStepStatus,
+    position: i64,
+) {
+    let wf_mgr = WorkflowManager::new(conn);
+    let step_id = wf_mgr
+        .insert_step(wf_run_id, "step", "actor", false, position, 0)
+        .unwrap();
+    wf_mgr
+        .update_step_status(&step_id, status, None, None, None, None, None)
+        .unwrap();
+}
+
+/// Helper: insert a terminal step with an explicit step ID and `ended_at` timestamp.
+/// Used by time-gated query tests that need control over the `ended_at` value.
+pub(super) fn insert_terminal_step_with_id(
+    conn: &Connection,
+    step_id: &str,
+    run_id: &str,
+    status: &str,
+    ended_at: &str,
+) {
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, ended_at) \
+         VALUES (?1, ?2, 'step-a', 'actor', 0, ?3, 0, ?4)",
+        params![step_id, run_id, status, ended_at],
+    )
+    .unwrap();
 }

@@ -23,32 +23,64 @@ pub enum AgentPermissionMode {
     SkipPermissions,
     /// Use `--permission-mode plan` (read-only mode for repo-scoped agents).
     Plan,
+    /// Use `--dangerously-skip-permissions` + `--allowedTools` read-safe pattern.
+    /// Excludes file-writing tools (Edit, Write, MultiEdit, NotebookEdit) at the
+    /// Claude tool level without locking into plan-mode's "propose before acting"
+    /// flow, so Bash/gh remain fully executable.
+    RepoSafe,
 }
 
 impl AgentPermissionMode {
-    /// Returns the CLI flag string to pass to the `claude` command.
+    /// Returns the conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
     pub fn cli_flag(&self) -> &str {
         match self {
             Self::AutoMode => "--enable-auto-mode",
             Self::SkipPermissions => "--dangerously-skip-permissions",
             Self::Plan => "--permission-mode",
+            Self::RepoSafe => "--permission-mode",
         }
     }
 
-    /// Returns the optional value argument that follows the flag (e.g. "plan" for `--permission-mode plan`).
+    /// Returns the optional value argument that follows the conductor CLI flag.
     pub fn cli_flag_value(&self) -> Option<&str> {
+        match self {
+            Self::Plan => Some("plan"),
+            Self::RepoSafe => Some("repo-safe"),
+            _ => None,
+        }
+    }
+
+    /// Returns the actual permission flag to pass to the `claude` subprocess.
+    ///
+    /// This differs from `cli_flag()` for `RepoSafe`: conductor receives
+    /// `--permission-mode repo-safe`, but claude receives `--dangerously-skip-permissions`.
+    pub fn claude_permission_flag(&self) -> &str {
+        match self {
+            Self::AutoMode => "--enable-auto-mode",
+            Self::SkipPermissions => "--dangerously-skip-permissions",
+            Self::Plan => "--permission-mode",
+            Self::RepoSafe => "--dangerously-skip-permissions",
+        }
+    }
+
+    /// Returns the optional value argument that follows the claude permission flag.
+    pub fn claude_permission_flag_value(&self) -> Option<&str> {
         match self {
             Self::Plan => Some("plan"),
             _ => None,
         }
     }
 
-    /// Returns the `--allowedTools` glob pattern for this mode, if any.
+    /// Returns the `--allowedTools` pattern for this mode, if any.
     ///
-    /// Plan mode restricts agents to conductor MCP tools only.
+    /// Plan and RepoSafe modes allow read-only and shell tools (Bash, Glob, Grep, Read,
+    /// WebFetch, WebSearch) plus all MCP tools, while excluding file-writing tools
+    /// (Edit, Write, MultiEdit, NotebookEdit).
     pub fn allowed_tools(&self) -> Option<&'static str> {
         match self {
-            Self::Plan => Some("mcp__conductor__*"),
+            Self::Plan | Self::RepoSafe => {
+                Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+            }
             _ => None,
         }
     }
@@ -71,16 +103,23 @@ pub enum AutoStartAgent {
 pub struct NotificationConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
-    pub workflows: WorkflowNotificationConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflows: Option<WorkflowNotificationConfig>,
     #[serde(default)]
     pub slack: SlackConfig,
+    /// Base URL of the conductor web UI used to build deep links in notification
+    /// events (e.g. `https://conductor.myhost.ts.net`). Trailing slash is trimmed
+    /// automatically. When set, workflow completion/failure notifications include a
+    /// `url` field of the form `{web_url}/repos/{repo_id}/worktrees/{worktree_id}/workflows/runs/{run_id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SlackConfig {
+    /// Slack app signing secret for verifying slash command request signatures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub webhook_url: Option<String>,
+    pub signing_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +166,66 @@ pub struct WebPushConfig {
     pub vapid_subject: Option<String>,
 }
 
+/// Configuration for a single notification hook (shell or HTTP).
+///
+/// ```toml
+/// [[notify.hooks]]
+/// on = "workflow_run.*"
+/// run = "~/.conductor/hooks/notify.sh"
+///
+/// [[notify.hooks]]
+/// on = "gate.waiting"
+/// url = "https://hooks.example.com/conductor"
+/// headers = { Authorization = "$CONDUCTOR_HOOK_TOKEN" }
+/// timeout_ms = 5000
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HookConfig {
+    /// Glob pattern for event names, e.g. `"*"`, `"workflow_run.*"`, `"gate.waiting"`.
+    pub on: String,
+    /// Shell command to run (passed to `sh -c`). Receives `CONDUCTOR_*` env vars.
+    #[serde(default)]
+    pub run: Option<String>,
+    /// URL to POST JSON payload to.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// HTTP headers; values starting with `$` are resolved from environment.
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+    /// Request/process timeout in milliseconds. Defaults to 10 000.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// For `cost_spike` / `duration_spike`: minimum multiple over baseline to trigger.
+    #[serde(default)]
+    pub threshold_multiple: Option<f64>,
+    /// For `gate.pending_too_long`: fire after gate has been waiting this many ms.
+    #[serde(default)]
+    pub gate_pending_ms: Option<u64>,
+    /// Optional workflow name filter: only fire for events from this workflow.
+    #[serde(default)]
+    pub workflow: Option<String>,
+    /// When `true`, only fire for root workflow runs (`parent_workflow_run_id` is `None`).
+    /// `None` or `false` fires for all workflows (backwards compatible default).
+    #[serde(default)]
+    pub root_workflows_only: Option<bool>,
+    /// Only fire for events from this repo (exact match on repo_slug).
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Only fire for events from this branch (glob pattern, e.g. `"release/*"`).
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// For gate events: only fire for this step name (exact match).
+    #[serde(default)]
+    pub step: Option<String>,
+}
+
+/// Top-level `[notify]` section containing user-configured notification hooks.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NotifyConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HookConfig>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -139,6 +238,8 @@ pub struct Config {
     pub notifications: NotificationConfig,
     #[serde(default)]
     pub web_push: WebPushConfig,
+    #[serde(default)]
+    pub notify: NotifyConfig,
 }
 
 /// Top-level `[github]` section.
@@ -212,6 +313,11 @@ pub struct GeneralConfig {
     /// Set to 0 to disable stale workflow detection. Defaults to 60.
     #[serde(default = "default_stale_workflow_minutes")]
     pub stale_workflow_minutes: u32,
+    /// Custom Claude Code configuration directory (e.g. `~/.claude-personal`).
+    /// When set, conductor uses this directory for MCP server setup and passes
+    /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_config_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +378,54 @@ impl Default for GeneralConfig {
             theme: None,
             auto_cleanup_merged_branches: true,
             stale_workflow_minutes: default_stale_workflow_minutes(),
+            claude_config_dir: None,
+        }
+    }
+}
+
+impl GeneralConfig {
+    /// Returns the resolved Claude config directory as a `PathBuf`.
+    ///
+    /// If `claude_config_dir` is set, expands `~` and returns the result.
+    /// Otherwise falls back to `~/.claude`.
+    pub fn resolved_claude_config_dir(&self) -> Result<PathBuf> {
+        match self.custom_claude_config_dir() {
+            Some(result) => result,
+            None => dirs::home_dir()
+                .map(|h| h.join(".claude"))
+                .ok_or_else(|| ConductorError::Config("cannot determine home directory".into())),
+        }
+    }
+
+    /// Returns the custom Claude config directory only when explicitly configured.
+    ///
+    /// Returns `None` when `claude_config_dir` is not set (use the default `~/.claude`).
+    /// Returns `Some(Ok(path))` when configured and tilde-expansion succeeds.
+    /// Returns `Some(Err(...))` when configured but tilde-expansion fails.
+    ///
+    /// Prefer this over accessing `claude_config_dir` directly — callers should
+    /// never need to inspect the raw field to distinguish "not configured" from
+    /// "resolution error".
+    pub fn custom_claude_config_dir(&self) -> Option<Result<PathBuf>> {
+        self.claude_config_dir
+            .as_deref()
+            .map(|raw| crate::text_util::expand_tilde(raw).map_err(ConductorError::Config))
+    }
+
+    /// Resolves the custom Claude config directory, logging a warning and returning `None` on error.
+    ///
+    /// Returns `None` when no custom directory is configured or when resolution fails.
+    /// Callers that need to distinguish the error case should use [`custom_claude_config_dir`] instead.
+    pub fn resolve_optional_claude_dir(&self) -> Option<PathBuf> {
+        match self.custom_claude_config_dir() {
+            Some(Ok(dir)) => Some(dir),
+            Some(Err(e)) => {
+                tracing::warn!(
+                    "failed to resolve claude_config_dir — will use default ~/.claude: {e}"
+                );
+                None
+            }
+            None => None,
         }
     }
 }
@@ -343,6 +497,11 @@ pub fn agent_log_dir() -> PathBuf {
     conductor_dir().join("agent-logs")
 }
 
+/// Returns the directory for user-supplied hook scripts: ~/.conductor/hooks/
+pub fn hooks_dir() -> PathBuf {
+    conductor_dir().join("hooks")
+}
+
 /// Returns the directory for user-supplied theme files: ~/.conductor/themes/
 pub fn themes_dir() -> PathBuf {
     conductor_dir().join("themes")
@@ -371,6 +530,30 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
     // Parse raw TOML once for migration checks and github.app validation.
     let raw: toml::Value =
         toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
+
+    // Deprecation: warn if webhook_url is still present in config.toml.
+    if raw
+        .get("notifications")
+        .and_then(|n| n.get("slack"))
+        .and_then(|s| s.get("webhook_url"))
+        .is_some()
+    {
+        tracing::warn!(
+            "notifications.slack.webhook_url is deprecated and has no effect — migrate to [[notify.hooks]]"
+        );
+    }
+
+    // Deprecation: warn if [notifications.workflows] is still present in config.toml.
+    if raw
+        .get("notifications")
+        .and_then(|n| n.get("workflows"))
+        .is_some()
+    {
+        tracing::warn!(
+            "[notifications.workflows] is deprecated — migrate to [[notify.hooks]] with `on` patterns; \
+             see CHANGELOG.md"
+        );
+    }
 
     // Guard: if [github.app] is present in the raw TOML but deserialized to None,
     // serde silently swallowed a deserialization error. Re-attempt explicitly so
@@ -652,10 +835,76 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_permission_mode_cli_flag_repo_safe() {
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.cli_flag(),
+            "--permission-mode"
+        );
+    }
+
+    #[test]
     fn test_agent_permission_mode_cli_flag_value() {
         assert_eq!(AgentPermissionMode::AutoMode.cli_flag_value(), None);
         assert_eq!(AgentPermissionMode::SkipPermissions.cli_flag_value(), None);
         assert_eq!(AgentPermissionMode::Plan.cli_flag_value(), Some("plan"));
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.cli_flag_value(),
+            Some("repo-safe")
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_claude_permission_flag() {
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag(),
+            "--enable-auto-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag(),
+            "--permission-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_claude_permission_flag_value() {
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag_value(),
+            Some("plan")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag_value(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_allowed_tools() {
+        assert_eq!(AgentPermissionMode::AutoMode.allowed_tools(), None);
+        assert_eq!(AgentPermissionMode::SkipPermissions.allowed_tools(), None);
+        assert_eq!(
+            AgentPermissionMode::Plan.allowed_tools(),
+            Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.allowed_tools(),
+            Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+        );
     }
 
     #[test]
@@ -834,6 +1083,42 @@ installation_id = 789012
     }
 
     #[test]
+    fn test_save_config_preserves_notify_hooks_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Write a config with a [[notify.hooks]] entry
+        std::fs::write(
+            &path,
+            r#"
+[[notify.hooks]]
+on = "workflow_run.*"
+url = "https://example.com/hook"
+"#,
+        )
+        .unwrap();
+
+        // Load and verify hook is present
+        let config = load_config_from(&path).unwrap();
+        assert_eq!(config.notify.hooks.len(), 1);
+
+        // Simulate the bug: save with an in-memory config whose hooks vec is empty (default)
+        let empty_hooks_config = Config::default();
+        save_config_to(&empty_hooks_config, &path).unwrap();
+
+        // Re-read raw TOML and verify [[notify.hooks]] is still there
+        let raw_contents = std::fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&raw_contents).unwrap();
+        assert!(
+            raw.get("notify")
+                .and_then(|n| n.get("hooks"))
+                .and_then(|h| h.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false),
+            "[[notify.hooks]] should survive save when hooks vec is empty in memory"
+        );
+    }
+
+    #[test]
     fn test_save_config_fails_on_malformed_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -924,30 +1209,8 @@ app_id = 123456
     fn test_notification_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert!(!config.notifications.enabled);
-        assert!(!config.notifications.workflows.on_success);
-        assert!(config.notifications.workflows.on_failure);
-        assert!(config.notifications.workflows.on_gate_human);
-        assert!(!config.notifications.workflows.on_gate_ci);
-        assert!(config.notifications.workflows.on_gate_pr_review);
-        assert!(config.notifications.slack.webhook_url.is_none());
-    }
-
-    #[test]
-    fn test_notification_slack_config() {
-        let config: Config = toml::from_str(
-            r#"
-            [notifications]
-            enabled = true
-            [notifications.slack]
-            webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
-        "#,
-        )
-        .unwrap();
-        assert!(config.notifications.enabled);
-        assert_eq!(
-            config.notifications.slack.webhook_url.as_deref(),
-            Some("https://hooks.slack.com/services/T00/B00/xxx")
-        );
+        // No [notifications.workflows] block → None (hooks are sole filter)
+        assert!(config.notifications.workflows.is_none());
     }
 
     #[test]
@@ -963,12 +1226,13 @@ app_id = 123456
         )
         .unwrap();
         assert!(config.notifications.enabled);
-        assert!(config.notifications.workflows.on_success);
-        assert!(!config.notifications.workflows.on_failure);
+        let wf = config.notifications.workflows.as_ref().unwrap();
+        assert!(wf.on_success);
+        assert!(!wf.on_failure);
         // Gate fields should still be at their defaults
-        assert!(config.notifications.workflows.on_gate_human);
-        assert!(!config.notifications.workflows.on_gate_ci);
-        assert!(config.notifications.workflows.on_gate_pr_review);
+        assert!(wf.on_gate_human);
+        assert!(!wf.on_gate_ci);
+        assert!(wf.on_gate_pr_review);
     }
 
     #[test]
@@ -984,9 +1248,10 @@ app_id = 123456
         "#,
         )
         .unwrap();
-        assert!(!config.notifications.workflows.on_gate_human);
-        assert!(config.notifications.workflows.on_gate_ci);
-        assert!(!config.notifications.workflows.on_gate_pr_review);
+        let wf = config.notifications.workflows.as_ref().unwrap();
+        assert!(!wf.on_gate_human);
+        assert!(wf.on_gate_ci);
+        assert!(!wf.on_gate_pr_review);
     }
 
     #[test]
@@ -1155,6 +1420,110 @@ bot_name = "my-bot"
             std::env::remove_var("CONDUCTOR_DB_PATH");
         }
         assert_eq!(result, PathBuf::from(custom));
+    }
+
+    // -----------------------------------------------------------------------
+    // resolved_claude_config_dir / custom_claude_config_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolved_claude_config_dir_none_falls_back_to_home_claude() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        // Should be <home>/.claude
+        let expected = dirs::home_dir().unwrap().join(".claude");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_resolved_claude_config_dir_absolute_path() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/my-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        assert_eq!(result, PathBuf::from("/tmp/my-claude"));
+    }
+
+    #[test]
+    fn test_resolved_claude_config_dir_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-personal".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolved_claude_config_dir().unwrap();
+        let expected = dirs::home_dir().unwrap().join(".claude-personal");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_none_when_not_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        assert!(config.custom_claude_config_dir().is_none());
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_some_ok_when_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/custom-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.custom_claude_config_dir();
+        assert!(result.is_some());
+        let path = result.unwrap().unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/custom-claude"));
+    }
+
+    #[test]
+    fn test_custom_claude_config_dir_some_ok_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-custom".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.custom_claude_config_dir().unwrap().unwrap();
+        let expected = dirs::home_dir().unwrap().join(".claude-custom");
+        assert_eq!(result, expected);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_optional_claude_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_optional_claude_dir_none_when_not_configured() {
+        let config = GeneralConfig {
+            claude_config_dir: None,
+            ..GeneralConfig::default()
+        };
+        // Not configured → None (no fallback to ~/.claude)
+        assert!(config.resolve_optional_claude_dir().is_none());
+    }
+
+    #[test]
+    fn test_resolve_optional_claude_dir_some_for_absolute_path() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("/tmp/my-claude".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolve_optional_claude_dir();
+        assert_eq!(result, Some(PathBuf::from("/tmp/my-claude")));
+    }
+
+    #[test]
+    fn test_resolve_optional_claude_dir_expands_tilde() {
+        let config = GeneralConfig {
+            claude_config_dir: Some("~/.claude-personal".to_string()),
+            ..GeneralConfig::default()
+        };
+        let result = config.resolve_optional_claude_dir();
+        let expected = dirs::home_dir().unwrap().join(".claude-personal");
+        assert_eq!(result, Some(expected));
     }
 
     #[test]

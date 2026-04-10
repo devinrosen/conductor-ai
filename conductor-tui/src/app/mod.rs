@@ -28,12 +28,15 @@ mod info_pane;
 mod input_handling;
 mod modal_dialog;
 mod navigation;
+mod settings_management;
 mod theme_management;
 mod url_operations;
 mod workflow_management;
 
 #[cfg(test)]
 mod tests;
+
+const BG_TX_NOT_READY: &str = "Background task sender not ready.";
 
 pub struct App {
     state: AppState,

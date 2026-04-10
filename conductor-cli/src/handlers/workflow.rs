@@ -17,9 +17,14 @@ pub fn handle_workflow(
     conn: &Connection,
     config: &Config,
 ) -> Result<()> {
-    // Detect and resume stuck workflow runs before handling any workflow command.
+    // Finalize and resume stuck workflow runs before handling any workflow command.
     {
         let wf_mgr = WorkflowManager::new(conn);
+        match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+            Ok(n) if n > 0 => eprintln!("Info: reaper finalized {n} stuck workflow run(s)"),
+            Ok(_) => {}
+            Err(e) => eprintln!("Warning: reap_finalization_stuck_workflow_runs failed: {e}"),
+        }
         match wf_mgr.detect_stuck_workflow_run_ids(60) {
             Ok(ids) if !ids.is_empty() => {
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
@@ -50,6 +55,25 @@ pub fn handle_workflow(
     }
 
     match command {
+        WorkflowCommands::Active => {
+            let wf_mgr = WorkflowManager::new(conn);
+            let runs = wf_mgr.list_active_workflow_runs(&[])?;
+
+            if runs.is_empty() {
+                println!("No active workflow runs.");
+            } else {
+                for run in &runs {
+                    let label = run.target_label.as_deref().unwrap_or("-");
+                    let since = &run.started_at[..16.min(run.started_at.len())];
+                    println!(
+                        "  {:<26}  {:<30}  {:<10}  {label} ({since})",
+                        &run.id[..26.min(run.id.len())],
+                        run.workflow_name,
+                        run.status,
+                    );
+                }
+            }
+        }
         WorkflowCommands::Runs { repo, worktree } => {
             let repo_mgr = RepoManager::new(conn, config);
             let r = repo_mgr.get_by_slug(&repo)?;
@@ -110,9 +134,14 @@ pub fn handle_workflow(
             if !wf_defs.is_empty() {
                 for def in &wf_defs {
                     let node_count = def.total_nodes();
+                    let display = if def.title.is_some() {
+                        format!("{} [id: {}]", def.display_name(), def.name)
+                    } else {
+                        def.name.clone()
+                    };
                     println!(
-                        "  {:<20} {:<40} [{}, {} nodes]",
-                        def.name, def.description, def.trigger, node_count
+                        "  {:<40} {:<40} [{}, {} nodes]",
+                        display, def.description, def.trigger, node_count
                     );
                 }
             } else {
@@ -700,6 +729,7 @@ pub fn handle_workflow(
                             &id,
                             conductor_core::workflow::WorkflowRunStatus::Cancelled,
                             Some("Cancelled by user"),
+                            None,
                         )?;
                         println!("Workflow run {} cancelled.", id);
                     }
@@ -719,10 +749,12 @@ pub fn handle_workflow(
         WorkflowCommands::GateReject { run_id } => {
             with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
                 wf_mgr.reject_gate(&step.id, user, None)?;
+                let reject_msg = format!("Gate '{}' rejected by {user}", step.step_name);
                 wf_mgr.update_workflow_status(
                     &run_id,
                     conductor_core::workflow::WorkflowRunStatus::Failed,
-                    Some(&format!("Gate '{}' rejected by {user}", step.step_name)),
+                    Some(&reject_msg),
+                    Some(&reject_msg),
                 )?;
                 println!("Gate '{}' rejected by {user}.", step.step_name);
                 Ok(())

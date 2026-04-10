@@ -1,7 +1,7 @@
 use super::*;
 use crate::agent::AgentManager;
 use crate::error::ConductorError;
-use crate::workflow_dsl::{AgentRef, CallNode, CallWorkflowNode, WorkflowNode};
+use crate::workflow_dsl::{AgentRef, CallNode, CallWorkflowNode, GateType, WorkflowNode};
 
 #[test]
 fn test_cannot_start_workflow_run_when_active() {
@@ -17,7 +17,7 @@ fn test_cannot_start_workflow_run_when_active() {
         .create_workflow_run("running-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -66,7 +66,7 @@ fn test_can_start_workflow_run_after_completion() {
         .create_workflow_run("done-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"), None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -116,7 +116,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         .create_workflow_run("parent-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -1142,5 +1142,61 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
         run.repo_id.as_deref(),
         Some("r1"),
         "repo_id should be derived from worktree w1's parent repo r1"
+    );
+}
+
+/// Regression test for #1652: always block must run even when fail_fast=true and the
+/// body has already failed.  Before the fix, execute_nodes checked
+/// `!all_succeeded && fail_fast` unconditionally and broke immediately, skipping
+/// every node in the always block.
+#[test]
+fn test_always_block_runs_on_fail_fast_failure() {
+    let conn = setup_db();
+    let config = Config::default();
+    let mut state = make_loop_test_state(&conn, &config);
+    state.exec_config.fail_fast = true;
+    state.exec_config.dry_run = true;
+    // Simulate the state after a body step has failed.
+    state.all_succeeded = false;
+
+    let nodes = vec![WorkflowNode::Gate(make_gate_node(
+        GateType::HumanApproval,
+        OnTimeout::Fail,
+    ))];
+
+    let initial_position = state.position;
+    // Mirrors the always-block call in run_workflow_engine: respect_fail_fast = false.
+    let result = execute_nodes(&mut state, &nodes, false);
+    assert!(result.is_ok(), "always block should not return an error");
+    assert_eq!(
+        state.position - initial_position,
+        1,
+        "always block gate must execute even when fail_fast=true and body failed"
+    );
+}
+
+/// Guard for the existing fail_fast body-skip behaviour: when respect_fail_fast=true
+/// and the body has already failed, subsequent nodes must be skipped.
+#[test]
+fn test_body_skips_on_fail_fast_failure() {
+    let conn = setup_db();
+    let config = Config::default();
+    let mut state = make_loop_test_state(&conn, &config);
+    state.exec_config.fail_fast = true;
+    state.exec_config.dry_run = true;
+    state.all_succeeded = false;
+
+    let nodes = vec![WorkflowNode::Gate(make_gate_node(
+        GateType::HumanApproval,
+        OnTimeout::Fail,
+    ))];
+
+    let initial_position = state.position;
+    // Mirrors the body call in run_workflow_engine: respect_fail_fast = true.
+    let result = execute_nodes(&mut state, &nodes, true);
+    assert!(result.is_ok());
+    assert_eq!(
+        state.position, initial_position,
+        "body gate must be skipped when fail_fast=true and body already failed"
     );
 }

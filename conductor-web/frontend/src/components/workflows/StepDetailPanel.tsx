@@ -151,6 +151,51 @@ export function StepDetailPanel({ step, worktreeId, onClose, stepEstimate }: Ste
           </div>
         )}
 
+        {/* Token Usage */}
+        {(step.input_tokens != null || step.output_tokens != null) && (
+          <div>
+            <h4 className="text-xs font-medium text-gray-500 mb-1">Token Usage</h4>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {step.input_tokens != null && (
+                <>
+                  <span className="text-gray-400">Input</span>
+                  <span className="text-gray-700 font-mono tabular-nums">{step.input_tokens.toLocaleString()}</span>
+                </>
+              )}
+              {step.output_tokens != null && (
+                <>
+                  <span className="text-gray-400">Output</span>
+                  <span className="text-gray-700 font-mono tabular-nums">{step.output_tokens.toLocaleString()}</span>
+                </>
+              )}
+              {step.cache_read_input_tokens != null && (
+                <>
+                  <span className="text-gray-400">Cache read</span>
+                  <span className="text-gray-700 font-mono tabular-nums">{step.cache_read_input_tokens.toLocaleString()}</span>
+                </>
+              )}
+              {step.cache_creation_input_tokens != null && (
+                <>
+                  <span className="text-gray-400">Cache write</span>
+                  <span className="text-gray-700 font-mono tabular-nums">{step.cache_creation_input_tokens.toLocaleString()}</span>
+                </>
+              )}
+              {step.input_tokens != null && step.cache_read_input_tokens != null && (step.input_tokens + step.cache_read_input_tokens) > 0 && (() => {
+                const efficiency = step.cache_read_input_tokens / (step.input_tokens + step.cache_read_input_tokens);
+                const pct = Math.round(efficiency * 100);
+                return (
+                  <>
+                    <span className="text-gray-400">Cache hit</span>
+                    <span className={`font-mono tabular-nums ${pct < 20 ? "text-amber-600" : "text-green-600"}`}>
+                      {pct}%
+                    </span>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
         {/* Agent events */}
         {step.child_run_id && (
           <div>

@@ -125,7 +125,7 @@ fn main() {
                             interval.tick().await;
                             let db = reaper_db.clone();
                             let cfg = reaper_config.clone();
-                            let _ = tokio::task::spawn_blocking(move || {
+                            if let Err(e) = tokio::task::spawn_blocking(move || {
                                 let conn = db.blocking_lock();
                                 let mgr = conductor_core::agent::AgentManager::new(&conn);
                                 if let Err(e) = mgr.reap_orphaned_runs() {
@@ -141,7 +141,10 @@ fn main() {
                                     tracing::warn!("reap_stale_worktrees failed: {e}");
                                 }
                             })
-                            .await;
+                            .await
+                            {
+                                tracing::warn!("reaper task panicked: {e}");
+                            }
                         }
                     });
 

@@ -368,6 +368,7 @@ mod tests {
             &run.id,
             crate::workflow::WorkflowRunStatus::Failed,
             Some("error"),
+            Some("error"),
         )
         .unwrap();
 

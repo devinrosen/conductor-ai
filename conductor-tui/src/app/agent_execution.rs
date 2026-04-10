@@ -3,7 +3,7 @@ use std::sync::Arc;
 use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
 use conductor_core::config::AutoStartAgent;
 use conductor_core::tickets::build_agent_prompt;
-use conductor_core::worktree::WorktreeManager;
+use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
 use crate::action::Action;
 use crate::state::{InputAction, Modal, WorkflowPickerItem};
@@ -387,36 +387,32 @@ impl App {
         &mut self,
         repo_slug: String,
         name: String,
-        ticket_id: Option<String>,
-        from_pr: Option<u32>,
-        from_branch: Option<String>,
+        opts: WorktreeCreateOptions,
     ) {
         // Guard before setting the non-dismissable Progress modal: if bg_tx is
-        // None (only possible before init() completes), skip rather than
+        // None (only possible before init() completes), show an error rather than
         // permanently locking the UI with no recovery path.
         let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: super::BG_TX_NOT_READY.into(),
+            };
             return;
         };
         self.state.modal = Modal::Progress {
-            message: if from_pr.is_some() {
+            message: if opts.from_pr.is_some() {
                 "Fetching PR branch…".to_string()
             } else {
                 "Creating worktree…".to_string()
             },
         };
+        let ticket_id = opts.ticket_id.clone();
         let config = self.config.clone();
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<_> {
                 let db = conductor_core::config::db_path();
                 let conn = conductor_core::db::open_database(&db)?;
                 let wt_mgr = WorktreeManager::new(&conn, &config);
-                let (wt, warnings) = wt_mgr.create(
-                    &repo_slug,
-                    &name,
-                    from_branch.as_deref(),
-                    ticket_id.as_deref(),
-                    from_pr,
-                )?;
+                let (wt, warnings) = wt_mgr.create(&repo_slug, &name, opts)?;
 
                 Ok((wt, warnings))
             })();
@@ -725,7 +721,7 @@ impl App {
                     .create_repo_run(&repo_id, &prompt, Some(&window_name), None)
                     .map_err(|e| format!("Failed to create repo agent run: {e}"))?;
 
-                let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
+                let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
                 let args = conductor_core::agent_runtime::build_agent_args_with_mode(
                     &run.id,
                     &repo_path,

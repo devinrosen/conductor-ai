@@ -169,6 +169,9 @@ pub(crate) fn sync_repo(
                             0
                         });
                     print!("  {} — synced {count} {label}", repo_slug);
+                    if count == 0 {
+                        print!(" (no items matched — check issue source configuration)");
+                    }
                     if closed > 0 {
                         print!(", {closed} marked closed");
                     }

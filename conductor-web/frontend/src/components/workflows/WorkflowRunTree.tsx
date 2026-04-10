@@ -174,10 +174,10 @@ const RunRow = memo(function RunRow({
       to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
       className="text-sm truncate block hover:underline"
     >
-      {run.workflow_name}
+      {run.workflow_title ?? run.workflow_name}
     </Link>
   ) : (
-    <span className="text-sm truncate block">{run.workflow_name}</span>
+    <span className="text-sm truncate block">{run.workflow_title ?? run.workflow_name}</span>
   );
 
   const isActive = run.status === "running" || run.status === "waiting";
@@ -259,10 +259,10 @@ function ChildRunWithSteps({ run, ctxMap, onCancel }: {
               className="text-xs truncate hover:underline"
               onClick={(e) => e.stopPropagation()}
             >
-              {run.workflow_name}
+              {run.workflow_title ?? run.workflow_name}
             </Link>
           ) : (
-            <span className="text-xs truncate">{run.workflow_name}</span>
+            <span className="text-xs truncate">{run.workflow_title ?? run.workflow_name}</span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0 text-xs text-gray-400">

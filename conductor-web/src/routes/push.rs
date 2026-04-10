@@ -3,27 +3,28 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::error::ApiError;
 use crate::push::PushSubscriptionManager;
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PushSubscribeRequest {
     pub endpoint: String,
     pub keys: PushSubscriptionKeys,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PushSubscriptionKeys {
     pub p256dh: String,
     pub auth: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VapidPublicKeyResponse {
     pub public_key: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct PushSubscribeResponse {
     pub success: bool,
     pub message: String,
@@ -31,17 +32,25 @@ pub struct PushSubscribeResponse {
 
 /// GET /api/push/vapid-public-key
 /// Returns the VAPID public key for push subscription
+#[utoipa::path(
+    get,
+    path = "/api/push/vapid-public-key",
+    responses(
+        (status = 200, description = "VAPID public key", body = VapidPublicKeyResponse),
+        (status = 503, description = "Push notifications not configured"),
+    ),
+    tag = "push",
+)]
 pub async fn get_vapid_public_key(
     State(state): State<AppState>,
-) -> Result<Json<VapidPublicKeyResponse>, (StatusCode, String)> {
+) -> Result<Json<VapidPublicKeyResponse>, ApiError> {
     let config = state.config.read().await;
 
     match &config.web_push.vapid_public_key {
         Some(public_key) => Ok(Json(VapidPublicKeyResponse {
             public_key: public_key.clone(),
         })),
-        None => Err((
-            StatusCode::SERVICE_UNAVAILABLE,
+        None => Err(ApiError::ServiceUnavailable(
             "Push notifications not configured - VAPID keys not found".to_string(),
         )),
     }
@@ -49,10 +58,20 @@ pub async fn get_vapid_public_key(
 
 /// POST /api/push/subscribe
 /// Subscribe to push notifications
+#[utoipa::path(
+    post,
+    path = "/api/push/subscribe",
+    request_body(content = PushSubscribeRequest, description = "Push subscription details"),
+    responses(
+        (status = 200, description = "Successfully subscribed", body = PushSubscribeResponse),
+        (status = 503, description = "Push notifications not configured"),
+    ),
+    tag = "push",
+)]
 pub async fn subscribe_push(
     State(state): State<AppState>,
     Json(request): Json<PushSubscribeRequest>,
-) -> Result<Json<PushSubscribeResponse>, (StatusCode, String)> {
+) -> Result<Json<PushSubscribeResponse>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
 
@@ -66,8 +85,7 @@ pub async fn subscribe_push(
             (private_key.clone(), public_key.clone(), subject.clone())
         }
         _ => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
+            return Err(ApiError::ServiceUnavailable(
                 "Push notifications not configured - VAPID keys not found".to_string(),
             ));
         }
@@ -81,19 +99,30 @@ pub async fn subscribe_push(
             success: true,
             message: "Successfully subscribed to push notifications".to_string(),
         })),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to subscribe to push notifications: {}", e),
-        )),
+        Err(e) => Err(ApiError::Internal(format!(
+            "Failed to subscribe to push notifications: {}",
+            e
+        ))),
     }
 }
 
 /// DELETE /api/push/subscribe
 /// Unsubscribe from push notifications
+#[utoipa::path(
+    delete,
+    path = "/api/push/subscribe",
+    request_body(content = PushSubscribeRequest, description = "Push subscription to remove"),
+    responses(
+        (status = 204, description = "Successfully unsubscribed"),
+        (status = 404, description = "Subscription not found"),
+        (status = 503, description = "Push notifications not configured"),
+    ),
+    tag = "push",
+)]
 pub async fn unsubscribe_push(
     State(state): State<AppState>,
     Json(request): Json<PushSubscribeRequest>,
-) -> Result<Json<PushSubscribeResponse>, (StatusCode, String)> {
+) -> Result<StatusCode, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
 
@@ -107,8 +136,7 @@ pub async fn unsubscribe_push(
             (private_key.clone(), public_key.clone(), subject.clone())
         }
         _ => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
+            return Err(ApiError::ServiceUnavailable(
                 "Push notifications not configured - VAPID keys not found".to_string(),
             ));
         }
@@ -118,23 +146,14 @@ pub async fn unsubscribe_push(
         PushSubscriptionManager::new(&db, vapid_private_key, vapid_public_key, vapid_subject);
 
     match manager.delete_subscription(&request.endpoint) {
-        Ok(deleted) => {
-            if deleted {
-                Ok(Json(PushSubscribeResponse {
-                    success: true,
-                    message: "Successfully unsubscribed from push notifications".to_string(),
-                }))
-            } else {
-                Err((
-                    StatusCode::NOT_FOUND,
-                    "Push subscription not found".to_string(),
-                ))
-            }
-        }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to unsubscribe from push notifications: {}", e),
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(ApiError::NotFound(
+            "Push subscription not found".to_string(),
         )),
+        Err(e) => Err(ApiError::Internal(format!(
+            "Failed to unsubscribe from push notifications: {}",
+            e
+        ))),
     }
 }
 
@@ -142,6 +161,7 @@ pub async fn unsubscribe_push(
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+    use axum::response::IntoResponse;
     use conductor_core::config::{Config, WebPushConfig};
     use tempfile::NamedTempFile;
 
@@ -201,7 +221,8 @@ mod tests {
         let result = get_vapid_public_key(State(state)).await;
 
         assert!(result.is_err());
-        let (status, _) = result.unwrap_err();
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let err = result.unwrap_err();
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

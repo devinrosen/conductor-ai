@@ -79,6 +79,7 @@ pub(crate) fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 }
 
 /// Status of an agent run.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRunStatus {
@@ -119,6 +120,7 @@ impl std::str::FromStr for AgentRunStatus {
 crate::impl_sql_enum!(AgentRunStatus);
 
 /// Status of a human-in-the-loop feedback request.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeedbackStatus {
@@ -153,6 +155,7 @@ impl std::str::FromStr for FeedbackStatus {
 crate::impl_sql_enum!(FeedbackStatus);
 
 /// Type of feedback being requested from the user.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeedbackType {
@@ -195,6 +198,7 @@ impl std::str::FromStr for FeedbackType {
 crate::impl_sql_enum!(FeedbackType);
 
 /// Status of a single plan step.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {

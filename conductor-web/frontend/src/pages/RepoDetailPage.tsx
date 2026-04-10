@@ -13,7 +13,7 @@ import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { ColumnHeader, type SortDirection } from "../components/shared/ColumnHeader";
-import { parseLabels } from "../utils/ticketUtils";
+import { parseLabels, getPipelineStatus, filterTicketsByColumns, sortTickets } from "../utils/ticketUtils";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -44,10 +44,12 @@ export function RepoDetailPage() {
   } = useApi(() => api.listWorktrees(repoId!, showCompletedWorktrees), [repoId, showCompletedWorktrees]);
 
   const {
-    data: tickets,
+    data: ticketList,
     loading: ticketsLoading,
     refetch: refetchTickets,
   } = useApi(() => api.listTickets(repoId!, showClosedTickets), [repoId, showClosedTickets]);
+  const tickets = ticketList?.tickets ?? null;
+  const ticketDependencies = ticketList?.dependencies ?? {};
 
   const { data: prs } = useApi(() => api.listPrs(repoId!), [repoId]);
 
@@ -75,14 +77,6 @@ export function RepoDetailPage() {
   const [ticketSortDir, setTicketSortDir] = useState<SortDirection>(null);
   const [ticketColumnFilters, setTicketColumnFilters] = useState<Record<string, Set<string>>>({});
 
-  function getTicketPipelineStatus(ticket: Ticket): string {
-    try {
-      return JSON.parse(ticket.raw_json)?.conductor?.status ?? "";
-    } catch {
-      return "";
-    }
-  }
-
   const ticketFilterOptions = useMemo(() => {
     if (!tickets) return {};
     const states = new Set<string>();
@@ -93,7 +87,7 @@ export function RepoDetailPage() {
       states.add(t.state);
       if (t.assignee) assignees.add(t.assignee);
       for (const l of parseLabels(t.labels)) labels.add(l);
-      const ps = getTicketPipelineStatus(t);
+      const ps = getPipelineStatus(t);
       if (ps) pipelines.add(ps);
     }
     return {
@@ -106,39 +100,9 @@ export function RepoDetailPage() {
 
   const sortedFilteredTickets = useMemo(() => {
     if (!tickets) return [];
-    let result = [...tickets];
-
-    // Column filters
-    for (const [col, values] of Object.entries(ticketColumnFilters)) {
-      if (values.size === 0) continue;
-      result = result.filter((t) => {
-        switch (col) {
-          case "state": return values.has(t.state);
-          case "assignee": return values.has(t.assignee ?? "");
-          case "labels": return parseLabels(t.labels).some((l) => values.has(l));
-          case "pipeline": return values.has(getTicketPipelineStatus(t));
-          default: return true;
-        }
-      });
-    }
-
-    // Sort
-    if (ticketSortColumn && ticketSortDir) {
-      const dir = ticketSortDir === "asc" ? 1 : -1;
-      result.sort((a, b) => {
-        let va = "";
-        let vb = "";
-        switch (ticketSortColumn) {
-          case "source_id": va = a.source_id; vb = b.source_id; break;
-          case "title": va = a.title; vb = b.title; break;
-          case "state": va = a.state; vb = b.state; break;
-          case "assignee": va = a.assignee ?? ""; vb = b.assignee ?? ""; break;
-          case "pipeline": va = getTicketPipelineStatus(a); vb = getTicketPipelineStatus(b); break;
-        }
-        return va.localeCompare(vb) * dir;
-      });
-    }
-
+    const noRepo = () => "";
+    let result = filterTicketsByColumns([...tickets], ticketColumnFilters, noRepo);
+    result = sortTickets(result, ticketSortColumn, ticketSortDir, noRepo);
     return result;
   }, [tickets, ticketColumnFilters, ticketSortColumn, ticketSortDir]);
 
@@ -259,10 +223,18 @@ export function RepoDetailPage() {
     [],
   );
 
-  // Build ticket dependency tree
+  // Build ticket dependency tree using API-provided deps (all source types)
   const ticketTree = useMemo(
-    () => (tickets ? buildTicketTree(tickets, worktrees ?? undefined, prs ?? undefined) : null),
-    [tickets, worktrees, prs],
+    () =>
+      tickets
+        ? buildTicketTree(
+            tickets,
+            worktrees ?? undefined,
+            prs ?? undefined,
+            Object.keys(ticketDependencies).length > 0 ? ticketDependencies : undefined,
+          )
+        : null,
+    [tickets, worktrees, prs, ticketDependencies],
   );
 
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display
@@ -282,12 +254,12 @@ export function RepoDetailPage() {
   }, [worktrees]);
 
   // Map worktree_id -> workflow run (for both worktree table and ticket indicators)
-  // Prefers: completed > running/pending/waiting > failed (most recent wins within tier)
+  // Prefers: running/pending/waiting > completed > failed (most recent wins within tier)
   const workflowRunByWorktreeId = useMemo(() => {
     const m = new Map<string, WorkflowRun>();
     if (!activeWorkflowRuns) return m;
     const priority = (s: string) =>
-      s === "completed" ? 3 : s === "running" || s === "pending" || s === "waiting" ? 2 : 1;
+      s === "running" || s === "pending" || s === "waiting" ? 3 : s === "completed" ? 2 : 1;
     for (const run of activeWorkflowRuns) {
       // Only top-level runs (no parent workflow), scoped to this repo
       if (run.repo_id === repoId && run.worktree_id && !run.parent_workflow_run_id) {
@@ -322,7 +294,8 @@ export function RepoDetailPage() {
     if (startingWorkflow) return;
     setStartingWorkflow(ticket.id);
     try {
-      const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title);
+      const labels = JSON.parse(ticket.labels || "[]") as string[];
+      const wtName = deriveWorktreeSlug(ticket.source_id, ticket.title, labels);
       // Parse base_branch from Vantage deliverable if present
       let fromBranch: string | undefined;
       try {
@@ -377,6 +350,7 @@ export function RepoDetailPage() {
       setActionError(err instanceof Error ? err.message : "Resume failed");
     }
   }
+
 
   async function handleSyncTickets() {
     setSyncing(true);

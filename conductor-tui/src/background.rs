@@ -9,9 +9,9 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::github;
 use conductor_core::github_app;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
-use conductor_core::jira_acli;
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
+use conductor_core::ticket_source::TicketSource;
 use conductor_core::tickets::{TicketInput, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
@@ -83,11 +83,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
 
                     // Reuse the connection returned by poll_data() — no need to open a
                     // second connection just for notification claims.
-                    let claim_conn = if config.notifications.enabled {
-                        Some(conn)
-                    } else {
-                        None
-                    };
+                    // Always pass the connection so dedup and hooks can run even when
+                    // desktop/Slack notifications are disabled.
+                    let claim_conn = Some(conn);
 
                     let all_runs = payload
                         .latest_workflow_runs_by_worktree
@@ -103,10 +101,21 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                             crate::notify::fire_workflow_notification(
                                 conn,
                                 &config.notifications,
-                                &t.run_id,
-                                &t.workflow_name,
-                                t.target_label.as_deref(),
-                                t.succeeded,
+                                &config.notify.hooks,
+                                &crate::notify::WorkflowNotificationArgs {
+                                    run_id: &t.run_id,
+                                    workflow_name: &t.workflow_name,
+                                    target_label: t.target_label.as_deref(),
+                                    succeeded: t.succeeded,
+                                    parent_workflow_run_id: t.parent_workflow_run_id.as_deref(),
+                                    repo_slug: &t.repo_slug,
+                                    branch: &t.branch,
+                                    duration_ms: t.duration_ms,
+                                    ticket_url: None,
+                                    error: t.error.as_deref(),
+                                    repo_id: t.repo_id.as_deref(),
+                                    worktree_id: t.worktree_id.as_deref(),
+                                },
                             );
                         }
 
@@ -117,8 +126,13 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 crate::notify::fire_feedback_notification(
                                     conn,
                                     &config.notifications,
-                                    &req.id,
-                                    &req.prompt,
+                                    &config.notify.hooks,
+                                    &crate::notify::FeedbackNotificationParams {
+                                        request_id: &req.id,
+                                        prompt_preview: &req.prompt,
+                                        repo_slug: "",
+                                        branch: "",
+                                    },
                                 );
                             }
                         }
@@ -149,9 +163,13 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     // Single gate: fire individual notification (no behavior change)
                                     let (step, workflow_name, target_label) = steps[0];
                                     notified_gate_ids.insert(step.id.clone());
+                                    let (rs, br) = conductor_core::notify::parse_target_label(
+                                        target_label.as_deref(),
+                                    );
                                     crate::notify::fire_gate_notification(
                                         conn,
                                         &config.notifications,
+                                        &config.notify.hooks,
                                         &crate::notify::GateNotificationParams {
                                             step_id: &step.id,
                                             step_name: &step.step_name,
@@ -159,6 +177,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                             target_label: target_label.as_deref(),
                                             gate_type: step.gate_type.as_ref(),
                                             gate_prompt: step.gate_prompt.as_deref(),
+                                            repo_slug: rs,
+                                            branch: br,
+                                            ticket_url: None,
                                         },
                                     );
                                 } else if !notified_grouped_run_ids.contains(run_id) {
@@ -173,6 +194,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     crate::notify::fire_grouped_gate_notification(
                                         conn,
                                         &config.notifications,
+                                        &config.notify.hooks,
                                         &crate::notify::GroupedGateNotificationParams {
                                             run_id,
                                             workflow_name,
@@ -213,10 +235,17 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 crate::notify::fire_agent_run_notification(
                                     conn,
                                     &config.notifications,
-                                    &t.run_id,
-                                    t.worktree_slug.as_deref(),
-                                    t.succeeded,
-                                    t.error_msg.as_deref(),
+                                    &config.notify.hooks,
+                                    &crate::notify::AgentRunNotificationArgs {
+                                        run_id: &t.run_id,
+                                        worktree_slug: t.worktree_slug.as_deref(),
+                                        succeeded: t.succeeded,
+                                        error_msg: t.error_msg.as_deref(),
+                                        repo_slug: &t.repo_slug,
+                                        branch: &t.branch,
+                                        duration_ms: t.duration_ms,
+                                        ticket_url: None,
+                                    },
                                 );
                             }
                         }
@@ -339,6 +368,13 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed: {e}"),
             }
+            match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+                Ok(n) if n > 0 => {
+                    tracing::info!("Reaper finalized {n} stuck workflow run(s)")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
+            }
             match wf_mgr.detect_stuck_workflow_run_ids(60) {
                 Ok(ids) if !ids.is_empty() => {
                     let n = ids.len();
@@ -449,6 +485,7 @@ pub fn poll_data() -> Option<PollResult> {
     let worktrees = wt_mgr.list(None, true).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
     let ticket_labels = ticket_syncer.get_all_labels().unwrap_or_default();
+    let ticket_dependencies = ticket_syncer.get_all_dependencies().unwrap_or_default();
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
@@ -649,6 +686,7 @@ pub fn poll_data() -> Option<PollResult> {
         worktrees,
         tickets,
         ticket_labels,
+        ticket_dependencies,
         latest_agent_runs,
         ticket_agent_totals,
         latest_workflow_runs_by_worktree,
@@ -787,36 +825,19 @@ fn sync_sources_for_repo(
         }
     } else {
         for source in sources {
-            match source.source_type.as_str() {
-                "github" => {
-                    let action = match serde_json::from_str::<GitHubConfig>(&source.config_json) {
-                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "github", || {
-                            github::sync_github_issues(&cfg.owner, &cfg.repo, token)
-                        }),
-                        Err(e) => Action::TicketSyncFailed {
-                            repo_slug: repo_slug.to_string(),
-                            error: format!("invalid github config: {e}"),
-                        },
-                    };
-                    if !tx.send(action) {
-                        return false;
-                    }
+            let action = match TicketSource::from_issue_source(&source) {
+                Ok(ts) => {
+                    let ts = ts.with_repo_slug(repo_slug);
+                    let source_type = ts.source_type_str();
+                    sync_repo(syncer, repo_id, repo_slug, source_type, || ts.sync(token))
                 }
-                "jira" => {
-                    let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
-                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "jira", || {
-                            jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-                        }),
-                        Err(e) => Action::TicketSyncFailed {
-                            repo_slug: repo_slug.to_string(),
-                            error: format!("invalid jira config: {e}"),
-                        },
-                    };
-                    if !tx.send(action) {
-                        return false;
-                    }
-                }
-                _ => {}
+                Err(e) => Action::TicketSyncFailed {
+                    repo_slug: repo_slug.to_string(),
+                    error: format!("unsupported source type {:?}: {e}", source.source_type),
+                },
+            };
+            if !tx.send(action) {
+                return false;
             }
         }
     }
@@ -831,6 +852,7 @@ pub fn spawn_ticket_sync_for_repo(
     repo_id: String,
     repo_slug: String,
     remote_url: String,
+    force: bool,
 ) {
     thread::spawn(move || {
         let db = db_path();
@@ -867,10 +889,10 @@ pub fn spawn_ticket_sync_for_repo(
                 })
                 .unwrap_or(true),
             Ok(None) => true,
-            Err(_) => false,
+            Err(_) => true,
         };
 
-        if !is_stale {
+        if !force && !is_stale {
             let _ = tx.send(Action::TicketSyncDone);
             return;
         }
@@ -1301,8 +1323,11 @@ mod tests {
             assignee: None,
             priority: None,
             url: "https://example.com".into(),
-            raw_json: "{}".into(),
+            raw_json: None,
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
         };
 
         let action = sync_repo(&syncer, "r1", "test-repo", "github", || Ok(vec![ticket]));
@@ -1348,8 +1373,11 @@ mod tests {
             assignee: None,
             priority: None,
             url: "https://example.com".into(),
-            raw_json: "{}".into(),
+            raw_json: None,
             label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
         };
 
         let action = sync_repo(&syncer, "nonexistent-repo", "test-repo", "github", || {

@@ -1,6 +1,6 @@
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
-use conductor_core::worktree::WorktreeManager;
+use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal};
@@ -23,11 +23,25 @@ impl App {
                 ticket_id,
                 from_pr,
                 from_branch,
+                force_dirty,
             } => {
-                self.spawn_worktree_create(repo_slug, wt_name, ticket_id, from_pr, from_branch);
+                self.spawn_worktree_create(
+                    repo_slug,
+                    wt_name,
+                    WorktreeCreateOptions {
+                        ticket_id,
+                        from_pr,
+                        from_branch,
+                        force_dirty,
+                        ..Default::default()
+                    },
+                );
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
                 let Some(bg_tx) = self.bg_tx.clone() else {
+                    self.state.modal = Modal::Error {
+                        message: "Cannot delete worktree: background sender not ready.".into(),
+                    };
                     return;
                 };
                 self.state.modal = Modal::Progress {
@@ -50,6 +64,9 @@ impl App {
             }
             ConfirmAction::UnregisterRepo { repo_slug } => {
                 let Some(bg_tx) = self.bg_tx.clone() else {
+                    self.state.modal = Modal::Error {
+                        message: "Cannot unregister repo: background sender not ready.".into(),
+                    };
                     return;
                 };
                 self.state.modal = Modal::Progress {
@@ -76,6 +93,7 @@ impl App {
                     &workflow_run_id,
                     WorkflowRunStatus::Cancelled,
                     Some("Cancelled by user"),
+                    None,
                 ) {
                     Ok(()) => {
                         self.state.status_message = Some("Workflow run cancelled".to_string());

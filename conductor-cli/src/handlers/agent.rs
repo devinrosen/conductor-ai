@@ -55,8 +55,12 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
             };
             let perm_mode = match permission_mode.as_deref() {
                 Some("plan") => Some(conductor_core::config::AgentPermissionMode::Plan),
+                Some("repo-safe") => Some(conductor_core::config::AgentPermissionMode::RepoSafe),
                 Some(other) => {
-                    anyhow::bail!("Unknown permission-mode '{}'; valid values: plan", other)
+                    anyhow::bail!(
+                        "Unknown permission-mode '{}'; valid values: plan, repo-safe",
+                        other
+                    )
                 }
                 None => None,
             };
@@ -325,8 +329,8 @@ pub(crate) fn run_agent(
         cmd.arg("--output-format")
             .arg("stream-json")
             .arg("--verbose")
-            .arg(effective_perm_mode.cli_flag());
-        if let Some(val) = effective_perm_mode.cli_flag_value() {
+            .arg(effective_perm_mode.claude_permission_flag());
+        if let Some(val) = effective_perm_mode.claude_permission_flag_value() {
             cmd.arg(val);
         }
         if let Some(pattern) = effective_perm_mode.allowed_tools() {
@@ -336,6 +340,18 @@ pub(crate) fn run_agent(
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .current_dir(worktree_path);
+
+        // Pass CLAUDE_CONFIG_DIR when explicitly configured so agent runs use
+        // the custom Claude config directory instead of the default ~/.claude.
+        match config.general.custom_claude_config_dir() {
+            Some(Ok(dir)) => {
+                cmd.env("CLAUDE_CONFIG_DIR", dir);
+            }
+            Some(Err(e)) => {
+                eprintln!("[conductor] Warning: failed to resolve claude_config_dir — agent will use default ~/.claude: {e}");
+            }
+            None => {}
+        }
 
         // Inject GH_TOKEN from the GitHub App installation token so all `gh` calls
         // made by the agent (including `gh pr create`) use the bot identity rather

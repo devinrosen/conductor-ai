@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import type { Ticket, TicketDetail } from "../../api/types";
+import type { Ticket, TicketDependencies, TicketDetail } from "../../api/types";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { StatusBadge } from "../shared/StatusBadge";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 import { formatDuration, formatTokens } from "../../utils/agentStats";
 import { deriveWorktreeSlug } from "../../utils/worktreeUtils";
+import { isSafeUrl } from "../../utils/urlUtils";
 import { CreateWorktreeForm } from "../worktrees/CreateWorktreeForm";
 
 interface TicketDetailModalProps {
@@ -104,14 +105,18 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
             <dt className="font-medium text-gray-500">URL</dt>
             <dd>
               {ticket.url ? (
-                <a
-                  href={ticket.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-indigo-600 hover:underline truncate block"
-                >
-                  {ticket.url}
-                </a>
+                isSafeUrl(ticket.url) ? (
+                  <a
+                    href={ticket.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-indigo-600 hover:underline truncate block"
+                  >
+                    {ticket.url}
+                  </a>
+                ) : (
+                  <span className="text-sm text-gray-700 truncate block">{ticket.url}</span>
+                )
               ) : (
                 <span className="text-gray-400">-</span>
               )}
@@ -127,6 +132,27 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
               <p className="text-sm text-gray-700 whitespace-pre-wrap break-words line-clamp-6">
                 {ticket.body}
               </p>
+            </div>
+          )}
+
+          {/* Dependencies */}
+          {hasDependencies(detail?.dependencies) && (
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
+                Dependencies
+              </h4>
+              {(detail!.dependencies.blocked_by.length > 0) && (
+                <DependencyGroup label="Blocked by" tickets={detail!.dependencies.blocked_by} />
+              )}
+              {(detail!.dependencies.blocks.length > 0) && (
+                <DependencyGroup label="Blocks" tickets={detail!.dependencies.blocks} />
+              )}
+              {detail!.dependencies.parent && (
+                <DependencyGroup label="Parent" tickets={[detail!.dependencies.parent]} />
+              )}
+              {(detail!.dependencies.children.length > 0) && (
+                <DependencyGroup label="Children" tickets={detail!.dependencies.children} />
+              )}
             </div>
           )}
 
@@ -171,7 +197,11 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
                 <CreateWorktreeForm
                   repoId={ticket.repo_id}
                   ticketId={ticket.id}
-                  initialName={deriveWorktreeSlug(ticket.source_id, ticket.title)}
+                  initialName={deriveWorktreeSlug(
+                    ticket.source_id,
+                    ticket.title,
+                    JSON.parse(ticket.labels || "[]"),
+                  )}
                   open={showCreateForm}
                   onOpenChange={setShowCreateForm}
                   onCreated={refetch}
@@ -219,6 +249,37 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function hasDependencies(deps: TicketDependencies | undefined): boolean {
+  if (!deps) return false;
+  return (
+    deps.blocked_by.length > 0 ||
+    deps.blocks.length > 0 ||
+    deps.parent !== null ||
+    deps.children.length > 0
+  );
+}
+
+function DependencyGroup({ label, tickets }: { label: string; tickets: Ticket[] }) {
+  return (
+    <div className="mb-1 text-sm">
+      <span className="font-medium text-gray-500 mr-2">{label}:</span>
+      <span className="space-x-2">
+        {tickets.map((t) => (
+          <a
+            key={t.id}
+            href={t.url || undefined}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-indigo-600 hover:underline"
+          >
+            #{t.source_id} {t.title}
+          </a>
+        ))}
+      </span>
     </div>
   );
 }

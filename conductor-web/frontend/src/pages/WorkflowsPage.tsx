@@ -334,7 +334,7 @@ export function WorkflowsPage() {
                 ) : pickerDefs.map((def) => (
                   <button key={def.name} onClick={() => handleSelectDef(def)}
                     className="w-full text-left px-3 py-2 text-sm rounded border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50">
-                    <span className="font-medium">{def.name}</span>
+                    <span className="font-medium">{def.title ?? def.name}</span>
                     {def.description && <span className="text-gray-500 ml-2 text-xs">{def.description}</span>}
                   </button>
                 ))}
@@ -436,10 +436,10 @@ export function WorkflowsPage() {
                           to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
                           className="text-indigo-600 hover:underline font-medium"
                         >
-                          {run.workflow_name}
+                          {run.workflow_title ?? run.workflow_name}
                         </Link>
                       ) : (
-                        <span className="font-medium">{run.workflow_name}</span>
+                        <span className="font-medium">{run.workflow_title ?? run.workflow_name}</span>
                       )}
                     </td>
                     <td className="px-3 py-1.5 text-gray-500">

@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
+import type { HookSummary } from "../api/types";
 import { ModelPicker } from "../components/shared/ModelPicker";
 import { ThemePicker } from "../components/shared/ThemePicker";
-import { usePushNotifications } from "../hooks/usePushNotifications";
 
 export function SettingsPage() {
   const { data: globalConfig, refetch: refetchGlobalConfig } = useApi(
@@ -13,8 +14,14 @@ export function SettingsPage() {
   const [savingGlobalModel, setSavingGlobalModel] = useState(false);
   const [globalModelError, setGlobalModelError] = useState<string | null>(null);
 
-  // Push notifications hook
-  const pushNotifications = usePushNotifications();
+  const { data: hooks, loading: hooksLoading } = useApi(
+    () => api.listHooks(),
+    [],
+  );
+
+  // Track which hooks have had a test fired (map of index → timeout handle)
+  const [firedHooks, setFiredHooks] = useState<Set<number>>(new Set());
+  const [hookTestError, setHookTestError] = useState<string | null>(null);
 
   async function handleGlobalModelChange(model: string | null) {
     setSavingGlobalModel(true);
@@ -28,6 +35,25 @@ export function SettingsPage() {
       );
     } finally {
       setSavingGlobalModel(false);
+    }
+  }
+
+  async function handleTestHook(hook: HookSummary) {
+    setHookTestError(null);
+    try {
+      await api.testHook(hook.index);
+      setFiredHooks((prev) => new Set(prev).add(hook.index));
+      setTimeout(() => {
+        setFiredHooks((prev) => {
+          const next = new Set(prev);
+          next.delete(hook.index);
+          return next;
+        });
+      }, 3000);
+    } catch (err) {
+      setHookTestError(
+        err instanceof Error ? err.message : "Failed to dispatch test event",
+      );
     }
   }
 
@@ -67,88 +93,102 @@ export function SettingsPage() {
         />
       </section>
 
-      {/* Push Notifications Section */}
+      {/* Notification Hooks Section */}
       <section>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-1">
-          Push Notifications
-        </h3>
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+            Notification Hooks
+          </h3>
+        </div>
         <p className="text-sm text-gray-500 mb-3">
-          Get notified about workflow completions, failures, and gate approvals even when the app is in the background.
+          Shell or HTTP hooks fired on workflow and agent lifecycle events. Configure in{" "}
+          <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">~/.conductor/config.toml</code>.
         </p>
 
-        {pushNotifications.error && (
+        {hookTestError && (
           <div className="mb-3 px-3 py-2 text-sm text-red-700 bg-red-50 rounded-md border border-red-200">
-            {pushNotifications.error}
+            {hookTestError}
           </div>
         )}
 
-        {!pushNotifications.isSupported ? (
+        {hooksLoading ? (
+          <div className="text-sm text-gray-400">Loading hooks…</div>
+        ) : !hooks || hooks.length === 0 ? (
           <div className="px-3 py-2 text-sm text-gray-600 bg-gray-50 rounded-md border border-gray-200">
-            Push notifications are not supported on this device or browser.
+            No hooks configured. Edit{" "}
+            <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">~/.conductor/config.toml</code>{" "}
+            to add hooks. See{" "}
+            <a
+              href="https://github.com/devinrosen/conductor-ai/tree/main/docs/examples/hooks"
+              target="_blank"
+              rel="noreferrer"
+              className="text-blue-600 hover:underline"
+            >
+              example scripts
+            </a>{" "}
+            to get started.
           </div>
         ) : (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm font-medium text-gray-900">
-                  Push Notifications
-                </div>
-                <div className="text-xs text-gray-500">
-                  Status: {pushNotifications.permission === 'granted'
-                    ? pushNotifications.isSubscribed
-                      ? 'Enabled'
-                      : 'Permission granted, not subscribed'
-                    : pushNotifications.permission === 'denied'
-                      ? 'Blocked'
-                      : 'Not configured'
-                  }
-                </div>
-              </div>
-
-              <div className="flex space-x-2">
-                {pushNotifications.permission === 'default' && (
-                  <button
-                    onClick={() => pushNotifications.actions.requestPermission()}
-                    disabled={pushNotifications.isLoading}
-                    className="px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {pushNotifications.isLoading ? 'Requesting...' : 'Request Permission'}
-                  </button>
-                )}
-
-                {pushNotifications.permission === 'granted' && !pushNotifications.isSubscribed && (
-                  <button
-                    onClick={() => pushNotifications.actions.subscribe()}
-                    disabled={pushNotifications.isLoading}
-                    className="px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {pushNotifications.isLoading ? 'Subscribing...' : 'Enable Notifications'}
-                  </button>
-                )}
-
-                {pushNotifications.permission === 'granted' && pushNotifications.isSubscribed && (
-                  <button
-                    onClick={() => pushNotifications.actions.unsubscribe()}
-                    disabled={pushNotifications.isLoading}
-                    className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {pushNotifications.isLoading ? 'Unsubscribing...' : 'Disable Notifications'}
-                  </button>
-                )}
-
-                {pushNotifications.permission === 'denied' && (
-                  <div className="text-xs text-gray-500">
-                    Permission denied. Enable in browser settings.
-                  </div>
-                )}
-              </div>
+          <div className="overflow-hidden rounded-md border border-gray-200">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Pattern
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Type
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Command / URL
+                  </th>
+                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Test
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 bg-white">
+                {hooks.map((hook) => (
+                  <tr key={hook.index}>
+                    <td className="px-3 py-2 font-mono text-xs text-gray-800">
+                      {hook.on}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-gray-500">
+                      {hook.kind}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-gray-600 max-w-xs truncate">
+                      {hook.command ?? <span className="italic text-gray-400">—</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {firedHooks.has(hook.index) ? (
+                        <span className="text-xs text-green-600 font-medium">
+                          Test sent
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleTestHook(hook)}
+                          className="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200"
+                          title="Fire a synthetic WorkflowRunCompleted event through this hook"
+                        >
+                          Send test event
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="px-3 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+              <p className="text-xs text-gray-400">
+                Test events fire asynchronously. Errors appear in hook output, not here.
+              </p>
+              <Link
+                to="/settings/hooks"
+                className="text-xs text-blue-600 hover:underline font-medium"
+              >
+                Edit event assignments →
+              </Link>
             </div>
-
-            {pushNotifications.isSubscribed && (
-              <div className="px-3 py-2 text-xs text-green-700 bg-green-50 rounded-md border border-green-200">
-                ✓ You'll receive notifications for workflow events and gate approvals.
-              </div>
-            )}
           </div>
         )}
       </section>

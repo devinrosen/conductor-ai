@@ -34,6 +34,11 @@ export function WorktreeRow({
       : workflowRun.result_summary
     : null;
 
+  // Find the current active step name (fallback when progress is unavailable)
+  const activeStep = workflowRun?.active_steps?.find(
+    (s) => s.status === "running" || s.status === "waiting",
+  );
+
   return (
     <tr
       className={selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}
@@ -66,7 +71,10 @@ export function WorktreeRow({
             </span>
             <span className="text-amber-600">
               {workflowRun!.workflow_name}
-              {progress && <span className="text-gray-400"> &middot; {progress}</span>}
+              {progress
+                ? <span className="text-gray-400"> &middot; {progress}</span>
+                : activeStep && <span className="text-gray-400"> &middot; {activeStep.step_name}</span>
+              }
             </span>
           </span>
         ) : isWaiting ? (
@@ -74,7 +82,10 @@ export function WorktreeRow({
             <span className="inline-flex h-2 w-2 rounded-full bg-blue-400 shrink-0" />
             <span className="text-blue-600">
               {workflowRun!.workflow_name}
-              {progress && <span className="text-gray-400"> &middot; {progress}</span>}
+              {progress
+                ? <span className="text-gray-400"> &middot; {progress}</span>
+                : activeStep && <span className="text-gray-400"> &middot; {activeStep.step_name}</span>
+              }
             </span>
           </span>
         ) : isFailed ? (
@@ -103,7 +114,7 @@ export function WorktreeRow({
               >
                 Resume
               </button>
-            )}
+            )
           </span>
         ) : null}
       </td>

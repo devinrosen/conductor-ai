@@ -465,10 +465,17 @@ impl App {
                             ticket_id,
                             from_pr,
                             from_branch,
+                            force_dirty: false,
                         },
                     };
                 } else {
-                    self.spawn_worktree_create(repo_slug, wt_name, ticket_id, from_pr, from_branch);
+                    self.spawn_main_health_check(
+                        repo_slug,
+                        wt_name,
+                        ticket_id,
+                        from_pr,
+                        from_branch,
+                    );
                 }
             }
             InputAction::LinkTicket { worktree_id } => {
@@ -704,6 +711,9 @@ impl App {
                     }
                 }
             }
+            InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
+                self.handle_settings_input_submit(on_submit, value);
+            }
         }
     }
 
@@ -768,6 +778,9 @@ impl App {
                     resume_session_id,
                     model,
                 );
+            }
+            InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
+                self.handle_settings_input_submit(on_submit, value);
             }
             _ => {}
         }

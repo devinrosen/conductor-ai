@@ -61,7 +61,7 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
             let mut spans = vec![
                 Span::styled(format!("{icon} "), Style::default().fg(icon_color)),
                 Span::styled(
-                    gate.workflow_name.as_str(),
+                    gate.display_name(),
                     Style::default().fg(state.theme.group_header),
                 ),
                 Span::raw("  "),

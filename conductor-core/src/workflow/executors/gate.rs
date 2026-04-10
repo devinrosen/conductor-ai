@@ -262,6 +262,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                             &state.workflow_run_id,
                             WorkflowRunStatus::Running,
                             None,
+                            None,
                         )?;
                         return Ok(());
                     }
@@ -271,6 +272,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                         state.wf_mgr.update_workflow_status(
                             &state.workflow_run_id,
                             WorkflowRunStatus::Running,
+                            None,
                             None,
                         )?;
                         return Err(ConductorError::Workflow(format!(
@@ -339,6 +341,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                                             &state.workflow_run_id,
                                             WorkflowRunStatus::Running,
                                             None,
+                                            None,
                                         )?;
                                         return Ok(());
                                     }
@@ -373,6 +376,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                                         state.wf_mgr.update_workflow_status(
                                             &state.workflow_run_id,
                                             WorkflowRunStatus::Running,
+                                            None,
                                             None,
                                         )?;
                                         return Ok(());
@@ -420,6 +424,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                                     state.wf_mgr.update_workflow_status(
                                         &state.workflow_run_id,
                                         WorkflowRunStatus::Running,
+                                        None,
                                         None,
                                     )?;
                                     return Ok(());
@@ -593,6 +598,7 @@ pub fn handle_gate_timeout(
                 &state.workflow_run_id,
                 WorkflowRunStatus::Running,
                 None,
+                None,
             )?;
             Err(ConductorError::Workflow(format!(
                 "Gate '{}' timed out",
@@ -612,6 +618,7 @@ pub fn handle_gate_timeout(
             state.wf_mgr.update_workflow_status(
                 &state.workflow_run_id,
                 WorkflowRunStatus::Running,
+                None,
                 None,
             )?;
             Ok(())

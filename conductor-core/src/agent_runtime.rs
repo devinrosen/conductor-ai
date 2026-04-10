@@ -144,6 +144,36 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Parse conductor-specific failure patterns from stderr output and format a
+/// clean, actionable error message.
+///
+/// Looks for:
+/// - `[conductor] Agent failed: {reason}` — the real failure reason
+/// - `[conductor] Agent log saved to {path}` — the agent log path
+///
+/// Returns `Some(formatted_message)` if the conductor failure pattern is found,
+/// or `None` if no conductor-specific patterns are present (caller should fall
+/// through to existing raw-stderr behavior).
+fn format_spawn_failure_error(_window_name: &str, stderr: &str) -> Option<String> {
+    let mut failure_reason: Option<&str> = None;
+    let mut log_path: Option<&str> = None;
+
+    for line in stderr.lines() {
+        if let Some(reason) = line.strip_prefix("[conductor] Agent failed: ") {
+            failure_reason = Some(reason);
+        } else if let Some(path) = line.strip_prefix("[conductor] Agent log saved to ") {
+            log_path = Some(path);
+        }
+    }
+
+    let reason = failure_reason?;
+
+    Some(match log_path {
+        Some(path) => format!("Agent exited immediately: {reason}\nSee full log: {path}"),
+        None => format!("Agent exited immediately: {reason}"),
+    })
+}
+
 /// After a successful `tmux new-window`, wait briefly and verify the window
 /// actually exists. Retries once with a longer delay before declaring failure.
 ///
@@ -171,6 +201,11 @@ fn verify_tmux_window(window_name: &str, err_file: &str) -> std::result::Result<
     // Window never appeared — read stderr capture for diagnostics.
     let stderr_output = std::fs::read_to_string(err_file).unwrap_or_default();
     let _ = std::fs::remove_file(err_file);
+
+    // Try to extract a clean, actionable error from conductor-specific patterns.
+    if let Some(friendly) = format_spawn_failure_error(window_name, &stderr_output) {
+        return Err(friendly);
+    }
 
     let detail = if stderr_output.trim().is_empty() {
         String::new()
@@ -297,7 +332,7 @@ const AGENT_ARGS_CAPACITY: usize = 18;
 /// ready to pass to [`spawn_tmux_window`].
 ///
 /// `permission_mode` optionally overrides the configured permission mode
-/// (e.g. `Some(AgentPermissionMode::Plan)` for repo-scoped read-only agents).
+/// (e.g. `Some(AgentPermissionMode::RepoSafe)` for repo-scoped read-only agents).
 pub fn build_agent_args(
     run_id: &str,
     worktree_path: &str,
@@ -321,8 +356,9 @@ pub fn build_agent_args(
 
 /// Like [`build_agent_args`] but accepts an optional permission mode override.
 ///
-/// When `permission_mode` is `Some(AgentPermissionMode::Plan)`, the agent run
-/// will use `--permission-mode plan` instead of the configured default.
+/// The permission mode is encoded via `--permission-mode <name>` in the conductor
+/// args (e.g. `--permission-mode repo-safe`). The actual flags passed to the claude
+/// subprocess differ and are resolved in `run_agent()` via `claude_permission_flag()`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_agent_args_with_mode(
     run_id: &str,
@@ -594,6 +630,96 @@ mod tests {
     }
 
     #[test]
+    fn format_spawn_failure_error_with_failure_and_log_path() {
+        let stderr = "[conductor] Agent failed: Claude exited with status: exit status: 1\n\
+                      [conductor] Agent log saved to /Users/devin/.conductor/agent-logs/01ABC.log\n";
+        let result = super::format_spawn_failure_error("my-window", stderr);
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert_eq!(
+            msg,
+            "Agent exited immediately: Claude exited with status: exit status: 1\n\
+             See full log: /Users/devin/.conductor/agent-logs/01ABC.log"
+        );
+    }
+
+    #[test]
+    fn format_spawn_failure_error_with_failure_only() {
+        let stderr = "[conductor] Agent failed: Claude exited with status: exit status: 1\n";
+        let result = super::format_spawn_failure_error("my-window", stderr);
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert_eq!(
+            msg,
+            "Agent exited immediately: Claude exited with status: exit status: 1"
+        );
+        assert!(!msg.contains("See full log"), "no log path should appear");
+    }
+
+    #[test]
+    fn format_spawn_failure_error_with_log_only() {
+        // Log path alone without failure line → None (not actionable without reason)
+        let stderr =
+            "[conductor] Agent log saved to /Users/devin/.conductor/agent-logs/01ABC.log\n";
+        let result = super::format_spawn_failure_error("my-window", stderr);
+        assert!(
+            result.is_none(),
+            "expected None when no failure line present"
+        );
+    }
+
+    #[test]
+    fn format_spawn_failure_error_empty() {
+        let result = super::format_spawn_failure_error("my-window", "");
+        assert!(result.is_none(), "expected None for empty stderr");
+    }
+
+    #[test]
+    fn verify_tmux_window_surfaces_conductor_error() {
+        // Write a fake err file with conductor-specific patterns.
+        let err_file = format!(
+            "/tmp/conductor-agent-conductor-error-test-{}.err",
+            std::process::id()
+        );
+        let stderr_content =
+            "[conductor] Agent failed: Claude exited with status: exit status: 1\n\
+             [conductor] Agent log saved to /tmp/fake-agent-run.log\n";
+        std::fs::write(&err_file, stderr_content).unwrap();
+
+        let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99998", &err_file);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+
+        // Should show the friendly message, not the raw tmux "not found" message
+        assert!(
+            msg.contains("Agent exited immediately:"),
+            "expected friendly error prefix: {msg}"
+        );
+        assert!(
+            msg.contains("Claude exited with status: exit status: 1"),
+            "expected failure reason in message: {msg}"
+        );
+        assert!(
+            msg.contains("See full log:"),
+            "expected log path hint: {msg}"
+        );
+        assert!(
+            !msg.contains("tmux window"),
+            "should not contain raw tmux error: {msg}"
+        );
+        assert!(
+            !msg.contains("Captured stderr:"),
+            "should not contain raw 'Captured stderr:' prefix: {msg}"
+        );
+
+        // File should have been cleaned up
+        assert!(
+            !std::path::Path::new(&err_file).exists(),
+            "stderr file should be cleaned up"
+        );
+    }
+
+    #[test]
     fn build_agent_args_short_prompt_uses_inline() {
         let prompt = "short prompt";
         assert!(prompt.len() <= 512);
@@ -764,8 +890,41 @@ mod tests {
     }
 
     #[test]
+    fn build_agent_args_with_mode_repo_safe() {
+        use crate::config::AgentPermissionMode;
+        let args = super::build_agent_args_with_mode(
+            "run-1",
+            "/tmp/wt",
+            "prompt",
+            None,
+            None,
+            None,
+            Some(&AgentPermissionMode::RepoSafe),
+            &[],
+        )
+        .unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--permission-mode")
+            .expect("expected --permission-mode flag in conductor args");
+        assert_eq!(
+            args[idx + 1],
+            "repo-safe",
+            "expected 'repo-safe' value after --permission-mode"
+        );
+
+        // --allowedTools must NOT appear in conductor args — it is passed
+        // to the claude CLI subprocess inside run_agent(), not here.
+        assert!(
+            !args.iter().any(|a| a == "--allowedTools"),
+            "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
+        );
+    }
+
+    #[test]
     fn build_agent_args_non_plan_no_allowed_tools() {
         use crate::config::AgentPermissionMode;
+        // RepoSafe is excluded: its allowed_tools() is applied in run_agent(), not here.
         for mode in &[
             AgentPermissionMode::SkipPermissions,
             AgentPermissionMode::AutoMode,

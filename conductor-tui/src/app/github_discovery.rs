@@ -223,6 +223,9 @@ impl App {
         }
 
         let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: "Cannot import repos: background sender not ready.".into(),
+            };
             return;
         };
         self.state.modal = Modal::Progress {

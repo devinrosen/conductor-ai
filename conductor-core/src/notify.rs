@@ -1,48 +1,11 @@
 use crate::agent::{AgentRun, AgentRunStatus};
-use crate::config::NotificationConfig;
+use crate::config::{HookConfig, NotificationConfig};
+use crate::notification_event::NotificationEvent;
+use crate::notification_hooks::HookRunner;
 use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
 use crate::workflow::WorkflowRun;
 use crate::workflow::WorkflowRunStatus;
 use crate::workflow_dsl::GateType;
-
-/// Send a plain-text message to a Slack incoming webhook URL.
-///
-/// Fire-and-forget on a spawned thread — never blocks the caller, never
-/// panics, never propagates errors. Logs a warning on failure.
-fn send_slack_message(webhook_url: &str, text: &str) {
-    let url = webhook_url.to_string();
-    let body = serde_json::json!({ "text": text });
-    std::thread::spawn(move || {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(10))
-            .build();
-        if let Err(e) = agent.post(&url).send_json(&body) {
-            tracing::warn!("Slack webhook failed: {e}");
-        }
-    });
-}
-
-/// Escape Slack mrkdwn special characters in user-supplied content.
-///
-/// Slack treats `<…>` as link/mention markup, so we must escape all `<`
-/// characters — not just `<!`, `<@`, `<#` — to prevent hyperlink injection
-/// (e.g. `<http://evil.com|Click here>`) from LLM-sourced agent output.
-/// Also escapes `&` which Slack requires as `&amp;`.
-fn escape_slack_mrkdwn(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// If Slack is configured, dispatch `text` to the webhook.
-fn maybe_send_slack(config: &NotificationConfig, text: &str) {
-    if let Some(ref url) = config.slack.webhook_url {
-        if !url.is_empty() {
-            let escaped = escape_slack_mrkdwn(text);
-            send_slack_message(url, &escaped);
-        }
-    }
-}
 
 /// Persist an in-app notification record. Logs a warning on failure.
 fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
@@ -60,15 +23,23 @@ fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification
 /// Returns `true` if a notification should fire given the config and run outcome.
 ///
 /// Pure function — no side effects — extracted so the three early-return guards
-/// can be unit-tested without touching `notify_rust`.
+/// can be unit-tested without side effects.
+///
+/// When `config.workflows` is `None` (no legacy `[notifications.workflows]` block),
+/// hook `on` patterns are the sole filter and this function always returns `true`.
+/// When `Some(wf)`, the legacy per-event flags are respected (backward compat).
 pub fn should_notify(config: &NotificationConfig, succeeded: bool) -> bool {
+    // No [notifications.workflows] block → hooks are the sole filter; always pass.
+    let Some(wf) = &config.workflows else {
+        return true;
+    };
     if !config.enabled {
         return false;
     }
-    if succeeded && !config.workflows.on_success {
+    if succeeded && !wf.on_success {
         return false;
     }
-    if !succeeded && !config.workflows.on_failure {
+    if !succeeded && !wf.on_failure {
         return false;
     }
     true
@@ -105,37 +76,149 @@ pub fn try_claim_notification(
     }
 }
 
+/// Parameters for the common 3-step notification dispatch pattern.
+struct DispatchParams<'a> {
+    dedup_entity_id: &'a str,
+    dedup_event_type: &'a str,
+    notification: &'a CreateNotification<'a>,
+    hooks: &'a [HookConfig],
+    event: Option<&'a NotificationEvent>,
+}
+
+/// Dispatch a notification using the common 3-step pattern.
+///
+/// 1. Try to claim notification for deduplication
+/// 2. Persist in-app notification
+/// 3. Fire user-configured notification hooks (shell/HTTP)
+///
+/// Returns `true` if the notification was dispatched, `false` if deduplicated.
+fn dispatch_notification(conn: &rusqlite::Connection, params: &DispatchParams<'_>) -> bool {
+    // Step 1: Try to claim notification for deduplication
+    if !try_claim_notification(conn, params.dedup_entity_id, params.dedup_event_type) {
+        return false;
+    }
+
+    // Step 2: Persist in-app notification
+    persist_notification(conn, params.notification);
+
+    // Step 3: Fire user-configured notification hooks (fire-and-forget)
+    if let Some(evt) = params.event {
+        HookRunner::new(params.hooks).fire(evt);
+    }
+
+    true
+}
+
+/// Parse `"repo_slug/branch"` from an optional target label.
+///
+/// Returns `("", "")` when the label is `None` or contains no `'/'` separator.
+/// The format `"repo_slug/worktree_slug"` is used by both workflow and agent runs.
+pub fn parse_target_label(label: Option<&str>) -> (&str, &str) {
+    label.and_then(|s| s.split_once('/')).unwrap_or(("", ""))
+}
+
+/// Build a deep link URL for a workflow run.
+///
+/// Returns `Some(url)` when all three of `web_url`, `repo_id`, and `worktree_id` are
+/// provided. Trailing slashes on `web_url` are trimmed automatically.
+pub fn build_workflow_deep_link(
+    web_url: Option<&str>,
+    repo_id: Option<&str>,
+    worktree_id: Option<&str>,
+    run_id: &str,
+) -> Option<String> {
+    match (web_url, repo_id, worktree_id) {
+        (Some(base), Some(repo), Some(wt)) => Some(format!(
+            "{}/repos/{}/worktrees/{}/workflows/runs/{}",
+            base.trim_end_matches('/'),
+            repo,
+            wt,
+            run_id
+        )),
+        _ => None,
+    }
+}
+
+/// Parameters for [`fire_workflow_notification`].
+pub struct WorkflowNotificationArgs<'a> {
+    pub run_id: &'a str,
+    pub workflow_name: &'a str,
+    pub target_label: Option<&'a str>,
+    pub succeeded: bool,
+    pub parent_workflow_run_id: Option<&'a str>,
+    pub repo_slug: &'a str,
+    pub branch: &'a str,
+    pub duration_ms: Option<u64>,
+    pub ticket_url: Option<String>,
+    pub error: Option<&'a str>,
+    /// Conductor repo ID for deep-link construction. `None` for ephemeral PR runs.
+    pub repo_id: Option<&'a str>,
+    /// Conductor worktree ID for deep-link construction. `None` for ephemeral PR runs.
+    pub worktree_id: Option<&'a str>,
+}
+
+/// Parameters for [`fire_agent_run_notification`].
+pub struct AgentRunNotificationArgs<'a> {
+    pub run_id: &'a str,
+    pub worktree_slug: Option<&'a str>,
+    pub succeeded: bool,
+    pub error_msg: Option<&'a str>,
+    pub repo_slug: &'a str,
+    pub branch: &'a str,
+    pub duration_ms: Option<u64>,
+    pub ticket_url: Option<String>,
+}
+
+/// Parameters for [`fire_feedback_notification`].
+pub struct FeedbackNotificationParams<'a> {
+    pub request_id: &'a str,
+    pub prompt_preview: &'a str,
+    pub repo_slug: &'a str,
+    pub branch: &'a str,
+}
+
 /// Fire a desktop notification for a workflow completion, respecting user config.
 ///
 /// Filters are applied in order: master `enabled` flag, then per-event
 /// `on_success`/`on_failure` guards. A cross-process dedup check via
 /// `notification_log` prevents duplicate notifications when multiple TUI/web
-/// instances run concurrently. A `notify_rust` error is logged as a warning.
+/// instances run concurrently.
+/// Matching entries in `notify_hooks` are fired after the dedup claim succeeds.
 pub fn fire_workflow_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
-    run_id: &str,
-    workflow_name: &str,
-    target_label: Option<&str>,
-    succeeded: bool,
+    notify_hooks: &[HookConfig],
+    params: &WorkflowNotificationArgs<'_>,
 ) {
-    if !should_notify(config, succeeded) {
+    let has_hooks = !notify_hooks.is_empty();
+    if !should_notify(config, params.succeeded) && !has_hooks {
         return;
     }
+
+    let run_id = params.run_id;
+    let workflow_name = params.workflow_name;
+    let target_label = params.target_label;
+    let succeeded = params.succeeded;
+    let parent_workflow_run_id = params.parent_workflow_run_id;
+    let repo_slug = params.repo_slug.to_string();
+    let branch = params.branch.to_string();
+    let duration_ms = params.duration_ms;
+    let ticket_url = params.ticket_url.clone();
+    let error = params.error.map(|s| s.to_string());
+    let deep_link = build_workflow_deep_link(
+        config.web_url.as_deref(),
+        params.repo_id,
+        params.worktree_id,
+        run_id,
+    );
 
     let event_type = if succeeded { "completed" } else { "failed" };
-    if !try_claim_notification(conn, run_id, event_type) {
-        return;
-    }
-
     let title = if succeeded {
         "Conductor \u{2014} Workflow Finished"
     } else {
         "Conductor \u{2014} Workflow Failed"
     };
     let body = notification_body(workflow_name, target_label);
-
-    // Persist in-app notification
     let severity = if succeeded {
         NotificationSeverity::Info
     } else {
@@ -146,87 +229,130 @@ pub fn fire_workflow_notification(
     } else {
         "workflow_failed"
     };
-    persist_notification(
+
+    let notification = CreateNotification {
+        kind,
+        title,
+        body: &body,
+        severity,
+        entity_id: Some(run_id),
+        entity_type: Some("workflow_run"),
+    };
+
+    let hook_event = if succeeded {
+        NotificationEvent::WorkflowRunCompleted {
+            run_id: run_id.to_string(),
+            label: body.clone(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            url: deep_link.clone(),
+            workflow_name: workflow_name.to_string(),
+            parent_workflow_run_id: parent_workflow_run_id.map(|s| s.to_string()),
+            repo_slug,
+            branch,
+            duration_ms,
+            ticket_url,
+        }
+    } else {
+        NotificationEvent::WorkflowRunFailed {
+            run_id: run_id.to_string(),
+            label: body.clone(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            url: deep_link,
+            workflow_name: workflow_name.to_string(),
+            parent_workflow_run_id: parent_workflow_run_id.map(|s| s.to_string()),
+            repo_slug,
+            branch,
+            duration_ms,
+            ticket_url,
+            error,
+        }
+    };
+
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind,
-            title,
-            body: &body,
-            severity,
-            entity_id: Some(run_id),
-            entity_type: Some("workflow_run"),
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: event_type,
+            notification: &notification,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
         },
     );
-
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(run_id, workflow_name, "desktop notification failed: {e}");
-    }
-
-    let status_word = if succeeded { "completed" } else { "failed" };
-    let slack_text = match target_label {
-        Some(label) => {
-            format!("[conductor] workflow \"{workflow_name}\" {status_word} for {label}")
-        }
-        None => format!("[conductor] workflow \"{workflow_name}\" {status_word}"),
-    };
-    maybe_send_slack(config, &slack_text);
 }
 
-/// Fire a desktop notification for an agent feedback request.
+/// Fire a notification for an agent feedback request.
 ///
 /// Gated on `config.enabled`. Uses `(request_id, "feedback_requested")` as the
 /// dedup key so each feedback request fires at most one notification across all
-/// processes.
+/// processes. Matching entries in `notify_hooks` are fired after the dedup claim
+/// succeeds.
 pub fn fire_feedback_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
-    request_id: &str,
-    prompt_preview: &str,
+    notify_hooks: &[HookConfig],
+    params: &FeedbackNotificationParams<'_>,
 ) {
-    if !config.enabled {
-        return;
-    }
-
-    if !try_claim_notification(conn, request_id, "feedback_requested") {
+    let has_hooks = !notify_hooks.is_empty();
+    if !config.enabled && !has_hooks {
         return;
     }
 
     let title = "Conductor \u{2014} Agent Needs Input";
+    let notification = CreateNotification {
+        kind: "feedback_requested",
+        title,
+        body: params.prompt_preview,
+        severity: NotificationSeverity::Warning,
+        entity_id: Some(params.request_id),
+        entity_type: Some("agent_run"),
+    };
 
-    // Persist in-app notification
-    persist_notification(
+    let hook_event = NotificationEvent::FeedbackRequested {
+        run_id: params.request_id.to_string(),
+        label: params.prompt_preview.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        url: None,
+        prompt_preview: params.prompt_preview.to_string(),
+        repo_slug: params.repo_slug.to_string(),
+        branch: params.branch.to_string(),
+        duration_ms: None,
+        ticket_url: None,
+    };
+
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "feedback_requested",
-            title,
-            body: prompt_preview,
-            severity: NotificationSeverity::Warning,
-            entity_id: Some(request_id),
-            entity_type: Some("agent_run"),
+        &DispatchParams {
+            dedup_entity_id: params.request_id,
+            dedup_event_type: "feedback_requested",
+            notification: &notification,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
         },
     );
-
-    if let Err(e) = show_desktop_notification(title, prompt_preview) {
-        tracing::warn!(request_id, "desktop notification failed: {e}");
-    }
-
-    let slack_text = format!("[conductor] agent run waiting for feedback: {prompt_preview}");
-    maybe_send_slack(config, &slack_text);
 }
 
 /// Fire a notification for a standalone agent run that reached a terminal state.
 ///
 /// Gated on `config.enabled` and per-event `on_success`/`on_failure` guards.
 /// Uses `(run_id, "agent_completed"|"agent_failed")` as the dedup key.
+/// Matching entries in `notify_hooks` are fired after the dedup claim succeeds.
 pub fn fire_agent_run_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
-    run_id: &str,
-    worktree_slug: Option<&str>,
-    succeeded: bool,
-    error_msg: Option<&str>,
+    notify_hooks: &[HookConfig],
+    params: &AgentRunNotificationArgs<'_>,
 ) {
-    if !should_notify(config, succeeded) {
+    let run_id = params.run_id;
+    let worktree_slug = params.worktree_slug;
+    let succeeded = params.succeeded;
+    let error_msg = params.error_msg;
+    let repo_slug = params.repo_slug.to_string();
+    let branch = params.branch.to_string();
+    let duration_ms = params.duration_ms;
+    let ticket_url = params.ticket_url.clone();
+
+    let has_hooks = !notify_hooks.is_empty();
+    if !should_notify(config, succeeded) && !has_hooks {
         return;
     }
 
@@ -235,9 +361,6 @@ pub fn fire_agent_run_notification(
     } else {
         "agent_failed"
     };
-    if !try_claim_notification(conn, run_id, event_type) {
-        return;
-    }
 
     let title = if succeeded {
         "Conductor \u{2014} Agent Run Finished"
@@ -263,34 +386,58 @@ pub fn fire_agent_run_notification(
     } else {
         NotificationSeverity::ActionRequired
     };
-    persist_notification(
+
+    let notification = CreateNotification {
+        kind: event_type,
+        title,
+        body: &body,
+        severity,
+        entity_id: Some(run_id),
+        entity_type: Some("agent_run"),
+    };
+
+    let label = worktree_slug.unwrap_or(run_id).to_string();
+    let hook_event = if succeeded {
+        NotificationEvent::AgentRunCompleted {
+            run_id: run_id.to_string(),
+            label,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            url: None,
+            repo_slug,
+            branch,
+            duration_ms,
+            ticket_url,
+        }
+    } else {
+        NotificationEvent::AgentRunFailed {
+            run_id: run_id.to_string(),
+            label,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            url: None,
+            error: error_msg.map(|s| s.to_string()),
+            repo_slug,
+            branch,
+            duration_ms,
+            ticket_url,
+        }
+    };
+
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: event_type,
-            title,
-            body: &body,
-            severity,
-            entity_id: Some(run_id),
-            entity_type: Some("agent_run"),
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: event_type,
+            notification: &notification,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
         },
     );
-
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(run_id, "desktop notification failed: {e}");
-    }
-
-    let status_word = if succeeded { "completed" } else { "failed" };
-    let slack_text = match worktree_slug {
-        Some(slug) => format!("[conductor] agent run {status_word} on {slug}"),
-        None => format!("[conductor] agent run {status_word}"),
-    };
-    maybe_send_slack(config, &slack_text);
 }
 
 /// Build the notification title and body for a gate based on its type.
 ///
 /// Pure function — no side effects — extracted so the formatting logic is
-/// unit-testable without touching `notify_rust` or the dedup DB.
+/// unit-testable without touching the dedup DB.
 pub fn gate_notification_text(
     gate_type: Option<&GateType>,
     step_name: &str,
@@ -346,21 +493,32 @@ pub struct GateNotificationParams<'a> {
     pub target_label: Option<&'a str>,
     pub gate_type: Option<&'a GateType>,
     pub gate_prompt: Option<&'a str>,
+    pub repo_slug: &'a str,
+    pub branch: &'a str,
+    pub ticket_url: Option<String>,
 }
 
 /// Returns `true` if a gate notification should fire given the config and gate type.
 ///
 /// Pure function — no side effects — checks master `enabled` flag then maps
 /// each gate type to its per-type config flag.
+///
+/// When `config.workflows` is `None` (no legacy `[notifications.workflows]` block),
+/// hook `on` patterns are the sole filter and this function always returns `true`.
+/// When `Some(wf)`, the legacy per-gate-type flags are respected (backward compat).
 pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateType>) -> bool {
+    // No [notifications.workflows] block → hooks are the sole filter; always pass.
+    let Some(wf) = &config.workflows else {
+        return true;
+    };
     if !config.enabled {
         return false;
     }
     match gate_type {
         None => true,
-        Some(GateType::HumanApproval | GateType::HumanReview) => config.workflows.on_gate_human,
-        Some(GateType::PrChecks) => config.workflows.on_gate_ci,
-        Some(GateType::PrApproval) => config.workflows.on_gate_pr_review,
+        Some(GateType::HumanApproval | GateType::HumanReview) => wf.on_gate_human,
+        Some(GateType::PrChecks) => wf.on_gate_ci,
+        Some(GateType::PrApproval) => wf.on_gate_pr_review,
         Some(GateType::QualityGate) => false, // quality gates are non-blocking, no notification
     }
 }
@@ -368,17 +526,16 @@ pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateTy
 /// Fire a desktop notification for a workflow gate waiting for action.
 ///
 /// Gated on `config.enabled` and per-gate-type flags. Uses `(step_id, "gate_waiting")`
-/// as the dedup key.
+/// as the dedup key. Matching entries in `notify_hooks` are fired after the dedup
+/// claim succeeds.
 pub fn fire_gate_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
     params: &GateNotificationParams<'_>,
 ) {
-    if !should_notify_gate(config, params.gate_type) {
-        return;
-    }
-
-    if !try_claim_notification(conn, params.step_id, "gate_waiting") {
+    let has_hooks = !notify_hooks.is_empty();
+    if !should_notify_gate(config, params.gate_type) && !has_hooks {
         return;
     }
 
@@ -390,36 +547,48 @@ pub fn fire_gate_notification(
         params.gate_prompt,
     );
 
-    // Persist in-app notification
     let severity = match params.gate_type {
         Some(GateType::HumanApproval | GateType::HumanReview) => {
             NotificationSeverity::ActionRequired
         }
         _ => NotificationSeverity::Warning,
     };
-    persist_notification(
+
+    let notification = CreateNotification {
+        kind: "gate_waiting",
+        title,
+        body: &body,
+        severity,
+        entity_id: Some(params.step_id),
+        entity_type: Some("workflow_step"),
+    };
+
+    let wf_label = match params.target_label {
+        Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
+        None => params.workflow_name.to_string(),
+    };
+    let hook_event = NotificationEvent::GateWaiting {
+        run_id: params.step_id.to_string(),
+        label: wf_label,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        url: None,
+        step_name: params.step_name.to_string(),
+        repo_slug: params.repo_slug.to_string(),
+        branch: params.branch.to_string(),
+        duration_ms: None,
+        ticket_url: params.ticket_url.clone(),
+    };
+
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "gate_waiting",
-            title,
-            body: &body,
-            severity,
-            entity_id: Some(params.step_id),
-            entity_type: Some("workflow_step"),
+        &DispatchParams {
+            dedup_entity_id: params.step_id,
+            dedup_event_type: "gate_waiting",
+            notification: &notification,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
         },
     );
-
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(
-            step_id = params.step_id,
-            step_name = params.step_name,
-            workflow_name = params.workflow_name,
-            "desktop notification failed: {e}"
-        );
-    }
-
-    let slack_text = format!("[conductor] {title}: {body}");
-    maybe_send_slack(config, &slack_text);
 }
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
@@ -490,13 +659,11 @@ pub struct GroupedGateNotificationParams<'a> {
 pub fn fire_grouped_gate_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
     params: &GroupedGateNotificationParams<'_>,
 ) {
-    if !config.enabled {
-        return;
-    }
-
-    if !try_claim_notification(conn, params.run_id, "gates_grouped") {
+    let has_hooks = !notify_hooks.is_empty();
+    if !config.enabled && !has_hooks {
         return;
     }
 
@@ -507,29 +674,41 @@ pub fn fire_grouped_gate_notification(
         params.count,
     );
 
-    // Persist in-app notification
-    persist_notification(
+    let notification = CreateNotification {
+        kind: "gate_waiting",
+        title,
+        body: &body,
+        severity: NotificationSeverity::ActionRequired,
+        entity_id: Some(params.run_id),
+        entity_type: Some("workflow_run"),
+    };
+
+    let wf_label = match params.target_label {
+        Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
+        None => params.workflow_name.to_string(),
+    };
+    let hook_event = NotificationEvent::GateWaiting {
+        run_id: params.run_id.to_string(),
+        label: wf_label,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        url: None,
+        step_name: format!("{} gates pending", params.count),
+        repo_slug: String::new(),
+        branch: String::new(),
+        duration_ms: None,
+        ticket_url: None,
+    };
+
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "gate_waiting",
-            title,
-            body: &body,
-            severity: NotificationSeverity::ActionRequired,
-            entity_id: Some(params.run_id),
-            entity_type: Some("workflow_run"),
+        &DispatchParams {
+            dedup_entity_id: params.run_id,
+            dedup_event_type: "gates_grouped",
+            notification: &notification,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
         },
     );
-
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(
-            run_id = params.run_id,
-            workflow_name = params.workflow_name,
-            "grouped desktop notification failed: {e}"
-        );
-    }
-
-    let slack_text = format!("[conductor] {title}: {body}");
-    maybe_send_slack(config, &slack_text);
 }
 
 /// A workflow run that freshly transitioned to a terminal state.
@@ -538,6 +717,13 @@ pub struct WorkflowTerminalTransition {
     pub workflow_name: String,
     pub target_label: Option<String>,
     pub succeeded: bool,
+    pub parent_workflow_run_id: Option<String>,
+    pub repo_slug: String,
+    pub branch: String,
+    pub duration_ms: Option<u64>,
+    pub error: Option<String>,
+    pub repo_id: Option<String>,
+    pub worktree_id: Option<String>,
 }
 
 /// Detect workflow runs that have freshly transitioned to a terminal status.
@@ -567,11 +753,26 @@ pub fn detect_workflow_terminal_transitions<'a>(
             let prev_status = seen.get(&run.id);
             let status_changed = prev_status.map(|s| s != &run.status).unwrap_or(true);
             if now_terminal && status_changed {
+                let succeeded = matches!(run.status, WorkflowRunStatus::Completed);
+                // Parse repo_slug/branch from target_label (format: "repo_slug/branch")
+                let (repo_slug, branch) = {
+                    let (r, b) = parse_target_label(run.target_label.as_deref());
+                    (r.to_string(), b.to_string())
+                };
+                let duration_ms = run.total_duration_ms.map(|ms| ms as u64);
+                let error = if !succeeded { run.error.clone() } else { None };
                 transitions.push(WorkflowTerminalTransition {
                     run_id: run.id.clone(),
-                    workflow_name: run.workflow_name.clone(),
+                    workflow_name: run.display_name().to_string(),
                     target_label: run.target_label.clone(),
-                    succeeded: matches!(run.status, WorkflowRunStatus::Completed),
+                    succeeded,
+                    parent_workflow_run_id: run.parent_workflow_run_id.clone(),
+                    repo_slug,
+                    branch,
+                    duration_ms,
+                    error,
+                    repo_id: run.repo_id.clone(),
+                    worktree_id: run.worktree_id.clone(),
                 });
             }
         }
@@ -593,6 +794,9 @@ pub struct AgentTerminalTransition {
     pub worktree_slug: Option<String>,
     pub succeeded: bool,
     pub error_msg: Option<String>,
+    pub repo_slug: String,
+    pub branch: String,
+    pub duration_ms: Option<u64>,
 }
 
 /// Detect agent runs that have freshly transitioned to a terminal status.
@@ -620,6 +824,7 @@ pub fn detect_agent_terminal_transitions<'a>(
             let changed = prev.map(|s| s != &run.status).unwrap_or(true);
             if now_terminal && changed {
                 let succeeded = run.status == AgentRunStatus::Completed;
+                let duration_ms = run.duration_ms.map(|ms| ms as u64);
                 transitions.push(AgentTerminalTransition {
                     run_id: run.id.clone(),
                     worktree_slug: slug.map(|s| s.to_string()),
@@ -629,6 +834,9 @@ pub fn detect_agent_terminal_transitions<'a>(
                     } else {
                         None
                     },
+                    repo_slug: String::new(),
+                    branch: String::new(),
+                    duration_ms,
                 });
             }
         }
@@ -659,11 +867,7 @@ pub fn fire_stale_workflow_notification(
     step_name: &str,
     running_minutes: i64,
 ) {
-    if !config.enabled || !config.workflows.on_stale {
-        return;
-    }
-
-    if !try_claim_notification(conn, run_id, "workflow_stale") {
+    if !config.enabled || !config.workflows.as_ref().is_some_and(|w| w.on_stale) {
         return;
     }
 
@@ -677,28 +881,25 @@ pub fn fire_stale_workflow_notification(
         ),
     };
 
-    persist_notification(
+    let notification = CreateNotification {
+        kind: "workflow_stale",
+        title,
+        body: &body,
+        severity: NotificationSeverity::Warning,
+        entity_id: Some(run_id),
+        entity_type: Some("workflow_run"),
+    };
+
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "workflow_stale",
-            title,
-            body: &body,
-            severity: NotificationSeverity::Warning,
-            entity_id: Some(run_id),
-            entity_type: Some("workflow_run"),
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: "workflow_stale",
+            notification: &notification,
+            hooks: &[],
+            event: None,
         },
     );
-
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(
-            run_id,
-            workflow_name,
-            "desktop notification (stale) failed: {e}"
-        );
-    }
-
-    let slack_text = format!("[conductor] {title}: {body}");
-    maybe_send_slack(config, &slack_text);
 }
 
 /// Fire a notification when orphaned/stuck workflow runs are auto-resumed on
@@ -708,17 +909,10 @@ pub fn fire_orphan_resumed_notification(
     config: &NotificationConfig,
     run_ids: &[String],
 ) {
-    if !config.enabled || !config.workflows.on_failure {
+    if !config.enabled || !config.workflows.as_ref().is_some_and(|w| w.on_failure) {
         return;
     }
     if run_ids.is_empty() {
-        return;
-    }
-
-    // Use a synthetic dedup key so we don't spam on every poll tick.
-    // One notification per batch of resumed runs.
-    let dedup_key = format!("orphan_resumed_{}", run_ids.first().unwrap());
-    if !try_claim_notification(conn, &dedup_key, "workflow_orphan_resumed") {
         return;
     }
 
@@ -730,24 +924,26 @@ pub fn fire_orphan_resumed_notification(
         format!("{n} stuck workflow runs were automatically resumed")
     };
 
-    persist_notification(
+    let dedup_key = format!("orphan_resumed_{}", run_ids.first().unwrap());
+    let notification = CreateNotification {
+        kind: "workflow_orphan_resumed",
+        title,
+        body: &body,
+        severity: NotificationSeverity::Warning,
+        entity_id: None,
+        entity_type: None,
+    };
+
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "workflow_orphan_resumed",
-            title,
-            body: &body,
-            severity: NotificationSeverity::Warning,
-            entity_id: None,
-            entity_type: None,
+        &DispatchParams {
+            dedup_entity_id: &dedup_key,
+            dedup_event_type: "workflow_orphan_resumed",
+            notification: &notification,
+            hooks: &[],
+            event: None,
         },
     );
-
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!("desktop notification (orphan resumed) failed: {e}");
-    }
-
-    let slack_text = format!("[conductor] {body}");
-    maybe_send_slack(config, &slack_text);
 }
 
 /// Fire a notification when a stale workflow run's agent was confirmed dead
@@ -761,11 +957,7 @@ pub fn fire_stale_reaped_notification(
     step_name: &str,
     auto_restarted: bool,
 ) {
-    if !config.enabled || !config.workflows.on_stale {
-        return;
-    }
-
-    if !try_claim_notification(conn, run_id, "workflow_stale_reaped") {
+    if !config.enabled || !config.workflows.as_ref().is_some_and(|w| w.on_stale) {
         return;
     }
 
@@ -782,43 +974,25 @@ pub fn fire_stale_reaped_notification(
         None => format!("{workflow_name}: agent for step \"{step_name}\" was dead — {action}"),
     };
 
-    persist_notification(
+    let notification = CreateNotification {
+        kind: "workflow_stale_reaped",
+        title,
+        body: &body,
+        severity: NotificationSeverity::Warning,
+        entity_id: Some(run_id),
+        entity_type: Some("workflow_run"),
+    };
+
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "workflow_stale_reaped",
-            title,
-            body: &body,
-            severity: NotificationSeverity::Warning,
-            entity_id: Some(run_id),
-            entity_type: Some("workflow_run"),
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: "workflow_stale_reaped",
+            notification: &notification,
+            hooks: &[],
+            event: None,
         },
     );
-
-    if let Err(e) = show_desktop_notification(title, &body) {
-        tracing::warn!(
-            run_id,
-            workflow_name,
-            "desktop notification (stale reaped) failed: {e}"
-        );
-    }
-
-    let slack_text = format!("[conductor] {title}: {body}");
-    maybe_send_slack(config, &slack_text);
-}
-
-fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
-    #[cfg(not(any(test, feature = "test-notifications")))]
-    {
-        notify_rust::Notification::new()
-            .summary(title)
-            .body(body)
-            .show()
-            .map(|_| ())
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(any(test, feature = "test-notifications"))]
-    let _ = (title, body);
-    Ok(())
 }
 
 #[cfg(test)]
@@ -830,15 +1004,37 @@ mod tests {
     fn config(enabled: bool, on_success: bool, on_failure: bool) -> NotificationConfig {
         NotificationConfig {
             enabled,
-            workflows: WorkflowNotificationConfig {
+            workflows: Some(WorkflowNotificationConfig {
                 on_success,
                 on_failure,
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
                 on_stale: true,
-            },
+            }),
             slack: SlackConfig::default(),
+            web_url: None,
+        }
+    }
+
+    fn config_with_web_url(
+        enabled: bool,
+        on_success: bool,
+        on_failure: bool,
+        web_url: &str,
+    ) -> NotificationConfig {
+        NotificationConfig {
+            enabled,
+            workflows: Some(WorkflowNotificationConfig {
+                on_success,
+                on_failure,
+                on_stale: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+            }),
+            slack: SlackConfig::default(),
+            web_url: Some(web_url.to_string()),
         }
     }
 
@@ -967,7 +1163,25 @@ mod tests {
     fn fire_workflow_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_workflow_notification(&conn, &cfg, "run-1", "my-workflow", None, true);
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-1",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-1'",
@@ -985,7 +1199,25 @@ mod tests {
     fn fire_workflow_notification_disabled_does_not_claim_on_failure() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_workflow_notification(&conn, &cfg, "run-6", "my-workflow", None, false);
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-6",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: false,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-6'",
@@ -1003,7 +1235,25 @@ mod tests {
     fn fire_workflow_notification_on_success_false_does_not_claim_success() {
         let conn = in_memory_db();
         let cfg = config(true, false, true);
-        fire_workflow_notification(&conn, &cfg, "run-2", "my-workflow", None, true);
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-2",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-2'",
@@ -1021,7 +1271,25 @@ mod tests {
     fn fire_workflow_notification_on_failure_false_does_not_claim_failure() {
         let conn = in_memory_db();
         let cfg = config(true, true, false); // enabled, on_success=true, on_failure=false
-        fire_workflow_notification(&conn, &cfg, "run-5", "my-workflow", None, false);
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-5",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: false,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-5'",
@@ -1040,8 +1308,44 @@ mod tests {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
         // Fire twice — second call must be a no-op (claim already taken).
-        fire_workflow_notification(&conn, &cfg, "run-3", "my-workflow", None, true);
-        fire_workflow_notification(&conn, &cfg, "run-3", "my-workflow", None, true);
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-3",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-3",
+                workflow_name: "my-workflow",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-3' AND event_type = 'completed'",
@@ -1066,8 +1370,44 @@ mod tests {
     fn fire_workflow_notification_enabled_claims_once_for_failure() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_workflow_notification(&conn, &cfg, "run-4", "my-workflow", Some("main"), false);
-        fire_workflow_notification(&conn, &cfg, "run-4", "my-workflow", Some("main"), false);
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-4",
+                workflow_name: "my-workflow",
+                target_label: Some("main"),
+                succeeded: false,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-4",
+                workflow_name: "my-workflow",
+                target_label: Some("main"),
+                succeeded: false,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-4' AND event_type = 'failed'",
@@ -1081,13 +1421,191 @@ mod tests {
         );
     }
 
+    // --- deep link URL construction tests ---
+
+    #[test]
+    fn deep_link_all_some_produces_correct_url() {
+        // Test the URL format directly via the pure helper.
+        let url = build_workflow_deep_link(
+            Some("https://conductor.example.ts.net"),
+            Some("repo-abc"),
+            Some("wt-xyz"),
+            "run-dl-1",
+        );
+        assert_eq!(
+            url,
+            Some(
+                "https://conductor.example.ts.net/repos/repo-abc/worktrees/wt-xyz/workflows/runs/run-dl-1"
+                    .to_string()
+            ),
+            "deep link URL must match expected format"
+        );
+
+        // Also verify that fire_workflow_notification reads web_url from config and fires.
+        let conn = in_memory_db();
+        let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net");
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-dl-1",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: Some("repo-abc"),
+                worktree_id: Some("wt-xyz"),
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-dl-1' AND event_type = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "notification must have been claimed");
+    }
+
+    #[test]
+    fn deep_link_trailing_slash_trimmed() {
+        // Trailing slash on web_url must be stripped so the URL has no double slash.
+        let url = build_workflow_deep_link(
+            Some("https://conductor.example.ts.net/"),
+            Some("repo-abc"),
+            Some("wt-xyz"),
+            "run-dl-2",
+        );
+        assert_eq!(
+            url,
+            Some(
+                "https://conductor.example.ts.net/repos/repo-abc/worktrees/wt-xyz/workflows/runs/run-dl-2"
+                    .to_string()
+            ),
+            "trailing slash on web_url must be trimmed"
+        );
+
+        // Confirm fire_workflow_notification still claims the notification.
+        let conn = in_memory_db();
+        let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net/");
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-dl-2",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: Some("repo-abc"),
+                worktree_id: Some("wt-xyz"),
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-dl-2' AND event_type = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "notification must have been claimed with trailing-slash url"
+        );
+    }
+
+    #[test]
+    fn deep_link_any_none_produces_no_url() {
+        // Missing worktree_id → no deep link.
+        assert_eq!(
+            build_workflow_deep_link(
+                Some("https://conductor.example.ts.net"),
+                Some("repo-abc"),
+                None,
+                "run-dl-3",
+            ),
+            None,
+            "missing worktree_id must produce None"
+        );
+        // Missing repo_id → no deep link.
+        assert_eq!(
+            build_workflow_deep_link(
+                Some("https://conductor.example.ts.net"),
+                None,
+                Some("wt-xyz"),
+                "run-dl-3",
+            ),
+            None,
+            "missing repo_id must produce None"
+        );
+        // Missing web_url → no deep link.
+        assert_eq!(
+            build_workflow_deep_link(None, Some("repo-abc"), Some("wt-xyz"), "run-dl-3"),
+            None,
+            "missing web_url must produce None"
+        );
+
+        // fire_workflow_notification must still fire (without a deep link) when worktree_id is absent.
+        let conn = in_memory_db();
+        let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net");
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &[],
+            &WorkflowNotificationArgs {
+                run_id: "run-dl-3",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: Some("repo-abc"),
+                worktree_id: None, // missing — no deep link
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-dl-3' AND event_type = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "notification must still fire without deep link");
+    }
+
     // --- fire_feedback_notification smoke test ---
 
     #[test]
     fn fire_feedback_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_feedback_notification(&conn, &cfg, "req-1", "Is this correct?");
+        fire_feedback_notification(
+            &conn,
+            &cfg,
+            &[],
+            &FeedbackNotificationParams {
+                request_id: "req-1",
+                prompt_preview: "Is this correct?",
+                repo_slug: "",
+                branch: "",
+            },
+        );
         // Notification was gated — no claim should have been recorded.
         let count: i64 = conn
             .query_row(
@@ -1107,8 +1625,28 @@ mod tests {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
         // Fire twice — second call must be a no-op (claim already taken).
-        fire_feedback_notification(&conn, &cfg, "req-2", "preview");
-        fire_feedback_notification(&conn, &cfg, "req-2", "preview");
+        fire_feedback_notification(
+            &conn,
+            &cfg,
+            &[],
+            &FeedbackNotificationParams {
+                request_id: "req-2",
+                prompt_preview: "preview",
+                repo_slug: "",
+                branch: "",
+            },
+        );
+        fire_feedback_notification(
+            &conn,
+            &cfg,
+            &[],
+            &FeedbackNotificationParams {
+                request_id: "req-2",
+                prompt_preview: "preview",
+                repo_slug: "",
+                branch: "",
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'req-2' AND event_type = 'feedback_requested'",
@@ -1254,6 +1792,7 @@ mod tests {
         fire_gate_notification(
             &conn,
             &cfg,
+            &[],
             &GateNotificationParams {
                 step_id: "step-1",
                 step_name: "Deploy to prod",
@@ -1261,6 +1800,9 @@ mod tests {
                 target_label: None,
                 gate_type: None,
                 gate_prompt: None,
+                repo_slug: "",
+                branch: "",
+                ticket_url: None,
             },
         );
         let count: i64 = conn
@@ -1284,9 +1826,12 @@ mod tests {
             target_label: None,
             gate_type: Some(&GateType::HumanApproval),
             gate_prompt: Some("Ready?"),
+            repo_slug: "",
+            branch: "",
+            ticket_url: None,
         };
-        fire_gate_notification(&conn, &cfg, &params);
-        fire_gate_notification(&conn, &cfg, &params);
+        fire_gate_notification(&conn, &cfg, &[], &params);
+        fire_gate_notification(&conn, &cfg, &[], &params);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-2' AND event_type = 'gate_waiting'",
@@ -1308,9 +1853,12 @@ mod tests {
             target_label: Some("conductor-ai/feat-1095"),
             gate_type: None,
             gate_prompt: None,
+            repo_slug: "",
+            branch: "",
+            ticket_url: None,
         };
-        fire_gate_notification(&conn, &cfg, &params);
-        fire_gate_notification(&conn, &cfg, &params);
+        fire_gate_notification(&conn, &cfg, &[], &params);
+        fire_gate_notification(&conn, &cfg, &[], &params);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-3' AND event_type = 'gate_waiting'",
@@ -1344,7 +1892,7 @@ mod tests {
     fn should_notify_gate_human_approval() {
         let mut cfg = config(true, true, true);
         assert!(should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
-        cfg.workflows.on_gate_human = false;
+        cfg.workflows.as_mut().unwrap().on_gate_human = false;
         assert!(!should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
     }
 
@@ -1352,7 +1900,7 @@ mod tests {
     fn should_notify_gate_human_review() {
         let mut cfg = config(true, true, true);
         assert!(should_notify_gate(&cfg, Some(&GateType::HumanReview)));
-        cfg.workflows.on_gate_human = false;
+        cfg.workflows.as_mut().unwrap().on_gate_human = false;
         assert!(!should_notify_gate(&cfg, Some(&GateType::HumanReview)));
     }
 
@@ -1366,7 +1914,7 @@ mod tests {
     #[test]
     fn should_notify_gate_pr_checks_enabled() {
         let mut cfg = config(true, true, true);
-        cfg.workflows.on_gate_ci = true;
+        cfg.workflows.as_mut().unwrap().on_gate_ci = true;
         assert!(should_notify_gate(&cfg, Some(&GateType::PrChecks)));
     }
 
@@ -1374,7 +1922,7 @@ mod tests {
     fn should_notify_gate_pr_approval() {
         let mut cfg = config(true, true, true);
         assert!(should_notify_gate(&cfg, Some(&GateType::PrApproval)));
-        cfg.workflows.on_gate_pr_review = false;
+        cfg.workflows.as_mut().unwrap().on_gate_pr_review = false;
         assert!(!should_notify_gate(&cfg, Some(&GateType::PrApproval)));
     }
 
@@ -1388,6 +1936,7 @@ mod tests {
         fire_gate_notification(
             &conn,
             &cfg,
+            &[],
             &GateNotificationParams {
                 step_id: "step-ci-1",
                 step_name: "wait-for-ci",
@@ -1395,6 +1944,9 @@ mod tests {
                 target_label: None,
                 gate_type: Some(&GateType::PrChecks),
                 gate_prompt: None,
+                repo_slug: "",
+                branch: "",
+                ticket_url: None,
             },
         );
         let count: i64 = conn
@@ -1417,6 +1969,7 @@ mod tests {
         fire_gate_notification(
             &conn,
             &cfg,
+            &[],
             &GateNotificationParams {
                 step_id: "step-human-1",
                 step_name: "approve",
@@ -1424,6 +1977,9 @@ mod tests {
                 target_label: None,
                 gate_type: Some(&GateType::HumanApproval),
                 gate_prompt: None,
+                repo_slug: "",
+                branch: "",
+                ticket_url: None,
             },
         );
         let count: i64 = conn
@@ -1522,6 +2078,7 @@ mod tests {
         fire_grouped_gate_notification(
             &conn,
             &cfg,
+            &[],
             &GroupedGateNotificationParams {
                 run_id: "run-g1",
                 workflow_name: "deploy",
@@ -1551,8 +2108,8 @@ mod tests {
             gate_types: vec![Some(&GateType::PrChecks), Some(&GateType::PrApproval)],
             count: 2,
         };
-        fire_grouped_gate_notification(&conn, &cfg, &params);
-        fire_grouped_gate_notification(&conn, &cfg, &params);
+        fire_grouped_gate_notification(&conn, &cfg, &[], &params);
+        fire_grouped_gate_notification(&conn, &cfg, &[], &params);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-g2' AND event_type = 'gates_grouped'",
@@ -1569,7 +2126,21 @@ mod tests {
     fn fire_agent_run_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_agent_run_notification(&conn, &cfg, "agent-1", Some("my-wt"), true, None);
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &[],
+            &AgentRunNotificationArgs {
+                run_id: "agent-1",
+                worktree_slug: Some("my-wt"),
+                succeeded: true,
+                error_msg: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-1'",
@@ -1587,8 +2158,36 @@ mod tests {
     fn fire_agent_run_notification_success_claims_once() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_agent_run_notification(&conn, &cfg, "agent-2", Some("feat/foo"), true, None);
-        fire_agent_run_notification(&conn, &cfg, "agent-2", Some("feat/foo"), true, None);
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &[],
+            &AgentRunNotificationArgs {
+                run_id: "agent-2",
+                worktree_slug: Some("feat/foo"),
+                succeeded: true,
+                error_msg: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &[],
+            &AgentRunNotificationArgs {
+                run_id: "agent-2",
+                worktree_slug: Some("feat/foo"),
+                succeeded: true,
+                error_msg: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-2' AND event_type = 'agent_completed'",
@@ -1612,18 +2211,32 @@ mod tests {
         fire_agent_run_notification(
             &conn,
             &cfg,
-            "agent-3",
-            Some("fix/bar"),
-            false,
-            Some("out of memory"),
+            &[],
+            &AgentRunNotificationArgs {
+                run_id: "agent-3",
+                worktree_slug: Some("fix/bar"),
+                succeeded: false,
+                error_msg: Some("out of memory"),
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+            },
         );
         fire_agent_run_notification(
             &conn,
             &cfg,
-            "agent-3",
-            Some("fix/bar"),
-            false,
-            Some("out of memory"),
+            &[],
+            &AgentRunNotificationArgs {
+                run_id: "agent-3",
+                worktree_slug: Some("fix/bar"),
+                succeeded: false,
+                error_msg: Some("out of memory"),
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+            },
         );
         let count: i64 = conn
             .query_row(
@@ -1644,7 +2257,21 @@ mod tests {
     fn fire_agent_run_notification_on_success_false_suppresses_success() {
         let conn = in_memory_db();
         let cfg = config(true, false, true);
-        fire_agent_run_notification(&conn, &cfg, "agent-4", None, true, None);
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &[],
+            &AgentRunNotificationArgs {
+                run_id: "agent-4",
+                worktree_slug: None,
+                succeeded: true,
+                error_msg: None,
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-4'",
@@ -1659,7 +2286,21 @@ mod tests {
     fn fire_agent_run_notification_on_failure_false_suppresses_failure() {
         let conn = in_memory_db();
         let cfg = config(true, true, false);
-        fire_agent_run_notification(&conn, &cfg, "agent-5", None, false, Some("err"));
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &[],
+            &AgentRunNotificationArgs {
+                run_id: "agent-5",
+                worktree_slug: None,
+                succeeded: false,
+                error_msg: Some("err"),
+                repo_slug: "",
+                branch: "",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-5'",
@@ -1668,60 +2309,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0);
-    }
-
-    // --- Slack config deserialization ---
-
-    #[test]
-    fn slack_config_default_is_none() {
-        let cfg: NotificationConfig = toml::from_str("enabled = true").unwrap();
-        assert!(cfg.slack.webhook_url.is_none());
-    }
-
-    #[test]
-    fn slack_config_with_webhook_url() {
-        let cfg: NotificationConfig = toml::from_str(
-            r#"
-            enabled = true
-            [slack]
-            webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
-            "#,
-        )
-        .unwrap();
-        assert_eq!(
-            cfg.slack.webhook_url.as_deref(),
-            Some("https://hooks.slack.com/services/T00/B00/xxx")
-        );
-    }
-
-    #[test]
-    fn maybe_send_slack_does_nothing_when_unconfigured() {
-        // Just verify it doesn't panic — no Slack server to hit in tests.
-        let cfg = config(true, true, true);
-        maybe_send_slack(&cfg, "test message");
-    }
-
-    // --- escape_slack_mrkdwn ---
-
-    #[test]
-    fn escape_slack_mrkdwn_escapes_hyperlink_injection() {
-        let input = "<http://evil.com|Click here>";
-        let escaped = escape_slack_mrkdwn(input);
-        assert!(
-            !escaped.contains("<http"),
-            "hyperlinks must be escaped: {escaped}"
-        );
-        assert!(escaped.contains("&lt;http"));
-    }
-
-    #[test]
-    fn escape_slack_mrkdwn_escapes_ampersand() {
-        assert_eq!(escape_slack_mrkdwn("a & b"), "a &amp; b");
-    }
-
-    #[test]
-    fn escape_slack_mrkdwn_escapes_angle_brackets() {
-        assert_eq!(escape_slack_mrkdwn("<>"), "&lt;&gt;");
     }
 
     // --- detect_workflow_terminal_transitions ---
@@ -1738,6 +2325,7 @@ mod tests {
             started_at: "2026-01-01T00:00:00Z".to_string(),
             ended_at: None,
             result_summary: None,
+            error: None,
             definition_snapshot: None,
             inputs: std::collections::HashMap::new(),
             ticket_id: None,
@@ -1748,6 +2336,7 @@ mod tests {
             iteration: 0,
             blocked_on: None,
             feature_id: None,
+            workflow_title: None,
             total_input_tokens: None,
             total_output_tokens: None,
             total_cache_read_input_tokens: None,
@@ -1989,6 +2578,90 @@ mod tests {
         assert_eq!(t2[0].workflow_name, "fast-job");
     }
 
+    /// Regression test for ticket/repo-targeted runs (worktree_id IS NULL).
+    ///
+    /// Previously, `list_active_non_worktree_workflow_runs` filtered to
+    /// `status IN ('running', 'waiting')`, so completed runs vanished from the query
+    /// before the detector could observe the transition.  After the fix the query also
+    /// returns recently-terminated runs, giving the detector at least one tick to fire.
+    ///
+    /// This test simulates the now-fixed scenario: a non-worktree run appears `running`
+    /// on tick 1 and `completed` on tick 2 (because the fixed query still returns it).
+    #[test]
+    fn wf_transitions_non_worktree_run_completed_fires_notification() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        // Tick 1: non-worktree run is running (worktree_id = None, no parent_workflow_run_id)
+        let tick1 = [make_workflow_run(
+            "nw1",
+            "label-all-tickets",
+            WorkflowRunStatus::Running,
+        )];
+        let t1 = detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+        assert!(t1.is_empty());
+
+        // Tick 2: same run is now completed — the fixed query keeps it visible via the
+        // 60-second recency window, so the detector can observe the transition.
+        let tick2 = [make_workflow_run(
+            "nw1",
+            "label-all-tickets",
+            WorkflowRunStatus::Completed,
+        )];
+        let t2 = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert_eq!(
+            t2.len(),
+            1,
+            "completed non-worktree run must fire exactly one notification"
+        );
+        assert_eq!(t2[0].run_id, "nw1");
+        assert_eq!(t2[0].workflow_name, "label-all-tickets");
+        assert!(t2[0].succeeded, "Completed → succeeded=true");
+    }
+
+    /// When `target_label` has no `'/'`, both `repo_slug` and `branch` must be empty
+    /// rather than misattributing the whole label as a repo slug.
+    #[test]
+    fn wf_transitions_target_label_no_slash_yields_empty_repo_and_branch() {
+        let mut run = make_workflow_run("r1", "deploy", WorkflowRunStatus::Running);
+        run.target_label = Some("noslash".to_string());
+
+        let tick1 = [run.clone()];
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+        detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+
+        let mut run_done = run;
+        run_done.status = WorkflowRunStatus::Completed;
+        let tick2 = [run_done];
+        let t = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].repo_slug, "", "repo_slug must be empty when no slash");
+        assert_eq!(t[0].branch, "", "branch must be empty when no slash");
+    }
+
+    /// When `target_label` is `Some("repo/branch")`, both components are parsed correctly.
+    #[test]
+    fn wf_transitions_target_label_with_slash_parses_repo_and_branch() {
+        let mut run = make_workflow_run("r1", "deploy", WorkflowRunStatus::Running);
+        run.target_label = Some("my-repo/main".to_string());
+
+        let tick1 = [run.clone()];
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+        detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+
+        let mut run_done = run;
+        run_done.status = WorkflowRunStatus::Completed;
+        let tick2 = [run_done];
+        let t = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].repo_slug, "my-repo");
+        assert_eq!(t[0].branch, "main");
+    }
+
     // --- detect_agent_terminal_transitions ---
 
     fn make_agent_run(id: &str, status: AgentRunStatus) -> AgentRun {
@@ -2015,6 +2688,7 @@ mod tests {
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
             bot_name: None,
+            conversation_id: None,
         }
     }
 
@@ -2143,5 +2817,326 @@ mod tests {
         assert!(title.contains("Quality Gate"), "title: {title}");
         assert!(body.contains("check-quality"), "body: {body}");
         assert!(body.contains("review-pr"), "body: {body}");
+    }
+
+    // --- hooks fire when [notifications] enabled = false ---
+
+    fn hook_matching_all() -> HookConfig {
+        HookConfig {
+            on: "workflow_run.*".to_string(),
+            run: None, // no actual shell command in tests
+            url: None,
+            ..Default::default()
+        }
+    }
+
+    /// When `enabled = false` but hooks are configured, the dedup claim MUST be
+    /// made (and hooks would fire) — desktop/Slack are just skipped.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_workflow() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![hook_matching_all()];
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &WorkflowNotificationArgs {
+                run_id: "run-hooks-1",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-hooks-1' AND event_type = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// Same as above for the failure path.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_workflow_failure() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![hook_matching_all()];
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &WorkflowNotificationArgs {
+                run_id: "run-hooks-2",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: false,
+                parent_workflow_run_id: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+                error: Some("out of memory"),
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-hooks-2' AND event_type = 'failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for failures when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// When `enabled = false` and hooks are configured, the feedback path must also
+    /// make a dedup claim so hooks can fire.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_feedback() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "feedback.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_feedback_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &FeedbackNotificationParams {
+                request_id: "req-hooks-1",
+                prompt_preview: "Is this correct?",
+                repo_slug: "my-repo",
+                branch: "main",
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'req-hooks-1' AND event_type = 'feedback_requested'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for feedback when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// `on_success = false` does NOT suppress hooks — hooks have their own event filtering.
+    /// The dedup claim must be made when hooks are configured even if on_success is false.
+    #[test]
+    fn hooks_fire_when_on_success_false_but_hooks_configured() {
+        let conn = in_memory_db();
+        let cfg = config(true, false, true); // enabled=true, on_success=false
+        let hooks = vec![hook_matching_all()];
+        fire_workflow_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &WorkflowNotificationArgs {
+                run_id: "run-hooks-3",
+                workflow_name: "deploy",
+                target_label: None,
+                succeeded: true,
+                parent_workflow_run_id: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-hooks-3' AND event_type = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made when hooks are configured, even if on_success=false"
+        );
+    }
+
+    /// `fire_agent_run_notification` must make a dedup claim (so hooks can fire)
+    /// when `enabled = false` but hooks are configured.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_agent_run() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "agent_run.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &AgentRunNotificationArgs {
+                run_id: "agent-hooks-1",
+                worktree_slug: Some("my-worktree"),
+                succeeded: true,
+                error_msg: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-hooks-1' AND event_type = 'agent_completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for agent_run when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// `fire_agent_run_notification` failure path: dedup claim must be made when
+    /// `enabled = false` but hooks are configured.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_agent_run_failure() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "agent_run.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &AgentRunNotificationArgs {
+                run_id: "agent-hooks-2",
+                worktree_slug: None,
+                succeeded: false,
+                error_msg: Some("exit 1"),
+                repo_slug: "my-repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-hooks-2' AND event_type = 'agent_failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for agent_run failure when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// `fire_gate_notification` must make a dedup claim (so hooks can fire)
+    /// when `enabled = false` but hooks are configured.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_gate() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "gate.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_gate_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &GateNotificationParams {
+                step_id: "gate-hooks-1",
+                step_name: "approve",
+                workflow_name: "deploy",
+                target_label: None,
+                gate_type: Some(&GateType::HumanApproval),
+                gate_prompt: None,
+                repo_slug: "my-repo",
+                branch: "main",
+                ticket_url: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'gate-hooks-1' AND event_type = 'gate_waiting'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for gate when hooks are configured, even with enabled=false"
+        );
+    }
+
+    /// `fire_grouped_gate_notification` must make a dedup claim (so hooks can fire)
+    /// when `enabled = false` but hooks are configured.
+    #[test]
+    fn hooks_fire_when_notifications_disabled_grouped_gate() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let hooks = vec![HookConfig {
+            on: "gate.*".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }];
+        fire_grouped_gate_notification(
+            &conn,
+            &cfg,
+            &hooks,
+            &GroupedGateNotificationParams {
+                run_id: "grouped-gate-hooks-1",
+                workflow_name: "deploy",
+                target_label: None,
+                gate_types: vec![Some(&GateType::HumanApproval)],
+                count: 2,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'grouped-gate-hooks-1' AND event_type = 'gates_grouped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "dedup claim must be made for grouped gate when hooks are configured, even with enabled=false"
+        );
     }
 }

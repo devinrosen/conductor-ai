@@ -9,32 +9,38 @@ import { TicketCard } from "../components/tickets/TicketCard";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { ColumnHeader, type SortDirection } from "../components/shared/ColumnHeader";
 import type { Ticket, Repo } from "../api/types";
-import { parseLabels, buildLabelColorMap } from "../utils/ticketUtils";
+import { parseLabels, buildLabelColorMap, getPipelineStatus, filterTicketsByColumns, sortTickets } from "../utils/ticketUtils";
+import { buildTicketTree } from "../utils/ticketDeps";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { useListNav } from "../hooks/useListNav";
 
 type SortColumn = "repo" | "source_id" | "title" | "state" | "assignee" | "pipeline" | null;
 
-function getPipelineStatus(ticket: Ticket): string {
-  try {
-    return JSON.parse(ticket.raw_json)?.conductor?.status ?? "";
-  } catch {
-    return "";
-  }
-}
-
 export function TicketsPage() {
   const { repos } = useRepos();
   const [showClosed, setShowClosed] = useState(false);
-  const { data: tickets, loading } = useApi(
+  const { data: ticketList, loading } = useApi(
     () => api.listAllTickets(showClosed),
     [showClosed],
   );
+  const tickets = ticketList?.tickets ?? null;
+  const dependencies = ticketList?.dependencies ?? {};
   const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
   const { data: allLabels } = useApi(() => api.ticketLabels(), []);
+  const { data: allWorktrees } = useApi(() => api.listAllWorktrees(), []);
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<Ticket | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+
+  const toggleCollapse = useCallback((sourceId: string) => {
+    setCollapsedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(sourceId)) next.delete(sourceId);
+      else next.add(sourceId);
+      return next;
+    });
+  }, []);
 
   // Sort state
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
@@ -105,40 +111,26 @@ export function TicketsPage() {
     }
 
     // Column filters
-    for (const [col, values] of Object.entries(columnFilters)) {
-      if (values.size === 0) continue;
-      result = result.filter((t) => {
-        switch (col) {
-          case "repo": return values.has(repoMap[t.repo_id]?.slug ?? "");
-          case "state": return values.has(t.state);
-          case "assignee": return values.has(t.assignee ?? "");
-          case "labels": return parseLabels(t.labels).some((l) => values.has(l));
-          case "pipeline": return values.has(getPipelineStatus(t));
-          default: return true;
-        }
-      });
-    }
+    const getSlug = (id: string) => repoMap[id]?.slug ?? "";
+    result = filterTicketsByColumns(result, columnFilters, getSlug);
 
     // Sort
-    if (sortColumn && sortDir) {
-      const dir = sortDir === "asc" ? 1 : -1;
-      result = [...result].sort((a, b) => {
-        let va = "";
-        let vb = "";
-        switch (sortColumn) {
-          case "repo": va = repoMap[a.repo_id]?.slug ?? ""; vb = repoMap[b.repo_id]?.slug ?? ""; break;
-          case "source_id": va = a.source_id; vb = b.source_id; break;
-          case "title": va = a.title; vb = b.title; break;
-          case "state": va = a.state; vb = b.state; break;
-          case "assignee": va = a.assignee ?? ""; vb = b.assignee ?? ""; break;
-          case "pipeline": va = getPipelineStatus(a); vb = getPipelineStatus(b); break;
-        }
-        return va.localeCompare(vb) * dir;
-      });
-    }
+    result = sortTickets(result, sortColumn, sortDir, getSlug);
 
     return result;
   }, [tickets, filter, columnFilters, sortColumn, sortDir, repoMap]);
+
+  // Build ticket tree from filtered tickets + API deps (when not sorting)
+  const ticketTree = useMemo(() => {
+    if (!tickets || sortColumn !== null) return null;
+    const filteredTickets = filtered;
+    return buildTicketTree(
+      filteredTickets,
+      allWorktrees ?? undefined,
+      undefined,
+      Object.keys(dependencies).length > 0 ? dependencies : undefined,
+    );
+  }, [tickets, filtered, sortColumn, allWorktrees, dependencies]);
 
   const { selectedIndex, moveDown, moveUp, reset } = useListNav(filtered.length);
 
@@ -186,6 +178,43 @@ export function TicketsPage() {
     return sortColumn === col ? sortDir : null;
   }
 
+  // Recursive tree row renderer for the desktop table
+  let flatIndex = 0;
+  function renderTicketRows(ticketList: Ticket[], depth: number): React.ReactNode[] {
+    const rows: React.ReactNode[] = [];
+    for (const t of ticketList) {
+      const children = ticketTree?.childMap.get(t.source_id);
+      const hasChildren = !!children && children.length > 0;
+      const isCollapsed = collapsedNodes.has(t.source_id);
+      const idx = flatIndex++;
+      rows.push(
+        <TicketRow
+          key={`${t.id}-d${depth}`}
+          ticket={t}
+          repoSlug={repoMap[t.repo_id]?.slug ?? "—"}
+          agentTotals={ticketTotals?.[t.id]}
+          onClick={setSelected}
+          selected={idx === selectedIndex}
+          index={idx}
+          labelColorMap={labelColorMap}
+          showPipeline={hasVantage}
+          hideStateAndLabels={allVantage}
+          depth={depth}
+          blocked={ticketTree?.blocked.has(t.id) ?? false}
+          unlocked={ticketTree?.unlocked.has(t.id) ?? false}
+          hasChildren={hasChildren}
+          collapsed={isCollapsed}
+          onToggleCollapse={toggleCollapse}
+        />,
+      );
+      if (hasChildren && !isCollapsed) {
+        rows.push(...renderTicketRows(children, depth + 1));
+      }
+    }
+    return rows;
+  }
+
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -222,6 +251,9 @@ export function TicketsPage() {
         />
       ) : (
         <>
+          {sortColumn !== null && (
+            <p className="text-xs text-gray-400 italic">Tree view disabled while sorting</p>
+          )}
           <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[560px]">
               <thead className="bg-gray-50 text-left text-gray-500">
@@ -237,20 +269,23 @@ export function TicketsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filtered.map((t, index) => (
-                  <TicketRow
-                    key={t.id}
-                    ticket={t}
-                    repoSlug={repoMap[t.repo_id]?.slug ?? "—"}
-                    agentTotals={ticketTotals?.[t.id]}
-                    onClick={setSelected}
-                    selected={index === selectedIndex}
-                    index={index}
-                    labelColorMap={labelColorMap}
-                    showPipeline={hasVantage}
-                    hideStateAndLabels={allVantage}
-                  />
-                ))}
+                {ticketTree
+                  ? (() => { flatIndex = 0; return renderTicketRows(ticketTree.roots, 0); })()
+                  : filtered.map((t, index) => (
+                    <TicketRow
+                      key={t.id}
+                      ticket={t}
+                      repoSlug={repoMap[t.repo_id]?.slug ?? "—"}
+                      agentTotals={ticketTotals?.[t.id]}
+                      onClick={setSelected}
+                      selected={index === selectedIndex}
+                      index={index}
+                      labelColorMap={labelColorMap}
+                      showPipeline={hasVantage}
+                      hideStateAndLabels={allVantage}
+                    />
+                  ))
+                }
               </tbody>
             </table>
           </div>

@@ -94,8 +94,13 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
             View::WorktreeDetail => "Worktree Detail",
             View::WorkflowRunDetail => "Workflow Run",
             View::WorkflowDefDetail => "Workflow Definition",
+            View::Settings => "Settings",
         };
-        format!("[{view_name}]  Tab:panel  [/]:column  \\:workflows  q:quit")
+        if state.view == View::Settings {
+            format!("[{view_name}]  Tab:pane  j/k:nav  Enter:edit  c:cycle  Esc:back")
+        } else {
+            format!("[{view_name}]  Tab:panel  [/]:column  \\:workflows  [S]:settings  q:quit")
+        }
     };
 
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -242,10 +247,10 @@ pub fn worktree_list_item_with_prefix(
                     .data
                     .workflow_step_summaries
                     .get(&wf.id)
-                    .map(|s| format!("{} › {}", wf.workflow_name, s.step_name))
-                    .unwrap_or_else(|| wf.workflow_name.clone())
+                    .map(|s| format!("{} › {}", wf.display_name(), s.step_name))
+                    .unwrap_or_else(|| wf.display_name().to_string())
             } else {
-                wf.workflow_name.clone()
+                wf.display_name().to_string()
             })
         }
     });

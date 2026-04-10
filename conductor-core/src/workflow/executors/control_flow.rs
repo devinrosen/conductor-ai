@@ -28,7 +28,7 @@ pub fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
 
     if condition_met {
         tracing::info!(condition = ?node.condition, "if — condition met, executing body");
-        execute_nodes(state, &node.body)?;
+        execute_nodes(state, &node.body, true)?;
     } else {
         tracing::info!(condition = ?node.condition, "if — condition not met, skipping");
     }
@@ -41,7 +41,7 @@ pub fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) -> Resu
 
     if !condition_met {
         tracing::info!(condition = ?node.condition, "unless — condition not met, executing body");
-        execute_nodes(state, &node.body)?;
+        execute_nodes(state, &node.body, true)?;
     } else {
         tracing::info!(condition = ?node.condition, "unless — condition met, skipping");
     }

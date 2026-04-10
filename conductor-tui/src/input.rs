@@ -315,6 +315,21 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::GraphView { .. } => {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
+                KeyCode::Char('h') | KeyCode::Left => Action::GraphNavLeft,
+                KeyCode::Char('l') | KeyCode::Right => Action::GraphNavRight,
+                KeyCode::Char('k') | KeyCode::Up => Action::GraphNavUp,
+                KeyCode::Char('j') | KeyCode::Down => Action::GraphNavDown,
+                KeyCode::Char('H') => Action::GraphPanLeft,
+                KeyCode::Char('L') => Action::GraphPanRight,
+                KeyCode::Char('K') => Action::GraphPanUp,
+                KeyCode::Char('J') => Action::GraphPanDown,
+                KeyCode::Enter => Action::Select,
+                _ => Action::None,
+            };
+        }
         Modal::None => {}
     }
 
@@ -391,8 +406,58 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('y') => return Action::CopyTicketUrl,
             KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Char('L') => return Action::EnterLabelFilter,
+            KeyCode::Char('g') => return Action::OpenTicketGraphView,
+            KeyCode::Char(' ') if state.column_focus == crate::state::ColumnFocus::Content => {
+                return Action::ToggleTicketCollapse;
+            }
             _ => {}
         }
+    }
+
+    // View-specific keybindings (Settings view)
+    if state.view == View::Settings {
+        return match key.code {
+            KeyCode::Esc => Action::Back,
+            KeyCode::Tab => Action::NextPanel,
+            KeyCode::BackTab => Action::PrevPanel,
+            KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+            KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+            KeyCode::Enter => {
+                use crate::state::SettingsFocus;
+                if state.settings_focus == SettingsFocus::SettingsList {
+                    Action::SettingsEditSetting
+                } else {
+                    // Enter on category list focuses the right pane
+                    Action::NextPanel
+                }
+            }
+            KeyCode::Char('c') => Action::SettingsCycleValue,
+            KeyCode::Char('t') => {
+                use crate::state::SettingsCategory;
+                if state.settings_category == SettingsCategory::Notifications {
+                    if let Some(idx) = state.settings_selected_hook_index() {
+                        Action::SettingsTestHook { hook_index: idx }
+                    } else {
+                        Action::None
+                    }
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Char('o') => {
+                use crate::state::SettingsCategory;
+                if state.settings_category == SettingsCategory::Notifications {
+                    if let Some(idx) = state.settings_selected_hook_index() {
+                        Action::SettingsOpenHookScript { hook_index: idx }
+                    } else {
+                        Action::None
+                    }
+                } else {
+                    Action::None
+                }
+            }
+            _ => Action::None,
+        };
     }
 
     // View-specific keybindings (Dashboard)
@@ -512,6 +577,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,
             KeyCode::Char('w') => return Action::PickWorkflow,
+            KeyCode::Char('g') => return Action::OpenWorkflowStepGraphView,
             KeyCode::Enter => {
                 // Approve a waiting gate step if one exists
                 let has_gate = state
@@ -627,7 +693,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
         KeyCode::Char('s') => Action::SyncTickets,
-        KeyCode::Char('S') => Action::ManageIssueSources,
+        KeyCode::Char('S') => Action::OpenSettings,
         KeyCode::Char('o') => Action::OpenTicketUrl,
 
         _ => Action::None,
@@ -668,6 +734,7 @@ mod tests {
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
             bot_name: None,
+            conversation_id: None,
         }
     }
 
@@ -692,6 +759,7 @@ mod tests {
             items.push(WorkflowPickerItem::Workflow(
                 conductor_core::workflow::WorkflowDef {
                     name: format!("workflow-{i}"),
+                    title: None,
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
                     targets: vec![],
@@ -1058,6 +1126,10 @@ mod tests {
             output_file: None,
             gate_options: None,
             gate_selections: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         }];
         state
     }
@@ -1409,6 +1481,7 @@ mod tests {
             items: vec![crate::state::WorkflowPickerItem::Workflow(
                 conductor_core::workflow::WorkflowDef {
                     name: "deploy".into(),
+                    title: None,
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
                     targets: vec!["repo".into()],
@@ -1483,6 +1556,7 @@ mod tests {
             items: vec![crate::state::WorkflowPickerItem::Workflow(
                 conductor_core::workflow::WorkflowDef {
                     name: "build".into(),
+                    title: None,
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
                     targets: vec!["worktree".into()],

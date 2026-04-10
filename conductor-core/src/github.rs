@@ -55,6 +55,7 @@ pub struct IssueRef {
 }
 
 /// An open GitHub pull request returned by `gh pr list`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GithubPr {
     pub number: i64,
@@ -154,6 +155,7 @@ pub fn list_open_prs(remote_url: &str) -> Result<Vec<GithubPr>> {
 }
 
 /// A GitHub repository discovered via the `gh` CLI.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredRepo {
     pub name: String,
@@ -298,8 +300,11 @@ pub fn sync_github_issues(
                 assignee,
                 priority: None,
                 url: issue["url"].as_str().unwrap_or("").to_string(),
-                raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
+                raw_json: serde_json::to_string(&issue).ok(),
                 label_details,
+                blocked_by: vec![],
+                children: vec![],
+                parent: None,
             }
         })
         .collect();
@@ -365,8 +370,11 @@ pub fn fetch_github_issue(
         assignee,
         priority: None,
         url: issue["url"].as_str().unwrap_or("").to_string(),
-        raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
+        raw_json: serde_json::to_string(&issue).ok(),
         label_details,
+        blocked_by: vec![],
+        children: vec![],
+        parent: None,
     })
 }
 

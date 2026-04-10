@@ -881,7 +881,7 @@ fn test_cannot_start_workflow_run_when_active() {
         .create_workflow_run("running-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -931,7 +931,7 @@ fn test_force_bypasses_active_workflow_guard() {
         .create_workflow_run("running-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -984,7 +984,7 @@ fn test_can_start_workflow_run_after_completion() {
         .create_workflow_run("done-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"), None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -1033,7 +1033,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         .create_workflow_run("parent-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let workflow = make_empty_workflow();
@@ -1640,6 +1640,12 @@ fn test_metadata_fields_basic() {
         gate_feedback: None,
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     };
     let entries = step.metadata_fields();
     assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
@@ -1720,6 +1726,12 @@ fn test_metadata_fields_optional_sections() {
         gate_feedback: Some("Looks good".into()),
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     };
     let entries = step.metadata_fields();
     assert!(entries.contains(&MetadataEntry::Field {
@@ -3270,18 +3282,6 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
 // ---------------------------------------------------------------------------
 // evaluate_hooks integration tests
 // ---------------------------------------------------------------------------
-
-/// Helper: set up a temp dir with `.conductor/config.toml` and optional workflow files.
-fn setup_hooks_dir(config_toml: &str, workflows: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let conductor_dir = dir.path().join(".conductor");
-    std::fs::create_dir_all(conductor_dir.join("workflows")).unwrap();
-    std::fs::write(conductor_dir.join("config.toml"), config_toml).unwrap();
-    for (name, content) in workflows {
-        std::fs::write(conductor_dir.join("workflows").join(name), content).unwrap();
-    }
-    dir
-}
 
 #[test]
 fn test_hook_chain_prevention_when_triggered_by_hook() {

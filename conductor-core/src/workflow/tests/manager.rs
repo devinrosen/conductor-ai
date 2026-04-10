@@ -557,7 +557,7 @@ fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
     let r2 = mgr
         .create_workflow_run("done-run", Some("w1"), &p2.id, false, "manual", None)
         .unwrap();
-    mgr.update_workflow_status(&r2.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&r2.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let completed = mgr
@@ -776,13 +776,13 @@ fn test_purge_all_terminal_statuses() {
         .create_workflow_run("t", Some("w1"), &a4.id, false, "manual", None)
         .unwrap();
 
-    mgr.update_workflow_status(&r_completed.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&r_completed.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
-    mgr.update_workflow_status(&r_failed.id, WorkflowRunStatus::Failed, None)
+    mgr.update_workflow_status(&r_failed.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
-    mgr.update_workflow_status(&r_cancelled.id, WorkflowRunStatus::Cancelled, None)
+    mgr.update_workflow_status(&r_cancelled.id, WorkflowRunStatus::Cancelled, None, None)
         .unwrap();
-    mgr.update_workflow_status(&r_running.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&r_running.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let deleted = mgr
@@ -813,9 +813,9 @@ fn test_purge_single_status_filter() {
         .create_workflow_run("t", Some("w1"), &a2.id, false, "manual", None)
         .unwrap();
 
-    mgr.update_workflow_status(&r_completed.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&r_completed.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
-    mgr.update_workflow_status(&r_failed.id, WorkflowRunStatus::Failed, None)
+    mgr.update_workflow_status(&r_failed.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
 
     // only purge completed
@@ -855,9 +855,9 @@ fn test_purge_repo_scoped() {
         .create_workflow_run("t", Some("w2"), &a2.id, false, "manual", None)
         .unwrap();
 
-    mgr.update_workflow_status(&run_r1.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_r1.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
-    mgr.update_workflow_status(&run_r2.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_r2.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     // scope to r1 only
@@ -880,7 +880,7 @@ fn test_purge_cascade_deletes_steps() {
         .unwrap();
     mgr.insert_step(&run.id, "step1", "actor", true, 0, 0)
         .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let deleted = mgr.purge(None, &["completed"]).unwrap();
@@ -905,9 +905,9 @@ fn test_purge_count_matches_purge() {
     let r2 = mgr
         .create_workflow_run("t", Some("w1"), &a2.id, false, "manual", None)
         .unwrap();
-    mgr.update_workflow_status(&r1.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&r1.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
-    mgr.update_workflow_status(&r2.id, WorkflowRunStatus::Failed, None)
+    mgr.update_workflow_status(&r2.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
 
     let statuses = &["completed", "failed", "cancelled"];
@@ -928,7 +928,7 @@ fn test_purge_noop_when_no_matches() {
     let run = mgr
         .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
         .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let count = mgr
@@ -970,9 +970,9 @@ fn test_purge_repo_scoped_does_not_delete_global_runs() {
         .create_workflow_run("t", Some("w1"), &a_w1.id, false, "manual", None)
         .unwrap();
 
-    mgr.update_workflow_status(&run_global.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_global.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
-    mgr.update_workflow_status(&run_w1.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run_w1.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     // Scope purge to r1 — must only delete the worktree-bound run.
@@ -1004,7 +1004,7 @@ fn test_cancel_run_running_with_active_steps() {
     let (mgr, _parent, run) = make_workflow_run(&conn);
 
     // Advance run to Running
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // Insert a Running step with a child agent run
@@ -1082,7 +1082,7 @@ fn test_cancel_run_skips_terminal_steps() {
     let conn = setup_db();
     let (mgr, _parent, run) = make_workflow_run(&conn);
 
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // A completed step — must not be touched
@@ -1129,7 +1129,7 @@ fn test_cancel_run_already_terminal_returns_error() {
     let conn = setup_db();
     let (mgr, _parent, run) = make_workflow_run(&conn);
 
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
 
     let err = mgr.cancel_run(&run.id, "too late").unwrap_err();
@@ -1795,7 +1795,7 @@ fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
     let (mgr, _parent, run) = make_workflow_run(&conn);
 
     // Start from Running
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let blocked = BlockedOn::HumanApproval {
@@ -1836,7 +1836,7 @@ fn test_blocked_on_cleared_when_transitioning_away_from_waiting() {
     assert!(waiting.blocked_on.is_some());
 
     // Transition to Running — blocked_on must be auto-cleared
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let running = mgr.get_workflow_run(&run.id).unwrap().unwrap();
@@ -1875,7 +1875,7 @@ fn test_update_workflow_status_rejects_waiting() {
     // Calling update_workflow_status with Waiting must return an error — callers
     // should use set_waiting_blocked_on() to enforce the blocked_on invariant.
     let err = mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+        .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None, None)
         .unwrap_err();
     assert!(
         err.to_string().contains("set_waiting_blocked_on()"),
@@ -2199,23 +2199,6 @@ fn insert_running_root_run(conn: &Connection, run_id: &str) {
     .unwrap();
 }
 
-/// Insert a terminal step with an explicit ended_at timestamp.
-fn insert_terminal_step(
-    conn: &Connection,
-    step_id: &str,
-    run_id: &str,
-    status: &str,
-    ended_at: &str,
-) {
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, ended_at) \
-         VALUES (?1, ?2, 'step-a', 'actor', 0, ?3, 0, ?4)",
-        params![step_id, run_id, status, ended_at],
-    )
-    .unwrap();
-}
-
 /// Insert a non-terminal step (pending/running/waiting) with no ended_at.
 fn insert_non_terminal_step(conn: &Connection, step_id: &str, run_id: &str, status: &str) {
     conn.execute(
@@ -2232,7 +2215,7 @@ fn test_reap_stuck_workflow_runs_detects_stale_run() {
     let conn = setup_db();
     insert_running_root_run(&conn, "stuck-run");
     // Step completed with an old ended_at — well past any reasonable threshold.
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s1",
         "stuck-run",
@@ -2316,7 +2299,7 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
         params![parent.id],
     )
     .unwrap();
-    insert_terminal_step(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
@@ -2329,21 +2312,21 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
     insert_workflow_run(&conn, "completed-run", "test-wf", "completed", None);
     insert_workflow_run(&conn, "failed-run", "test-wf", "failed", None);
     insert_workflow_run(&conn, "waiting-run", "test-wf", "waiting", None);
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s1",
         "completed-run",
         "completed",
         "2020-01-01T00:00:00Z",
     );
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s2",
         "failed-run",
         "completed",
         "2020-01-01T00:00:00Z",
     );
-    insert_terminal_step(
+    insert_terminal_step_with_id(
         &conn,
         "s3",
         "waiting-run",
@@ -2373,9 +2356,9 @@ fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
     insert_running_root_run(&conn, "stuck-1");
     insert_running_root_run(&conn, "stuck-2");
     insert_running_root_run(&conn, "stuck-3");
-    insert_terminal_step(&conn, "s1", "stuck-1", "completed", "2020-01-01T00:00:00Z");
-    insert_terminal_step(&conn, "s2", "stuck-2", "failed", "2020-01-01T00:00:00Z");
-    insert_terminal_step(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s1", "stuck-1", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s2", "stuck-2", "failed", "2020-01-01T00:00:00Z");
+    insert_terminal_step_with_id(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
@@ -2470,7 +2453,7 @@ fn test_detect_stale_workflow_runs_skips_completed_step() {
     let conn = setup_db();
     insert_running_root_run_with_label(&conn, "done-run", "deploy", None);
     // Step is completed, not running — should not be detected.
-    insert_terminal_step(&conn, "s1", "done-run", "completed", "2020-01-01T00:00:00Z");
+    insert_terminal_step(&conn, "done-run", WorkflowStepStatus::Completed, 0);
 
     let mgr = WorkflowManager::new(&conn);
     let stale = mgr.detect_stale_workflow_runs(60).unwrap();

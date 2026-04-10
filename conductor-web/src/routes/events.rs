@@ -8,6 +8,14 @@ use tokio_stream::StreamExt;
 
 use crate::state::AppState;
 
+#[utoipa::path(
+    get,
+    path = "/api/events",
+    responses(
+        (status = 200, description = "SSE event stream", body = String, content_type = "text/event-stream"),
+    ),
+    tag = "events",
+)]
 pub async fn event_stream(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {

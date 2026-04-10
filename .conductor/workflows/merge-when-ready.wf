@@ -1,5 +1,6 @@
 workflow merge-when-ready {
   meta {
+    title       = "Merge When Ready"
     description = "Wait for CI checks and PR approval, then merge and close"
     trigger     = "manual"
     targets     = ["worktree"] // not "pr": merge-and-close runs `gh pr merge` from the branch checkout; the ephemeral --pr shallow clone has no push remote configured so the merge step would fail

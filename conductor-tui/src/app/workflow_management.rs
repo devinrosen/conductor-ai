@@ -713,7 +713,7 @@ impl App {
                 Ok(Some(active)) => {
                     self.state.status_message = Some(format!(
                         "Workflow '{}' is already running — cancel it before starting another",
-                        active.workflow_name
+                        active.display_name()
                     ));
                     return;
                 }
@@ -1080,7 +1080,7 @@ impl App {
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         let handle = std::thread::spawn(move || {
@@ -1130,11 +1130,11 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, None, result);
+            send_workflow_result(&bg_tx, def.display_name(), None, result);
         });
 
         self.workflow_threads.push(handle);
-        self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
+        self.state.status_message = Some(format!("Starting workflow '{workflow_display_name}'…"));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1150,7 +1150,7 @@ impl App {
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         let handle = std::thread::spawn(move || {
@@ -1197,11 +1197,13 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, None, result);
+            send_workflow_result(&bg_tx, def.display_name(), None, result);
         });
 
         self.workflow_threads.push(handle);
-        self.state.status_message = Some(format!("Starting workflow '{workflow_name}' on ticket…"));
+        self.state.status_message = Some(format!(
+            "Starting workflow '{workflow_display_name}' on ticket…"
+        ));
     }
 
     pub(super) fn spawn_repo_workflow_in_background(
@@ -1215,7 +1217,7 @@ impl App {
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         let handle = std::thread::spawn(move || {
@@ -1249,11 +1251,13 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, None, result);
+            send_workflow_result(&bg_tx, def.display_name(), None, result);
         });
 
         self.workflow_threads.push(handle);
-        self.state.status_message = Some(format!("Starting workflow '{workflow_name}' on repo…"));
+        self.state.status_message = Some(format!(
+            "Starting workflow '{workflow_display_name}' on repo…"
+        ));
     }
 
     pub(super) fn spawn_workflow_run_target_in_background(
@@ -1266,7 +1270,7 @@ impl App {
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         let handle = std::thread::spawn(move || {
@@ -1300,12 +1304,12 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, None, result);
+            send_workflow_result(&bg_tx, def.display_name(), None, result);
         });
 
         self.workflow_threads.push(handle);
         self.state.status_message = Some(format!(
-            "Starting workflow '{workflow_name}' on workflow run…"
+            "Starting workflow '{workflow_display_name}' on workflow run…"
         ));
     }
 
@@ -1381,12 +1385,12 @@ impl App {
 
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
-        let workflow_name = def.name.clone();
+        let workflow_display_name = def.display_name().to_string();
         let pr_label = format!("{}#{}", pr_ref.repo_slug(), pr_ref.number);
         let shutdown = Arc::clone(&self.workflow_shutdown);
 
         self.state.status_message = Some(format!(
-            "Starting workflow '{workflow_name}' on {pr_label}…"
+            "Starting workflow '{workflow_display_name}' on {pr_label}…"
         ));
 
         let handle = std::thread::spawn(move || {
@@ -1423,7 +1427,7 @@ impl App {
                 conductor_core::workflow::resolve_conductor_bin_dir(),
             );
 
-            send_workflow_result(&bg_tx, &workflow_name, Some(&pr_label), result);
+            send_workflow_result(&bg_tx, &workflow_display_name, Some(&pr_label), result);
         });
 
         self.workflow_threads.push(handle);
@@ -1452,7 +1456,7 @@ impl App {
 
         self.state.modal = Modal::Confirm {
             title: "Resume Workflow".to_string(),
-            message: format!("Resume workflow run '{}'?", run.workflow_name),
+            message: format!("Resume workflow run '{}'?", run.display_name()),
             on_confirm: ConfirmAction::ResumeWorkflow {
                 workflow_run_id: run.id.clone(),
             },
@@ -1488,7 +1492,7 @@ impl App {
 
         self.state.modal = Modal::Confirm {
             title: "Resume Workflow".to_string(),
-            message: format!("Resume workflow run '{}'?", run.workflow_name),
+            message: format!("Resume workflow run '{}'?", run.display_name()),
             on_confirm: ConfirmAction::ResumeWorkflow {
                 workflow_run_id: run.id,
             },
@@ -1511,7 +1515,7 @@ impl App {
 
         self.state.modal = Modal::Confirm {
             title: "Cancel Workflow".to_string(),
-            message: format!("Cancel workflow run '{}'?", run.workflow_name),
+            message: format!("Cancel workflow run '{}'?", run.display_name()),
             on_confirm: ConfirmAction::CancelWorkflow {
                 workflow_run_id: run.id.clone(),
             },
@@ -1796,7 +1800,7 @@ impl App {
             Ok(Some(active)) => {
                 self.state.status_message = Some(format!(
                     "Workflow '{}' is already running — cancel it before starting another",
-                    active.workflow_name
+                    active.display_name()
                 ));
                 true
             }
@@ -2050,6 +2054,7 @@ mod tests {
 
         let def = WorkflowDef {
             name: "test-wf".into(),
+            title: None,
             description: "test".into(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
@@ -2139,6 +2144,7 @@ mod tests {
     fn make_def(name: &str, group: Option<&str>) -> conductor_core::workflow::WorkflowDef {
         conductor_core::workflow::WorkflowDef {
             name: name.to_string(),
+            title: None,
             description: String::new(),
             trigger: conductor_core::workflow::WorkflowTrigger::Manual,
             targets: vec![],

@@ -1,3 +1,12 @@
+/// Minimum number of recent runs required to emit a regression signal.
+pub const REGRESSION_MIN_RECENT_RUNS: i64 = 5;
+/// Flag duration regression if P75 increased by more than this percentage.
+pub const REGRESSION_DURATION_THRESHOLD_PCT: f64 = 25.0;
+/// Flag cost regression if P75 increased by more than this percentage.
+pub const REGRESSION_COST_THRESHOLD_PCT: f64 = 20.0;
+/// Flag failure-rate regression if failure rate increased by more than this many percentage points.
+pub const REGRESSION_FAILURE_RATE_THRESHOLD_PP: f64 = 5.0;
+
 /// Column list for `workflow_run_steps` SELECT queries (used by `row_to_workflow_step`).
 pub(super) const STEP_COLUMNS: &str =
     "id, workflow_run_id, step_name, role, can_commit, condition_expr, status, \
@@ -18,7 +27,8 @@ pub(super) const RUN_COLUMNS: &str =
      started_at, ended_at, result_summary, definition_snapshot, inputs, ticket_id, repo_id, \
      parent_workflow_run_id, target_label, default_bot_name, iteration, blocked_on, feature_id, \
      total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \
-     total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model";
+     total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
+     error";
 
 /// Instruction appended to every agent prompt for structured output.
 pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"

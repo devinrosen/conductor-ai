@@ -81,6 +81,35 @@ fn workflow_picker_visual_line(items: &[WorkflowPickerItem], selected: usize) ->
 }
 
 impl App {
+    /// Update `status_message` to show unresolved blockers for the currently selected ticket,
+    /// or clear it if the ticket has no unresolved blockers.
+    pub(super) fn update_selected_ticket_blocked_message(&mut self) {
+        if let Some(ticket) = self
+            .state
+            .filtered_detail_tickets
+            .get(self.state.detail_ticket_index)
+        {
+            let blockers: Vec<String> = self
+                .state
+                .data
+                .ticket_dependencies
+                .get(&ticket.id)
+                .map(|d| {
+                    d.active_blockers()
+                        .map(|b| format!("#{}", b.source_id))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if blockers.is_empty() {
+                self.state.status_message = None;
+                self.state.status_message_at = None;
+            } else {
+                self.state.status_message = Some(format!("blocked by: {}", blockers.join(", ")));
+                self.state.status_message_at = Some(std::time::Instant::now());
+            }
+        }
+    }
+
     pub(super) fn half_page_size(&self) -> usize {
         let (_, height) = crossterm::terminal::size().unwrap_or((80, 24));
         // Agent activity pane is roughly the bottom half of the terminal.
@@ -126,6 +155,9 @@ impl App {
         }
         match self.state.view {
             View::Dashboard => self.show_confirm_quit(),
+            View::Settings => {
+                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+            }
             View::RepoDetail => {
                 self.state.view = View::Dashboard;
                 self.state.selected_repo_id = None;
@@ -175,6 +207,7 @@ impl App {
             }
             ColumnFocus::Content => match self.state.view {
                 View::Dashboard => {} // single panel — Tab is a no-op
+                View::Settings => self.settings_toggle_focus(),
                 View::RepoDetail => {
                     self.state.repo_detail_focus = self.state.repo_detail_focus.next();
                 }
@@ -205,6 +238,7 @@ impl App {
             }
             ColumnFocus::Content => match self.state.view {
                 View::Dashboard => {} // single panel — Tab is a no-op
+                View::Settings => self.settings_toggle_focus(),
                 View::RepoDetail => {
                     self.state.repo_detail_focus = self.state.repo_detail_focus.prev();
                 }
@@ -538,6 +572,7 @@ impl App {
                 RepoDetailFocus::Tickets => {
                     self.state.detail_ticket_index =
                         self.state.detail_ticket_index.saturating_sub(1);
+                    self.update_selected_ticket_blocked_message();
                 }
                 RepoDetailFocus::Prs => {
                     self.state.detail_pr_index = self.state.detail_pr_index.saturating_sub(1);
@@ -579,6 +614,9 @@ impl App {
             View::WorkflowDefDetail => {
                 self.state.workflow_def_detail_scroll =
                     self.state.workflow_def_detail_scroll.saturating_sub(1);
+            }
+            View::Settings => {
+                self.settings_move_up();
             }
             _ => {}
         }
@@ -709,6 +747,7 @@ impl App {
                         &mut self.state.detail_ticket_index,
                         self.state.filtered_detail_tickets.len(),
                     );
+                    self.update_selected_ticket_blocked_message();
                 }
                 RepoDetailFocus::Prs => {
                     clamp_increment(&mut self.state.detail_pr_index, self.state.detail_prs.len());
@@ -774,6 +813,9 @@ impl App {
                 self.state.workflow_def_detail_scroll =
                     self.state.workflow_def_detail_scroll.saturating_add(1);
             }
+            View::Settings => {
+                self.settings_move_down();
+            }
             _ => {}
         }
     }
@@ -813,6 +855,7 @@ impl App {
                         repo_id.clone(),
                         repo.slug.clone(),
                         remote_url,
+                        false,
                     );
                 }
             }
@@ -987,6 +1030,7 @@ impl App {
             }
             View::WorktreeDetail => {}
             View::WorkflowDefDetail => {}
+            View::Settings => {}
         }
     }
 }
@@ -1059,11 +1103,16 @@ mod tests {
                 output_file: None,
                 gate_options: None,
                 gate_selections: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             },
             workflow_name: "test-wf".into(),
             target_label: None,
             branch: None,
             ticket_ref: None,
+            workflow_title: None,
         }
     }
 
@@ -1220,6 +1269,7 @@ mod tests {
         app.state.previous_view = Some(View::Dashboard);
         app.state.selected_workflow_def = Some(conductor_core::workflow::WorkflowDef {
             name: "test".into(),
+            title: None,
             description: String::new(),
             trigger: conductor_core::workflow::WorkflowTrigger::Manual,
             targets: vec![],
@@ -1528,6 +1578,7 @@ mod tests {
     fn make_wf_def(name: &str) -> conductor_core::workflow::WorkflowDef {
         conductor_core::workflow::WorkflowDef {
             name: name.into(),
+            title: None,
             description: String::new(),
             trigger: conductor_core::workflow::WorkflowTrigger::Manual,
             targets: vec![],
