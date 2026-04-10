@@ -3446,4 +3446,93 @@ mod tests {
             "duplicate stale reaped notification should be deduped"
         );
     }
+
+    #[test]
+    fn orphan_resumed_notification_skipped_when_disabled() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let ids = vec!["run-orphan-disabled".to_string()];
+
+        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_orphan_resumed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "orphan resumed notification should not fire when notifications disabled"
+        );
+    }
+
+    #[test]
+    fn stale_reaped_notification_skipped_when_disabled() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-reaped-disabled",
+            "deploy",
+            Some("repo/branch"),
+            "build",
+            false,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_stale_reaped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "stale reaped notification should not fire when notifications disabled"
+        );
+    }
+
+    #[test]
+    fn stale_reaped_notification_skipped_when_on_stale_false() {
+        let conn = in_memory_db();
+        let cfg = NotificationConfig {
+            enabled: true,
+            workflows: Some(WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+                on_stale: false,
+            }),
+            slack: SlackConfig::default(),
+            web_url: None,
+        };
+
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-reaped-no-stale",
+            "deploy",
+            Some("repo/branch"),
+            "build",
+            false,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_stale_reaped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "stale reaped notification should not fire when on_stale=false"
+        );
+    }
 }
