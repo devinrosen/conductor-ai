@@ -78,6 +78,82 @@ pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus
     }
 }
 
+/// Resolve the base branch name (with prefix fallback) and ensure it's up to date.
+///
+/// When an explicit `from_branch` is provided (e.g. from a Vantage ticket), we try:
+/// 1. The exact name
+/// 2. If that fails and the name doesn't already start with `feat/` or `fix/`, try
+///    prefixing with `feat/` then `fix/`
+///
+/// If no explicit branch is given, falls back to `resolve_base_branch`.
+///
+/// The `force_dirty` and `pre_verified_clean` flags are forwarded to
+/// `ensure_base_up_to_date`.
+pub(super) fn resolve_and_update_base(
+    repo_path: &str,
+    from_branch: Option<&str>,
+    configured_default: &str,
+    force_dirty: bool,
+    pre_verified_clean: bool,
+) -> Result<(String, Vec<String>)> {
+    let Some(requested) = from_branch else {
+        let base = resolve_base_branch(repo_path, configured_default);
+        let warnings = ensure_base_up_to_date(repo_path, &base, force_dirty, pre_verified_clean)?;
+        return Ok((base, warnings));
+    };
+
+    // Perform a single fetch upfront to avoid redundant network calls
+    // during prefix fallback attempts
+    let mut fetch_warnings = Vec::new();
+    let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
+    match fetch {
+        Ok(o) if o.status.success() => {}
+        _ => {
+            fetch_warnings.push(
+                "could not fetch from origin; creating worktree from local state".to_string(),
+            );
+        }
+    }
+
+    // Try exact name first (skip fetch since we already did it)
+    match ensure_base_up_to_date_with_fetch_control(
+        repo_path,
+        requested,
+        force_dirty,
+        pre_verified_clean,
+        false,
+    ) {
+        Ok(mut warnings) => {
+            warnings.extend(fetch_warnings);
+            Ok((requested.to_string(), warnings))
+        }
+        Err(_first_err) => {
+            // If the name already has a known prefix, don't try alternatives
+            if requested.starts_with("feat/") || requested.starts_with("fix/") {
+                return Err(_first_err);
+            }
+
+            // Try feat/ and fix/ prefixes (skip fetch since we already did it)
+            for prefix in &["feat/", "fix/"] {
+                let candidate = format!("{prefix}{requested}");
+                if let Ok(mut warnings) = ensure_base_up_to_date_with_fetch_control(
+                    repo_path,
+                    &candidate,
+                    force_dirty,
+                    pre_verified_clean,
+                    false,
+                ) {
+                    warnings.extend(fetch_warnings);
+                    return Ok((candidate, warnings));
+                }
+            }
+
+            // All attempts failed — return the original error
+            Err(_first_err)
+        }
+    }
+}
+
 /// Resolve the base branch for a repo using a priority order:
 /// 1. The configured default branch (from DB) if it exists locally
 /// 2. `git symbolic-ref refs/remotes/origin/HEAD` (remote default)
@@ -142,6 +218,22 @@ pub(super) fn ensure_base_up_to_date(
     force_dirty: bool,
     pre_verified_clean: bool,
 ) -> Result<Vec<String>> {
+    ensure_base_up_to_date_with_fetch_control(
+        repo_path,
+        base_branch,
+        force_dirty,
+        pre_verified_clean,
+        true,
+    )
+}
+
+fn ensure_base_up_to_date_with_fetch_control(
+    repo_path: &str,
+    base_branch: &str,
+    force_dirty: bool,
+    pre_verified_clean: bool,
+    should_fetch: bool,
+) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
 
     // 1. Check for uncommitted changes in the repo working tree
@@ -155,14 +247,16 @@ pub(super) fn ensure_base_up_to_date(
     }
 
     // 2. Fetch from remote (soft failure — warn and allow local-only creation).
-    let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
-    match fetch {
-        Ok(o) if o.status.success() => {}
-        _ => {
-            warnings.push(
-                "could not fetch from origin; creating worktree from local state".to_string(),
-            );
-            return Ok(warnings);
+    if should_fetch {
+        let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
+        match fetch {
+            Ok(o) if o.status.success() => {}
+            _ => {
+                warnings.push(
+                    "could not fetch from origin; creating worktree from local state".to_string(),
+                );
+                return Ok(warnings);
+            }
         }
     }
 
@@ -174,7 +268,60 @@ pub(super) fn ensure_base_up_to_date(
         .map(|o| o.status.success())
         .unwrap_or(false);
 
+    let has_local = branch_exists(repo_path, base_branch);
+
+    if !has_remote && !has_local {
+        return Err(ConductorError::Git(
+            crate::error::SubprocessFailure::from_message(
+                "git",
+                format!(
+                    "base branch '{}' not found locally or on remote 'origin'",
+                    base_branch
+                ),
+            ),
+        ));
+    }
+
+    // 3b. If the branch exists on the remote but not locally, create a local tracking branch
+    if has_remote && !has_local {
+        // Validate branch name for security - prevent injection of git options
+        if base_branch.starts_with('-') || base_branch.contains('\0') || base_branch.contains('\n')
+        {
+            return Err(ConductorError::InvalidInput(format!(
+                "invalid branch name '{}': branch names cannot start with '-' or contain null/newline characters",
+                base_branch
+            )));
+        }
+
+        let create = git_in(repo_path)
+            .args([
+                "branch",
+                "--track",
+                "--", // Explicitly separate options from branch names
+                base_branch,
+                &format!("origin/{base_branch}"),
+            ])
+            .output();
+        match create {
+            Ok(o) if o.status.success() => {}
+            _ => {
+                return Err(ConductorError::Git(
+                    crate::error::SubprocessFailure::from_message(
+                        "git",
+                        format!(
+                            "base branch '{}' exists on remote but could not create local tracking branch",
+                            base_branch
+                        ),
+                    ),
+                ));
+            }
+        }
+        // Local branch is now set to the remote tip — no need to fast-forward.
+        return Ok(warnings);
+    }
+
     if !has_remote {
+        // Local branch exists but no remote tracking — use local state as-is.
         return Ok(warnings);
     }
 
@@ -201,28 +348,20 @@ pub(super) fn ensure_base_up_to_date(
             ));
         }
     } else {
-        // Need to checkout base branch first (handles detached HEAD too)
-        let checkout = git_in(repo_path)
-            .args(["switch", "--", base_branch])
+        // Base exists locally but is not checked out — update it without checkout
+        // by using `git fetch . origin/{base}:refs/heads/{base}` (local fast-forward).
+        let ff = git_in(repo_path)
+            .args([
+                "fetch",
+                ".",
+                &format!("refs/remotes/origin/{base_branch}:refs/heads/{base_branch}"),
+            ])
             .output();
-        match checkout {
-            Ok(o) if o.status.success() => {
-                let merge = git_in(repo_path)
-                    .args(["merge", "--ff-only", &origin_ref])
-                    .output();
-                if !merge.map(|o| o.status.success()).unwrap_or(false) {
-                    warnings.push(format!(
-                        "base branch '{}' has diverged from origin; consider `git pull --rebase`",
-                        base_branch
-                    ));
-                }
-            }
-            _ => {
-                warnings.push(format!(
-                    "could not checkout '{}'; creating worktree from local state",
-                    base_branch
-                ));
-            }
+        if !ff.map(|o| o.status.success()).unwrap_or(false) {
+            warnings.push(format!(
+                "base branch '{}' has diverged from origin; consider `git pull --rebase`",
+                base_branch
+            ));
         }
     }
 
@@ -421,10 +560,34 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
             .trim()
             .to_string();
 
-        // Add the remote if it doesn't already exist (ignore failure if it does)
-        let _ = git_in(repo_path)
+        // Add the remote if it doesn't already exist (ignore failure only if remote already exists)
+        match git_in(repo_path)
             .args(["remote", "add", fork_owner, &fork_url])
-            .output();
+            .output()
+        {
+            Ok(output) if !output.status.success() => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.contains("already exists") {
+                    return Err(crate::error::ConductorError::Git(
+                        crate::error::SubprocessFailure {
+                            command: format!("git remote add {} {}", fork_owner, fork_url),
+                            exit_code: output.status.code(),
+                            stderr: stderr.to_string(),
+                            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                        },
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(crate::error::ConductorError::Git(
+                    crate::error::SubprocessFailure::from_message(
+                        &format!("git remote add {} {}", fork_owner, fork_url),
+                        e.to_string(),
+                    ),
+                ));
+            }
+            _ => {} // Success or already exists case
+        }
 
         // Fetch the branch from the fork remote
         check_output(git_in(repo_path).args([
@@ -606,7 +769,7 @@ mod tests {
 
     #[test]
     fn has_installable_deps_invalid_json() {
-        // Malformed JSON → treated as "has deps" (install proceeds, safer default).
+        // Malformed JSON → treated as "no deps" (install skipped).
         assert!(!has_installable_deps("not json"));
     }
 }

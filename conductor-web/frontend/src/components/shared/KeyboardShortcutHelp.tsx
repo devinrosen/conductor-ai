@@ -35,9 +35,18 @@ const groups: ShortcutGroup[] = [
   {
     title: "Actions",
     shortcuts: [
-      { keys: ["c"], description: "Create (repo / worktree)" },
+      { keys: ["c"], description: "Create / Copy path" },
       { keys: ["d"], description: "Delete (with confirmation)" },
+      { keys: ["l"], description: "Launch agent" },
       { keys: ["/"], description: "Focus search" },
+    ],
+  },
+  {
+    title: "Worktree Detail",
+    shortcuts: [
+      { keys: ["w"], description: "Toggle workflows sidebar" },
+      { keys: ["a"], description: "Toggle activity log" },
+      { keys: ["Esc"], description: "Back to repo" },
     ],
   },
   {

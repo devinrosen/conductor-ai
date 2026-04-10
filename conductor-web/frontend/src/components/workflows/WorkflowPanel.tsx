@@ -5,6 +5,7 @@ import type { WorkflowDefSummary, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { RunWorkflowModal } from "./RunWorkflowModal";
+import { getWorkflowDisplayName } from "../../utils/workflow";
 
 function GroupSection({
   title,
@@ -192,7 +193,7 @@ export function WorkflowPanel({ repoId, worktreeId, ticketId }: WorkflowPanelPro
                     to={`/repos/${repoId}/worktrees/${worktreeId}/workflows/runs/${run.id}`}
                     className="flex items-center gap-3 hover:opacity-80 min-w-0"
                   >
-                    <span className="font-medium text-gray-200 truncate">{run.workflow_title ?? run.workflow_name}</span>
+                    <span className="font-medium text-gray-200 truncate">{getWorkflowDisplayName(run)}</span>
                     <StatusBadge status={run.status} />
                     {run.dry_run && (
                       <span className="text-xs px-1.5 py-0.5 bg-yellow-900 text-yellow-300 rounded shrink-0">

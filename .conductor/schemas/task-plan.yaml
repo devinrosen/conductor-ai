@@ -16,6 +16,9 @@ fields:
   risks?:
     type: array
     desc: "Risks or unknowns that should be resolved before implementing"
+  estimated_minutes:
+    type: number
+    desc: "Estimated total minutes to complete the entire plan, including all tasks"
   summary: string
 
 markers:

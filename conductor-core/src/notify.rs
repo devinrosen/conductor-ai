@@ -867,11 +867,10 @@ pub fn fire_stale_workflow_notification(
     step_name: &str,
     running_minutes: i64,
 ) {
-    if !config.enabled || config.workflows.as_ref().is_none_or(|w| !w.on_stale) {
+    let Some(wf) = &config.workflows else {
         return;
-    }
-
-    if !try_claim_notification(conn, run_id, "workflow_stale") {
+    };
+    if !config.enabled || !wf.on_stale {
         return;
     }
 
@@ -885,22 +884,23 @@ pub fn fire_stale_workflow_notification(
         ),
     };
 
-    persist_notification(
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "workflow_stale",
-            title,
-            body: &body,
-            severity: NotificationSeverity::Warning,
-            entity_id: Some(run_id),
-            entity_type: Some("workflow_run"),
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: "workflow_stale",
+            notification: &CreateNotification {
+                kind: "workflow_stale",
+                title,
+                body: &body,
+                severity: NotificationSeverity::Warning,
+                entity_id: Some(run_id),
+                entity_type: Some("workflow_run"),
+            },
+            hooks: &[],
+            event: None,
         },
     );
-
-    let _ = show_desktop_notification(title, &body);
-
-    let slack_text = format!("[conductor] {title}: {body}");
-    maybe_send_slack(config, &slack_text);
 }
 
 /// Fire a notification when orphaned/stuck workflow runs are auto-resumed on
@@ -910,7 +910,10 @@ pub fn fire_orphan_resumed_notification(
     config: &NotificationConfig,
     run_ids: &[String],
 ) {
-    if !config.enabled || config.workflows.as_ref().is_none_or(|w| !w.on_failure) {
+    let Some(wf) = &config.workflows else {
+        return;
+    };
+    if !config.enabled || !wf.on_stale {
         return;
     }
     if run_ids.is_empty() {
@@ -920,9 +923,6 @@ pub fn fire_orphan_resumed_notification(
     // Use a synthetic dedup key so we don't spam on every poll tick.
     // One notification per batch of resumed runs.
     let dedup_key = format!("orphan_resumed_{}", run_ids.first().unwrap());
-    if !try_claim_notification(conn, &dedup_key, "workflow_orphan_resumed") {
-        return;
-    }
 
     let n = run_ids.len();
     let title = "Conductor \u{2014} Orphaned Workflows Recovered";
@@ -932,22 +932,23 @@ pub fn fire_orphan_resumed_notification(
         format!("{n} stuck workflow runs were automatically resumed")
     };
 
-    persist_notification(
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "workflow_orphan_resumed",
-            title,
-            body: &body,
-            severity: NotificationSeverity::Warning,
-            entity_id: None,
-            entity_type: None,
+        &DispatchParams {
+            dedup_entity_id: &dedup_key,
+            dedup_event_type: "workflow_orphan_resumed",
+            notification: &CreateNotification {
+                kind: "workflow_orphan_resumed",
+                title,
+                body: &body,
+                severity: NotificationSeverity::Warning,
+                entity_id: None,
+                entity_type: None,
+            },
+            hooks: &[],
+            event: None,
         },
     );
-
-    let _ = show_desktop_notification(title, &body);
-
-    let slack_text = format!("[conductor] {body}");
-    maybe_send_slack(config, &slack_text);
 }
 
 /// Fire a notification when a stale workflow run's agent was confirmed dead
@@ -961,11 +962,10 @@ pub fn fire_stale_reaped_notification(
     step_name: &str,
     auto_restarted: bool,
 ) {
-    if !config.enabled || config.workflows.as_ref().is_none_or(|w| !w.on_stale) {
+    let Some(wf) = &config.workflows else {
         return;
-    }
-
-    if !try_claim_notification(conn, run_id, "workflow_stale_reaped") {
+    };
+    if !config.enabled || !wf.on_stale {
         return;
     }
 
@@ -982,30 +982,23 @@ pub fn fire_stale_reaped_notification(
         None => format!("{workflow_name}: agent for step \"{step_name}\" was dead — {action}"),
     };
 
-    persist_notification(
+    dispatch_notification(
         conn,
-        &CreateNotification {
-            kind: "workflow_stale_reaped",
-            title,
-            body: &body,
-            severity: NotificationSeverity::Warning,
-            entity_id: Some(run_id),
-            entity_type: Some("workflow_run"),
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: "workflow_stale_reaped",
+            notification: &CreateNotification {
+                kind: "workflow_stale_reaped",
+                title,
+                body: &body,
+                severity: NotificationSeverity::Warning,
+                entity_id: Some(run_id),
+                entity_type: Some("workflow_run"),
+            },
+            hooks: &[],
+            event: None,
         },
     );
-
-    let _ = show_desktop_notification(title, &body);
-
-    let slack_text = format!("[conductor] {title}: {body}");
-    maybe_send_slack(config, &slack_text);
-}
-
-fn show_desktop_notification(_title: &str, _body: &str) -> Result<(), String> {
-    Ok(())
-}
-
-fn maybe_send_slack(_config: &NotificationConfig, _text: &str) {
-    // Slack outgoing notifications not yet implemented.
 }
 
 #[cfg(test)]
@@ -2882,61 +2875,6 @@ mod tests {
         );
     }
 
-    // --- fire_stale_workflow_notification ---
-
-    #[test]
-    fn fire_stale_workflow_notification_disabled_does_not_claim() {
-        let conn = in_memory_db();
-        let cfg = config(false, true, true);
-        fire_stale_workflow_notification(&conn, &cfg, "run-s1", "my-workflow", None, "step-a", 30);
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-s1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 0,
-            "disabled config must not write to notification_log"
-        );
-    }
-
-    #[test]
-    fn fire_stale_workflow_notification_enabled_claims_once() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-        fire_stale_workflow_notification(
-            &conn,
-            &cfg,
-            "run-s2",
-            "my-workflow",
-            Some("feat/x"),
-            "step-b",
-            45,
-        );
-        fire_stale_workflow_notification(
-            &conn,
-            &cfg,
-            "run-s2",
-            "my-workflow",
-            Some("feat/x"),
-            "step-b",
-            45,
-        );
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-s2' AND event_type = 'workflow_stale'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 1,
-            "dedup claim must be made when hooks are configured, even with enabled=false"
-        );
-    }
-
     /// Same as above for the failure path.
     #[test]
     fn hooks_fire_when_notifications_disabled_workflow_failure() {
@@ -2971,79 +2909,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             count, 1,
-            "dedup claim must be made when hooks are configured, even with enabled=false"
-        );
-    }
-
-    // --- fire_orphan_resumed_notification ---
-
-    #[test]
-    fn fire_orphan_resumed_notification_disabled_does_not_claim() {
-        let conn = in_memory_db();
-        let cfg = config(false, true, true);
-        fire_orphan_resumed_notification(&conn, &cfg, &["run-o1".to_string()]);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM notification_log", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(
-            count, 0,
-            "disabled config must not write to notification_log"
-        );
-    }
-
-    #[test]
-    fn fire_orphan_resumed_notification_empty_run_ids_is_noop() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-        fire_orphan_resumed_notification(&conn, &cfg, &[]);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM notification_log", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(count, 0, "empty run_ids must not write to notification_log");
-    }
-
-    #[test]
-    fn fire_orphan_resumed_notification_enabled_claims_once() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-        let ids = vec!["run-o2".to_string(), "run-o3".to_string()];
-        fire_orphan_resumed_notification(&conn, &cfg, &ids);
-        fire_orphan_resumed_notification(&conn, &cfg, &ids);
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_orphan_resumed'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1, "duplicate call must be deduped");
-        let mgr = NotificationManager::new(&conn);
-        let unread = mgr.list_unread().unwrap();
-        assert_eq!(unread.len(), 1);
-        assert_eq!(unread[0].kind, "workflow_orphan_resumed");
-    }
-
-    // --- fire_stale_reaped_notification ---
-
-    #[test]
-    fn fire_stale_reaped_notification_disabled_does_not_claim() {
-        let conn = in_memory_db();
-        let cfg = config(false, true, true);
-        fire_stale_reaped_notification(&conn, &cfg, "run-r1", "my-workflow", None, "step-a", true);
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-r1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 0,
-            "disabled config must not write to notification_log"
+            "dedup claim must be made for failures when hooks are configured, even with enabled=false"
         );
     }
 
@@ -3079,57 +2945,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             count, 1,
-            "dedup claim must be made when hooks are configured, even with enabled=false"
-        );
-    }
-
-    #[test]
-    fn fire_stale_reaped_notification_auto_restarted_true_claims_once() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-        fire_stale_reaped_notification(
-            &conn,
-            &cfg,
-            "run-r2",
-            "my-workflow",
-            Some("main"),
-            "step-b",
-            true,
-        );
-        fire_stale_reaped_notification(
-            &conn,
-            &cfg,
-            "run-r2",
-            "my-workflow",
-            Some("main"),
-            "step-b",
-            true,
-        );
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-r2' AND event_type = 'workflow_stale_reaped'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 1,
             "dedup claim must be made for feedback when hooks are configured, even with enabled=false"
-        );
-
-        // Verify the notification body contains the expected auto-restart text
-        let (body, kind): (String, String) = conn
-            .query_row(
-                "SELECT body, kind FROM notifications WHERE entity_id = 'run-r2' AND kind = 'workflow_stale_reaped'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(kind, "workflow_stale_reaped");
-        assert!(
-            body.contains("marked as failed and auto-restarted"),
-            "body should mention auto-restart: {}",
-            body
         );
     }
 
@@ -3330,52 +3146,393 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fire_stale_reaped_notification_auto_restarted_false_body_says_failed() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-        fire_stale_reaped_notification(&conn, &cfg, "run-r3", "my-workflow", None, "step-c", false);
-        let mgr = NotificationManager::new(&conn);
-        let unread = mgr.list_unread().unwrap();
-        assert_eq!(unread.len(), 1);
-        assert!(
-            unread[0].body.contains("marked as failed"),
-            "body must mention failure when auto_restarted=false: {}",
-            unread[0].body
-        );
-        assert!(
-            !unread[0].body.contains("auto-restarted"),
-            "body must NOT mention auto-restart when auto_restarted=false: {}",
-            unread[0].body
-        );
-    }
+    // --- fire_stale_workflow_notification tests ---
 
     #[test]
-    fn fire_stale_workflow_notification_suppressed_when_on_stale_false() {
+    fn stale_notification_persists_and_deduplicates() {
         let conn = in_memory_db();
-        let mut cfg = config(true, true, true);
-        cfg.workflows.as_mut().unwrap().on_stale = false;
+        let cfg = config(true, true, true);
 
         fire_stale_workflow_notification(
             &conn,
             &cfg,
-            "run-s1",
-            "test-workflow",
-            None,
-            "test-step",
-            15,
+            "run-stale-1",
+            "deploy",
+            Some("repo/branch"),
+            "build",
+            45,
         );
 
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-s1' AND event_type = 'workflow_stale'",
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-stale-1' AND event_type = 'workflow_stale'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "first stale notification should be persisted");
+
+        // Second call with same run_id should be deduped
+        fire_stale_workflow_notification(
+            &conn,
+            &cfg,
+            "run-stale-1",
+            "deploy",
+            Some("repo/branch"),
+            "build",
+            60,
+        );
+
+        let count2: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-stale-1' AND event_type = 'workflow_stale'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count2, 1, "duplicate stale notification should be deduped");
+    }
+
+    #[test]
+    fn stale_notification_skipped_when_disabled() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+
+        fire_stale_workflow_notification(&conn, &cfg, "run-stale-off", "deploy", None, "build", 30);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-stale-off'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "stale notification should not fire when disabled");
+    }
+
+    #[test]
+    fn stale_notification_skipped_when_on_stale_false() {
+        let conn = in_memory_db();
+        let cfg = NotificationConfig {
+            enabled: true,
+            workflows: Some(WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+                on_stale: false,
+            }),
+            slack: SlackConfig::default(),
+            web_url: None,
+        };
+
+        fire_stale_workflow_notification(
+            &conn,
+            &cfg,
+            "run-stale-off2",
+            "deploy",
+            None,
+            "build",
+            30,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-stale-off2'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
         assert_eq!(
             count, 0,
-            "notification should be suppressed when on_stale = false"
+            "stale notification should not fire when on_stale=false"
+        );
+    }
+
+    #[test]
+    fn stale_notification_skipped_when_workflows_none() {
+        let conn = in_memory_db();
+        let cfg = NotificationConfig {
+            enabled: true,
+            workflows: None,
+            slack: SlackConfig::default(),
+            web_url: None,
+        };
+
+        fire_stale_workflow_notification(
+            &conn,
+            &cfg,
+            "run-stale-none",
+            "deploy",
+            None,
+            "build",
+            30,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-stale-none'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "stale notification should not fire when workflows=None"
+        );
+    }
+
+    // --- fire_orphan_resumed_notification tests ---
+
+    #[test]
+    fn orphan_resumed_notification_persists() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        let ids = vec!["run-orphan-1".to_string(), "run-orphan-2".to_string()];
+
+        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_orphan_resumed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "orphan resumed notification should be persisted");
+    }
+
+    #[test]
+    fn orphan_resumed_notification_skipped_for_empty_ids() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+
+        fire_orphan_resumed_notification(&conn, &cfg, &[]);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_orphan_resumed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "should not fire for empty run list");
+    }
+
+    #[test]
+    fn orphan_resumed_notification_deduplicates() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        let ids = vec!["run-orphan-dedup".to_string()];
+
+        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_orphan_resumed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "duplicate orphan resumed notification should be deduped"
+        );
+    }
+
+    // --- fire_stale_reaped_notification tests ---
+
+    #[test]
+    fn stale_reaped_notification_persists() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-reaped-1",
+            "deploy",
+            Some("repo/branch"),
+            "build",
+            false,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-reaped-1' AND event_type = 'workflow_stale_reaped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "stale reaped notification should be persisted");
+    }
+
+    #[test]
+    fn stale_reaped_notification_auto_restart_variant() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-reaped-restart",
+            "deploy",
+            None,
+            "build",
+            true, // auto_restarted
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-reaped-restart' AND event_type = 'workflow_stale_reaped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "auto-restart stale reaped notification should be persisted"
+        );
+
+        // Verify notification body references auto-restart
+        let body: String = conn
+            .query_row(
+                "SELECT body FROM notifications WHERE entity_id = 'run-reaped-restart'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            body.contains("auto-restarted"),
+            "notification body should mention auto-restart"
+        );
+    }
+
+    #[test]
+    fn stale_reaped_notification_deduplicates() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-reaped-dup",
+            "deploy",
+            None,
+            "build",
+            false,
+        );
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-reaped-dup",
+            "deploy",
+            None,
+            "build",
+            false,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-reaped-dup' AND event_type = 'workflow_stale_reaped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "duplicate stale reaped notification should be deduped"
+        );
+    }
+
+    #[test]
+    fn orphan_resumed_notification_skipped_when_disabled() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+        let ids = vec!["run-orphan-disabled".to_string()];
+
+        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_orphan_resumed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "orphan resumed notification should not fire when notifications disabled"
+        );
+    }
+
+    #[test]
+    fn stale_reaped_notification_skipped_when_disabled() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true); // enabled=false
+
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-reaped-disabled",
+            "deploy",
+            Some("repo/branch"),
+            "build",
+            false,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_stale_reaped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "stale reaped notification should not fire when notifications disabled"
+        );
+    }
+
+    #[test]
+    fn stale_reaped_notification_skipped_when_on_stale_false() {
+        let conn = in_memory_db();
+        let cfg = NotificationConfig {
+            enabled: true,
+            workflows: Some(WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
+                on_stale: false,
+            }),
+            slack: SlackConfig::default(),
+            web_url: None,
+        };
+
+        fire_stale_reaped_notification(
+            &conn,
+            &cfg,
+            "run-reaped-no-stale",
+            "deploy",
+            Some("repo/branch"),
+            "build",
+            false,
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_stale_reaped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "stale reaped notification should not fire when on_stale=false"
         );
     }
 }

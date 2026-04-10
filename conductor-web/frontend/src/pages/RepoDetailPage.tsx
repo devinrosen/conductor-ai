@@ -77,14 +77,6 @@ export function RepoDetailPage() {
   const [ticketSortDir, setTicketSortDir] = useState<SortDirection>(null);
   const [ticketColumnFilters, setTicketColumnFilters] = useState<Record<string, Set<string>>>({});
 
-  function getTicketPipelineStatus(ticket: Ticket): string {
-    try {
-      return JSON.parse(ticket.raw_json)?.conductor?.status ?? "";
-    } catch {
-      return "";
-    }
-  }
-
   const ticketFilterOptions = useMemo(() => {
     if (!tickets) return {};
     const states = new Set<string>();
@@ -95,7 +87,7 @@ export function RepoDetailPage() {
       states.add(t.state);
       if (t.assignee) assignees.add(t.assignee);
       for (const l of parseLabels(t.labels)) labels.add(l);
-      const ps = getTicketPipelineStatus(t);
+      const ps = getPipelineStatus(t);
       if (ps) pipelines.add(ps);
     }
     return {
@@ -108,39 +100,9 @@ export function RepoDetailPage() {
 
   const sortedFilteredTickets = useMemo(() => {
     if (!tickets) return [];
-    let result = [...tickets];
-
-    // Column filters
-    for (const [col, values] of Object.entries(ticketColumnFilters)) {
-      if (values.size === 0) continue;
-      result = result.filter((t) => {
-        switch (col) {
-          case "state": return values.has(t.state);
-          case "assignee": return values.has(t.assignee ?? "");
-          case "labels": return parseLabels(t.labels).some((l) => values.has(l));
-          case "pipeline": return values.has(getTicketPipelineStatus(t));
-          default: return true;
-        }
-      });
-    }
-
-    // Sort
-    if (ticketSortColumn && ticketSortDir) {
-      const dir = ticketSortDir === "asc" ? 1 : -1;
-      result.sort((a, b) => {
-        let va = "";
-        let vb = "";
-        switch (ticketSortColumn) {
-          case "source_id": va = a.source_id; vb = b.source_id; break;
-          case "title": va = a.title; vb = b.title; break;
-          case "state": va = a.state; vb = b.state; break;
-          case "assignee": va = a.assignee ?? ""; vb = b.assignee ?? ""; break;
-          case "pipeline": va = getTicketPipelineStatus(a); vb = getTicketPipelineStatus(b); break;
-        }
-        return va.localeCompare(vb) * dir;
-      });
-    }
-
+    const noRepo = () => "";
+    let result = filterTicketsByColumns([...tickets], ticketColumnFilters, noRepo);
+    result = sortTickets(result, ticketSortColumn, ticketSortDir, noRepo);
     return result;
   }, [tickets, ticketColumnFilters, ticketSortColumn, ticketSortDir]);
 
@@ -257,22 +219,8 @@ export function RepoDetailPage() {
 
   // Fetch active workflow runs for this repo to show running indicators on tickets
   const { data: activeWorkflowRuns, refetch: refetchWorkflowRuns } = useApi(
-    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed"]),
+    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed", "completed"]),
     [],
-  );
-
-  // Build ticket dependency tree using API-provided deps (all source types)
-  const ticketTree = useMemo(
-    () =>
-      tickets
-        ? buildTicketTree(
-            tickets,
-            worktrees ?? undefined,
-            prs ?? undefined,
-            Object.keys(ticketDependencies).length > 0 ? ticketDependencies : undefined,
-          )
-        : null,
-    [tickets, worktrees, prs, ticketDependencies],
   );
 
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display
@@ -311,27 +259,36 @@ export function RepoDetailPage() {
     return m;
   }, [activeWorkflowRuns, repoId]);
 
-  // Map ticket source_id -> workflow status (via worktree linkage)
-  const workflowStatusByTicketSourceId = useMemo(() => {
-    const m = new Map<string, WorkflowRun["status"]>();
+  // Map ticket source_id -> workflow run (via worktree linkage)
+  const workflowRunByTicketSourceId = useMemo(() => {
+    const m = new Map<string, WorkflowRun>();
     if (!worktrees || !workflowRunByWorktreeId.size) return m;
-    // Build an O(1) lookup for ticket.id → ticket.source_id to avoid an O(n)
-    // tickets.find() scan per worktree, making the overall loop O(worktrees + tickets).
-    const ticketSourceIdById = new Map(
-      tickets ? tickets.map((t) => [t.id, t.source_id]) : []
-    );
     for (const wt of worktrees) {
       const run = workflowRunByWorktreeId.get(wt.id);
       if (!run) continue;
-      if (wt.ticket_id) {
-        const sourceId = ticketSourceIdById.get(wt.ticket_id);
-        if (sourceId) {
-          m.set(sourceId, run.status);
+      if (tickets && wt.ticket_id) {
+        const ticket = tickets.find((t) => t.id === wt.ticket_id);
+        if (ticket) {
+          m.set(ticket.source_id, run);
         }
       }
     }
     return m;
   }, [worktrees, workflowRunByWorktreeId, tickets]);
+
+  // Build ticket dependency tree using API-provided deps (all source types)
+  const ticketTree = useMemo(
+    () =>
+      tickets
+        ? buildTicketTree(
+            tickets,
+            worktrees ?? undefined,
+            prs ?? undefined,
+            Object.keys(ticketDependencies).length > 0 ? ticketDependencies : undefined,
+          )
+        : null,
+    [tickets, worktrees, prs, ticketDependencies],
+  );
 
   async function handleStartTicketToPr(ticket: Ticket) {
     if (startingWorkflow) return;
@@ -382,6 +339,20 @@ export function RepoDetailPage() {
       setActionError(err instanceof Error ? err.message : "Failed to start workflow");
     } finally {
       setStartingWorkflow(null);
+    }
+  }
+
+  const [resumingWorkflowId, setResumingWorkflowId] = useState<string | null>(null);
+
+  async function handleResumeWorkflow(runId: string) {
+    setResumingWorkflowId(runId);
+    try {
+      await api.resumeWorkflow(runId);
+      refetchWorkflowRuns();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Resume failed");
+    } finally {
+      setResumingWorkflowId(null);
     }
   }
 
@@ -486,7 +457,7 @@ export function RepoDetailPage() {
       const children = ticketTree?.childMap.get(t.source_id);
       const hasChildren = !!children && children.length > 0;
       const isCollapsed = collapsedNodes.has(t.source_id);
-      const wfStatus = workflowStatusByTicketSourceId.get(t.source_id) as "running" | "pending" | "waiting" | "failed" | "completed" | undefined;
+      const wfRun = workflowRunByTicketSourceId.get(t.source_id);
       rows.push(
         <TicketRow
           key={`${t.id}-d${depth}`}
@@ -496,8 +467,12 @@ export function RepoDetailPage() {
           depth={depth}
           blocked={ticketTree?.blocked.has(t.id) ?? false}
           unlocked={ticketTree?.unlocked.has(t.id) ?? false}
-          workflowStatus={wfStatus ?? null}
+          workflowStatus={(wfRun?.status as "running" | "pending" | "waiting" | "failed" | "completed") ?? null}
+          workflowRun={wfRun ?? null}
           onStartWorkflow={handleStartTicketToPr}
+          onResumeWorkflow={handleResumeWorkflow}
+          isStarting={startingWorkflow === t.id}
+          isResuming={resumingWorkflowId === wfRun?.id}
           showPipeline={hasVantage}
           hideStateAndLabels={allVantage}
           hasChildren={hasChildren}
@@ -791,11 +766,10 @@ export function RepoDetailPage() {
                 <tr>
                   <th className="px-4 py-2">Branch</th>
                   <th className="px-4 py-2">Ticket</th>
-                  <th className="px-4 py-2">Status</th>
                   <th className="px-4 py-2">Workflow</th>
-                  <th className="px-4 py-2">Agent</th>
-                  <th className="px-4 py-2">Created</th>
-                  <th className="px-4 py-2"></th>
+                  <th className="px-3 py-2">Duration</th>
+                  <th className="w-6"></th>
+                  <th className="w-6"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -805,9 +779,12 @@ export function RepoDetailPage() {
                     worktree={wt}
                     workflowRun={workflowRunByWorktreeId.get(wt.id)}
                     onDelete={setDeleteTarget}
+                    onResume={handleResumeWorkflow}
                     selected={index === selectedIndex}
                     index={index}
                     ticketSourceId={wt.ticket_id ? ticketSourceIdMap.get(wt.ticket_id) : null}
+                    isMerged={prs?.some((pr) => pr.head_ref_name === wt.branch && pr.state === "MERGED") ?? false}
+                    isResuming={resumingWorkflowId === workflowRunByWorktreeId.get(wt.id)?.id}
                   />
                 ))}
               </tbody>
@@ -872,7 +849,7 @@ export function RepoDetailPage() {
                     {!allVantage && <ColumnHeader label="Labels" columnKey="labels" sortDirection={null} onSort={() => {}} filterOptions={ticketFilterOptions.labels} activeFilters={ticketColumnFilters.labels} onFilter={handleTicketFilter} />}
                     <ColumnHeader label="Assignee" columnKey="assignee" sortDirection={ticketSortDirFor("assignee")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.assignee} activeFilters={ticketColumnFilters.assignee} onFilter={handleTicketFilter} />
                     {hasVantage && <ColumnHeader label="Pipeline" columnKey="pipeline" sortDirection={ticketSortDirFor("pipeline")} onSort={handleTicketSort} filterOptions={ticketFilterOptions.pipeline} activeFilters={ticketColumnFilters.pipeline} onFilter={handleTicketFilter} />}
-                    <th className="px-4 py-2 text-xs font-medium uppercase">Agent</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase">Workflow</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">

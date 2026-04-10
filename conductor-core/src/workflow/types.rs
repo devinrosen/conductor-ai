@@ -7,6 +7,28 @@ use crate::workflow_dsl::GateType;
 
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 
+/// Time granularity for workflow analytics queries.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeGranularity {
+    Daily,
+    Weekly,
+}
+
+impl std::str::FromStr for TimeGranularity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "daily" => Ok(TimeGranularity::Daily),
+            "weekly" => Ok(TimeGranularity::Weekly),
+            _ => Err(format!(
+                "Invalid granularity: {s}. Must be 'daily' or 'weekly'"
+            )),
+        }
+    }
+}
+
 /// Describes what a workflow run is currently blocked on when in `Waiting` status.
 ///
 /// Uses internally-tagged JSON (`{"type":"human_approval",...}`) for forward-compatibility
@@ -760,5 +782,36 @@ mod tests {
         let snapshot = r#"{"title": 42}"#;
         let run = make_run("my-workflow", Some(snapshot));
         assert_eq!(run.display_name(), "my-workflow");
+    }
+
+    #[test]
+    fn time_granularity_from_str_success() {
+        use std::str::FromStr;
+        assert_eq!(
+            TimeGranularity::from_str("daily"),
+            Ok(TimeGranularity::Daily)
+        );
+        assert_eq!(
+            TimeGranularity::from_str("weekly"),
+            Ok(TimeGranularity::Weekly)
+        );
+    }
+
+    #[test]
+    fn time_granularity_from_str_error() {
+        use std::str::FromStr;
+        let result = TimeGranularity::from_str("monthly");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Invalid granularity: monthly. Must be 'daily' or 'weekly'"
+        );
+
+        let result = TimeGranularity::from_str("invalid");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Invalid granularity: invalid. Must be 'daily' or 'weekly'"
+        );
     }
 }

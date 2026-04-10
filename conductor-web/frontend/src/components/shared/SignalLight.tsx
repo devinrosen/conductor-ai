@@ -25,9 +25,9 @@ const statusToLight: Record<string, "green" | "amber" | "red"> = {
 
 // Signal housing is always dark metal — intentionally hardcoded, not theme-variable
 const colors = {
-  green: { on: "#39B54A", glow: "rgba(57, 181, 74, 0.4)" },
-  amber: { on: "#FF9500", glow: "rgba(255, 149, 0, 0.4)" },
-  red: { on: "#D73020", glow: "rgba(215, 48, 32, 0.4)" },
+  green: { on: "var(--color-green-500, #39B54A)", glow: "rgba(57, 181, 74, 0.4)" },
+  amber: { on: "var(--color-yellow-500, #FF9500)", glow: "rgba(255, 149, 0, 0.4)" },
+  red: { on: "var(--color-red-500, #D73020)", glow: "rgba(215, 48, 32, 0.4)" },
   off: "#1a2236",
 };
 
@@ -44,7 +44,7 @@ export function SignalLight({ status, size = 14 }: { status: string; size?: numb
         padding: `${gap + 1}px ${gap}px`,
         gap: `${gap}px`,
         backgroundColor: "#0a1020",
-        border: "1px solid #232D42",
+        border: "1px solid var(--color-gray-200, #232D42)",
       }}
       title={status}
     >

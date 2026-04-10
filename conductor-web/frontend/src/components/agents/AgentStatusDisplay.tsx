@@ -16,18 +16,12 @@ interface AgentStatusDisplayProps {
   run: AgentRun;
   runs: AgentRun[];
   childRuns?: AgentRun[];
-  onLaunch: () => void;
-  onOrchestrate?: () => void;
-  onStop: () => void;
 }
 
 export function AgentStatusDisplay({
   run,
   runs,
   childRuns,
-  onLaunch,
-  onOrchestrate,
-  onStop,
 }: AgentStatusDisplayProps) {
   const color = statusColors[run.status] ?? "bg-gray-100 text-gray-600";
   const hasChildren = childRuns && childRuns.length > 0;
@@ -95,33 +89,6 @@ export function AgentStatusDisplay({
             </span>
           )}
         </div>
-        <div className="flex gap-2">
-          {isActive ? (
-            <button
-              onClick={onStop}
-              className="px-3 py-1.5 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
-            >
-              Stop Agent
-            </button>
-          ) : (
-            <>
-              <button
-                onClick={onLaunch}
-                className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
-              >
-                {run.claude_session_id ? "Launch / Resume" : "Launch Agent"}
-              </button>
-              {onOrchestrate && (
-                <button
-                  onClick={onOrchestrate}
-                  className="px-3 py-1.5 text-sm rounded-md border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
-                >
-                  Orchestrate
-                </button>
-              )}
-            </>
-          )}
-        </div>
       </div>
 
       <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
@@ -172,10 +139,13 @@ export function AgentStatusDisplay({
           </div>
         )}
         {run.claude_session_id && (
-          <div className="col-span-2">
+          <div>
             <dt className="text-gray-500">Session</dt>
-            <dd className="font-mono text-xs text-gray-700 truncate">
-              {run.claude_session_id}
+            <dd
+              className="font-mono text-xs text-gray-700 cursor-help"
+              title={run.claude_session_id}
+            >
+              {run.claude_session_id.slice(0, 8)}&hellip;
             </dd>
           </div>
         )}
