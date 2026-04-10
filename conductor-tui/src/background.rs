@@ -432,44 +432,44 @@ pub fn poll_data() -> Option<PollResult> {
                 if !stale_runs.is_empty() {
                     let live_windows = wf_mgr.get_live_tmux_windows();
                     match wf_mgr.reap_detected_stale_runs(stale_runs, &live_windows) {
-                    Ok(reaped) if !reaped.is_empty() => {
-                        let conductor_bin_dir =
-                            conductor_core::workflow::resolve_conductor_bin_dir();
-                        for r in &reaped {
-                            let config_for_thread = config.clone();
-                            let config_for_notify = config.clone();
-                            let bin_dir = conductor_bin_dir.clone();
-                            let run_id = r.run_id.clone();
-                            let workflow_name = r.workflow_name.clone();
-                            let target_label = r.target_label.clone();
-                            let step_name = r.step_name.clone();
-                            spawn_workflow_resume(
-                                config_for_thread,
-                                run_id,
-                                bin_dir,
-                                move |run_id, result| {
-                                    let auto_restarted = result.is_ok();
-                                    if let Err(e) = &result {
-                                        tracing::warn!(
-                                            run_id = %run_id,
-                                            "Auto-restart of stale workflow run failed: {e}"
-                                        );
-                                    }
-                                    if let Ok(thread_conn) = open_database(&db_path()) {
-                                        conductor_core::notify::fire_stale_reaped_notification(
-                                            &thread_conn,
-                                            &config_for_notify.notifications,
-                                            run_id,
-                                            &workflow_name,
-                                            target_label.as_deref(),
-                                            &step_name,
-                                            auto_restarted,
-                                        );
-                                    }
-                                },
-                            );
+                        Ok(reaped) if !reaped.is_empty() => {
+                            let conductor_bin_dir =
+                                conductor_core::workflow::resolve_conductor_bin_dir();
+                            for r in &reaped {
+                                let config_for_thread = config.clone();
+                                let config_for_notify = config.clone();
+                                let bin_dir = conductor_bin_dir.clone();
+                                let run_id = r.run_id.clone();
+                                let workflow_name = r.workflow_name.clone();
+                                let target_label = r.target_label.clone();
+                                let step_name = r.step_name.clone();
+                                spawn_workflow_resume(
+                                    config_for_thread,
+                                    run_id,
+                                    bin_dir,
+                                    move |run_id, result| {
+                                        let auto_restarted = result.is_ok();
+                                        if let Err(e) = &result {
+                                            tracing::warn!(
+                                                run_id = %run_id,
+                                                "Auto-restart of stale workflow run failed: {e}"
+                                            );
+                                        }
+                                        if let Ok(thread_conn) = open_database(&db_path()) {
+                                            conductor_core::notify::fire_stale_reaped_notification(
+                                                &thread_conn,
+                                                &config_for_notify.notifications,
+                                                run_id,
+                                                &workflow_name,
+                                                target_label.as_deref(),
+                                                &step_name,
+                                                auto_restarted,
+                                            );
+                                        }
+                                    },
+                                );
+                            }
                         }
-                    }
                         Ok(_) => {}
                         Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
                     }
