@@ -2021,13 +2021,13 @@ mod tests {
     fn test_notification_config() -> conductor_core::config::NotificationConfig {
         conductor_core::config::NotificationConfig {
             enabled: true,
-            workflows: conductor_core::config::WorkflowNotificationConfig {
+            workflows: Some(conductor_core::config::WorkflowNotificationConfig {
                 on_success: true,
                 on_failure: true,
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
-            },
+            }),
             slack: conductor_core::config::SlackConfig::default(),
             web_url: None,
         }
