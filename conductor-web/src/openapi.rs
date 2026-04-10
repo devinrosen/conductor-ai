@@ -37,7 +37,7 @@ use crate::routes::conversations::{
 #[allow(unused_imports)]
 use crate::routes::features::FeaturesResponse;
 #[allow(unused_imports)]
-use crate::routes::hooks::{HookSummary, TestHookRequest};
+use crate::routes::hooks::{HookEventEntry, HookSummary, PatchHookOnRequest, TestHookRequest};
 #[allow(unused_imports)]
 use crate::routes::issue_sources::CreateIssueSourceRequest;
 #[allow(unused_imports)]
@@ -201,6 +201,8 @@ use crate::routes::worktrees::{
         // Hooks
         crate::routes::hooks::list_hooks,
         crate::routes::hooks::test_hook,
+        crate::routes::hooks::list_hook_events,
+        crate::routes::hooks::patch_hook_on,
         // SSE events
         crate::routes::events::event_stream,
     ),
@@ -297,6 +299,8 @@ use crate::routes::worktrees::{
             SuggestModelResponse,
             HookSummary,
             TestHookRequest,
+            PatchHookOnRequest,
+            HookEventEntry,
         )
     )
 )]

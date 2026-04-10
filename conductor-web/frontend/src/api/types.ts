@@ -523,5 +523,16 @@ export interface HookSummary {
   index: number;
   on: string;
   kind: "shell" | "http";
+  /** Short display name: filename or truncated command/URL. */
+  label: string;
+  /** Full command (first 80 chars), used as tooltip. */
   command?: string;
+  is_wildcard: boolean;
+}
+
+export interface HookEvent {
+  name: string;
+  label: string;
+  /** True for workflow events that support the `:root` modifier. */
+  is_workflow: boolean;
 }

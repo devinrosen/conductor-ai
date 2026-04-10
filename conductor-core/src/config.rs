@@ -483,6 +483,11 @@ pub fn agent_log_dir() -> PathBuf {
     conductor_dir().join("agent-logs")
 }
 
+/// Returns the directory for user-supplied hook scripts: ~/.conductor/hooks/
+pub fn hooks_dir() -> PathBuf {
+    conductor_dir().join("hooks")
+}
+
 /// Returns the directory for user-supplied theme files: ~/.conductor/themes/
 pub fn themes_dir() -> PathBuf {
     conductor_dir().join("themes")

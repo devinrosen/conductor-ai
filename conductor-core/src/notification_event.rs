@@ -4,6 +4,24 @@ use serde_json::{json, Value};
 
 use crate::error::{ConductorError, Result};
 
+/// All non-threshold lifecycle event names with their display labels and whether
+/// they are workflow events (supporting the `:root` modifier).
+///
+/// This is the authoritative list used by `GET /api/config/hooks/events` to populate
+/// the hook × event matrix UI. Threshold-based events (`workflow_run.cost_spike`,
+/// `workflow_run.duration_spike`, `gate.pending_too_long`) are excluded because they
+/// require additional filter fields that cannot be represented as simple checkboxes.
+///
+/// Tuple: `(event_name, display_label, is_workflow_event)`.
+pub const ALL_EVENTS: &[(&str, &str, bool)] = &[
+    ("workflow_run.completed", "Workflow completed", true),
+    ("workflow_run.failed", "Workflow failed", true),
+    ("agent_run.completed", "Agent completed", false),
+    ("agent_run.failed", "Agent failed", false),
+    ("gate.waiting", "Gate waiting", false),
+    ("feedback.requested", "Feedback requested", false),
+];
+
 /// All concrete event names that `NotificationEvent::synthetic` accepts.
 ///
 /// This is the single source of truth shared by both `synthetic()` (for its error
@@ -296,7 +314,7 @@ impl NotificationEvent {
     pub fn synthetic_for_pattern(pattern: &str, now: impl Into<String>) -> Self {
         let now = now.into();
         for &name in VALID_SYNTHETIC_EVENTS {
-            if crate::notification_hooks::glob_matches(pattern, name) {
+            if crate::notification_hooks::on_pattern_matches(pattern, name) {
                 // VALID_SYNTHETIC_EVENTS entries are kept in sync with synthetic()'s
                 // match arms, so this can never fail.
                 return Self::synthetic(name, &now)
