@@ -86,4 +86,29 @@ describe("getErrorMessage", () => {
     };
     expect(getErrorMessage(error, fallbackMessage)).toBe(fallbackMessage);
   });
+
+  it("uses fallback for empty string message", () => {
+    const error = { message: "" };
+    expect(getErrorMessage(error, fallbackMessage)).toBe(fallbackMessage);
+  });
+
+  it("uses fallback for whitespace-only message", () => {
+    const error = { message: "   " };
+    expect(getErrorMessage(error, fallbackMessage)).toBe(fallbackMessage);
+  });
+
+  it("uses fallback for empty string error", () => {
+    const error = { error: "" };
+    expect(getErrorMessage(error, fallbackMessage)).toBe(fallbackMessage);
+  });
+
+  it("uses fallback for empty string detail", () => {
+    const error = { detail: "" };
+    expect(getErrorMessage(error, fallbackMessage)).toBe(fallbackMessage);
+  });
+
+  it("uses fallback for nested empty string message", () => {
+    const error = { error: { message: "" } };
+    expect(getErrorMessage(error, fallbackMessage)).toBe(fallbackMessage);
+  });
 });

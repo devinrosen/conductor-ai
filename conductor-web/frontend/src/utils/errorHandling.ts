@@ -18,21 +18,21 @@ export function getErrorMessage(error: unknown, fallbackMessage: string): string
   if (error && typeof error === "object") {
     const errorObj = error as Record<string, unknown>;
 
-    // Common error message fields
-    if (typeof errorObj.message === "string") {
+    // Common error message fields (must be non-empty strings)
+    if (typeof errorObj.message === "string" && errorObj.message.trim()) {
       return errorObj.message;
     }
-    if (typeof errorObj.error === "string") {
+    if (typeof errorObj.error === "string" && errorObj.error.trim()) {
       return errorObj.error;
     }
-    if (typeof errorObj.detail === "string") {
+    if (typeof errorObj.detail === "string" && errorObj.detail.trim()) {
       return errorObj.detail;
     }
 
     // API error responses with nested error info
     if (errorObj.error && typeof errorObj.error === "object") {
       const nestedError = errorObj.error as Record<string, unknown>;
-      if (typeof nestedError.message === "string") {
+      if (typeof nestedError.message === "string" && nestedError.message.trim()) {
         return nestedError.message;
       }
     }
