@@ -134,6 +134,10 @@ pub struct WorkflowNotificationConfig {
     pub on_gate_ci: bool,
     #[serde(default = "default_true")]
     pub on_gate_pr_review: bool,
+    /// Fire a notification when a workflow step has been running longer than
+    /// `general.stale_workflow_minutes`. Defaults to true.
+    #[serde(default = "default_true")]
+    pub on_stale: bool,
 }
 
 impl Default for WorkflowNotificationConfig {
@@ -144,6 +148,7 @@ impl Default for WorkflowNotificationConfig {
             on_gate_human: true,
             on_gate_ci: false,
             on_gate_pr_review: true,
+            on_stale: true,
         }
     }
 }
@@ -304,6 +309,10 @@ pub struct GeneralConfig {
     /// remove worktree directory, auto-close orphaned features). Defaults to true.
     #[serde(default = "default_true")]
     pub auto_cleanup_merged_branches: bool,
+    /// Minutes a workflow step can run without progress before a "stale" alert fires.
+    /// Set to 0 to disable stale workflow detection. Defaults to 60.
+    #[serde(default = "default_stale_workflow_minutes")]
+    pub stale_workflow_minutes: u32,
     /// Custom Claude Code configuration directory (e.g. `~/.claude-personal`).
     /// When set, conductor uses this directory for MCP server setup and passes
     /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
@@ -349,6 +358,10 @@ fn default_stale_feature_days() -> u32 {
     14
 }
 
+fn default_stale_workflow_minutes() -> u32 {
+    60
+}
+
 fn default_true() -> bool {
     true
 }
@@ -364,6 +377,7 @@ impl Default for GeneralConfig {
             inject_startup_context: true,
             theme: None,
             auto_cleanup_merged_branches: true,
+            stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
         }
     }

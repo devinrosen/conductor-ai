@@ -37,6 +37,63 @@ impl WorkflowDef {
         count_nodes(&self.body) + count_nodes(&self.always)
     }
 
+    /// Number of top-level steps (body + always, non-recursive).
+    /// Better for user-facing progress display than `total_nodes()`.
+    pub fn top_level_steps(&self) -> usize {
+        self.body.len() + self.always.len()
+    }
+
+    /// Find the `max_iterations` of the do-while or while loop that owns
+    /// the step with the given name. Returns `None` if the step is not
+    /// inside a loop or the step name is not found.
+    pub fn max_iterations_for_step(&self, step_name: &str) -> Option<u32> {
+        fn search(nodes: &[WorkflowNode], name: &str) -> Option<u32> {
+            for node in nodes {
+                match node {
+                    WorkflowNode::DoWhile(n) => {
+                        if n.step == name {
+                            return Some(n.max_iterations);
+                        }
+                        if let Some(v) = search(&n.body, name) {
+                            return Some(v);
+                        }
+                    }
+                    WorkflowNode::While(n) => {
+                        if n.step == name {
+                            return Some(n.max_iterations);
+                        }
+                        if let Some(v) = search(&n.body, name) {
+                            return Some(v);
+                        }
+                    }
+                    WorkflowNode::If(n) => {
+                        if let Some(v) = search(&n.body, name) {
+                            return Some(v);
+                        }
+                    }
+                    WorkflowNode::Unless(n) => {
+                        if let Some(v) = search(&n.body, name) {
+                            return Some(v);
+                        }
+                    }
+                    WorkflowNode::Do(n) => {
+                        if let Some(v) = search(&n.body, name) {
+                            return Some(v);
+                        }
+                    }
+                    WorkflowNode::Always(n) => {
+                        if let Some(v) = search(&n.body, name) {
+                            return Some(v);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        search(&self.body, step_name).or_else(|| search(&self.always, step_name))
+    }
+
     /// Collect all prompt snippet references across body and always blocks, sorted and deduplicated.
     pub fn collect_all_snippet_refs(&self) -> Vec<String> {
         let mut refs = collect_snippet_refs(&self.body);

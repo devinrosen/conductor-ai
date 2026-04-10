@@ -11,6 +11,7 @@ use tower_http::trace::TraceLayer;
 
 use conductor_web::assets::static_handler;
 use conductor_web::events::{ConductorEvent, EventBus};
+use conductor_web::notify;
 use conductor_web::openapi::ApiDoc;
 use conductor_web::push::{PushPayload, PushSubscriptionManager};
 use conductor_web::routes::api_router;
@@ -134,6 +135,7 @@ async fn main() -> Result<()> {
             Ok(ids) if !ids.is_empty() => {
                 let n = ids.len();
                 tracing::info!("Auto-resuming {n} stuck workflow run(s) on startup");
+                notify::fire_orphan_resumed_notification(&conn, &config.notifications, &ids);
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                 for run_id in ids {
                     let config_clone = config.clone();
@@ -233,6 +235,11 @@ async fn main() -> Result<()> {
                     Ok(ids) if !ids.is_empty() => {
                         let n = ids.len();
                         tracing::info!("Auto-resuming {n} stuck workflow run(s)");
+                        conductor_core::notify::fire_orphan_resumed_notification(
+                            &conn,
+                            &cfg.notifications,
+                            &ids,
+                        );
                         let conductor_bin_dir =
                             conductor_core::workflow::resolve_conductor_bin_dir();
                         for run_id in ids {
