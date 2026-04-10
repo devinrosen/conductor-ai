@@ -24,14 +24,22 @@ fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification
 ///
 /// Pure function — no side effects — extracted so the three early-return guards
 /// can be unit-tested without side effects.
+///
+/// When `config.workflows` is `None` (no legacy `[notifications.workflows]` block),
+/// hook `on` patterns are the sole filter and this function always returns `true`.
+/// When `Some(wf)`, the legacy per-event flags are respected (backward compat).
 pub fn should_notify(config: &NotificationConfig, succeeded: bool) -> bool {
+    // No [notifications.workflows] block → hooks are the sole filter; always pass.
+    let Some(wf) = &config.workflows else {
+        return true;
+    };
     if !config.enabled {
         return false;
     }
-    if succeeded && !config.workflows.on_success {
+    if succeeded && !wf.on_success {
         return false;
     }
-    if !succeeded && !config.workflows.on_failure {
+    if !succeeded && !wf.on_failure {
         return false;
     }
     true
@@ -494,15 +502,23 @@ pub struct GateNotificationParams<'a> {
 ///
 /// Pure function — no side effects — checks master `enabled` flag then maps
 /// each gate type to its per-type config flag.
+///
+/// When `config.workflows` is `None` (no legacy `[notifications.workflows]` block),
+/// hook `on` patterns are the sole filter and this function always returns `true`.
+/// When `Some(wf)`, the legacy per-gate-type flags are respected (backward compat).
 pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateType>) -> bool {
+    // No [notifications.workflows] block → hooks are the sole filter; always pass.
+    let Some(wf) = &config.workflows else {
+        return true;
+    };
     if !config.enabled {
         return false;
     }
     match gate_type {
         None => true,
-        Some(GateType::HumanApproval | GateType::HumanReview) => config.workflows.on_gate_human,
-        Some(GateType::PrChecks) => config.workflows.on_gate_ci,
-        Some(GateType::PrApproval) => config.workflows.on_gate_pr_review,
+        Some(GateType::HumanApproval | GateType::HumanReview) => wf.on_gate_human,
+        Some(GateType::PrChecks) => wf.on_gate_ci,
+        Some(GateType::PrApproval) => wf.on_gate_pr_review,
         Some(GateType::QualityGate) => false, // quality gates are non-blocking, no notification
     }
 }
@@ -846,13 +862,13 @@ mod tests {
     fn config(enabled: bool, on_success: bool, on_failure: bool) -> NotificationConfig {
         NotificationConfig {
             enabled,
-            workflows: WorkflowNotificationConfig {
+            workflows: Some(WorkflowNotificationConfig {
                 on_success,
                 on_failure,
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
-            },
+            }),
             slack: SlackConfig::default(),
             web_url: None,
         }
@@ -866,13 +882,13 @@ mod tests {
     ) -> NotificationConfig {
         NotificationConfig {
             enabled,
-            workflows: WorkflowNotificationConfig {
+            workflows: Some(WorkflowNotificationConfig {
                 on_success,
                 on_failure,
                 on_gate_human: true,
                 on_gate_ci: false,
                 on_gate_pr_review: true,
-            },
+            }),
             slack: SlackConfig::default(),
             web_url: Some(web_url.to_string()),
         }
@@ -1732,7 +1748,7 @@ mod tests {
     fn should_notify_gate_human_approval() {
         let mut cfg = config(true, true, true);
         assert!(should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
-        cfg.workflows.on_gate_human = false;
+        cfg.workflows.as_mut().unwrap().on_gate_human = false;
         assert!(!should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
     }
 
@@ -1740,7 +1756,7 @@ mod tests {
     fn should_notify_gate_human_review() {
         let mut cfg = config(true, true, true);
         assert!(should_notify_gate(&cfg, Some(&GateType::HumanReview)));
-        cfg.workflows.on_gate_human = false;
+        cfg.workflows.as_mut().unwrap().on_gate_human = false;
         assert!(!should_notify_gate(&cfg, Some(&GateType::HumanReview)));
     }
 
@@ -1754,7 +1770,7 @@ mod tests {
     #[test]
     fn should_notify_gate_pr_checks_enabled() {
         let mut cfg = config(true, true, true);
-        cfg.workflows.on_gate_ci = true;
+        cfg.workflows.as_mut().unwrap().on_gate_ci = true;
         assert!(should_notify_gate(&cfg, Some(&GateType::PrChecks)));
     }
 
@@ -1762,7 +1778,7 @@ mod tests {
     fn should_notify_gate_pr_approval() {
         let mut cfg = config(true, true, true);
         assert!(should_notify_gate(&cfg, Some(&GateType::PrApproval)));
-        cfg.workflows.on_gate_pr_review = false;
+        cfg.workflows.as_mut().unwrap().on_gate_pr_review = false;
         assert!(!should_notify_gate(&cfg, Some(&GateType::PrApproval)));
     }
 

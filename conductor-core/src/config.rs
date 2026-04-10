@@ -103,8 +103,8 @@ pub enum AutoStartAgent {
 pub struct NotificationConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
-    pub workflows: WorkflowNotificationConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflows: Option<WorkflowNotificationConfig>,
     #[serde(default)]
     pub slack: SlackConfig,
     /// Base URL of the conductor web UI used to build deep links in notification
@@ -526,6 +526,18 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
     {
         tracing::warn!(
             "notifications.slack.webhook_url is deprecated and has no effect — migrate to [[notify.hooks]]"
+        );
+    }
+
+    // Deprecation: warn if [notifications.workflows] is still present in config.toml.
+    if raw
+        .get("notifications")
+        .and_then(|n| n.get("workflows"))
+        .is_some()
+    {
+        tracing::warn!(
+            "[notifications.workflows] is deprecated — migrate to [[notify.hooks]] with `on` patterns; \
+             see CHANGELOG.md"
         );
     }
 
@@ -1183,11 +1195,8 @@ app_id = 123456
     fn test_notification_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert!(!config.notifications.enabled);
-        assert!(!config.notifications.workflows.on_success);
-        assert!(config.notifications.workflows.on_failure);
-        assert!(config.notifications.workflows.on_gate_human);
-        assert!(!config.notifications.workflows.on_gate_ci);
-        assert!(config.notifications.workflows.on_gate_pr_review);
+        // No [notifications.workflows] block → None (hooks are sole filter)
+        assert!(config.notifications.workflows.is_none());
     }
 
     #[test]
@@ -1203,12 +1212,13 @@ app_id = 123456
         )
         .unwrap();
         assert!(config.notifications.enabled);
-        assert!(config.notifications.workflows.on_success);
-        assert!(!config.notifications.workflows.on_failure);
+        let wf = config.notifications.workflows.as_ref().unwrap();
+        assert!(wf.on_success);
+        assert!(!wf.on_failure);
         // Gate fields should still be at their defaults
-        assert!(config.notifications.workflows.on_gate_human);
-        assert!(!config.notifications.workflows.on_gate_ci);
-        assert!(config.notifications.workflows.on_gate_pr_review);
+        assert!(wf.on_gate_human);
+        assert!(!wf.on_gate_ci);
+        assert!(wf.on_gate_pr_review);
     }
 
     #[test]
@@ -1224,9 +1234,10 @@ app_id = 123456
         "#,
         )
         .unwrap();
-        assert!(!config.notifications.workflows.on_gate_human);
-        assert!(config.notifications.workflows.on_gate_ci);
-        assert!(!config.notifications.workflows.on_gate_pr_review);
+        let wf = config.notifications.workflows.as_ref().unwrap();
+        assert!(!wf.on_gate_human);
+        assert!(wf.on_gate_ci);
+        assert!(!wf.on_gate_pr_review);
     }
 
     #[test]
