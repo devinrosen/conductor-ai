@@ -122,15 +122,15 @@ export function HookMatrixPage() {
       <div className="flex items-center gap-2">
         <Link
           to="/settings"
-          className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          className="text-sm text-gray-500 hover:text-gray-700"
         >
           ← Settings
         </Link>
-        <span className="text-gray-300 dark:text-gray-600">/</span>
-        <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Hook × Event Matrix</h2>
+        <span className="text-gray-300">/</span>
+        <h2 className="text-xl font-bold text-gray-900">Hook × Event Matrix</h2>
       </div>
 
-      <p className="text-sm text-gray-500 dark:text-gray-400">
+      <p className="text-sm text-gray-500">
         Each column is a notification hook. For workflow events, choose{" "}
         <span className="font-semibold text-blue-600">Any</span> (all workflows) or{" "}
         <span className="font-semibold text-amber-500">Root</span> (root workflows only).
@@ -138,13 +138,13 @@ export function HookMatrixPage() {
       </p>
 
       {patchError && (
-        <div className="px-3 py-2 text-sm text-red-700 bg-red-50 dark:bg-red-900/30 dark:text-red-300 rounded-md border border-red-200 dark:border-red-800">
+        <div className="px-3 py-2 text-sm text-red-700 bg-red-50 rounded-md border border-red-200">
           {patchError}
         </div>
       )}
 
       {error && (
-        <div className="px-3 py-2 text-sm text-red-700 bg-red-50 dark:bg-red-900/30 dark:text-red-300 rounded-md border border-red-200 dark:border-red-800">
+        <div className="px-3 py-2 text-sm text-red-700 bg-red-50 rounded-md border border-red-200">
           {error}
         </div>
       )}
@@ -152,15 +152,15 @@ export function HookMatrixPage() {
       {loading ? (
         <div className="text-sm text-gray-400">Loading…</div>
       ) : !hooks || hooks.length === 0 ? (
-        <div className="px-4 py-6 text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-md border border-gray-200 dark:border-gray-700 text-center space-y-2">
+        <div className="px-4 py-6 text-sm text-gray-600 bg-gray-50 rounded-md border border-gray-200 text-center space-y-2">
           <p>No hooks configured yet.</p>
           <p>
             Add hook scripts to{" "}
-            <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded">
+            <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">
               ~/.conductor/hooks/
             </code>{" "}
             or edit{" "}
-            <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded">
+            <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">
               ~/.conductor/config.toml
             </code>{" "}
             to add hooks. See{" "}

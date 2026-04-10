@@ -99,14 +99,6 @@ export function SettingsPage() {
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
             Notification Hooks
           </h3>
-          {hooks && hooks.length > 0 && (
-            <Link
-              to="/settings/hooks"
-              className="text-xs text-blue-600 hover:underline font-medium"
-            >
-              Manage event matrix →
-            </Link>
-          )}
         </div>
         <p className="text-sm text-gray-500 mb-3">
           Shell or HTTP hooks fired on workflow and agent lifecycle events. Configure in{" "}

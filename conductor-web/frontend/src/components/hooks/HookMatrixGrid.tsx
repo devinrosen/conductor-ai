@@ -102,12 +102,12 @@ export function HookMatrixGrid({
   if (hooks.length === 0) return null;
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto rounded-[--cd-radius-card] border border-gray-200 bg-gray-100">
       <table className="border-collapse text-sm w-full">
         <thead>
-          <tr>
+          <tr className="bg-gray-200">
             {/* top-left corner cell */}
-            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200 dark:border-gray-600 min-w-[160px]">
+            <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase tracking-wider border-b border-gray-200 min-w-[160px]">
               Event
             </th>
             {hooks.map((hook) => {
@@ -120,7 +120,7 @@ export function HookMatrixGrid({
               return (
                 <th
                   key={hook.index}
-                  className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200 dark:border-gray-600 min-w-[100px] max-w-[160px]"
+                  className="px-3 py-2 text-center text-xs font-medium text-gray-600 border-b border-gray-200 min-w-[100px] max-w-[160px]"
                 >
                   <div className="flex flex-col items-center gap-1.5">
                     <div
@@ -128,7 +128,7 @@ export function HookMatrixGrid({
                       title={hook.command ?? ""}
                     >
                       <HookTypeIcon kind={hook.kind} />
-                      <span className="font-mono truncate max-w-[130px] inline-block">
+                      <span className="font-mono truncate max-w-[130px] inline-block text-gray-800">
                         {hook.label || "—"}
                       </span>
                     </div>
@@ -149,15 +149,15 @@ export function HookMatrixGrid({
             })}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+        <tbody className="divide-y divide-gray-200">
           {events.map((event, rowIdx) => (
             <tr
               key={event.name}
-              className={rowIdx % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50 dark:bg-gray-800/50"}
+              className={rowIdx % 2 === 0 ? "" : "bg-gray-200/40"}
             >
-              <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
+              <td className="px-3 py-2 text-xs text-gray-800 whitespace-nowrap">
                 <div>{event.label}</div>
-                <div className="font-mono text-gray-400 dark:text-gray-500">{event.name}</div>
+                <div className="font-mono text-gray-500">{event.name}</div>
               </td>
               {hooks.map((hook) => {
                 const cell = cellMode(hook, draft, event.name);
@@ -185,10 +185,10 @@ export function HookMatrixGrid({
         </tbody>
       </table>
 
-      <p className="mt-2 text-xs text-gray-400">
+      <p className="mt-2 px-3 pb-3 text-xs text-gray-500">
         Wildcard badges indicate the hook fires on all matching events via a glob pattern.
         Edit the pattern directly in{" "}
-        <code className="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded">~/.conductor/config.toml</code>{" "}
+        <code className="bg-gray-200 px-1 py-0.5 rounded">~/.conductor/config.toml</code>{" "}
         to use threshold-based events (cost spike, duration spike).
       </p>
     </div>
