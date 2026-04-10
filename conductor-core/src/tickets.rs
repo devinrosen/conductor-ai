@@ -1780,9 +1780,11 @@ mod tests {
         let tickets = vec![make_ticket("cleanup-test", "Test cleanup ticket")];
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
-            .query_row("SELECT id FROM tickets WHERE source_id = 'cleanup-test'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 'cleanup-test'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
 
         // Insert worktree record pointing to non-existent path (safe for testing)
@@ -1800,7 +1802,8 @@ mod tests {
                 "active",
                 "2024-01-01T00:00:00Z",
             ],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Close the ticket
         syncer
