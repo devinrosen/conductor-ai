@@ -1156,7 +1156,8 @@ mod tests {
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
              VALUES (?1, 'r1', ?2, 'feat/test', '/tmp/ws', 'active', ?3)",
             rusqlite::params![id, slug, created_at],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1169,7 +1170,9 @@ mod tests {
         insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
 
         let mgr = WorktreeManager::new(&conn, &config);
-        let results = mgr.list(Some("test-repo"), false, Some(2), Some(0)).unwrap();
+        let results = mgr
+            .list(Some("test-repo"), false, Some(2), Some(0))
+            .unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -1184,7 +1187,9 @@ mod tests {
 
         let mgr = WorktreeManager::new(&conn, &config);
         // Offset 2 should return only the last row (ordered by active-first, then created_at)
-        let results = mgr.list(Some("test-repo"), false, Some(10), Some(2)).unwrap();
+        let results = mgr
+            .list(Some("test-repo"), false, Some(10), Some(2))
+            .unwrap();
         assert_eq!(results.len(), 1);
     }
 
@@ -1199,8 +1204,12 @@ mod tests {
         insert_wt(&conn, "wt4", "slug-d", "2024-01-04T00:00:00Z");
 
         let mgr = WorktreeManager::new(&conn, &config);
-        let page1 = mgr.list(Some("test-repo"), false, Some(2), Some(0)).unwrap();
-        let page2 = mgr.list(Some("test-repo"), false, Some(2), Some(2)).unwrap();
+        let page1 = mgr
+            .list(Some("test-repo"), false, Some(2), Some(0))
+            .unwrap();
+        let page2 = mgr
+            .list(Some("test-repo"), false, Some(2), Some(2))
+            .unwrap();
         assert_eq!(page1.len(), 2);
         assert_eq!(page2.len(), 2);
         // Pages must not overlap
