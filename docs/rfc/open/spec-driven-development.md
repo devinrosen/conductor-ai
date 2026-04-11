@@ -1,7 +1,8 @@
-# Spec-Driven Development Research
+# RFC: Spec-Driven Development
 
+**Status:** Pre-RFC Research
 **Date:** 2026-04-08
-**Status:** Research — not yet RFC
+**Author:** Devin
 
 This document captures the landscape of spec-driven development (SDD) and explores how Conductor could enable a spec-first workflow: generating specs from existing inputs (Figma designs, tickets, existing code), gating on human review, and feeding specs into code-generation workflows.
 

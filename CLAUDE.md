@@ -93,7 +93,8 @@ Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Cl
 ## Project Context
 
 - **Vision & motivation:** [docs/VISION.md](docs/VISION.md)
-- **Current priorities:** [docs/ROADMAP.md](docs/ROADMAP.md)
+- **Autonomous SDLC vision:** [docs/AUTONOMOUS-SDLC.md](docs/AUTONOMOUS-SDLC.md)
+- **Current priorities:** https://github.com/devinrosen/conductor-ai/issues?q=is%3Aopen+label%3Aroadmap
 - **Workflow engine design:** [docs/workflow/engine.md](docs/workflow/engine.md)
 
 ## TUI Threading Rule

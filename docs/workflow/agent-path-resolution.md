@@ -2,16 +2,15 @@
 
 ## Overview
 
-Workflows reference agents via the `call` statement. Today, agents are resolved
-by **short name** from a fixed set of directories under `.conductor/`. This
-proposal extends `call` to also accept **explicit relative paths**, giving
-workflow authors full control over where agent definitions live.
+Workflows reference agents via the `call` statement. Agents are resolved either
+by **short name** from a fixed set of directories, or by **explicit relative path**
+for full control over where agent definitions live.
 
 ---
 
 ## Syntax
 
-### Short name (existing behavior)
+### Short name
 
 ```
 call plan
@@ -21,7 +20,7 @@ call implement { retries = 2 }
 The engine resolves the name using the search order described below. This is
 the default and recommended form for most workflows.
 
-### Explicit path (new)
+### Explicit path
 
 ```
 call "./custom/agents/my-lint.md"
@@ -57,18 +56,11 @@ it by checking the following locations in order. The first match wins.
 |---|---|---|
 | 1 | `.conductor/workflows/<workflow>/agents/<name>.md` | Workflow-local override (worktree, then repo) |
 | 2 | `.conductor/agents/<name>.md` | Shared conductor agents (worktree, then repo) |
+| 3 | `.claude/agents/<name>.md` | Claude Code agents (worktree, then repo) |
 
 Each priority level is checked first in the **worktree path**, then in the
 **repo path** (the registered repository root). This allows worktree-local
 overrides of shared agents.
-
-### Proposed additions to the search order
-
-| Priority | Path | Scope |
-|---|---|---|
-| 1 | `.conductor/workflows/<workflow>/agents/<name>.md` | Workflow-local override (worktree, then repo) |
-| 2 | `.conductor/agents/<name>.md` | Shared conductor agents (worktree, then repo) |
-| 3 | `.claude/agents/<name>.md` | Claude Code agents (worktree, then repo) |
 
 Priority 3 enables reuse of agents defined for Claude Code's own agent
 framework without duplicating files into `.conductor/agents/`. Conductor-specific
@@ -195,48 +187,6 @@ parallel {
   call "team/agents/perf-reviewer.md"
 }
 ```
-
----
-
-## Implementation summary
-
-### Parser changes (`workflow_dsl.rs`)
-
-1. **`parse_call()`**: After consuming the `call` token, check if the next
-   token is a `StringLit` (quoted path) or an `Ident` (short name). Store the
-   result in `CallNode`.
-2. **`CallNode` struct**: Add a field to distinguish name vs. path, or store
-   a single enum:
-   ```rust
-   pub enum AgentRef {
-       Name(String),       // bare identifier — use search order
-       Path(String),       // quoted string — relative path from repo root
-   }
-   ```
-3. **`collect_agent_names()`**: Update to collect both variants for validation.
-4. **`on_fail` parsing**: Apply the same `Ident` vs `StringLit` logic.
-
-### Agent resolution (`agent_config.rs`)
-
-1. **`load_agent()`**: Accept `AgentRef` instead of `&str`. For `AgentRef::Path`,
-   resolve relative to repo root and call `parse_agent_file()` directly.
-2. **Add `.claude/agents/` fallback**: Insert as priority 3 in the existing
-   search order for `AgentRef::Name`.
-3. **Path safety**: Canonicalize the resolved path and verify it starts with
-   the repo root.
-
-### Workflow execution (`workflow.rs`)
-
-1. **`execute_call()`** and **`execute_parallel()`**: Pass `AgentRef` through
-   to `load_agent()` instead of a plain string.
-2. **Validation phase**: Handle both variants when checking agent existence
-   before execution begins.
-
-### Error messages
-
-- Short name not found: list all searched paths (as today, plus `.claude/agents/`).
-- Explicit path not found: show the single resolved path.
-- Path escapes repo root: specific error message.
 
 ---
 
