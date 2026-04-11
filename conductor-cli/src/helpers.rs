@@ -231,6 +231,24 @@ mod tests {
         assert!(result.is_err(), "expected Err for nonexistent file, got Ok");
     }
 
+    /// A `conductor-prompt-*.txt` file that lives in a *subdirectory* of temp_dir
+    /// must NOT be deleted — only files directly in temp_dir() qualify.
+    #[test]
+    fn conductor_prompt_file_in_subdir_is_not_deleted() {
+        let subdir = std::env::temp_dir().join("conductor-test-subdir-guard");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let path = subdir.join("conductor-prompt-run-guard-test.txt");
+        std::fs::write(&path, "guarded content").unwrap();
+        let content = read_and_maybe_cleanup_prompt_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(content, "guarded content");
+        assert!(
+            path.exists(),
+            "conductor-prompt file in a subdirectory must not be deleted"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&subdir);
+    }
+
     #[test]
     fn parse_ticket_ids_basic() {
         assert_eq!(parse_ticket_ids("ABC-1,ABC-2"), vec!["ABC-1", "ABC-2"]);
