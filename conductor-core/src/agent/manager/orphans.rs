@@ -39,6 +39,20 @@ fn cleanup_stale_stderr_files() {
 }
 
 impl<'a> AgentManager<'a> {
+    /// Attempt log recovery for a run, falling back to marking it failed.
+    ///
+    /// Tries `try_recover_from_log` first; if no result is found in the log,
+    /// marks the run as `failed` with `fail_msg`.
+    fn reap_one(&self, run_id: &str, fail_msg: &str) -> crate::error::Result<()> {
+        if try_recover_from_log(self, run_id).is_some() {
+            tracing::info!("reap_orphaned_runs: recovered result from log for run {run_id}");
+            return Ok(());
+        }
+        tracing::warn!("reap_orphaned_runs: no log recovery for run {run_id}, marking as failed");
+        self.update_run_failed(run_id, fail_msg)?;
+        Ok(())
+    }
+
     /// Reap orphaned agent runs whose tmux windows have disappeared.
     ///
     /// Queries all runs with an active status (`running` or `waiting_for_feedback`),
@@ -90,7 +104,24 @@ impl<'a> AgentManager<'a> {
             #[cfg(unix)]
             if let Some(pid) = run.subprocess_pid {
                 if crate::process_utils::pid_is_alive(pid as u32) {
-                    // Process is still alive — skip.
+                    // PID is alive — guard against PID reuse by comparing the OS-recorded
+                    // process start time against run.started_at.
+                    // If start times differ by >60 s, the PID was recycled by the OS after
+                    // the original subprocess exited and should be reaped.
+                    if crate::process_utils::pid_was_recycled(pid as u32, &run.started_at) {
+                        tracing::warn!(
+                            "reap_orphaned_runs: PID {pid} recycled for run {} (started_at={})",
+                            run.id,
+                            run.started_at,
+                        );
+                        self.reap_one(
+                            &run.id,
+                            "subprocess PID recycled — agent may have completed but result was not captured",
+                        )?;
+                        reaped += 1;
+                        continue;
+                    }
+                    // Start time is consistent — process is genuinely still running.
                     continue;
                 }
                 tracing::warn!(
@@ -99,20 +130,7 @@ impl<'a> AgentManager<'a> {
                     run.started_at,
                     run.worktree_id,
                 );
-                // PID is dead — try log recovery first, then mark failed.
-                if try_recover_from_log(self, &run.id).is_some() {
-                    tracing::info!(
-                        "reap_orphaned_runs: recovered result from log for run {}",
-                        run.id
-                    );
-                    reaped += 1;
-                    continue;
-                }
-                tracing::warn!(
-                    "reap_orphaned_runs: no log recovery for run {}, marking as failed",
-                    run.id
-                );
-                self.update_run_failed(
+                self.reap_one(
                     &run.id,
                     "subprocess exited unexpectedly — agent may have completed but result was not captured",
                 )?;
@@ -140,21 +158,8 @@ impl<'a> AgentManager<'a> {
                     run.worktree_id,
                 );
             }
-            // Window is gone — try to recover result from log file
-            if try_recover_from_log(self, &run.id).is_some() {
-                tracing::info!(
-                    "reap_orphaned_runs: recovered result from log for run {}",
-                    run.id
-                );
-                reaped += 1;
-                continue;
-            }
-            // No result in log — mark as failed
-            tracing::warn!(
-                "reap_orphaned_runs: no log recovery possible for run {}, marking as failed",
-                run.id
-            );
-            self.update_run_failed(
+            // Window is gone — try to recover result from log file, then mark failed.
+            self.reap_one(
                 &run.id,
                 "tmux session lost — agent may have completed but result was not captured",
             )?;
@@ -361,6 +366,53 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("subprocess exited unexpectedly"));
+    }
+
+    /// A run with a subprocess_pid pointing to a live process whose start time is years in the
+    /// past (simulating PID reuse) must be reaped with the "PID recycled" message.
+    #[cfg(all(test, target_os = "macos"))]
+    #[test]
+    fn test_reap_orphaned_runs_subprocess_pid_recycled() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Spawn a long-lived child — its PID is alive, but we'll tell the reaper
+        // it started years ago to simulate OS PID reuse.
+        let mut child = std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap();
+        let live_pid = child.id();
+
+        let run = mgr
+            .create_run(Some("w1"), "headless task recycled", None, None)
+            .unwrap();
+
+        // Backdate started_at to 2020 — far outside the 60-second tolerance.
+        conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1, started_at = ?2 WHERE id = ?3",
+            rusqlite::params![live_pid as i64, "2020-01-01T00:00:00Z", run.id],
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+
+        // Always kill the child, even if the assertion below panics.
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(reaped, 1, "recycled PID run should have been reaped");
+
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::Failed);
+        assert!(
+            updated
+                .result_text
+                .as_deref()
+                .unwrap()
+                .contains("PID recycled"),
+            "result_text should mention PID recycled"
+        );
     }
 
     /// A run with a subprocess_pid pointing to the current (live) process must NOT be reaped.
