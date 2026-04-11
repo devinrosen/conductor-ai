@@ -516,13 +516,13 @@ pub struct HeadlessHandle {
 /// Pass `args` as produced by [`build_headless_agent_args`].
 #[cfg(unix)]
 pub fn spawn_headless(
-    args: &[&str],
+    args: &[Cow<'static, str>],
     working_dir: &std::path::Path,
 ) -> std::result::Result<HeadlessHandle, String> {
     use std::process::Stdio;
     let conductor_bin = resolve_conductor_bin();
     let mut child = Command::new(&conductor_bin)
-        .args(args)
+        .args(args.iter().map(|a| a.as_ref()))
         .current_dir(working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -729,7 +729,7 @@ pub fn build_headless_agent_args(
     bot_name: Option<&str>,
     permission_mode: Option<&crate::config::AgentPermissionMode>,
     extra_plugin_dirs: &[String],
-) -> std::result::Result<(Vec<String>, std::path::PathBuf), String> {
+) -> std::result::Result<(Vec<Cow<'static, str>>, std::path::PathBuf), String> {
     // Always write to temp dir — no worktree dir leakage, no size threshold.
     let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
     {
@@ -786,10 +786,7 @@ pub fn build_headless_agent_args(
         extra_plugin_dirs,
     );
 
-    Ok((
-        args.into_iter().map(|c| c.into_owned()).collect(),
-        prompt_file_path,
-    ))
+    Ok((args, prompt_file_path))
 }
 
 /// Spawn a child agent in a new tmux window.
