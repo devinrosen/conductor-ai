@@ -139,7 +139,7 @@ For full details on the DSL grammar, constructs, structured output, and design t
 
 ## Architecture
 
-Four crates in a Cargo workspace:
+Five crates in a Cargo workspace:
 
 | Crate | Role |
 |---|---|
@@ -147,6 +147,7 @@ Four crates in a Cargo workspace:
 | **conductor-cli** | Thin CLI binary using clap |
 | **conductor-tui** | Terminal UI using ratatui + crossterm |
 | **conductor-web** | Web UI using axum + React (Vite + Tailwind, embedded via `rust_embed`) |
+| **conductor-desktop** | Native macOS desktop app using Tauri v2 |
 
 Data lives in `~/.conductor/` — a single SQLite database and per-repo worktree directories. No daemon or background process; the CLI and TUI link directly against `conductor-core`.
 

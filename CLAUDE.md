@@ -36,12 +36,13 @@ git config core.hooksPath .githooks
 
 ### Workspace Layout
 
-Four crates in a Cargo workspace:
+Five crates in a Cargo workspace:
 
 - **conductor-core** — Library crate with all domain logic. Everything lives here.
 - **conductor-cli** — Thin binary wrapping core with clap subcommands.
 - **conductor-tui** — TUI binary using ratatui + crossterm.
 - **conductor-web** — Web UI binary using axum + React (Vite + Tailwind frontend embedded via `rust_embed`).
+- **conductor-desktop** — Native macOS desktop app using Tauri v2 (wraps conductor-web).
 
 ### Library-First (v1)
 
