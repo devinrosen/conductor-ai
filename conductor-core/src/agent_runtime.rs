@@ -677,10 +677,19 @@ pub fn drain_stream_json(
                     }
                 } else {
                     // Use the if_running variant to avoid clobbering a value already written
-                    // by the subprocess itself (double-write safety).
-                    if let Err(e) = mgr.update_run_completed_if_running(
+                    // by the subprocess itself (double-write safety). Persist all result-event
+                    // fields (cost_usd, num_turns, duration_ms, final token counts).
+                    if let Err(e) = mgr.update_run_completed_if_running_full(
                         run_id,
                         log_result.result_text.as_deref().unwrap_or(""),
+                        session_id,
+                        log_result.cost_usd,
+                        log_result.num_turns,
+                        log_result.duration_ms,
+                        log_result.input_tokens,
+                        log_result.output_tokens,
+                        log_result.cache_read_input_tokens,
+                        log_result.cache_creation_input_tokens,
                     ) {
                         tracing::warn!("[drain_stream_json] failed to mark run completed: {e}");
                     }
@@ -1530,5 +1539,41 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.input_tokens, Some(10));
         assert_eq!(fetched.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn drain_stream_json_result_persists_cost_turns_duration() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        // Result event with cost, turns, duration, and final token usage
+        let json_lines = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-drain-1\"}\n",
+            "{\"type\":\"result\",\"is_error\":false,\"result\":\"task complete\",\"session_id\":\"sess-drain-1\",",
+            "\"total_cost_usd\":0.05,\"num_turns\":3,\"duration_ms\":5000,",
+            "\"usage\":{\"input_tokens\":200,\"output_tokens\":100,",
+            "\"cache_read_input_tokens\":40,\"cache_creation_input_tokens\":20}}\n",
+        );
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let outcome = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        assert!(matches!(outcome, super::DrainOutcome::Completed));
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, crate::agent::AgentRunStatus::Completed);
+        assert_eq!(fetched.result_text.as_deref(), Some("task complete"));
+        assert_eq!(fetched.cost_usd, Some(0.05));
+        assert_eq!(fetched.num_turns, Some(3));
+        assert_eq!(fetched.duration_ms, Some(5000));
+        assert_eq!(fetched.input_tokens, Some(200));
+        assert_eq!(fetched.output_tokens, Some(100));
+        assert_eq!(fetched.cache_read_input_tokens, Some(40));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(20));
     }
 }
