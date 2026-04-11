@@ -4,7 +4,7 @@ use rusqlite::params;
 use crate::error::Result;
 
 use super::super::status::AgentRunStatus;
-use super::super::types::AgentRun;
+use super::super::types::{AgentRun, LogResult};
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
@@ -267,6 +267,49 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Mark a run as completed with all result-event fields, only if it is currently `running`.
+    ///
+    /// This is the authoritative write for the headless drain path. It persists
+    /// `cost_usd`, `num_turns`, `duration_ms`, all token counts, and optionally
+    /// `claude_session_id` (via COALESCE so an eagerly-stored session_id is not
+    /// clobbered). The `AND status = 'running'` guard prevents double-writes if
+    /// the subprocess has already finalized the row.
+    pub fn update_run_completed_if_running_full(
+        &self,
+        run_id: &str,
+        log_result: &LogResult,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let result_text = log_result.result_text.as_deref().unwrap_or("");
+        self.conn.execute(
+            "UPDATE agent_runs \
+             SET status = 'completed', result_text = ?1, ended_at = ?2, \
+                 claude_session_id = COALESCE(?3, claude_session_id), \
+                 cost_usd = COALESCE(?4, cost_usd), \
+                 num_turns = COALESCE(?5, num_turns), \
+                 duration_ms = COALESCE(?6, duration_ms), \
+                 input_tokens = COALESCE(?7, input_tokens), \
+                 output_tokens = COALESCE(?8, output_tokens), \
+                 cache_read_input_tokens = COALESCE(?9, cache_read_input_tokens), \
+                 cache_creation_input_tokens = COALESCE(?10, cache_creation_input_tokens) \
+             WHERE id = ?11 AND status = 'running'",
+            params![
+                result_text,
+                now,
+                log_result.session_id.as_deref(),
+                log_result.cost_usd,
+                log_result.num_turns,
+                log_result.duration_ms,
+                log_result.input_tokens,
+                log_result.output_tokens,
+                log_result.cache_read_input_tokens,
+                log_result.cache_creation_input_tokens,
+                run_id,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn update_run_cancelled(&self, run_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
@@ -403,6 +446,7 @@ mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
     use crate::agent::status::AgentRunStatus;
+    use crate::agent::types::LogResult;
 
     #[test]
     fn test_create_and_list() {
@@ -852,6 +896,120 @@ mod tests {
             fetched.result_text.as_deref(),
             Some("original error"),
             "result_text must not be overwritten when run is not running"
+        );
+    }
+
+    #[test]
+    fn test_update_run_completed_if_running_full_persists_all_fields() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+
+        mgr.update_run_completed_if_running_full(
+            &run.id,
+            &LogResult {
+                result_text: Some("All done".into()),
+                session_id: Some("sess-result".into()),
+                cost_usd: Some(0.05),
+                num_turns: Some(3),
+                duration_ms: Some(5000),
+                is_error: false,
+                input_tokens: Some(200),
+                output_tokens: Some(100),
+                cache_read_input_tokens: Some(50),
+                cache_creation_input_tokens: Some(25),
+            },
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Completed);
+        assert_eq!(fetched.result_text.as_deref(), Some("All done"));
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-result"));
+        assert_eq!(fetched.cost_usd, Some(0.05));
+        assert_eq!(fetched.num_turns, Some(3));
+        assert_eq!(fetched.duration_ms, Some(5000));
+        assert_eq!(fetched.input_tokens, Some(200));
+        assert_eq!(fetched.output_tokens, Some(100));
+        assert_eq!(fetched.cache_read_input_tokens, Some(50));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(25));
+        assert!(fetched.ended_at.is_some());
+    }
+
+    #[test]
+    fn test_update_run_completed_if_running_full_coalesce_preserves_eager_session_when_none() {
+        // When the result event does not carry a session_id (None), the COALESCE
+        // guard must preserve the session_id written eagerly from the system/init event.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_session_id(&run.id, "sess-early").unwrap();
+
+        mgr.update_run_completed_if_running_full(
+            &run.id,
+            &LogResult {
+                result_text: Some("All done".into()),
+                session_id: None, // no session_id in result event
+                cost_usd: Some(0.01),
+                num_turns: Some(1),
+                duration_ms: Some(1000),
+                is_error: false,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            },
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Completed);
+        // COALESCE(NULL, "sess-early") → preserves eagerly stored session_id
+        assert_eq!(
+            fetched.claude_session_id.as_deref(),
+            Some("sess-early"),
+            "eagerly stored session_id must be preserved when result event has none"
+        );
+    }
+
+    #[test]
+    fn test_update_run_completed_if_running_full_noop_when_not_running() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_failed(&run.id, "original error").unwrap();
+
+        // Guard must prevent overwriting a finalized run
+        mgr.update_run_completed_if_running_full(
+            &run.id,
+            &LogResult {
+                result_text: Some("overwritten result".into()),
+                session_id: None,
+                cost_usd: Some(0.99),
+                num_turns: Some(99),
+                duration_ms: Some(99999),
+                is_error: false,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            },
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Failed);
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("original error"),
+            "result_text must not be overwritten when run is not running"
+        );
+        assert!(
+            fetched.cost_usd.is_none(),
+            "cost_usd must not be written when run is not running"
         );
     }
 
