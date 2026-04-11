@@ -1,6 +1,7 @@
 use super::{
-    eval_condition, execute_call_workflow, execute_gate, execute_if, execute_quality_gate,
-    execute_script, execute_unless, poll_script_child, read_stdout_bounded, ScriptPollResult,
+    eval_condition, execute_call_workflow, execute_gate, execute_if, execute_parallel,
+    execute_quality_gate, execute_script, execute_unless, poll_script_child, read_stdout_bounded,
+    ScriptPollResult,
 };
 use crate::workflow::engine::ExecutionState;
 use crate::workflow::status::WorkflowStepStatus;
@@ -1236,4 +1237,85 @@ fn test_execute_call_workflow_sets_child_run_id() {
         wf_step.child_run_id.is_some(),
         "child_run_id must be populated on the workflow step"
     );
+}
+
+// -----------------------------------------------------------------------
+// execute_parallel — headless path tests
+// -----------------------------------------------------------------------
+
+/// Verify that execute_parallel handles the headless spawn-failure path correctly:
+/// all 3 agents fail to spawn (no conductor binary available at test time), each
+/// run + step is marked Failed in the DB, and execute_parallel still returns Ok(()).
+///
+/// This exercises the no-tmux-kill-window code path and confirms that the new
+/// drain-thread plumbing compiles and integrates correctly without requiring a
+/// real Claude subprocess.
+#[test]
+fn test_parallel_three_agents_headless_spawn_fail() {
+    use crate::workflow_dsl::{AgentRef, ParallelNode};
+    use std::collections::HashMap;
+
+    // Create agent config files so load_agent() succeeds (spawn is the failure point)
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    for name in ["agent-alpha", "agent-beta", "agent-gamma"] {
+        std::fs::write(
+            agents_dir.join(format!("{name}.md")),
+            "---\nrole: reviewer\n---\nTest agent for parallel headless path.\n",
+        )
+        .unwrap();
+    }
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            fail_fast: false,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let node = ParallelNode {
+        fail_fast: false,
+        // min_success=Some(0): the test passes regardless of how many agents succeed,
+        // so CI machines without a `conductor` binary still get a green test.
+        min_success: Some(0),
+        calls: vec![
+            AgentRef::Name("agent-alpha".into()),
+            AgentRef::Name("agent-beta".into()),
+            AgentRef::Name("agent-gamma".into()),
+        ],
+        output: None,
+        call_outputs: HashMap::new(),
+        with: vec![],
+        call_with: HashMap::new(),
+        call_if: HashMap::new(),
+    };
+
+    let result = execute_parallel(&mut state, &node, 0);
+    assert!(
+        result.is_ok(),
+        "execute_parallel should return Ok even when all spawns fail: {result:?}"
+    );
+
+    // Each agent that reached spawn creates a step record (inserted before spawn attempt).
+    // Spawn failure marks the step Failed and marks the run Failed.
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    assert_eq!(steps.len(), 3, "expected 3 step records (one per agent)");
+    for step in &steps {
+        assert_eq!(
+            step.status,
+            WorkflowStepStatus::Failed,
+            "each spawn-failed agent should have a Failed step: {:?}",
+            step.step_name
+        );
+    }
 }

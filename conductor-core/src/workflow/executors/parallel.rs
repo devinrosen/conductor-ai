@@ -3,11 +3,9 @@ use crate::agent_config::AgentSpec;
 use crate::error::Result;
 use crate::workflow_dsl::ParallelNode;
 use std::collections::HashSet;
-use std::process::Command;
 use std::thread;
 
 use crate::workflow::engine::{resolve_schema, restore_step, should_skip, ExecutionState};
-use crate::workflow::helpers::sanitize_tmux_name;
 use crate::workflow::output::{interpret_agent_output, parse_conductor_output};
 use crate::workflow::prompt_builder::build_agent_prompt;
 use crate::workflow::status::WorkflowStepStatus;
@@ -40,13 +38,17 @@ pub fn execute_parallel(
         agent_name: String,
         child_run_id: String,
         step_id: String,
-        window_name: String,
+        pid: u32,
+        drain_handle: std::thread::JoinHandle<crate::agent_runtime::DrainOutcome>,
+        prompt_file: std::path::PathBuf,
         /// Resolved schema for this child (computed at spawn time).
         schema: Option<crate::schema_config::OutputSchema>,
     }
 
-    let mut children = Vec::new();
+    let mut children: Vec<ParallelChild> = Vec::new();
     let mut skipped_count = 0u32;
+
+    let permission_mode = state.config.general.agent_permission_mode;
 
     for (i, agent_ref) in node.calls.iter().enumerate() {
         let pos = pos_base + i as i64;
@@ -142,13 +144,10 @@ pub fn execute_parallel(
         )?;
         state.wf_mgr.set_step_parallel_group(&step_id, &group_id)?;
 
-        let window_prefix = state.window_prefix();
-        let window_name =
-            sanitize_tmux_name(&format!("{}-wf-{}-{}", window_prefix, agent_label, i));
         let child_run = state.agent_mgr.create_child_run(
             state.worktree_id.as_deref(),
             &prompt,
-            Some(&window_name),
+            None,
             step_model,
             &state.parent_run_id,
             state.default_bot_name.as_deref(),
@@ -164,39 +163,107 @@ pub fn execute_parallel(
             None,
         )?;
 
-        if let Err(e) = crate::agent_runtime::spawn_child_tmux(
+        // Build headless args and spawn
+        let (args, prompt_file) = match crate::agent_runtime::build_headless_agent_args(
             &child_run.id,
             &state.working_dir,
             &prompt,
+            None,
             step_model,
-            &window_name,
             state.default_bot_name.as_deref(),
+            Some(&permission_mode),
             &state.extra_plugin_dirs,
         ) {
-            tracing::warn!("Failed to spawn parallel agent '{agent_label}': {e}");
-            let _ = state
-                .agent_mgr
-                .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
-            state.wf_mgr.update_step_status(
-                &step_id,
-                WorkflowStepStatus::Failed,
-                Some(&child_run.id),
-                Some(&format!("spawn failed: {e}")),
-                None,
-                None,
-                None,
-            )?;
-            continue;
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to build headless args for parallel agent '{agent_label}': {e}"
+                );
+                let _ = state
+                    .agent_mgr
+                    .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    Some(&child_run.id),
+                    Some(&format!("spawn failed: {e}")),
+                    None,
+                    None,
+                    None,
+                )?;
+                continue;
+            }
+        };
+
+        let handle = match crate::agent_runtime::spawn_headless(
+            &args,
+            std::path::Path::new(&state.working_dir),
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("Failed to spawn headless parallel agent '{agent_label}': {e}");
+                let _ = std::fs::remove_file(&prompt_file);
+                let _ = state
+                    .agent_mgr
+                    .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    Some(&child_run.id),
+                    Some(&format!("spawn failed: {e}")),
+                    None,
+                    None,
+                    None,
+                )?;
+                continue;
+            }
+        };
+
+        let pid = handle.pid;
+        if let Err(e) = state
+            .agent_mgr
+            .update_run_subprocess_pid(&child_run.id, pid)
+        {
+            tracing::warn!("parallel: failed to persist subprocess pid for '{agent_label}': {e}");
         }
+
+        // Spawn one drain thread per agent (each opens its own DB connection,
+        // since rusqlite::Connection is not Send)
+        let run_id_clone = child_run.id.clone();
+        let log_path = crate::config::agent_log_path(&child_run.id);
+        let prompt_file_for_thread = prompt_file.clone();
+        let drain_handle = std::thread::spawn(move || {
+            let conn = crate::db::open_database(&crate::config::db_path())
+                .expect("parallel drain thread: failed to open DB");
+            let mgr = crate::agent::AgentManager::new(&conn);
+            let outcome = crate::agent_runtime::drain_stream_json(
+                handle.stdout,
+                &run_id_clone,
+                &log_path,
+                &mgr,
+                |_| {},
+            );
+            let _ = std::fs::remove_file(&prompt_file_for_thread);
+            let _ = {
+                let mut c = handle.child;
+                c.wait()
+            };
+            outcome
+        });
 
         children.push(ParallelChild {
             agent_name: agent_label.to_string(),
             child_run_id: child_run.id,
             step_id,
-            window_name,
+            pid,
+            drain_handle,
+            prompt_file,
             schema: call_schema.or_else(|| block_schema.clone()),
         });
     }
+
+    // Capture count before polling loop (needed for min_success after join)
+    let children_count = children.len() as u32;
 
     // Poll all children until completion
     let start = std::time::Instant::now();
@@ -209,6 +276,38 @@ pub fn execute_parallel(
         if completed.len() == children.len() {
             break;
         }
+
+        // Check shutdown flag
+        if let Some(ref flag) = state.exec_config.shutdown {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!("parallel: shutdown requested, cancelling remaining agents");
+                for (i, child) in children.iter().enumerate() {
+                    if !completed.contains(&i) {
+                        // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
+                        let _ = state.agent_mgr.update_run_cancelled(&child.child_run_id);
+                        crate::agent_runtime::cancel_subprocess(child.pid);
+                        if let Err(e) = state.wf_mgr.update_step_status(
+                            &child.step_id,
+                            WorkflowStepStatus::Failed,
+                            Some(&child.child_run_id),
+                            Some("cancelled: executor shutdown"),
+                            None,
+                            None,
+                            None,
+                        ) {
+                            tracing::warn!(
+                                "parallel: failed to update step for '{}' on shutdown: {e}",
+                                child.agent_name
+                            );
+                        }
+                        completed.insert(i);
+                        failures += 1;
+                    }
+                }
+                break;
+            }
+        }
+
         if start.elapsed() > state.exec_config.step_timeout {
             tracing::warn!("parallel: timeout reached");
             // Cancel remaining
@@ -220,9 +319,8 @@ pub fn execute_parallel(
                             child.agent_name
                         );
                     }
-                    let _ = Command::new("tmux")
-                        .args(["kill-window", "-t", &format!(":{}", child.window_name)])
-                        .output();
+                    // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
+                    crate::agent_runtime::cancel_subprocess(child.pid);
                     if let Err(e) = state.wf_mgr.update_step_status(
                         &child.step_id,
                         WorkflowStepStatus::Failed,
@@ -352,13 +450,8 @@ pub fn execute_parallel(
                                             other.agent_name
                                         );
                                     }
-                                    let _ = Command::new("tmux")
-                                        .args([
-                                            "kill-window",
-                                            "-t",
-                                            &format!(":{}", other.window_name),
-                                        ])
-                                        .output();
+                                    // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
+                                    crate::agent_runtime::cancel_subprocess(other.pid);
                                     if let Err(e) = state.wf_mgr.update_step_status(
                                         &other.step_id,
                                         WorkflowStepStatus::Failed,
@@ -387,9 +480,22 @@ pub fn execute_parallel(
         thread::sleep(state.exec_config.poll_interval);
     }
 
+    // Join all drain thread handles (best-effort; prevents zombie threads).
+    // Drain threads handle prompt_file cleanup internally; the remove_file here
+    // is a belt-and-suspenders cleanup in case the thread never ran.
+    for child in children {
+        if let Err(e) = child.drain_handle.join() {
+            tracing::warn!(
+                "parallel: drain thread for '{}' panicked: {e:?}",
+                child.agent_name
+            );
+        }
+        let _ = std::fs::remove_file(&child.prompt_file);
+    }
+
     // Apply min_success policy (skipped-on-resume agents count as successes)
     let effective_successes = successes + skipped_count;
-    let total_agents = children.len() as u32 + skipped_count;
+    let total_agents = children_count + skipped_count;
     let min_required = node.min_success.unwrap_or(total_agents);
     tracing::info!(
         "parallel: {successes} succeeded, {failures} failed, {skipped_count} skipped out of {total_agents} agents",

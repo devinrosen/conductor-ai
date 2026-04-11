@@ -7,7 +7,6 @@ use crate::workflow::engine::{
     record_step_failure, record_step_success, resolve_schema, restore_step, run_on_fail_agent,
     should_skip, ExecutionState,
 };
-use crate::workflow::helpers::sanitize_tmux_name;
 use crate::workflow::output::interpret_agent_output;
 use crate::workflow::prompt_builder::build_agent_prompt;
 use crate::workflow::status::WorkflowStepStatus;
@@ -121,8 +120,6 @@ fn execute_call_with_schema(
             iteration as i64,
         )?;
 
-        let window_prefix = state.window_prefix();
-        let child_window = sanitize_tmux_name(&format!("{}-wf-{}", window_prefix, agent_label));
         let effective_bot_name = node
             .bot_name
             .as_deref()
@@ -130,7 +127,7 @@ fn execute_call_with_schema(
         let child_run = state.agent_mgr.create_child_run(
             state.worktree_id.as_deref(),
             &prompt,
-            Some(&child_window),
+            None,
             step_model,
             &state.parent_run_id,
             effective_bot_name,
@@ -147,93 +144,165 @@ fn execute_call_with_schema(
         )?;
 
         tracing::info!(
-            "Step '{}' (attempt {}/{}): spawning in '{}'",
+            "Step '{}' (attempt {}/{}): spawning headless",
             agent_label,
             attempt + 1,
             max_attempts,
-            child_window,
         );
 
-        // Spawn in tmux
-        if let Err(e) = crate::agent_runtime::spawn_child_tmux(
+        // Build args and spawn headless subprocess
+        let (args, prompt_file) = match crate::agent_runtime::build_headless_agent_args(
             &child_run.id,
             &state.working_dir,
             &prompt,
+            None,
             step_model,
-            &child_window,
             effective_bot_name,
+            Some(&state.config.general.agent_permission_mode),
             &merged_plugin_dirs,
         ) {
-            tracing::warn!("Failed to spawn child: {e}");
-            let _ = state
-                .agent_mgr
-                .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
-            state.wf_mgr.update_step_status(
-                &step_id,
-                WorkflowStepStatus::Failed,
-                Some(&child_run.id),
-                Some(&format!("spawn failed: {e}")),
-                None,
-                None,
-                Some(attempt as i64),
-            )?;
-            last_error = format!("spawn failed: {e}");
-            continue;
-        }
-
-        // Capture pre-step base totals and references for the tick closure.
-        // All i64/f64 fields are Copy; &Connection is Copy (pointer copy).
-        let conn = state.conn;
-        let wf_run_id = state.workflow_run_id.clone();
-        let model_str = state.model.clone();
-        let base_input = state.total_input_tokens;
-        let base_output = state.total_output_tokens;
-        let base_cr = state.total_cache_read_input_tokens;
-        let base_cc = state.total_cache_creation_input_tokens;
-        let base_cost = state.total_cost;
-        let base_turns = state.total_turns;
-        let base_dur = state.total_duration_ms;
-        let partial_run_id = child_run.id.clone();
-        let log_path = crate::config::agent_log_path(&child_run.id)
-            .to_string_lossy()
-            .into_owned();
-
-        let on_tick = move || {
-            let (step_in, step_out, step_cr, step_cc) =
-                crate::agent::log_parsing::scan_partial_token_usage(&log_path);
-            if step_in == 0 && step_out == 0 && step_cr == 0 && step_cc == 0 {
-                return;
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!("Failed to build headless args: {e}");
+                let _ = state
+                    .agent_mgr
+                    .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    Some(&child_run.id),
+                    Some(&format!("spawn failed: {e}")),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                last_error = format!("spawn failed: {e}");
+                continue;
             }
-            let _ = crate::agent::AgentManager::new(conn).update_run_tokens_partial(
-                &partial_run_id,
-                step_in,
-                step_out,
-                step_cr,
-                step_cc,
-            );
-            let _ = crate::workflow::manager::WorkflowManager::new(conn).persist_workflow_metrics(
-                &wf_run_id,
-                base_input + step_in,
-                base_output + step_out,
-                base_cr + step_cr,
-                base_cc + step_cc,
-                base_turns,
-                base_cost,
-                base_dur,
-                model_str.as_deref(),
-            );
         };
 
-        // Poll for completion
-        match crate::agent_runtime::poll_child_completion(
-            state.conn,
-            &child_run.id,
-            state.exec_config.poll_interval,
-            state.exec_config.step_timeout,
-            state.exec_config.shutdown.as_ref(),
-            Some(&on_tick),
+        let handle = match crate::agent_runtime::spawn_headless(
+            &args,
+            std::path::Path::new(&state.working_dir),
         ) {
-            Ok(completed_run) => {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("Failed to spawn headless: {e}");
+                let _ = std::fs::remove_file(&prompt_file);
+                let _ = state
+                    .agent_mgr
+                    .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    Some(&child_run.id),
+                    Some(&format!("spawn failed: {e}")),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                last_error = format!("spawn failed: {e}");
+                continue;
+            }
+        };
+
+        let pid = handle.pid;
+        if let Err(e) = state
+            .agent_mgr
+            .update_run_subprocess_pid(&child_run.id, pid)
+        {
+            tracing::warn!("Failed to persist subprocess pid: {e}");
+        }
+
+        // Spawn drain thread — opens its own DB connection (Connection is not Send)
+        let run_id_clone = child_run.id.clone();
+        let log_path = crate::config::agent_log_path(&child_run.id);
+        let (tx, rx) = std::sync::mpsc::channel::<crate::agent_runtime::DrainOutcome>();
+        std::thread::spawn(move || {
+            let conn = crate::db::open_database(&crate::config::db_path())
+                .expect("drain thread: failed to open DB");
+            let mgr = crate::agent::AgentManager::new(&conn);
+            let outcome = crate::agent_runtime::drain_stream_json(
+                handle.stdout,
+                &run_id_clone,
+                &log_path,
+                &mgr,
+                |_| {},
+            );
+            let _ = std::fs::remove_file(&prompt_file);
+            let _ = {
+                let mut c = handle.child;
+                c.wait()
+            };
+            let _ = tx.send(outcome);
+        });
+
+        // Wait for drain thread with periodic shutdown/timeout checks
+        let start = std::time::Instant::now();
+        let drain_outcome = loop {
+            match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                Ok(outcome) => break outcome,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // Check shutdown flag
+                    if let Some(ref flag) = state.exec_config.shutdown {
+                        if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            tracing::warn!(
+                                "Step '{}': shutdown requested, cancelling",
+                                agent_label
+                            );
+                            // Mark cancelled BEFORE sending SIGTERM (RFC 016 Q2)
+                            let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
+                            crate::agent_runtime::cancel_subprocess(pid);
+                            // Drain the channel for final outcome (best-effort)
+                            let _ = rx.recv_timeout(std::time::Duration::from_secs(6));
+                            let cancel_msg = "executor shutdown requested".to_string();
+                            state.wf_mgr.update_step_status(
+                                &step_id,
+                                WorkflowStepStatus::Failed,
+                                Some(&child_run.id),
+                                Some(&cancel_msg),
+                                None,
+                                None,
+                                Some(attempt as i64),
+                            )?;
+                            return Err(ConductorError::Workflow(cancel_msg));
+                        }
+                    }
+                    // Check step timeout
+                    if start.elapsed() > state.exec_config.step_timeout {
+                        tracing::warn!("Step '{}': timeout reached, cancelling", agent_label);
+                        // Mark cancelled BEFORE sending SIGTERM (RFC 016 Q2)
+                        let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
+                        crate::agent_runtime::cancel_subprocess(pid);
+                        let _ = rx.recv_timeout(std::time::Duration::from_secs(6));
+                        break crate::agent_runtime::DrainOutcome::NoResult;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    // Drain thread panicked
+                    tracing::warn!(
+                        "Step '{}': drain thread disconnected unexpectedly",
+                        agent_label
+                    );
+                    break crate::agent_runtime::DrainOutcome::NoResult;
+                }
+            }
+        };
+
+        match drain_outcome {
+            crate::agent_runtime::DrainOutcome::Completed => {
+                // Re-read run from DB for final status and metrics
+                let completed_run = match state.agent_mgr.get_run(&child_run.id) {
+                    Ok(Some(r)) => r,
+                    Ok(None) => {
+                        last_error = format!("run {} not found after drain", child_run.id);
+                        continue;
+                    }
+                    Err(e) => {
+                        last_error = format!("DB error after drain: {e}");
+                        continue;
+                    }
+                };
                 let succeeded = completed_run.status == AgentRunStatus::Completed;
 
                 // Parse output: structured (schema) or generic (markers + context)
@@ -333,28 +402,28 @@ fn execute_call_with_schema(
                     continue;
                 }
             }
-            Err(e) => {
-                tracing::warn!("Step '{}' poll error: {e}", agent_label);
-                if let Err(cancel_err) = state.agent_mgr.update_run_cancelled(&child_run.id) {
-                    tracing::warn!(
-                        run_id = %child_run.id,
-                        "Failed to mark cancelled agent run: {cancel_err}"
-                    );
-                }
-                let cancel_msg = e.to_string();
+            crate::agent_runtime::DrainOutcome::NoResult => {
+                // Subprocess exited without a result event (timeout or crash)
+                tracing::warn!(
+                    "Step '{}' (attempt {}/{}): no result event from drain",
+                    agent_label,
+                    attempt + 1,
+                    max_attempts,
+                );
+                // Ensure the run is marked failed if not already cancelled
+                let _ = state
+                    .agent_mgr
+                    .update_run_failed_if_running(&child_run.id, "agent exited without result");
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
                     Some(&child_run.id),
-                    Some(&cancel_msg),
+                    Some("agent exited without result"),
                     None,
                     None,
                     Some(attempt as i64),
                 )?;
-                if matches!(e, crate::agent_runtime::PollError::Shutdown) {
-                    return Err(ConductorError::Workflow(cancel_msg));
-                }
-                last_error = cancel_msg;
+                last_error = "agent exited without result".to_string();
                 continue;
             }
         }

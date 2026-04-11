@@ -60,6 +60,7 @@ pub(super) fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
 
 /// Sanitize a string for use as a tmux window name.
 /// Removes characters that tmux treats specially (`.`, `:`, `\`).
+#[cfg(test)]
 pub(super) fn sanitize_tmux_name(name: &str) -> String {
     name.chars()
         .map(|c| match c {
