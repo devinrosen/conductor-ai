@@ -360,7 +360,7 @@ pub fn build_agent_args(
 
 /// Push optional agent flags shared between tmux and headless arg builders.
 fn push_optional_agent_flags(
-    args: &mut Vec<String>,
+    args: &mut Vec<Cow<'static, str>>,
     resume_session_id: Option<&str>,
     model: Option<&str>,
     bot_name: Option<&str>,
@@ -368,26 +368,26 @@ fn push_optional_agent_flags(
     extra_plugin_dirs: &[String],
 ) {
     if let Some(id) = resume_session_id {
-        args.push("--resume".to_string());
-        args.push(id.to_string());
+        args.push(Cow::Borrowed("--resume"));
+        args.push(Cow::Owned(id.to_string()));
     }
     if let Some(m) = model {
-        args.push("--model".to_string());
-        args.push(m.to_string());
+        args.push(Cow::Borrowed("--model"));
+        args.push(Cow::Owned(m.to_string()));
     }
     if let Some(b) = bot_name {
-        args.push("--bot-name".to_string());
-        args.push(b.to_string());
+        args.push(Cow::Borrowed("--bot-name"));
+        args.push(Cow::Owned(b.to_string()));
     }
     if let Some(mode) = permission_mode {
-        args.push(mode.cli_flag().to_string());
+        args.push(Cow::Owned(mode.cli_flag().to_string()));
         if let Some(val) = mode.cli_flag_value() {
-            args.push(val.to_string());
+            args.push(Cow::Owned(val.to_string()));
         }
     }
     for dir in extra_plugin_dirs {
-        args.push("--plugin-dir".to_string());
-        args.push(dir.clone());
+        args.push(Cow::Borrowed("--plugin-dir"));
+        args.push(Cow::Owned(dir.clone()));
     }
 }
 
@@ -437,36 +437,17 @@ pub fn build_agent_args_with_mode(
         args.push(Cow::Owned(prompt.to_string()));
     }
 
-    if let Some(id) = resume_session_id {
-        args.push(Cow::Borrowed("--resume"));
-        args.push(Cow::Owned(id.to_string()));
-    }
-
-    if let Some(m) = model {
-        args.push(Cow::Borrowed("--model"));
-        args.push(Cow::Owned(m.to_string()));
-    }
-
-    if let Some(b) = bot_name {
-        args.push(Cow::Borrowed("--bot-name"));
-        args.push(Cow::Owned(b.to_string()));
-    }
-
-    if let Some(mode) = permission_mode {
-        args.push(Cow::Owned(mode.cli_flag().to_string()));
-        if let Some(val) = mode.cli_flag_value() {
-            args.push(Cow::Owned(val.to_string()));
-        }
-    }
-
     // NOTE: --allowedTools is NOT passed to the conductor binary here.
     // It is derived from --permission-mode and passed to the `claude` CLI
     // subprocess inside run_agent() (conductor-cli/src/main.rs).
-
-    for dir in extra_plugin_dirs {
-        args.push(Cow::Borrowed("--plugin-dir"));
-        args.push(Cow::Owned(dir.clone()));
-    }
+    push_optional_agent_flags(
+        &mut args,
+        resume_session_id,
+        model,
+        bot_name,
+        permission_mode,
+        extra_plugin_dirs,
+    );
 
     Ok(args)
 }
@@ -713,18 +694,6 @@ pub fn drain_stream_json(
     DrainOutcome::NoResult
 }
 
-/// Check whether a process with the given PID is still alive.
-///
-/// Delegates to [`crate::process_utils::pid_is_alive`].
-///
-/// # TODO
-/// Cross-check process start time against the stored spawn time (RFC 016 open
-/// question #1) to guard against PID reuse after the agent exits.
-#[cfg(unix)]
-pub fn pid_is_alive(pid: u32) -> bool {
-    crate::process_utils::pid_is_alive(pid)
-}
-
 /// Send SIGTERM to the process group rooted at `pid`.
 ///
 /// The negative PID targets the entire process group (agent + any children it
@@ -798,15 +767,15 @@ pub fn build_headless_agent_args(
         }
     }
 
-    let mut args: Vec<String> = Vec::with_capacity(AGENT_ARGS_CAPACITY + 2);
-    args.push("agent".to_string());
-    args.push("run".to_string());
-    args.push("--run-id".to_string());
-    args.push(run_id.to_string());
-    args.push("--worktree-path".to_string());
-    args.push(working_dir.to_string());
-    args.push("--prompt-file".to_string());
-    args.push(prompt_file_path.to_string_lossy().into_owned());
+    let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY + 2);
+    args.push(Cow::Borrowed("agent"));
+    args.push(Cow::Borrowed("run"));
+    args.push(Cow::Borrowed("--run-id"));
+    args.push(Cow::Owned(run_id.to_string()));
+    args.push(Cow::Borrowed("--worktree-path"));
+    args.push(Cow::Owned(working_dir.to_string()));
+    args.push(Cow::Borrowed("--prompt-file"));
+    args.push(Cow::Owned(prompt_file_path.to_string_lossy().into_owned()));
 
     push_optional_agent_flags(
         &mut args,
@@ -817,7 +786,10 @@ pub fn build_headless_agent_args(
         extra_plugin_dirs,
     );
 
-    Ok((args, prompt_file_path))
+    Ok((
+        args.into_iter().map(|c| c.into_owned()).collect(),
+        prompt_file_path,
+    ))
 }
 
 /// Spawn a child agent in a new tmux window.
@@ -1467,6 +1439,13 @@ mod tests {
         assert!(prompt_file.exists());
         let content = std::fs::read_to_string(&prompt_file).unwrap();
         assert_eq!(content, "hello world");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(&prompt_file).unwrap();
+            let mode = metadata.mode() & 0o777;
+            assert_eq!(mode, 0o600, "prompt file should be 0o600, got 0o{mode:o}");
+        }
         let _ = std::fs::remove_file(&prompt_file);
         // --prompt-file should be in args
         assert!(args.iter().any(|a| a == "--prompt-file"));
