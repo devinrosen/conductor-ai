@@ -733,6 +733,7 @@ mod tests {
             cache_creation_input_tokens: None,
             bot_name: None,
             conversation_id: None,
+            subprocess_pid: None,
         }
     }
 
