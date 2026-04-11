@@ -396,6 +396,11 @@ fn push_optional_agent_flags(
 /// The permission mode is encoded via `--permission-mode <name>` in the conductor
 /// args (e.g. `--permission-mode repo-safe`). The actual flags passed to the claude
 /// subprocess differ and are resolved in `run_agent()` via `claude_permission_flag()`.
+///
+/// The prompt is always written to `temp_dir()/conductor-prompt-{run_id}.txt` (mode
+/// 0o600 on Unix) and passed via `--prompt-file`, keeping it out of the git worktree
+/// and avoiding tmux command-line length limits.  The CLI child subprocess reads and
+/// deletes the file via `read_and_maybe_cleanup_prompt_file`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_agent_args_with_mode(
     run_id: &str,
@@ -407,19 +412,38 @@ pub fn build_agent_args_with_mode(
     permission_mode: Option<&crate::config::AgentPermissionMode>,
     extra_plugin_dirs: &[String],
 ) -> std::result::Result<Vec<Cow<'static, str>>, String> {
-    // tmux has a hard limit on command-line length (~2 KB depending on version).
-    // For prompts that exceed a safe threshold, write to a file and pass
-    // --prompt-file instead so we never hit that limit.
-    const PROMPT_FILE_THRESHOLD: usize = 512;
+    let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
 
-    let prompt_file_path: Option<String> = if prompt.len() > PROMPT_FILE_THRESHOLD {
-        let path = format!("{working_dir}/.conductor-prompt-{run_id}.txt");
-        std::fs::write(&path, prompt)
-            .map_err(|e| format!("Failed to write prompt file '{path}': {e}"))?;
-        Some(path)
-    } else {
-        None
-    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&prompt_file_path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(prompt.as_bytes())
+            })
+            .map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&prompt_file_path, prompt).map_err(|e| {
+            format!(
+                "Failed to write prompt file '{}': {e}",
+                prompt_file_path.display()
+            )
+        })?;
+    }
 
     let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY);
     args.push(Cow::Borrowed("agent"));
@@ -429,13 +453,8 @@ pub fn build_agent_args_with_mode(
     args.push(Cow::Borrowed("--worktree-path"));
     args.push(Cow::Owned(working_dir.to_string()));
 
-    if let Some(path) = prompt_file_path {
-        args.push(Cow::Borrowed("--prompt-file"));
-        args.push(Cow::Owned(path));
-    } else {
-        args.push(Cow::Borrowed("--prompt"));
-        args.push(Cow::Owned(prompt.to_string()));
-    }
+    args.push(Cow::Borrowed("--prompt-file"));
+    args.push(Cow::Owned(prompt_file_path.to_string_lossy().into_owned()));
 
     // NOTE: --allowedTools is NOT passed to the conductor binary here.
     // It is derived from --permission-mode and passed to the `claude` CLI
@@ -877,18 +896,6 @@ mod tests {
         assert_eq!(name, "repo-slug-12345678");
     }
 
-    fn assert_inline_prompt(args: &[Cow<'static, str>], prompt: &str) {
-        let prompt_idx = args
-            .iter()
-            .position(|a| a == "--prompt")
-            .expect("--prompt flag missing");
-        assert_eq!(args[prompt_idx + 1], prompt);
-        assert!(
-            !args.iter().any(|a| a == "--prompt-file"),
-            "--prompt-file should not appear"
-        );
-    }
-
     fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str, expected_path: &str) {
         let file_idx = args
             .iter()
@@ -1082,77 +1089,103 @@ mod tests {
     }
 
     #[test]
-    fn build_agent_args_short_prompt_uses_inline() {
+    fn build_agent_args_short_prompt_uses_file() {
+        let run_id = "run-short-1";
         let prompt = "short prompt";
-        assert!(prompt.len() <= 512);
         let args =
-            super::build_agent_args("run-1", "/tmp/wt", prompt, None, None, None, &[]).unwrap();
-        assert_inline_prompt(&args, prompt);
+            super::build_agent_args(run_id, "/tmp/wt", prompt, None, None, None, &[]).unwrap();
+        let expected_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+        assert_file_prompt(&args, prompt, expected_path.to_str().unwrap());
+        let _ = std::fs::remove_file(&expected_path);
     }
 
     #[test]
     fn build_agent_args_long_prompt_uses_file() {
-        let tmp = std::env::temp_dir().join(format!("conductor-test-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let worktree = tmp.to_str().unwrap();
         let run_id = "run-long-99";
-
         let prompt = "x".repeat(513);
         let args =
-            super::build_agent_args(run_id, worktree, &prompt, None, None, None, &[]).unwrap();
-
-        let expected_path = format!("{worktree}/.conductor-prompt-{run_id}.txt");
-        assert_file_prompt(&args, &prompt, &expected_path);
-
-        // cleanup
+            super::build_agent_args(run_id, "/tmp/wt", &prompt, None, None, None, &[]).unwrap();
+        let expected_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+        assert_file_prompt(&args, &prompt, expected_path.to_str().unwrap());
         let _ = std::fs::remove_file(&expected_path);
-        let _ = std::fs::remove_dir(&tmp);
     }
 
     #[test]
-    fn build_agent_args_file_write_error_propagates() {
-        let worktree = "/nonexistent/path/that/does/not/exist";
-        let prompt = "x".repeat(513);
-        let result =
-            super::build_agent_args("run-err-01", worktree, &prompt, None, None, None, &[]);
-        assert!(result.is_err(), "expected Err when write fails");
-        let msg = result.unwrap_err();
-        assert!(
-            msg.starts_with("Failed to write prompt file"),
-            "unexpected error message: {msg}"
-        );
-    }
-
-    #[test]
-    fn build_agent_args_exact_boundary_prompt_uses_inline() {
-        // A prompt of exactly PROMPT_FILE_THRESHOLD bytes must still use --prompt,
-        // because the condition is strictly `>`, not `>=`.
-        let prompt = "x".repeat(512);
-        assert_eq!(prompt.len(), 512);
+    fn build_agent_args_prompt_file_in_temp_dir() {
+        let run_id = "run-tempdir-01";
+        let prompt = "any length prompt";
         let args =
-            super::build_agent_args("run-boundary", "/tmp/wt", &prompt, None, None, None, &[])
+            super::build_agent_args(run_id, "/tmp/wt", prompt, None, None, None, &[]).unwrap();
+
+        // --prompt-file must be present, --prompt must not
+        let file_idx = args
+            .iter()
+            .position(|a| a == "--prompt-file")
+            .expect("--prompt-file flag missing");
+        assert!(
+            !args.iter().any(|a| a == "--prompt"),
+            "--prompt should not appear"
+        );
+
+        let file_path = std::path::PathBuf::from(args[file_idx + 1].as_ref());
+
+        // File must be inside temp_dir()
+        assert_eq!(
+            file_path.parent(),
+            Some(std::env::temp_dir().as_path()),
+            "prompt file must be in temp_dir()"
+        );
+
+        // File must exist with correct content
+        assert!(file_path.exists(), "prompt file should exist");
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), prompt);
+
+        // Consumer cleanup: read_and_maybe_cleanup_prompt_file should delete it
+        // (tested via conductor-cli helpers, verified here end-to-end)
+        let _ = std::fs::remove_file(&file_path);
+        assert!(!file_path.exists(), "file should be removed after cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_agent_args_prompt_file_mode_0o600() {
+        use std::os::unix::fs::MetadataExt;
+        let run_id = "run-perm-600-01";
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", "secret prompt", None, None, None, &[])
                 .unwrap();
-        assert_inline_prompt(&args, &prompt);
+        let file_idx = args
+            .iter()
+            .position(|a| a == "--prompt-file")
+            .expect("--prompt-file flag missing");
+        let file_path = std::path::Path::new(args[file_idx + 1].as_ref());
+        let mode = std::fs::metadata(file_path)
+            .expect("prompt file must exist")
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "prompt file must have mode 0o600, got {:#o}",
+            mode & 0o777
+        );
+        let _ = std::fs::remove_file(file_path);
     }
 
     #[test]
     fn build_agent_args_with_resume_sets_flag() {
+        let run_id = "run-resume-sets-flag";
         let prompt = "short prompt";
-        let args = super::build_agent_args(
-            "run-1",
-            "/tmp/wt",
-            prompt,
-            Some("sess-abc"),
-            None,
-            None,
-            &[],
-        )
-        .unwrap();
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", prompt, Some("sess-abc"), None, None, &[])
+                .unwrap();
         let resume_idx = args
             .iter()
             .position(|a| a == "--resume")
             .expect("--resume flag missing");
         assert_eq!(args[resume_idx + 1], "sess-abc");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1186,8 +1219,9 @@ mod tests {
     #[test]
     fn build_agent_args_with_mode_skip_permissions() {
         use crate::config::AgentPermissionMode;
+        let run_id = "run-mode-skip-perms";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -1201,13 +1235,17 @@ mod tests {
             args.iter().any(|a| a == "--dangerously-skip-permissions"),
             "expected --dangerously-skip-permissions flag"
         );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_with_mode_auto_mode() {
         use crate::config::AgentPermissionMode;
+        let run_id = "run-mode-auto-mode";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -1221,13 +1259,17 @@ mod tests {
             args.iter().any(|a| a == "--enable-auto-mode"),
             "expected --enable-auto-mode flag"
         );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_with_mode_plan() {
         use crate::config::AgentPermissionMode;
+        let run_id = "run-mode-plan-01";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -1249,13 +1291,17 @@ mod tests {
             !args.iter().any(|a| a == "--allowedTools"),
             "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
         );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_with_mode_repo_safe() {
         use crate::config::AgentPermissionMode;
+        let run_id = "run-mode-repo-safe";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -1281,18 +1327,21 @@ mod tests {
             !args.iter().any(|a| a == "--allowedTools"),
             "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
         );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_non_plan_no_allowed_tools() {
         use crate::config::AgentPermissionMode;
         // RepoSafe is excluded: its allowed_tools() is applied in run_agent(), not here.
-        for mode in &[
-            AgentPermissionMode::SkipPermissions,
-            AgentPermissionMode::AutoMode,
+        for (mode, run_id) in &[
+            (AgentPermissionMode::SkipPermissions, "run-no-tools-skip"),
+            (AgentPermissionMode::AutoMode, "run-no-tools-auto"),
         ] {
             let args = super::build_agent_args_with_mode(
-                "run-1",
+                run_id,
                 "/tmp/wt",
                 "prompt",
                 None,
@@ -1307,13 +1356,17 @@ mod tests {
                 "expected no --allowedTools for {:?}",
                 mode
             );
+            let _ = std::fs::remove_file(
+                std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+            );
         }
     }
 
     #[test]
     fn build_agent_args_with_mode_none() {
+        let run_id = "run-mode-none-01";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -1329,12 +1382,16 @@ mod tests {
                 || a == "--permission-mode"),
             "no permission flag should appear when mode is None"
         );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_with_model_override() {
+        let run_id = "run-model-override";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -1349,12 +1406,16 @@ mod tests {
             .position(|a| a == "--model")
             .expect("expected --model flag");
         assert_eq!(args[idx + 1], "claude-sonnet-4-6");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_with_bot_name() {
+        let run_id = "run-bot-name-01";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -1369,6 +1430,9 @@ mod tests {
             .position(|a| a == "--bot-name")
             .expect("expected --bot-name flag");
         assert_eq!(args[idx + 1], "my-bot");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1410,6 +1474,7 @@ mod tests {
             .position(|a| a == "--permission-mode")
             .expect("--permission-mode missing");
         assert_eq!(args[perm_idx + 1], "plan");
+        let _ = std::fs::remove_file(std::env::temp_dir().join("conductor-prompt-run-all.txt"));
     }
 
     fn test_db() -> rusqlite::Connection {

@@ -122,18 +122,19 @@ pub(crate) fn generate_plan(
 }
 
 /// Read `path` and, if it is an internal conductor temp file
-/// (`.conductor-prompt-*.txt`), delete it afterwards.
+/// (`conductor-prompt-*.txt` in the system temp directory), delete it afterwards.
 ///
 /// User-supplied files passed via `--prompt-file` are left untouched.
 pub(crate) fn read_and_maybe_cleanup_prompt_file(path: &str) -> anyhow::Result<String> {
     use anyhow::Context;
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read prompt file: {path}"))?;
-    if let Some(filename) = std::path::Path::new(path)
-        .file_name()
-        .and_then(|f| f.to_str())
-    {
-        if filename.starts_with(".conductor-prompt-") && filename.ends_with(".txt") {
+    let p = std::path::Path::new(path);
+    if let Some(filename) = p.file_name().and_then(|f| f.to_str()) {
+        if filename.starts_with("conductor-prompt-")
+            && filename.ends_with(".txt")
+            && p.parent() == Some(std::env::temp_dir().as_path())
+        {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -198,7 +199,7 @@ mod tests {
     #[test]
     fn internal_temp_file_is_deleted_after_read() {
         let tmp = std::env::temp_dir();
-        let path = tmp.join(".conductor-prompt-run-abc123.txt");
+        let path = tmp.join("conductor-prompt-run-abc123.txt");
         std::fs::write(&path, "hello").unwrap();
         let content = read_and_maybe_cleanup_prompt_file(path.to_str().unwrap()).unwrap();
         assert_eq!(content, "hello");
@@ -228,6 +229,24 @@ mod tests {
             "/tmp/conductor-nonexistent-file-that-does-not-exist.txt",
         );
         assert!(result.is_err(), "expected Err for nonexistent file, got Ok");
+    }
+
+    /// A `conductor-prompt-*.txt` file that lives in a *subdirectory* of temp_dir
+    /// must NOT be deleted — only files directly in temp_dir() qualify.
+    #[test]
+    fn conductor_prompt_file_in_subdir_is_not_deleted() {
+        let subdir = std::env::temp_dir().join("conductor-test-subdir-guard");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let path = subdir.join("conductor-prompt-run-guard-test.txt");
+        std::fs::write(&path, "guarded content").unwrap();
+        let content = read_and_maybe_cleanup_prompt_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(content, "guarded content");
+        assert!(
+            path.exists(),
+            "conductor-prompt file in a subdirectory must not be deleted"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&subdir);
     }
 
     #[test]
