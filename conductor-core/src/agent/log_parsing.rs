@@ -12,6 +12,10 @@ pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
             .get("result")
             .and_then(|v| v.as_str())
             .map(String::from),
+        session_id: event
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
         num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
         duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),

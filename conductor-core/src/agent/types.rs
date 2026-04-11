@@ -299,6 +299,7 @@ pub struct ActiveAgentCounts {
 /// Parsed result event from an agent log file or streaming JSON.
 pub struct LogResult {
     pub result_text: Option<String>,
+    pub session_id: Option<String>,
     pub cost_usd: Option<f64>,
     pub num_turns: Option<i64>,
     pub duration_ms: Option<i64>,

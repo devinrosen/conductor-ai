@@ -664,33 +664,25 @@ pub fn drain_stream_json(
             }
             "result" => {
                 let log_result = crate::agent::log_parsing::parse_result_event(&value);
-                let session_id = value.get("session_id").and_then(|v| v.as_str());
                 if log_result.is_error {
                     let error_msg = log_result
                         .result_text
                         .as_deref()
                         .unwrap_or(crate::agent::status::DEFAULT_AGENT_ERROR_MSG);
-                    if let Err(e) =
-                        mgr.update_run_failed_with_session(run_id, error_msg, session_id)
-                    {
+                    if let Err(e) = mgr.update_run_failed_with_session(
+                        run_id,
+                        error_msg,
+                        log_result.session_id.as_deref(),
+                    ) {
                         tracing::warn!("[drain_stream_json] failed to mark run failed: {e}");
                     }
                 } else {
                     // Use the if_running variant to avoid clobbering a value already written
                     // by the subprocess itself (double-write safety). Persist all result-event
                     // fields (cost_usd, num_turns, duration_ms, final token counts).
-                    if let Err(e) = mgr.update_run_completed_if_running_full(
-                        run_id,
-                        log_result.result_text.as_deref().unwrap_or(""),
-                        session_id,
-                        log_result.cost_usd,
-                        log_result.num_turns,
-                        log_result.duration_ms,
-                        log_result.input_tokens,
-                        log_result.output_tokens,
-                        log_result.cache_read_input_tokens,
-                        log_result.cache_creation_input_tokens,
-                    ) {
+                    if let Err(e) =
+                        mgr.update_run_completed_if_running_full(run_id, &log_result)
+                    {
                         tracing::warn!("[drain_stream_json] failed to mark run completed: {e}");
                     }
                 }
@@ -1568,6 +1560,7 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.status, crate::agent::AgentRunStatus::Completed);
         assert_eq!(fetched.result_text.as_deref(), Some("task complete"));
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-drain-1"));
         assert_eq!(fetched.cost_usd, Some(0.05));
         assert_eq!(fetched.num_turns, Some(3));
         assert_eq!(fetched.duration_ms, Some(5000));

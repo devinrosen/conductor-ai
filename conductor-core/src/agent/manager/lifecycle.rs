@@ -4,7 +4,7 @@ use rusqlite::params;
 use crate::error::Result;
 
 use super::super::status::AgentRunStatus;
-use super::super::types::AgentRun;
+use super::super::types::{AgentRun, LogResult};
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
@@ -274,21 +274,13 @@ impl<'a> AgentManager<'a> {
     /// `claude_session_id` (via COALESCE so an eagerly-stored session_id is not
     /// clobbered). The `AND status = 'running'` guard prevents double-writes if
     /// the subprocess has already finalized the row.
-    #[allow(clippy::too_many_arguments)]
     pub fn update_run_completed_if_running_full(
         &self,
         run_id: &str,
-        result_text: &str,
-        session_id: Option<&str>,
-        cost_usd: Option<f64>,
-        num_turns: Option<i64>,
-        duration_ms: Option<i64>,
-        input_tokens: Option<i64>,
-        output_tokens: Option<i64>,
-        cache_read_input_tokens: Option<i64>,
-        cache_creation_input_tokens: Option<i64>,
+        log_result: &LogResult,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+        let result_text = log_result.result_text.as_deref().unwrap_or("");
         self.conn.execute(
             "UPDATE agent_runs \
              SET status = 'completed', result_text = ?1, ended_at = ?2, \
@@ -304,14 +296,14 @@ impl<'a> AgentManager<'a> {
             params![
                 result_text,
                 now,
-                session_id,
-                cost_usd,
-                num_turns,
-                duration_ms,
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
+                log_result.session_id.as_deref(),
+                log_result.cost_usd,
+                log_result.num_turns,
+                log_result.duration_ms,
+                log_result.input_tokens,
+                log_result.output_tokens,
+                log_result.cache_read_input_tokens,
+                log_result.cache_creation_input_tokens,
                 run_id,
             ],
         )?;
@@ -454,6 +446,7 @@ mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
     use crate::agent::status::AgentRunStatus;
+    use crate::agent::types::LogResult;
 
     #[test]
     fn test_create_and_list() {
@@ -915,15 +908,18 @@ mod tests {
 
         mgr.update_run_completed_if_running_full(
             &run.id,
-            "All done",
-            Some("sess-result"),
-            Some(0.05),
-            Some(3),
-            Some(5000),
-            Some(200),
-            Some(100),
-            Some(50),
-            Some(25),
+            &LogResult {
+                result_text: Some("All done".into()),
+                session_id: Some("sess-result".into()),
+                cost_usd: Some(0.05),
+                num_turns: Some(3),
+                duration_ms: Some(5000),
+                is_error: false,
+                input_tokens: Some(200),
+                output_tokens: Some(100),
+                cache_read_input_tokens: Some(50),
+                cache_creation_input_tokens: Some(25),
+            },
         )
         .unwrap();
 
@@ -953,15 +949,18 @@ mod tests {
 
         mgr.update_run_completed_if_running_full(
             &run.id,
-            "All done",
-            None, // no session_id in result event
-            Some(0.01),
-            Some(1),
-            Some(1000),
-            None,
-            None,
-            None,
-            None,
+            &LogResult {
+                result_text: Some("All done".into()),
+                session_id: None, // no session_id in result event
+                cost_usd: Some(0.01),
+                num_turns: Some(1),
+                duration_ms: Some(1000),
+                is_error: false,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            },
         )
         .unwrap();
 
@@ -986,15 +985,18 @@ mod tests {
         // Guard must prevent overwriting a finalized run
         mgr.update_run_completed_if_running_full(
             &run.id,
-            "overwritten result",
-            None,
-            Some(0.99),
-            Some(99),
-            Some(99999),
-            None,
-            None,
-            None,
-            None,
+            &LogResult {
+                result_text: Some("overwritten result".into()),
+                session_id: None,
+                cost_usd: Some(0.99),
+                num_turns: Some(99),
+                duration_ms: Some(99999),
+                is_error: false,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            },
         )
         .unwrap();
 
