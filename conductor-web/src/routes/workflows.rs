@@ -9,13 +9,13 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
+    apply_workflow_input_defaults, estimation, execute_workflow, validate_resume_preconditions,
     GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
     StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity, WorkflowDef, WorkflowExecConfig,
     WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles,
     WorkflowRegressionSignal, WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow,
-    WorkflowRunStatus, WorkflowRunStep, WorkflowTokenAggregate, WorkflowTokenTrendRow,
-    REGRESSION_MIN_RECENT_RUNS,
+    WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate,
+    WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -116,6 +116,39 @@ pub struct WorkflowRunResponse {
     repo_slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     worktree_slug: Option<String>,
+    /// Total number of steps in the workflow definition (from definition_snapshot).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_steps: Option<usize>,
+    /// Position of the current (or last completed/failed) step (1-indexed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_step: Option<i64>,
+    /// Name of the current active step (for display).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_step_name: Option<String>,
+    /// Current iteration for do-while loops (0 = first pass).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_iteration: Option<i64>,
+    /// Max iterations configured for the active do-while loop, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_iterations: Option<i64>,
+    /// Estimated total workflow duration in milliseconds (hybrid: LLM + historical).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_duration_ms: Option<i64>,
+    /// Estimated remaining milliseconds for in-progress runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_remaining_ms: Option<i64>,
+    /// Confidence level for the time estimate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimate_confidence: Option<conductor_core::workflow::Confidence>,
+    /// Lower bound (p25) of estimated remaining ms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_remaining_low_ms: Option<i64>,
+    /// Upper bound (p75) of estimated remaining ms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_remaining_high_ms: Option<i64>,
+    /// Per-step time estimates for active runs (step_name → estimate).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step_estimates: Option<HashMap<String, conductor_core::workflow::Estimate>>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -165,7 +198,7 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
-            node_count: def.body.len(),
+            node_count: def.top_level_steps(),
             group: def.group.clone(),
             targets: def.targets.clone(),
         }
@@ -910,6 +943,52 @@ pub async fn list_all_workflow_runs_handler(
         .map(|wt| (wt.id, wt.slug))
         .collect();
 
+    // ── Time estimation: batch-fetch historical durations, step histories, and LLM estimates ──
+    let active_run_ids: Vec<&str> = runs
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Pending
+            )
+        })
+        .map(|r| r.id.as_str())
+        .collect();
+    let plan_estimates = mgr.get_plan_estimates_for_runs(&active_run_ids)?;
+
+    // Collect unique workflow names for active runs
+    let active_workflow_names: std::collections::HashSet<&str> = runs
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Pending
+            )
+        })
+        .map(|r| r.workflow_name.as_str())
+        .collect();
+
+    // Batch-fetch historical durations (workflow-level) and step histories
+    let historical_durations: HashMap<String, Vec<i64>> = active_workflow_names
+        .iter()
+        .filter_map(|name| {
+            mgr.get_completed_run_durations(name, 15)
+                .ok()
+                .map(|d| (name.to_string(), d))
+        })
+        .collect();
+    let step_histories: HashMap<String, HashMap<String, Vec<i64>>> = active_workflow_names
+        .into_iter()
+        .filter_map(|name| {
+            mgr.get_completed_step_durations(name, 20)
+                .ok()
+                .map(|d| (name.to_string(), d))
+        })
+        .collect();
+
+    // Batch-fetch all steps for active runs (for live remaining estimation)
+    let mut all_active_run_steps: HashMap<String, Vec<WorkflowRunStep>> =
+        mgr.get_steps_for_runs(&active_run_ids)?;
     let responses: Vec<WorkflowRunResponse> = runs
         .into_iter()
         .map(|run| {
@@ -924,11 +1003,107 @@ pub async fn list_all_workflow_runs_handler(
                 .as_deref()
                 .and_then(|id| wt_slug_map.get(id))
                 .cloned();
+
+            // Determine the "current" step — get first running step
+            let current = active_steps
+                .iter()
+                .find(|s| matches!(s.status, WorkflowStepStatus::Running));
+            let current_step = current.map(|s| s.position + 1); // 1-indexed
+            let current_step_name = current.map(|s| s.step_name.clone());
+            let current_iteration = current.map(|s| s.iteration);
+
+            // Compute total_steps and max_iterations from definition_snapshot
+            let def: Option<WorkflowDef> = run
+                .definition_snapshot
+                .as_deref()
+                .and_then(|snap| serde_json::from_str(snap).ok());
+            let total_steps = def.as_ref().map(|d| d.total_nodes());
+            let max_iterations = current_step_name
+                .as_deref()
+                .and_then(|name| def.as_ref().and_then(|d| d.max_iterations_for_step(name)))
+                .map(|v| v as i64);
+
+            // Compute time estimates for active runs
+            let is_active = matches!(
+                run.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Pending
+            );
+
+            let (
+                estimated_duration_ms,
+                estimated_remaining_ms,
+                estimate_confidence,
+                estimated_remaining_low_ms,
+                estimated_remaining_high_ms,
+                step_estimates_out,
+            ) = if is_active {
+                let llm_est = plan_estimates.get(&run.id).copied();
+                let hist = historical_durations
+                    .get(&run.workflow_name)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+
+                // Try per-step live estimation first
+                let sh = step_histories.get(&run.workflow_name);
+                let run_steps = all_active_run_steps.remove(&run.id).unwrap_or_default();
+                let step_ests = sh.map(estimation::estimate_all_steps);
+                let live = step_ests
+                    .as_ref()
+                    .and_then(|se| estimation::live_remaining_estimate(&run_steps, se));
+
+                if let Some(ref live_est) = live {
+                    // Use per-step live estimate
+                    let wf_est = estimation::estimate_with_confidence(llm_est, hist);
+                    (
+                        wf_est.as_ref().map(|e| e.point_ms),
+                        Some(live_est.remaining_ms),
+                        Some(live_est.confidence),
+                        Some(live_est.low_remaining_ms),
+                        Some(live_est.high_remaining_ms),
+                        step_ests,
+                    )
+                } else {
+                    // Fall back to workflow-level estimate with confidence
+                    let wf_est = estimation::estimate_with_confidence(llm_est, hist);
+                    match wf_est {
+                        Some(ref est) => {
+                            let remaining =
+                                estimation::estimated_remaining_ms(est.point_ms, &run.started_at);
+                            let remaining_low =
+                                estimation::estimated_remaining_ms(est.low_ms, &run.started_at);
+                            let remaining_high =
+                                estimation::estimated_remaining_ms(est.high_ms, &run.started_at);
+                            (
+                                Some(est.point_ms),
+                                Some(remaining),
+                                Some(est.confidence),
+                                Some(remaining_low),
+                                Some(remaining_high),
+                                None,
+                            )
+                        }
+                        None => (None, None, None, None, None, None),
+                    }
+                }
+            } else {
+                (None, None, None, None, None, None)
+            };
             WorkflowRunResponse {
                 run,
                 active_steps,
                 repo_slug,
                 worktree_slug,
+                total_steps,
+                current_step,
+                current_step_name,
+                current_iteration,
+                max_iterations,
+                estimated_duration_ms,
+                estimated_remaining_ms,
+                estimate_confidence,
+                estimated_remaining_low_ms,
+                estimated_remaining_high_ms,
+                step_estimates: step_estimates_out,
             }
         })
         .collect();

@@ -122,6 +122,7 @@ fn data_refreshed_updates_repos() {
             latest_repo_agent_runs: std::collections::HashMap::new(),
             worktree_agent_events: std::collections::HashMap::new(),
             repo_agent_events: std::collections::HashMap::new(),
+            workflow_run_estimates: std::collections::HashMap::new(),
         },
     )));
 

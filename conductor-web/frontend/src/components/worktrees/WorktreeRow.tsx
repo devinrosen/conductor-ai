@@ -77,6 +77,12 @@ export function WorktreeRow({
   const isActive = isRunning || isWaiting;
   const hasWorkflow = isActive || isFailed || isCompleted;
 
+  // Truncated failure reason from result_summary
+  const failReason = isFailed && workflowRun?.result_summary
+    ? workflowRun.result_summary.length > 80
+      ? workflowRun.result_summary.slice(0, 80) + "\u2026"
+      : workflowRun.result_summary
+    : null;
   // Get the deepest active substep name from active_steps
   const activeStep = workflowRun?.active_steps?.find(
     (s) => s.status === "running" || s.status === "waiting",
@@ -165,6 +171,11 @@ export function WorktreeRow({
               )}
               {displaySubstep && (
                 <span className="text-[10px] text-gray-500 block truncate max-w-[180px]">{displaySubstep}</span>
+              )}
+              {failReason && (
+                <span className="block text-[10px] text-red-400 mt-0.5 truncate max-w-[180px]" title={workflowRun!.result_summary ?? undefined}>
+                  {failReason}
+                </span>
               )}
             </div>
           </div>

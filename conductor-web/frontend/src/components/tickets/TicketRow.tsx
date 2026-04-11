@@ -3,7 +3,7 @@ import { StatusBadge } from "../shared/StatusBadge";
 import { Tooltip } from "../shared/Tooltip";
 import { formatTicketTotalsFull } from "../../utils/agentStats";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
-import { formatStepProgress, formatIteration } from "../../utils/workflowProgress";
+import { formatWorkflowProgress } from "../../utils/workflowProgress";
 
 interface TicketRowProps {
   ticket: Ticket;
@@ -78,13 +78,7 @@ export function TicketRow({
 }: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
   const isActive = workflowStatus === "running" || workflowStatus === "pending" || workflowStatus === "waiting";
-  // Build short progress: "Step 3/7 · implement"
-  const stepProg = workflowRun ? formatStepProgress(workflowRun) : null;
-  const iter = workflowRun ? formatIteration(workflowRun) : null;
-  const stepName = workflowRun?.current_step_name;
-  const displayName = stepName && !stepName.startsWith("workflow:") ? stepName : null;
-  const progressParts = [stepProg, iter, displayName].filter(Boolean);
-  const progressText = progressParts.length > 0 ? progressParts.join(" \u00b7 ") : null;
+  const progressText = workflowRun ? formatWorkflowProgress(workflowRun) : null;
   const canStart =
     (!blocked || unlocked) &&
     !isActive &&
@@ -200,6 +194,11 @@ export function TicketRow({
               <span className="text-gray-700 dark:text-gray-200 block">Failed</span>
               {progressText && (
                 <span className="text-[11px] text-gray-500 block">{progressText}</span>
+              )}
+              {workflowRun?.result_summary && (
+                <span className="block text-[10px] text-red-400 mt-0.5 whitespace-normal max-w-[200px]" title={workflowRun.result_summary}>
+                  {workflowRun.result_summary.length > 60 ? workflowRun.result_summary.slice(0, 60) + "\u2026" : workflowRun.result_summary}
+                </span>
               )}
             </div>
             {onResumeWorkflow && workflowRun && (

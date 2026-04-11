@@ -7,6 +7,7 @@
 mod batch_validate;
 pub(crate) mod constants;
 pub(crate) mod engine;
+pub mod estimation;
 pub(crate) mod executors;
 pub(crate) mod helpers;
 pub(crate) mod manager;
@@ -41,6 +42,8 @@ pub use engine::{
     apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
     resume_workflow_standalone, validate_resume_preconditions,
 };
+pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
+pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::WorkflowManager;
 pub use output::{parse_conductor_output, ConductorOutput};
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};

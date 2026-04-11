@@ -235,11 +235,6 @@ async fn main() -> Result<()> {
                     Ok(ids) if !ids.is_empty() => {
                         let n = ids.len();
                         tracing::info!("Auto-resuming {n} stuck workflow run(s)");
-                        conductor_core::notify::fire_orphan_resumed_notification(
-                            &conn,
-                            &cfg.notifications,
-                            &ids,
-                        );
                         let conductor_bin_dir =
                             conductor_core::workflow::resolve_conductor_bin_dir();
                         for run_id in ids {

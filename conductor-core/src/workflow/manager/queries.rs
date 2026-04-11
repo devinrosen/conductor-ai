@@ -1009,6 +1009,61 @@ impl<'a> WorkflowManager<'a> {
         Ok(result)
     }
 
+    /// Return historical step durations grouped by step_name for a given workflow.
+    ///
+    /// Queries completed steps from the most recent completed runs. Duration is
+    /// computed from `started_at`/`ended_at` timestamps since there is no
+    /// pre-computed duration column on steps.
+    ///
+    /// Returns `step_name → Vec<duration_ms>`.
+    pub fn get_completed_step_durations(
+        &self,
+        workflow_name: &str,
+        limit_runs: usize,
+    ) -> Result<HashMap<String, Vec<i64>>> {
+        // Phase 1: get IDs of recent completed runs
+        let run_sql = "SELECT id FROM workflow_runs \
+                       WHERE workflow_name = ?1 \
+                         AND status = 'completed' \
+                       ORDER BY ended_at DESC \
+                       LIMIT ?2";
+        let mut run_stmt = self.conn.prepare_cached(run_sql)?;
+        let run_ids: Vec<String> = run_stmt
+            .query_map(params![workflow_name, limit_runs as i64], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Phase 2: get step durations from those runs
+        let placeholders = sql_placeholders(run_ids.len());
+        let step_sql = format!(
+            "SELECT step_name, \
+                    CAST((julianday(ended_at) - julianday(started_at)) * 86400000 AS INTEGER) AS duration_ms \
+             FROM workflow_run_steps \
+             WHERE workflow_run_id IN ({placeholders}) \
+               AND status = 'completed' \
+               AND started_at IS NOT NULL \
+               AND ended_at IS NOT NULL"
+        );
+        let mut step_stmt = self.conn.prepare_cached(&step_sql)?;
+        let rows = step_stmt.query_map(rusqlite::params_from_iter(run_ids.iter()), |row| {
+            let name: String = row.get(0)?;
+            let dur: i64 = row.get(1)?;
+            Ok((name, dur))
+        })?;
+
+        let mut result: HashMap<String, Vec<i64>> = HashMap::new();
+        for row in rows {
+            let (name, dur) = row?;
+            if dur > 0 {
+                result.entry(name).or_default().push(dur);
+            }
+        }
+        Ok(result)
+    }
+
     /// Aggregate token usage per workflow name across all terminal runs (completed + failed).
     /// Token averages are computed only over completed runs to avoid skewing with failed runs.
     /// When `repo_id` is `Some`, restricts to runs for that repo.

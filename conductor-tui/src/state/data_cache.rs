@@ -7,7 +7,7 @@ use conductor_core::feature::FeatureRow;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
-    InputDecl, WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary,
+    InputDecl, LiveEstimate, WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary,
 };
 use conductor_core::worktree::Worktree;
 
@@ -88,6 +88,8 @@ pub struct DataCache {
     pub all_worktree_agent_events: HashMap<String, Vec<AgentRunEvent>>,
     /// All repo-scoped agent events keyed by repo_id; populated by background poller.
     pub all_repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
+    /// Estimated remaining time for active workflow runs, keyed by run_id.
+    pub workflow_run_estimates: HashMap<String, LiveEstimate>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

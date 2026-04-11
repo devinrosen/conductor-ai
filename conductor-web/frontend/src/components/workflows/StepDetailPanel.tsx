@@ -3,13 +3,21 @@ import { StatusBadge } from "../shared/StatusBadge";
 import { formatDuration, liveElapsedMs } from "../../utils/agentStats";
 import { AgentEventFeed } from "./AgentEventFeed";
 
+interface StepEstimate {
+  point_ms: number;
+  low_ms: number;
+  high_ms: number;
+  confidence: "high" | "medium" | "low";
+}
+
 interface StepDetailPanelProps {
   step: WorkflowRunStep;
   worktreeId: string;
   onClose: () => void;
+  stepEstimate?: StepEstimate | null;
 }
 
-export function StepDetailPanel({ step, worktreeId, onClose }: StepDetailPanelProps) {
+export function StepDetailPanel({ step, worktreeId, onClose, stepEstimate }: StepDetailPanelProps) {
   const stepDurationMs = (() => {
     if (!step.started_at) return null;
     if (step.ended_at) return new Date(step.ended_at).getTime() - new Date(step.started_at).getTime();
@@ -68,6 +76,16 @@ export function StepDetailPanel({ step, worktreeId, onClose }: StepDetailPanelPr
             <>
               <span className="text-gray-400">Duration</span>
               <span className="text-gray-700 font-mono tabular-nums">{formatDuration(stepDurationMs)}</span>
+            </>
+          )}
+          {stepEstimate && step.status !== "completed" && step.status !== "failed" && (
+            <>
+              <span className="text-gray-400">Est. remaining</span>
+              <span className="text-gray-700 font-mono tabular-nums">
+                {stepEstimate.confidence !== "low" && stepEstimate.low_ms !== stepEstimate.high_ms
+                  ? `~${formatDuration(stepEstimate.low_ms)}-${formatDuration(stepEstimate.high_ms)}`
+                  : `~${formatDuration(stepEstimate.point_ms)}`}
+              </span>
             </>
           )}
         </div>
