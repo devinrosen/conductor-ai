@@ -1520,3 +1520,94 @@ fn test_call_shutdown_during_drain() {
         "execute_call should return Err when shutdown is signalled or spawns fail"
     );
 }
+
+/// Regression test for the drain-signal race condition in execute_parallel.
+///
+/// When the drain thread signals completion via the channel but the DB row still
+/// shows Running or WaitingForFeedback (because the drain thread's DB write hasn't
+/// been committed yet), the parallel executor must:
+///   1. Call `update_run_failed_if_running` to transition the run out of `running`
+///   2. Call `update_step_status(Failed)` to mark the workflow step as terminal
+///
+/// This test verifies those DB operations work correctly by exercising them directly
+/// with a run in `running` state — ensuring the guard is effective and no run can
+/// be left permanently stuck in `running` after a drain-signal race.
+#[test]
+fn test_parallel_drain_signal_race_condition_db_guard() {
+    use crate::agent::manager::AgentManager;
+    use crate::agent::status::AgentRunStatus;
+    use crate::workflow::manager::WorkflowManager;
+
+    let conn = crate::test_helpers::setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    // Create an agent run (starts in `running` state by default)
+    let run = agent_mgr
+        .create_run(None, "test prompt", None, None)
+        .expect("create_run should succeed");
+    assert_eq!(
+        run.status,
+        AgentRunStatus::Running,
+        "newly created run must start in Running state"
+    );
+
+    // Create a workflow run + step in Running state so we can verify the step update
+    let wf_run_id = "drain-race-wf-run-01";
+    let step_id = "drain-race-step-01";
+    let parent_run_id = run.id.clone();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
+         VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
+        rusqlite::params![wf_run_id, parent_run_id],
+    )
+    .expect("insert workflow_run");
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration) \
+         VALUES (?1, ?2, 'test-agent', 'actor', 0, 'running', 1)",
+        rusqlite::params![step_id, wf_run_id],
+    )
+    .expect("insert workflow_run_step");
+
+    // Simulate what execute_parallel does in the Running|WaitingForFeedback arm:
+    // the drain thread signalled completion but the DB row wasn't updated yet.
+    let fail_msg = "drain completed without result";
+    agent_mgr
+        .update_run_failed_if_running(&run.id, fail_msg)
+        .expect("update_run_failed_if_running should succeed");
+    wf_mgr
+        .update_step_status(
+            step_id,
+            WorkflowStepStatus::Failed,
+            Some(&run.id),
+            Some(fail_msg),
+            None,
+            None,
+            None,
+        )
+        .expect("update_step_status should succeed");
+
+    // Verify: run must now be `failed`, not `running`
+    let updated_run = agent_mgr
+        .get_run(&run.id)
+        .expect("get_run should succeed")
+        .expect("run should exist");
+    assert_eq!(
+        updated_run.status,
+        AgentRunStatus::Failed,
+        "run must transition to Failed after drain-signal race guard"
+    );
+
+    // Verify: step must be in a terminal (non-Running) state
+    let steps = wf_mgr
+        .get_workflow_steps(wf_run_id)
+        .expect("get_workflow_steps should succeed");
+    assert_eq!(steps.len(), 1, "expected exactly one step");
+    assert_eq!(
+        steps[0].status,
+        WorkflowStepStatus::Failed,
+        "step must be Failed, not left Running after drain-signal race guard"
+    );
+}

@@ -591,7 +591,7 @@ pub fn try_spawn_headless_run(
         permission_mode,
         plugin_dirs,
     )
-    .map_err(|e| format!("spawn failed: {e}"))?;
+    .map_err(|e| format!("failed to prepare agent args: {e}"))?;
     let h = spawn_headless(&args, std::path::Path::new(working_dir)).map_err(|e| {
         let _ = std::fs::remove_file(&pf);
         format!("spawn failed: {e}")
