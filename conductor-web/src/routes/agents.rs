@@ -358,7 +358,7 @@ pub async fn stop_agent(
     Path(worktree_id): Path<String>,
 ) -> Result<Json<AgentRun>, ApiError> {
     // Phase 1: DB operations under lock — validate + mark cancelled immediately.
-    let (run, tmux_window) = {
+    let (run, tmux_window, subprocess_pid) = {
         let db = state.db.lock().await;
         let agent_mgr = AgentManager::new(&db);
 
@@ -379,13 +379,14 @@ pub async fn stop_agent(
 
         agent_mgr.update_run_cancelled(&run.id)?;
 
+        let subprocess_pid = run.subprocess_pid;
         let tmux_window = run.tmux_window.clone();
-        (run, tmux_window)
+        (run, tmux_window, subprocess_pid)
     };
     // DB lock is now dropped.
 
-    // Phase 2: tmux cleanup on a blocking thread (no lock held).
-    cancel_agent_blocking(&state, &run.id, tmux_window).await;
+    // Phase 2: subprocess or tmux cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&state, &run.id, tmux_window, subprocess_pid).await;
 
     // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
@@ -1120,10 +1121,34 @@ pub async fn restart_agent(
     Ok((StatusCode::CREATED, Json(new_run)))
 }
 
-/// Capture tmux scrollback and kill the tmux window on a blocking thread,
-/// then persist the log file path in the DB. Best-effort — failures are logged
-/// but do not fail the request.
-async fn cancel_agent_blocking(state: &AppState, run_id: &str, tmux_window: Option<String>) {
+/// Send a cancellation signal to an agent run on a blocking thread.
+///
+/// For headless runs (`subprocess_pid` is `Some`): sends SIGTERM, waits up to
+/// 5 s, then escalates to SIGKILL. For tmux runs (`tmux_window` is `Some`):
+/// captures scrollback and kills the tmux window. Best-effort — failures are
+/// logged but do not fail the request.
+///
+/// The `subprocess_pid` is stored as `i64` in the DB (SQLite integer) but cast
+/// to `u32` here; the cast is safe for realistic PID values.
+async fn cancel_agent_blocking(
+    state: &AppState,
+    run_id: &str,
+    tmux_window: Option<String>,
+    subprocess_pid: Option<i64>,
+) {
+    // Headless path: signal the subprocess directly.
+    if let Some(pid) = subprocess_pid {
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            conductor_core::agent_runtime::cancel_subprocess(pid as u32);
+        })
+        .await
+        {
+            warn!(run_id, %e, "cancel_agent_blocking: subprocess cancel task panicked");
+        }
+        return;
+    }
+
+    // Tmux path: original behavior unchanged.
     let Some(window) = tmux_window else {
         return;
     };
@@ -1291,7 +1316,7 @@ pub async fn stop_repo_agent(
     Path((repo_id, run_id)): Path<(String, String)>,
 ) -> Result<Json<AgentRun>, ApiError> {
     // Phase 1: DB operations under lock — validate + mark cancelled immediately.
-    let (run, tmux_window) = {
+    let (run, tmux_window, subprocess_pid) = {
         let db = state.db.lock().await;
         let agent_mgr = AgentManager::new(&db);
 
@@ -1310,13 +1335,14 @@ pub async fn stop_repo_agent(
 
         agent_mgr.update_run_cancelled(&run.id)?;
 
+        let subprocess_pid = run.subprocess_pid;
         let tmux_window = run.tmux_window.clone();
-        (run, tmux_window)
+        (run, tmux_window, subprocess_pid)
     };
     // DB lock is now dropped.
 
-    // Phase 2: tmux cleanup on a blocking thread (no lock held).
-    cancel_agent_blocking(&state, &run.id, tmux_window).await;
+    // Phase 2: subprocess or tmux cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&state, &run.id, tmux_window, subprocess_pid).await;
 
     // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
