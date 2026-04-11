@@ -137,6 +137,11 @@ Workflow files live in `.conductor/workflows/<name>.wf`. Agent prompts live in `
 
 For full details on the DSL grammar, constructs, structured output, and design tradeoffs, see [docs/workflow/engine.md](docs/workflow/engine.md).
 
+## Configuration
+
+- **Themes** — TUI color customization via built-in themes (`nord`, `gruvbox`, `catppuccin_mocha`) or custom base16 files dropped into `~/.conductor/themes/`. See [docs/user-guides/themes.md](docs/user-guides/themes.md).
+- **Notification hooks** — fire shell commands or HTTP webhooks on workflow events. See [docs/examples/hooks/](docs/examples/hooks/).
+
 ## Architecture
 
 Five crates in a Cargo workspace:
