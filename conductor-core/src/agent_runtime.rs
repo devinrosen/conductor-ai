@@ -358,6 +358,39 @@ pub fn build_agent_args(
     )
 }
 
+/// Push optional agent flags shared between tmux and headless arg builders.
+fn push_optional_agent_flags(
+    args: &mut Vec<String>,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&crate::config::AgentPermissionMode>,
+    extra_plugin_dirs: &[String],
+) {
+    if let Some(id) = resume_session_id {
+        args.push("--resume".to_string());
+        args.push(id.to_string());
+    }
+    if let Some(m) = model {
+        args.push("--model".to_string());
+        args.push(m.to_string());
+    }
+    if let Some(b) = bot_name {
+        args.push("--bot-name".to_string());
+        args.push(b.to_string());
+    }
+    if let Some(mode) = permission_mode {
+        args.push(mode.cli_flag().to_string());
+        if let Some(val) = mode.cli_flag_value() {
+            args.push(val.to_string());
+        }
+    }
+    for dir in extra_plugin_dirs {
+        args.push("--plugin-dir".to_string());
+        args.push(dir.clone());
+    }
+}
+
 /// Like [`build_agent_args`] but accepts an optional permission mode override.
 ///
 /// The permission mode is encoded via `--permission-mode <name>` in the conductor
@@ -485,6 +518,7 @@ pub fn build_orchestrate_args(
 /// `child.wait()` to collect the exit status and avoid zombie processes.
 ///
 /// **Not for use on the TUI main thread** — `drain_stream_json` is blocking.
+#[cfg(unix)]
 pub struct HeadlessHandle {
     pub pid: u32,
     pub stdout: std::process::ChildStdout,
@@ -499,6 +533,7 @@ pub struct HeadlessHandle {
 /// the indirection.  stdout and stderr are piped back to the caller.
 ///
 /// Pass `args` as produced by [`build_headless_agent_args`].
+#[cfg(unix)]
 pub fn spawn_headless(
     args: &[&str],
     working_dir: &std::path::Path,
@@ -515,8 +550,14 @@ pub fn spawn_headless(
         .map_err(|e| format!("Failed to spawn conductor headless: {e}"))?;
 
     let pid = child.id();
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture stdout from headless subprocess".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture stderr from headless subprocess".to_string())?;
     Ok(HeadlessHandle {
         pid,
         stdout,
@@ -537,7 +578,7 @@ pub enum DrainOutcome {
 /// Drain the stdout of a headless subprocess, persisting events to the DB.
 ///
 /// Reads `stdout` line-by-line via `BufReader`, writes each line to `log_file`,
-/// calls `parse_events_from_line()` to produce `AgentEvent` values for the
+/// calls `parse_events_from_value()` to produce `AgentEvent` values for the
 /// `on_event` callback, and makes eager DB writes:
 /// - `system/init` → `update_run_model_and_session`
 /// - `assistant` with usage → `update_run_tokens_partial`
@@ -549,20 +590,24 @@ pub enum DrainOutcome {
 /// **Blocking** — must not be called from the TUI main thread or an async context.
 /// Use `std::thread::spawn` to run this in a background thread.
 pub fn drain_stream_json(
-    stdout: std::process::ChildStdout,
+    stdout: impl std::io::Read,
     run_id: &str,
     log_file: &std::path::Path,
-    conn: &rusqlite::Connection,
+    mgr: &crate::agent::AgentManager<'_>,
     on_event: impl Fn(&crate::agent::types::AgentEvent),
 ) -> DrainOutcome {
     use std::io::{BufRead, BufReader, Write};
-
-    let mgr = crate::agent::AgentManager::new(conn);
 
     let mut log_writer = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_file)
+        .map_err(|e| {
+            tracing::warn!(
+                "[drain_stream_json] failed to open log file {}: {e}",
+                log_file.display()
+            );
+        })
         .ok();
 
     let reader = BufReader::new(stdout);
@@ -578,16 +623,17 @@ pub fn drain_stream_json(
             }
         }
 
+        // Parse once for both display events and DB writes
+        let value = match serde_json::from_str::<serde_json::Value>(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
         // Fire display-event callback
-        let events = crate::agent::log_parsing::parse_events_from_line(&line);
+        let events = crate::agent::log_parsing::parse_events_from_value(&value);
         for event in &events {
             on_event(event);
         }
-
-        // Parse for DB writes
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
 
         let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -669,24 +715,14 @@ pub fn drain_stream_json(
 
 /// Check whether a process with the given PID is still alive.
 ///
-/// Uses `kill(pid, 0)` — sends no signal; returns `true` if the process exists
-/// and we have permission to signal it. Returns `false` on `ESRCH` (no such
-/// process). Returns `true` on `EPERM` (process exists but unowned — treated
-/// conservatively as alive to avoid false-positive reaping).
+/// Delegates to [`crate::process_utils::pid_is_alive`].
 ///
 /// # TODO
 /// Cross-check process start time against the stored spawn time (RFC 016 open
 /// question #1) to guard against PID reuse after the agent exits.
 #[cfg(unix)]
 pub fn pid_is_alive(pid: u32) -> bool {
-    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if ret == 0 {
-        return true; // process exists and we own it
-    }
-    let err = std::io::Error::last_os_error();
-    // EPERM: process exists but is owned by another user — treat as alive (conservative)
-    // ESRCH: no such process — dead
-    err.raw_os_error() == Some(libc::EPERM)
+    crate::process_utils::pid_is_alive(pid)
 }
 
 /// Send SIGTERM to the process group rooted at `pid`.
@@ -699,8 +735,10 @@ pub fn pid_is_alive(pid: u32) -> bool {
 /// this function.
 #[cfg(unix)]
 pub fn cancel_subprocess(pid: u32) {
-    unsafe {
-        libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
+    let ret = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
+    if ret != 0 {
+        let err = std::io::Error::last_os_error();
+        tracing::warn!("cancel_subprocess: kill(-{pid}, SIGTERM) failed: {err}");
     }
 }
 
@@ -725,12 +763,40 @@ pub fn build_headless_agent_args(
 ) -> std::result::Result<(Vec<String>, std::path::PathBuf), String> {
     // Always write to temp dir — no worktree dir leakage, no size threshold.
     let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
-    std::fs::write(&prompt_file_path, prompt).map_err(|e| {
-        format!(
-            "Failed to write prompt file '{}': {e}",
-            prompt_file_path.display()
-        )
-    })?;
+    {
+        use std::io::Write;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&prompt_file_path)
+                .map_err(|e| {
+                    format!(
+                        "Failed to write prompt file '{}': {e}",
+                        prompt_file_path.display()
+                    )
+                })?;
+            file.write_all(prompt.as_bytes()).map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&prompt_file_path, prompt).map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+        }
+    }
 
     let mut args: Vec<String> = Vec::with_capacity(AGENT_ARGS_CAPACITY + 2);
     args.push("agent".to_string());
@@ -742,32 +808,14 @@ pub fn build_headless_agent_args(
     args.push("--prompt-file".to_string());
     args.push(prompt_file_path.to_string_lossy().into_owned());
 
-    if let Some(id) = resume_session_id {
-        args.push("--resume".to_string());
-        args.push(id.to_string());
-    }
-
-    if let Some(m) = model {
-        args.push("--model".to_string());
-        args.push(m.to_string());
-    }
-
-    if let Some(b) = bot_name {
-        args.push("--bot-name".to_string());
-        args.push(b.to_string());
-    }
-
-    if let Some(mode) = permission_mode {
-        args.push(mode.cli_flag().to_string());
-        if let Some(val) = mode.cli_flag_value() {
-            args.push(val.to_string());
-        }
-    }
-
-    for dir in extra_plugin_dirs {
-        args.push("--plugin-dir".to_string());
-        args.push(dir.clone());
-    }
+    push_optional_agent_flags(
+        &mut args,
+        resume_session_id,
+        model,
+        bot_name,
+        permission_mode,
+        extra_plugin_dirs,
+    );
 
     Ok((args, prompt_file_path))
 }
@@ -1350,5 +1398,161 @@ mod tests {
             .position(|a| a == "--permission-mode")
             .expect("--permission-mode missing");
         assert_eq!(args[perm_idx + 1], "plan");
+    }
+
+    fn test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::db::migrations::run(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn build_headless_agent_args_includes_run_id_and_worktree() {
+        let (args, _prompt_file) = super::build_headless_agent_args(
+            "run-h-1",
+            "/tmp/wt",
+            "test prompt",
+            None,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
+        let pos = args.iter().position(|a| a == "--run-id").unwrap();
+        assert_eq!(args[pos + 1], "run-h-1");
+        let pos = args.iter().position(|a| a == "--worktree-path").unwrap();
+        assert_eq!(args[pos + 1], "/tmp/wt");
+    }
+
+    #[test]
+    fn build_headless_agent_args_with_all_options() {
+        use crate::config::AgentPermissionMode;
+        let (args, _prompt_file) = super::build_headless_agent_args(
+            "run-h-2",
+            "/tmp/wt",
+            "test prompt",
+            Some("sess-abc"),
+            Some("claude-opus-4-6"),
+            Some("bot-y"),
+            Some(&AgentPermissionMode::Plan),
+            &["dir1".to_string()],
+        )
+        .unwrap();
+
+        let pos = args.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(args[pos + 1], "sess-abc");
+        let pos = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[pos + 1], "claude-opus-4-6");
+        let pos = args.iter().position(|a| a == "--bot-name").unwrap();
+        assert_eq!(args[pos + 1], "bot-y");
+        let pos = args.iter().position(|a| a == "--plugin-dir").unwrap();
+        assert_eq!(args[pos + 1], "dir1");
+    }
+
+    #[test]
+    fn build_headless_agent_args_prompt_file_written() {
+        let (args, prompt_file) = super::build_headless_agent_args(
+            "run-h-3",
+            "/tmp/wt",
+            "hello world",
+            None,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
+        assert!(prompt_file.exists());
+        let content = std::fs::read_to_string(&prompt_file).unwrap();
+        assert_eq!(content, "hello world");
+        let _ = std::fs::remove_file(&prompt_file);
+        // --prompt-file should be in args
+        assert!(args.iter().any(|a| a == "--prompt-file"));
+    }
+
+    #[test]
+    fn drain_stream_json_completed_on_result_event() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        let json_lines = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-1\"}\n",
+            "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"session_id\":\"sess-1\"}\n",
+        );
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let outcome = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        assert!(matches!(outcome, super::DrainOutcome::Completed));
+    }
+
+    #[test]
+    fn drain_stream_json_no_result_returns_no_result() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        let json_lines =
+            "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-1\"}\n";
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let outcome = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        assert!(matches!(outcome, super::DrainOutcome::NoResult));
+    }
+
+    #[test]
+    fn drain_stream_json_error_result_event() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        let json_lines =
+            "{\"type\":\"result\",\"is_error\":true,\"result\":\"something went wrong\"}\n";
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let outcome = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        assert!(matches!(outcome, super::DrainOutcome::Completed));
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, crate::agent::AgentRunStatus::Failed);
+    }
+
+    #[test]
+    fn drain_stream_json_token_update() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        let json_lines = concat!(
+            "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n",
+            "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\"}\n",
+        );
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let _ = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.input_tokens, Some(10));
+        assert_eq!(fetched.output_tokens, Some(5));
     }
 }

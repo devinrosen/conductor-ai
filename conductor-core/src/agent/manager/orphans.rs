@@ -89,7 +89,7 @@ impl<'a> AgentManager<'a> {
             // 2. Headless subprocess run — check PID liveness via kill(0).
             #[cfg(unix)]
             if let Some(pid) = run.subprocess_pid {
-                if crate::agent_runtime::pid_is_alive(pid as u32) {
+                if crate::process_utils::pid_is_alive(pid as u32) {
                     // Process is still alive — skip.
                     continue;
                 }

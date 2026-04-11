@@ -854,4 +854,42 @@ mod tests {
             "result_text must not be overwritten when run is not running"
         );
     }
+
+    #[test]
+    fn test_update_run_model_and_session_coalesce_idempotency() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a run with a known model
+        let run = mgr
+            .create_run(Some("w1"), "test", None, Some("original-model"))
+            .unwrap();
+        assert_eq!(run.model.as_deref(), Some("original-model"));
+
+        // Update with model=None — COALESCE should preserve original
+        mgr.update_run_model_and_session(&run.id, None, Some("sess-abc"))
+            .unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.model.as_deref(),
+            Some("original-model"),
+            "model should not be clobbered by NULL"
+        );
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-abc"));
+
+        // Update again with session_id=None — COALESCE should preserve original session
+        mgr.update_run_model_and_session(&run.id, Some("new-model"), None)
+            .unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.model.as_deref(),
+            Some("new-model"),
+            "model should be updated when not NULL"
+        );
+        assert_eq!(
+            fetched.claude_session_id.as_deref(),
+            Some("sess-abc"),
+            "session should not be clobbered by NULL"
+        );
+    }
 }
