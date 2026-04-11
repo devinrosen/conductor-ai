@@ -150,59 +150,50 @@ fn execute_call_with_schema(
             max_attempts,
         );
 
-        // Build args and spawn headless subprocess
-        let (args, prompt_file) = match crate::agent_runtime::build_headless_agent_args(
-            &child_run.id,
-            &state.working_dir,
-            &prompt,
-            None,
-            step_model,
-            effective_bot_name,
-            Some(&state.config.general.agent_permission_mode),
-            &merged_plugin_dirs,
-        ) {
-            Ok(pair) => pair,
-            Err(e) => {
-                tracing::warn!("Failed to build headless args: {e}");
-                let _ = state
-                    .agent_mgr
-                    .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
-                state.wf_mgr.update_step_status(
-                    &step_id,
-                    WorkflowStepStatus::Failed,
-                    Some(&child_run.id),
-                    Some(&format!("spawn failed: {e}")),
+        // Build args and spawn headless subprocess — collapse both error paths into one
+        let (handle, prompt_file) = {
+            let r: std::result::Result<
+                (crate::agent_runtime::HeadlessHandle, std::path::PathBuf),
+                String,
+            > = (|| {
+                let (args, pf) = crate::agent_runtime::build_headless_agent_args(
+                    &child_run.id,
+                    &state.working_dir,
+                    &prompt,
                     None,
-                    None,
-                    Some(attempt as i64),
-                )?;
-                last_error = format!("spawn failed: {e}");
-                continue;
-            }
-        };
-
-        let handle = match crate::agent_runtime::spawn_headless(
-            &args,
-            std::path::Path::new(&state.working_dir),
-        ) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!("Failed to spawn headless: {e}");
-                let _ = std::fs::remove_file(&prompt_file);
-                let _ = state
-                    .agent_mgr
-                    .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
-                state.wf_mgr.update_step_status(
-                    &step_id,
-                    WorkflowStepStatus::Failed,
-                    Some(&child_run.id),
-                    Some(&format!("spawn failed: {e}")),
-                    None,
-                    None,
-                    Some(attempt as i64),
-                )?;
-                last_error = format!("spawn failed: {e}");
-                continue;
+                    step_model,
+                    effective_bot_name,
+                    Some(&state.config.general.agent_permission_mode),
+                    &merged_plugin_dirs,
+                )
+                .map_err(|e| format!("spawn failed: {e}"))?;
+                let h = crate::agent_runtime::spawn_headless(
+                    &args,
+                    std::path::Path::new(&state.working_dir),
+                )
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&pf);
+                    format!("spawn failed: {e}")
+                })?;
+                Ok((h, pf))
+            })();
+            match r {
+                Ok(pair) => pair,
+                Err(err_msg) => {
+                    tracing::warn!("Step '{}': {err_msg}", agent_label);
+                    let _ = state.agent_mgr.update_run_failed(&child_run.id, &err_msg);
+                    state.wf_mgr.update_step_status(
+                        &step_id,
+                        WorkflowStepStatus::Failed,
+                        Some(&child_run.id),
+                        Some(&err_msg),
+                        None,
+                        None,
+                        Some(attempt as i64),
+                    )?;
+                    last_error = err_msg;
+                    continue;
+                }
             }
         };
 
@@ -219,8 +210,15 @@ fn execute_call_with_schema(
         let log_path = crate::config::agent_log_path(&child_run.id);
         let (tx, rx) = std::sync::mpsc::channel::<crate::agent_runtime::DrainOutcome>();
         std::thread::spawn(move || {
-            let conn = crate::db::open_database(&crate::config::db_path())
-                .expect("drain thread: failed to open DB");
+            let conn = match crate::db::open_database(&crate::config::db_path()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("drain thread: failed to open DB: {e}");
+                    let _ = std::fs::remove_file(&prompt_file);
+                    let _ = tx.send(crate::agent_runtime::DrainOutcome::NoResult);
+                    return;
+                }
+            };
             let mgr = crate::agent::AgentManager::new(&conn);
             let outcome = crate::agent_runtime::drain_stream_json(
                 handle.stdout,
@@ -411,9 +409,12 @@ fn execute_call_with_schema(
                     max_attempts,
                 );
                 // Ensure the run is marked failed if not already cancelled
-                let _ = state
+                if let Err(e) = state
                     .agent_mgr
-                    .update_run_failed_if_running(&child_run.id, "agent exited without result");
+                    .update_run_failed_if_running(&child_run.id, "agent exited without result")
+                {
+                    tracing::warn!("Step '{}': failed to mark run as failed: {e}", agent_label);
+                }
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,

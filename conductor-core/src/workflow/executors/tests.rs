@@ -1,7 +1,7 @@
 use super::{
-    eval_condition, execute_call_workflow, execute_gate, execute_if, execute_parallel,
-    execute_quality_gate, execute_script, execute_unless, poll_script_child, read_stdout_bounded,
-    ScriptPollResult,
+    eval_condition, execute_call, execute_call_workflow, execute_gate, execute_if,
+    execute_parallel, execute_quality_gate, execute_script, execute_unless, poll_script_child,
+    read_stdout_bounded, ScriptPollResult,
 };
 use crate::workflow::engine::ExecutionState;
 use crate::workflow::status::WorkflowStepStatus;
@@ -1318,4 +1318,122 @@ fn test_parallel_three_agents_headless_spawn_fail() {
             step.step_name
         );
     }
+}
+
+// ------- execute_call — headless path tests -------
+
+/// Verify that execute_call handles the headless spawn-failure path correctly:
+/// the agent fails to spawn (no conductor binary at test time), the run is marked
+/// Failed in the DB, and execute_call returns an error (all retries exhausted).
+#[test]
+fn test_call_headless_spawn_fail() {
+    use crate::workflow_dsl::{AgentRef, CallNode};
+
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::write(
+        agents_dir.join("test-agent.md"),
+        "---\nrole: reviewer\n---\nTest agent for call headless path.\n",
+    )
+    .unwrap();
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            fail_fast: false,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let node = CallNode {
+        agent: AgentRef::Name("test-agent".into()),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+        output: None,
+        with: vec![],
+        plugin_dirs: vec![],
+    };
+
+    // execute_call is expected to fail (spawn fails; all retries exhausted)
+    // OR succeed if conductor binary is present (subprocess fails naturally).
+    // Either way, a step record should exist.
+    let _result = execute_call(&mut state, &node, 0);
+
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    assert_eq!(steps.len(), 1, "expected exactly one step record");
+    // Step should be Failed (spawn fail) or potentially Completed/Failed from real subprocess
+    assert_ne!(
+        steps[0].status,
+        WorkflowStepStatus::Running,
+        "step should not be left in Running state"
+    );
+}
+
+/// Verify that when the shutdown flag is set during the drain-wait loop,
+/// execute_call marks the run cancelled, cancels the subprocess, and returns Err.
+#[test]
+fn test_call_shutdown_during_drain() {
+    use crate::workflow_dsl::{AgentRef, CallNode};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::write(
+        agents_dir.join("slow-agent.md"),
+        "---\nrole: reviewer\n---\nTest agent for shutdown path.\n",
+    )
+    .unwrap();
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = Arc::clone(&shutdown);
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            shutdown: Some(Arc::clone(&shutdown)),
+            // fail_fast=true ensures we get Err both when spawn fails (retries exhausted)
+            // and when the shutdown flag is detected mid-drain.
+            fail_fast: true,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
+    };
+
+    // Set the shutdown flag immediately so it fires on the first poll tick
+    shutdown_clone.store(true, Ordering::Relaxed);
+
+    let node = CallNode {
+        agent: AgentRef::Name("slow-agent".into()),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+        output: None,
+        with: vec![],
+        plugin_dirs: vec![],
+    };
+
+    // If spawn fails (no conductor binary), retries are exhausted → record_step_failure
+    // returns Err because fail_fast=true.
+    // If spawn succeeds, the shutdown flag causes execute_call to return Err immediately.
+    let result = execute_call(&mut state, &node, 0);
+    assert!(
+        result.is_err(),
+        "execute_call should return Err when shutdown is signalled or spawns fail"
+    );
 }

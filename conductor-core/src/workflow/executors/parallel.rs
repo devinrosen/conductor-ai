@@ -3,7 +3,6 @@ use crate::agent_config::AgentSpec;
 use crate::error::Result;
 use crate::workflow_dsl::ParallelNode;
 use std::collections::HashSet;
-use std::thread;
 
 use crate::workflow::engine::{resolve_schema, restore_step, should_skip, ExecutionState};
 use crate::workflow::output::{interpret_agent_output, parse_conductor_output};
@@ -44,6 +43,10 @@ pub fn execute_parallel(
         /// Resolved schema for this child (computed at spawn time).
         schema: Option<crate::schema_config::OutputSchema>,
     }
+
+    // Completion channel: drain threads signal (child_index, DrainOutcome) when done.
+    let (completion_tx, completion_rx) =
+        std::sync::mpsc::channel::<(usize, crate::agent_runtime::DrainOutcome)>();
 
     let mut children: Vec<ParallelChild> = Vec::new();
     let mut skipped_count = 0u32;
@@ -163,59 +166,49 @@ pub fn execute_parallel(
             None,
         )?;
 
-        // Build headless args and spawn
-        let (args, prompt_file) = match crate::agent_runtime::build_headless_agent_args(
-            &child_run.id,
-            &state.working_dir,
-            &prompt,
-            None,
-            step_model,
-            state.default_bot_name.as_deref(),
-            Some(&permission_mode),
-            &state.extra_plugin_dirs,
-        ) {
-            Ok(pair) => pair,
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to build headless args for parallel agent '{agent_label}': {e}"
-                );
-                let _ = state
-                    .agent_mgr
-                    .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
-                state.wf_mgr.update_step_status(
-                    &step_id,
-                    WorkflowStepStatus::Failed,
-                    Some(&child_run.id),
-                    Some(&format!("spawn failed: {e}")),
+        // Build headless args and spawn — collapse both error paths into one
+        let (handle, prompt_file) = {
+            let r: std::result::Result<
+                (crate::agent_runtime::HeadlessHandle, std::path::PathBuf),
+                String,
+            > = (|| {
+                let (args, pf) = crate::agent_runtime::build_headless_agent_args(
+                    &child_run.id,
+                    &state.working_dir,
+                    &prompt,
                     None,
-                    None,
-                    None,
-                )?;
-                continue;
-            }
-        };
-
-        let handle = match crate::agent_runtime::spawn_headless(
-            &args,
-            std::path::Path::new(&state.working_dir),
-        ) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!("Failed to spawn headless parallel agent '{agent_label}': {e}");
-                let _ = std::fs::remove_file(&prompt_file);
-                let _ = state
-                    .agent_mgr
-                    .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
-                state.wf_mgr.update_step_status(
-                    &step_id,
-                    WorkflowStepStatus::Failed,
-                    Some(&child_run.id),
-                    Some(&format!("spawn failed: {e}")),
-                    None,
-                    None,
-                    None,
-                )?;
-                continue;
+                    step_model,
+                    state.default_bot_name.as_deref(),
+                    Some(&permission_mode),
+                    &state.extra_plugin_dirs,
+                )
+                .map_err(|e| format!("spawn failed: {e}"))?;
+                let h = crate::agent_runtime::spawn_headless(
+                    &args,
+                    std::path::Path::new(&state.working_dir),
+                )
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&pf);
+                    format!("spawn failed: {e}")
+                })?;
+                Ok((h, pf))
+            })();
+            match r {
+                Ok(pair) => pair,
+                Err(err_msg) => {
+                    tracing::warn!("parallel: agent '{agent_label}': {err_msg}");
+                    let _ = state.agent_mgr.update_run_failed(&child_run.id, &err_msg);
+                    state.wf_mgr.update_step_status(
+                        &step_id,
+                        WorkflowStepStatus::Failed,
+                        Some(&child_run.id),
+                        Some(&err_msg),
+                        None,
+                        None,
+                        None,
+                    )?;
+                    continue;
+                }
             }
         };
 
@@ -232,9 +225,22 @@ pub fn execute_parallel(
         let run_id_clone = child_run.id.clone();
         let log_path = crate::config::agent_log_path(&child_run.id);
         let prompt_file_for_thread = prompt_file.clone();
+        let outcome_tx = completion_tx.clone();
+        let child_index = children.len(); // index this child will have in children vec
         let drain_handle = std::thread::spawn(move || {
-            let conn = crate::db::open_database(&crate::config::db_path())
-                .expect("parallel drain thread: failed to open DB");
+            let conn = match crate::db::open_database(&crate::config::db_path()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        "parallel drain thread: failed to open DB for '{}': {e}",
+                        run_id_clone
+                    );
+                    let _ = std::fs::remove_file(&prompt_file_for_thread);
+                    let _ = outcome_tx
+                        .send((child_index, crate::agent_runtime::DrainOutcome::NoResult));
+                    return crate::agent_runtime::DrainOutcome::NoResult;
+                }
+            };
             let mgr = crate::agent::AgentManager::new(&conn);
             let outcome = crate::agent_runtime::drain_stream_json(
                 handle.stdout,
@@ -243,11 +249,23 @@ pub fn execute_parallel(
                 &mgr,
                 |_| {},
             );
+            // Architecture fix: mark run as failed on NoResult so polling loop detects it
+            if matches!(outcome, crate::agent_runtime::DrainOutcome::NoResult) {
+                if let Err(e) =
+                    mgr.update_run_failed_if_running(&run_id_clone, "agent exited without result")
+                {
+                    tracing::warn!(
+                        "parallel drain: failed to mark run '{}' failed: {e}",
+                        run_id_clone
+                    );
+                }
+            }
             let _ = std::fs::remove_file(&prompt_file_for_thread);
             let _ = {
                 let mut c = handle.child;
                 c.wait()
             };
+            let _ = outcome_tx.send((child_index, outcome));
             outcome
         });
 
@@ -262,10 +280,13 @@ pub fn execute_parallel(
         });
     }
 
+    // Drop our own sender so the channel disconnects once all drain threads finish.
+    drop(completion_tx);
+
     // Capture count before polling loop (needed for min_success after join)
     let children_count = children.len() as u32;
 
-    // Poll all children until completion
+    // Poll all children until completion, using channel signals from drain threads.
     let start = std::time::Instant::now();
     let mut completed: HashSet<usize> = HashSet::new();
     let mut successes = 0u32;
@@ -342,27 +363,39 @@ pub fn execute_parallel(
             break;
         }
 
-        let pending_ids: Vec<&str> = children
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !completed.contains(i))
-            .map(|(_, c)| c.child_run_id.as_str())
-            .collect();
-        let run_map = state
-            .agent_mgr
-            .get_runs_by_ids(&pending_ids)
-            .unwrap_or_default();
+        // Wait for the next drain-thread completion signal (up to poll_interval)
+        match completion_rx.recv_timeout(state.exec_config.poll_interval) {
+            Ok((child_idx, _drain_outcome)) => {
+                if completed.contains(&child_idx) {
+                    // Already processed (e.g., cancelled by fail_fast or timeout)
+                    continue;
+                }
+                let child = &children[child_idx];
+                // Targeted DB lookup for just this run
+                let run = match state.agent_mgr.get_run(&child.child_run_id) {
+                    Ok(Some(r)) => r,
+                    Ok(None) => {
+                        tracing::warn!(
+                            "parallel: run '{}' not found in DB after drain",
+                            child.child_run_id
+                        );
+                        completed.insert(child_idx);
+                        failures += 1;
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!("parallel: DB error for '{}': {e}", child.agent_name);
+                        completed.insert(child_idx);
+                        failures += 1;
+                        continue;
+                    }
+                };
 
-        for (i, child) in children.iter().enumerate() {
-            if completed.contains(&i) {
-                continue;
-            }
-            if let Some(run) = run_map.get(&child.child_run_id) {
                 match run.status {
                     AgentRunStatus::Completed
                     | AgentRunStatus::Failed
                     | AgentRunStatus::Cancelled => {
-                        completed.insert(i);
+                        completed.insert(child_idx);
                         let succeeded = run.status == AgentRunStatus::Completed;
 
                         // In parallel blocks, schema validation failures fall back
@@ -421,7 +454,7 @@ pub fn execute_parallel(
                             );
                         }
 
-                        state.accumulate_agent_run(run);
+                        state.accumulate_agent_run(&run);
 
                         // Best-effort mid-run metrics flush after each parallel agent
                         if let Err(e) = state.flush_metrics() {
@@ -472,12 +505,26 @@ pub fn execute_parallel(
                             }
                         }
                     }
-                    AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {}
+                    AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {
+                        // Drain thread signalled completion but DB not yet updated —
+                        // treat as failure to avoid hanging.
+                        tracing::warn!(
+                            "parallel: '{}' drain signalled but run still in-progress state, treating as failure",
+                            child.agent_name
+                        );
+                        completed.insert(child_idx);
+                        failures += 1;
+                    }
                 }
             }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // No completion within poll_interval — loop back and check shutdown/timeout
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // All drain threads finished and dropped their senders
+                break;
+            }
         }
-
-        thread::sleep(state.exec_config.poll_interval);
     }
 
     // Join all drain thread handles (best-effort; prevents zombie threads).

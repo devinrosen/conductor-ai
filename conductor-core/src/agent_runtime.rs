@@ -567,6 +567,7 @@ pub fn spawn_headless(
 }
 
 /// Result of draining a headless subprocess stdout stream.
+#[derive(Copy, Clone)]
 pub enum DrainOutcome {
     /// A `result` event was seen; the run was finalized in the DB.
     Completed,
