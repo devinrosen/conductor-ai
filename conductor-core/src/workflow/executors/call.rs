@@ -150,50 +150,36 @@ fn execute_call_with_schema(
             max_attempts,
         );
 
-        // Build args and spawn headless subprocess — collapse both error paths into one
-        let (handle, prompt_file) = {
-            let r: std::result::Result<
-                (crate::agent_runtime::HeadlessHandle, std::path::PathBuf),
-                String,
-            > = (|| {
-                let (args, pf) = crate::agent_runtime::build_headless_agent_args(
-                    &child_run.id,
-                    &state.working_dir,
-                    &prompt,
-                    None,
-                    step_model,
-                    effective_bot_name,
-                    Some(&state.config.general.agent_permission_mode),
-                    &merged_plugin_dirs,
-                )
-                .map_err(|e| format!("spawn failed: {e}"))?;
-                let h = crate::agent_runtime::spawn_headless(
-                    &args,
-                    std::path::Path::new(&state.working_dir),
-                )
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&pf);
-                    format!("spawn failed: {e}")
-                })?;
-                Ok((h, pf))
-            })();
-            match r {
-                Ok(pair) => pair,
-                Err(err_msg) => {
-                    tracing::warn!("Step '{}': {err_msg}", agent_label);
-                    let _ = state.agent_mgr.update_run_failed(&child_run.id, &err_msg);
-                    state.wf_mgr.update_step_status(
-                        &step_id,
-                        WorkflowStepStatus::Failed,
-                        Some(&child_run.id),
-                        Some(&err_msg),
-                        None,
-                        None,
-                        Some(attempt as i64),
-                    )?;
-                    last_error = err_msg;
-                    continue;
+        // Build args and spawn headless subprocess
+        let (handle, prompt_file) = match crate::agent_runtime::try_spawn_headless_run(
+            &child_run.id,
+            &state.working_dir,
+            &prompt,
+            step_model,
+            effective_bot_name,
+            Some(&state.config.general.agent_permission_mode),
+            &merged_plugin_dirs,
+        ) {
+            Ok(pair) => pair,
+            Err(err_msg) => {
+                tracing::warn!("Step '{}': {err_msg}", agent_label);
+                if let Err(e) = state.agent_mgr.update_run_failed(&child_run.id, &err_msg) {
+                    tracing::warn!(
+                        "Step '{}': failed to mark run failed in DB: {e}",
+                        agent_label
+                    );
                 }
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    Some(&child_run.id),
+                    Some(&err_msg),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                last_error = err_msg;
+                continue;
             }
         };
 

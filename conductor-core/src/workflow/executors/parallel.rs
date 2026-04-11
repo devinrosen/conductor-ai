@@ -166,49 +166,34 @@ pub fn execute_parallel(
             None,
         )?;
 
-        // Build headless args and spawn — collapse both error paths into one
-        let (handle, prompt_file) = {
-            let r: std::result::Result<
-                (crate::agent_runtime::HeadlessHandle, std::path::PathBuf),
-                String,
-            > = (|| {
-                let (args, pf) = crate::agent_runtime::build_headless_agent_args(
-                    &child_run.id,
-                    &state.working_dir,
-                    &prompt,
-                    None,
-                    step_model,
-                    state.default_bot_name.as_deref(),
-                    Some(&permission_mode),
-                    &state.extra_plugin_dirs,
-                )
-                .map_err(|e| format!("spawn failed: {e}"))?;
-                let h = crate::agent_runtime::spawn_headless(
-                    &args,
-                    std::path::Path::new(&state.working_dir),
-                )
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&pf);
-                    format!("spawn failed: {e}")
-                })?;
-                Ok((h, pf))
-            })();
-            match r {
-                Ok(pair) => pair,
-                Err(err_msg) => {
-                    tracing::warn!("parallel: agent '{agent_label}': {err_msg}");
-                    let _ = state.agent_mgr.update_run_failed(&child_run.id, &err_msg);
-                    state.wf_mgr.update_step_status(
-                        &step_id,
-                        WorkflowStepStatus::Failed,
-                        Some(&child_run.id),
-                        Some(&err_msg),
-                        None,
-                        None,
-                        None,
-                    )?;
-                    continue;
+        // Build headless args and spawn
+        let (handle, prompt_file) = match crate::agent_runtime::try_spawn_headless_run(
+            &child_run.id,
+            &state.working_dir,
+            &prompt,
+            step_model,
+            state.default_bot_name.as_deref(),
+            Some(&permission_mode),
+            &state.extra_plugin_dirs,
+        ) {
+            Ok(pair) => pair,
+            Err(err_msg) => {
+                tracing::warn!("parallel: agent '{agent_label}': {err_msg}");
+                if let Err(e) = state.agent_mgr.update_run_failed(&child_run.id, &err_msg) {
+                    tracing::warn!(
+                        "parallel: failed to mark run failed for '{agent_label}' in DB: {e}"
+                    );
                 }
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    Some(&child_run.id),
+                    Some(&err_msg),
+                    None,
+                    None,
+                    None,
+                )?;
+                continue;
             }
         };
 
@@ -506,12 +491,37 @@ pub fn execute_parallel(
                         }
                     }
                     AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {
-                        // Drain thread signalled completion but DB not yet updated —
-                        // treat as failure to avoid hanging.
+                        // Drain thread signalled completion but the DB status wasn't updated
+                        // (race between drain thread DB write and polling loop DB read).
+                        // Mark the run and step failed so the workflow doesn't hang.
                         tracing::warn!(
                             "parallel: '{}' drain signalled but run still in-progress state, treating as failure",
                             child.agent_name
                         );
+                        let fail_msg = "drain completed without result";
+                        if let Err(e) = state
+                            .agent_mgr
+                            .update_run_failed_if_running(&child.child_run_id, fail_msg)
+                        {
+                            tracing::warn!(
+                                "parallel: failed to mark run failed for '{}': {e}",
+                                child.agent_name
+                            );
+                        }
+                        if let Err(e) = state.wf_mgr.update_step_status(
+                            &child.step_id,
+                            WorkflowStepStatus::Failed,
+                            Some(&child.child_run_id),
+                            Some(fail_msg),
+                            None,
+                            None,
+                            None,
+                        ) {
+                            tracing::warn!(
+                                "parallel: failed to update step status for '{}': {e}",
+                                child.agent_name
+                            );
+                        }
                         completed.insert(child_idx);
                         failures += 1;
                     }

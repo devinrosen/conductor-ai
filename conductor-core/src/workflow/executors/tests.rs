@@ -1320,6 +1320,89 @@ fn test_parallel_three_agents_headless_spawn_fail() {
     }
 }
 
+/// Verify that execute_parallel exercises the channel-based polling loop, including
+/// the timeout-cancellation branch.
+///
+/// With step_timeout=1ns and poll_interval=1ms the polling loop detects the timeout
+/// on its very first iteration (after recv_timeout returns Timeout), cancels any
+/// children that were added, and breaks.
+///
+/// * When conductor is **unavailable** (unit-test environments) all spawns fail,
+///   `children` is empty, and the loop exits via the `completed.len()==children.len()`
+///   guard before even reaching the channel.  All steps still end in Failed.
+/// * When conductor is **available** (CI after `cargo build`) at least one agent
+///   makes it into `children`.  The 1 ns timeout fires on the first recv_timeout
+///   iteration, cancels remaining agents, and exercises the channel-polling timeout
+///   branch.  All steps again end in a terminal (non-Running) state.
+#[test]
+fn test_parallel_channel_polling_timeout_path() {
+    use crate::workflow_dsl::{AgentRef, ParallelNode};
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    for name in ["agent-x", "agent-y"] {
+        std::fs::write(
+            agents_dir.join(format!("{name}.md")),
+            "---\nrole: reviewer\n---\nTest agent for channel polling path.\n",
+        )
+        .unwrap();
+    }
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            // 1 ns timeout — fires immediately in the polling loop so the
+            // timeout-cancellation branch is hit on the very first iteration.
+            step_timeout: Duration::from_nanos(1),
+            poll_interval: Duration::from_millis(1),
+            fail_fast: false,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let node = ParallelNode {
+        fail_fast: false,
+        min_success: Some(0),
+        calls: vec![
+            AgentRef::Name("agent-x".into()),
+            AgentRef::Name("agent-y".into()),
+        ],
+        output: None,
+        call_outputs: HashMap::new(),
+        with: vec![],
+        call_with: HashMap::new(),
+        call_if: HashMap::new(),
+    };
+
+    let result = execute_parallel(&mut state, &node, 0);
+    assert!(
+        result.is_ok(),
+        "execute_parallel should return Ok with min_success=0: {result:?}"
+    );
+
+    // All recorded steps must be in a terminal (non-Running) state.
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    for step in &steps {
+        assert_ne!(
+            step.status,
+            WorkflowStepStatus::Running,
+            "step '{}' must not be left in Running state",
+            step.step_name
+        );
+    }
+}
+
 // ------- execute_call — headless path tests -------
 
 /// Verify that execute_call handles the headless spawn-failure path correctly:
