@@ -655,6 +655,7 @@ dependencies = [
  "chrono",
  "dirs",
  "jsonwebtoken",
+ "libc",
  "notify",
  "regex-lite",
  "rusqlite",

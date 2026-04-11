@@ -8,7 +8,11 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+#[cfg(unix)]
+use libc;
 use rusqlite::Connection;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use crate::agent::{list_live_tmux_windows, AgentManager, AgentRun, AgentRunStatus};
 
@@ -468,6 +472,304 @@ pub fn build_orchestrate_args(
     }
 
     args
+}
+
+/// Handle to a headless agent subprocess.
+///
+/// Caller must pass `stdout` to [`drain_stream_json`] to consume events and
+/// finalize the run in the DB.  `pid` should be stored via
+/// `AgentManager::update_run_subprocess_pid()` immediately after spawn.
+///
+/// The `child` field keeps the `Child` handle alive (and its stdio pipes open)
+/// for the duration of the drain. After [`drain_stream_json`] completes, call
+/// `child.wait()` to collect the exit status and avoid zombie processes.
+///
+/// **Not for use on the TUI main thread** — `drain_stream_json` is blocking.
+pub struct HeadlessHandle {
+    pub pid: u32,
+    pub stdout: std::process::ChildStdout,
+    pub stderr: std::process::ChildStderr,
+    pub child: std::process::Child,
+}
+
+/// Spawn a headless `conductor agent run` subprocess.
+///
+/// The child is placed in its own process group (`process_group(0)`) so it
+/// survives terminal SIGHUP — the same resilience guarantee as tmux, without
+/// the indirection.  stdout and stderr are piped back to the caller.
+///
+/// Pass `args` as produced by [`build_headless_agent_args`].
+pub fn spawn_headless(
+    args: &[&str],
+    working_dir: &std::path::Path,
+) -> std::result::Result<HeadlessHandle, String> {
+    use std::process::Stdio;
+    let conductor_bin = resolve_conductor_bin();
+    let mut child = Command::new(&conductor_bin)
+        .args(args)
+        .current_dir(working_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0) // own process group; survives terminal SIGHUP
+        .spawn()
+        .map_err(|e| format!("Failed to spawn conductor headless: {e}"))?;
+
+    let pid = child.id();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    Ok(HeadlessHandle {
+        pid,
+        stdout,
+        stderr,
+        child,
+    })
+}
+
+/// Result of draining a headless subprocess stdout stream.
+pub enum DrainOutcome {
+    /// A `result` event was seen; the run was finalized in the DB.
+    Completed,
+    /// EOF before any `result` event (SIGTERM path or unexpected crash).
+    /// Caller must mark the run as cancelled/failed in the DB.
+    NoResult,
+}
+
+/// Drain the stdout of a headless subprocess, persisting events to the DB.
+///
+/// Reads `stdout` line-by-line via `BufReader`, writes each line to `log_file`,
+/// calls `parse_events_from_line()` to produce `AgentEvent` values for the
+/// `on_event` callback, and makes eager DB writes:
+/// - `system/init` → `update_run_model_and_session`
+/// - `assistant` with usage → `update_run_tokens_partial`
+/// - `result` → `update_run_completed_if_running` or `update_run_failed_with_session`
+///   and returns [`DrainOutcome::Completed`]
+///
+/// Returns [`DrainOutcome::NoResult`] on EOF without a `result` event (e.g. SIGTERM).
+///
+/// **Blocking** — must not be called from the TUI main thread or an async context.
+/// Use `std::thread::spawn` to run this in a background thread.
+pub fn drain_stream_json(
+    stdout: std::process::ChildStdout,
+    run_id: &str,
+    log_file: &std::path::Path,
+    conn: &rusqlite::Connection,
+    on_event: impl Fn(&crate::agent::types::AgentEvent),
+) -> DrainOutcome {
+    use std::io::{BufRead, BufReader, Write};
+
+    let mgr = crate::agent::AgentManager::new(conn);
+
+    let mut log_writer = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .ok();
+
+    let reader = BufReader::new(stdout);
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            break;
+        };
+
+        // Persist to log file (best-effort; I/O errors don't abort the drain)
+        if let Some(ref mut w) = log_writer {
+            if let Err(e) = writeln!(w, "{line}") {
+                tracing::warn!("[drain_stream_json] failed to write log line: {e}");
+            }
+        }
+
+        // Fire display-event callback
+        let events = crate::agent::log_parsing::parse_events_from_line(&line);
+        for event in &events {
+            on_event(event);
+        }
+
+        // Parse for DB writes
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+
+        let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        match event_type {
+            "system" => {
+                let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+                if subtype == "init" {
+                    let model = value.get("model").and_then(|v| v.as_str());
+                    let session_id = value.get("session_id").and_then(|v| v.as_str());
+                    if let Err(e) = mgr.update_run_model_and_session(run_id, model, session_id) {
+                        tracing::warn!("[drain_stream_json] failed to update model/session: {e}");
+                    }
+                }
+            }
+            "assistant" => {
+                let usage = value
+                    .get("message")
+                    .and_then(|m| m.get("usage"))
+                    .or_else(|| value.get("usage"));
+                if let Some(usage) = usage {
+                    let input = usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let output = usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let cache_read = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let cache_create = usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    if let Err(e) = mgr.update_run_tokens_partial(
+                        run_id,
+                        input,
+                        output,
+                        cache_read,
+                        cache_create,
+                    ) {
+                        tracing::warn!("[drain_stream_json] failed to update tokens: {e}");
+                    }
+                }
+            }
+            "result" => {
+                let log_result = crate::agent::log_parsing::parse_result_event(&value);
+                let session_id = value.get("session_id").and_then(|v| v.as_str());
+                if log_result.is_error {
+                    let error_msg = log_result
+                        .result_text
+                        .as_deref()
+                        .unwrap_or(crate::agent::status::DEFAULT_AGENT_ERROR_MSG);
+                    if let Err(e) =
+                        mgr.update_run_failed_with_session(run_id, error_msg, session_id)
+                    {
+                        tracing::warn!("[drain_stream_json] failed to mark run failed: {e}");
+                    }
+                } else {
+                    // Use the if_running variant to avoid clobbering a value already written
+                    // by the subprocess itself (double-write safety).
+                    if let Err(e) = mgr.update_run_completed_if_running(
+                        run_id,
+                        log_result.result_text.as_deref().unwrap_or(""),
+                    ) {
+                        tracing::warn!("[drain_stream_json] failed to mark run completed: {e}");
+                    }
+                }
+                return DrainOutcome::Completed;
+            }
+            _ => {}
+        }
+    }
+
+    DrainOutcome::NoResult
+}
+
+/// Check whether a process with the given PID is still alive.
+///
+/// Uses `kill(pid, 0)` — sends no signal; returns `true` if the process exists
+/// and we have permission to signal it. Returns `false` on `ESRCH` (no such
+/// process). Returns `true` on `EPERM` (process exists but unowned — treated
+/// conservatively as alive to avoid false-positive reaping).
+///
+/// # TODO
+/// Cross-check process start time against the stored spawn time (RFC 016 open
+/// question #1) to guard against PID reuse after the agent exits.
+#[cfg(unix)]
+pub fn pid_is_alive(pid: u32) -> bool {
+    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if ret == 0 {
+        return true; // process exists and we own it
+    }
+    let err = std::io::Error::last_os_error();
+    // EPERM: process exists but is owned by another user — treat as alive (conservative)
+    // ESRCH: no such process — dead
+    err.raw_os_error() == Some(libc::EPERM)
+}
+
+/// Send SIGTERM to the process group rooted at `pid`.
+///
+/// The negative PID targets the entire process group (agent + any children it
+/// spawned). Does not wait — caller is responsible for DB status update.
+///
+/// NOTE: per RFC 016 Q2, SIGTERM does NOT cause Claude CLI to flush a `result`
+/// event. The caller must mark the run as `cancelled` directly after calling
+/// this function.
+#[cfg(unix)]
+pub fn cancel_subprocess(pid: u32) {
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
+    }
+}
+
+/// Build `conductor agent run` args for a headless launch.
+///
+/// Unlike [`build_agent_args_with_mode`], this always writes the prompt to
+/// `std::env::temp_dir()/conductor-prompt-{run_id}.txt` regardless of length.
+/// Returns `(args, prompt_file_path)` so the caller can delete the prompt file
+/// after [`drain_stream_json`] completes.
+///
+/// The existing [`build_agent_args_with_mode`] is untouched (tmux path unchanged).
+#[allow(clippy::too_many_arguments)]
+pub fn build_headless_agent_args(
+    run_id: &str,
+    working_dir: &str,
+    prompt: &str,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&crate::config::AgentPermissionMode>,
+    extra_plugin_dirs: &[String],
+) -> std::result::Result<(Vec<String>, std::path::PathBuf), String> {
+    // Always write to temp dir — no worktree dir leakage, no size threshold.
+    let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+    std::fs::write(&prompt_file_path, prompt).map_err(|e| {
+        format!(
+            "Failed to write prompt file '{}': {e}",
+            prompt_file_path.display()
+        )
+    })?;
+
+    let mut args: Vec<String> = Vec::with_capacity(AGENT_ARGS_CAPACITY + 2);
+    args.push("agent".to_string());
+    args.push("run".to_string());
+    args.push("--run-id".to_string());
+    args.push(run_id.to_string());
+    args.push("--worktree-path".to_string());
+    args.push(working_dir.to_string());
+    args.push("--prompt-file".to_string());
+    args.push(prompt_file_path.to_string_lossy().into_owned());
+
+    if let Some(id) = resume_session_id {
+        args.push("--resume".to_string());
+        args.push(id.to_string());
+    }
+
+    if let Some(m) = model {
+        args.push("--model".to_string());
+        args.push(m.to_string());
+    }
+
+    if let Some(b) = bot_name {
+        args.push("--bot-name".to_string());
+        args.push(b.to_string());
+    }
+
+    if let Some(mode) = permission_mode {
+        args.push(mode.cli_flag().to_string());
+        if let Some(val) = mode.cli_flag_value() {
+            args.push(val.to_string());
+        }
+    }
+
+    for dir in extra_plugin_dirs {
+        args.push("--plugin-dir".to_string());
+        args.push(dir.clone());
+    }
+
+    Ok((args, prompt_file_path))
 }
 
 /// Spawn a child agent in a new tmux window.

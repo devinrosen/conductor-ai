@@ -317,6 +317,35 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Store the OS PID for a headless agent run immediately after spawn.
+    pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
+            params![pid as i64, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Eagerly save model and session_id from the stream-json system/init event.
+    ///
+    /// Uses COALESCE so the write is idempotent and cannot clobber a value already
+    /// written by the subprocess itself — only sets the column if the incoming value
+    /// is not NULL.
+    pub fn update_run_model_and_session(
+        &self,
+        run_id: &str,
+        model: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs \
+             SET model = COALESCE(?1, model), claude_session_id = COALESCE(?2, claude_session_id) \
+             WHERE id = ?3",
+            params![model, session_id, run_id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_run_log_file(&self, run_id: &str, path: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
