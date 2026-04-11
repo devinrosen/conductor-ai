@@ -1552,24 +1552,22 @@ fn test_parallel_drain_signal_race_condition_db_guard() {
         "newly created run must start in Running state"
     );
 
-    // Create a workflow run + step in Running state so we can verify the step update
-    let wf_run_id = "drain-race-wf-run-01";
-    let step_id = "drain-race-step-01";
-    let parent_run_id = run.id.clone();
-    conn.execute(
-        "INSERT INTO workflow_runs \
-         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
-         VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
-        rusqlite::params![wf_run_id, parent_run_id],
-    )
-    .expect("insert workflow_run");
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration) \
-         VALUES (?1, ?2, 'test-agent', 'actor', 0, 'running', 1)",
-        rusqlite::params![step_id, wf_run_id],
-    )
-    .expect("insert workflow_run_step");
+    // Create a workflow run + step in Running state so we can verify the step update.
+    // Use the public manager APIs (pending → running) to stay aligned with the production
+    // state machine and avoid fragile raw SQL that silently breaks on schema changes.
+    let wf_run = wf_mgr
+        .create_workflow_run("test-wf", None, &run.id, false, "manual", None)
+        .expect("create_workflow_run should succeed");
+    wf_mgr
+        .update_workflow_status(&wf_run.id, crate::workflow::status::WorkflowRunStatus::Running, None, None)
+        .expect("update_workflow_status to Running should succeed");
+    let step_id = wf_mgr
+        .insert_step(&wf_run.id, "test-agent", "actor", false, 0, 1)
+        .expect("insert_step should succeed");
+    wf_mgr
+        .update_step_status(&step_id, WorkflowStepStatus::Running, None, None, None, None, None)
+        .expect("update_step_status to Running should succeed");
+    let wf_run_id = wf_run.id.as_str();
 
     // Simulate what execute_parallel does in the Running|WaitingForFeedback arm:
     // the drain thread signalled completion but the DB row wasn't updated yet.
@@ -1579,7 +1577,7 @@ fn test_parallel_drain_signal_race_condition_db_guard() {
         .expect("update_run_failed_if_running should succeed");
     wf_mgr
         .update_step_status(
-            step_id,
+            &step_id,
             WorkflowStepStatus::Failed,
             Some(&run.id),
             Some(fail_msg),
