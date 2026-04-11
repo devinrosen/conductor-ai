@@ -37,10 +37,10 @@ conductor --help
 
 ```bash
 # If you already have a local checkout:
-conductor repo add https://github.com/your-org/your-repo --local-path ~/path/to/repo
+conductor repo register https://github.com/your-org/your-repo --local-path ~/path/to/repo
 
 # If you want conductor to clone it:
-conductor repo add https://github.com/your-org/your-repo
+conductor repo register https://github.com/your-org/your-repo
 ```
 
 Conductor stores all state in `~/.conductor/conductor.db`. Nothing is written into your repo except the `.conductor/` directory (workflows, agents, prompts) which you manage yourself.
@@ -127,7 +127,7 @@ conductor workflow resume <run-id>
 conductor workflow resume <run-id> --restart
 
 # Resume from a specific step:
-conductor workflow resume <run-id> --from implement
+conductor workflow resume <run-id> --from-step implement
 ```
 
 ## Embedding conductor in a project
@@ -146,7 +146,7 @@ If your team wants to run conductor workflows directly from a project repo witho
 
 2. **Register the repo once** per developer machine:
    ```bash
-   conductor repo add https://github.com/your-org/your-repo --local-path .
+   conductor repo register https://github.com/your-org/your-repo --local-path .
    ```
 
 3. **Run workflows** from anywhere:
