@@ -680,9 +680,7 @@ pub fn drain_stream_json(
                     // Use the if_running variant to avoid clobbering a value already written
                     // by the subprocess itself (double-write safety). Persist all result-event
                     // fields (cost_usd, num_turns, duration_ms, final token counts).
-                    if let Err(e) =
-                        mgr.update_run_completed_if_running_full(run_id, &log_result)
-                    {
+                    if let Err(e) = mgr.update_run_completed_if_running_full(run_id, &log_result) {
                         tracing::warn!("[drain_stream_json] failed to mark run completed: {e}");
                     }
                 }
