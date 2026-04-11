@@ -45,14 +45,10 @@ impl<'a> AgentManager<'a> {
     /// marks the run as `failed` with `fail_msg`.
     fn reap_one(&self, run_id: &str, fail_msg: &str) -> crate::error::Result<()> {
         if try_recover_from_log(self, run_id).is_some() {
-            tracing::info!(
-                "reap_orphaned_runs: recovered result from log for run {run_id}"
-            );
+            tracing::info!("reap_orphaned_runs: recovered result from log for run {run_id}");
             return Ok(());
         }
-        tracing::warn!(
-            "reap_orphaned_runs: no log recovery for run {run_id}, marking as failed"
-        );
+        tracing::warn!("reap_orphaned_runs: no log recovery for run {run_id}, marking as failed");
         self.update_run_failed(run_id, fail_msg)?;
         Ok(())
     }
