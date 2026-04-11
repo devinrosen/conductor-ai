@@ -829,35 +829,30 @@ fn seed_agent_run_with_subprocess_pid(conn: &Connection) {
     mgr.update_run_subprocess_pid(&run.id, 999_999_999).unwrap();
 }
 
-fn seed_repo_agent_run(conn: &Connection) {
+fn seed_test_repo(conn: &Connection) -> conductor_core::repo::Repo {
     let config = Config::default();
     let repo_mgr = RepoManager::new(conn, &config);
-    let repo = repo_mgr
+    repo_mgr
         .register(
             "test-repo",
             "/tmp/repo",
             "https://github.com/test/repo.git",
             None,
         )
-        .unwrap();
-    let mgr = AgentManager::new(conn);
-    mgr.create_repo_run(&repo.id, "repo prompt", None, None)
+        .unwrap()
+}
+
+fn seed_repo_agent_run(conn: &Connection) {
+    let repo = seed_test_repo(conn);
+    AgentManager::new(conn)
+        .create_repo_run(&repo.id, "repo prompt", None, None)
         .unwrap();
 }
 
 /// Seed a repo agent run with `subprocess_pid` set to a non-existent PID.
 /// See `seed_agent_run_with_subprocess_pid` for rationale.
 fn seed_repo_agent_run_with_subprocess_pid(conn: &Connection) {
-    let config = Config::default();
-    let repo_mgr = RepoManager::new(conn, &config);
-    let repo = repo_mgr
-        .register(
-            "test-repo",
-            "/tmp/repo",
-            "https://github.com/test/repo.git",
-            None,
-        )
-        .unwrap();
+    let repo = seed_test_repo(conn);
     let mgr = AgentManager::new(conn);
     let run = mgr
         .create_repo_run(&repo.id, "repo prompt", None, None)

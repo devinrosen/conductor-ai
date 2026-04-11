@@ -959,9 +959,7 @@ fn kill_subprocess_or_tmux(
     } else if let Some(window) = tmux_window {
         // Tmux path: capture scrollback then kill the window.
         mgr.capture_agent_log(run_id, window);
-        let _ = std::process::Command::new("tmux")
-            .args(["kill-window", "-t", &format!(":{window}")])
-            .output();
+        conductor_core::agent::kill_tmux_window(window);
     }
 }
 
