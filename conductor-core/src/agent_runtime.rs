@@ -1175,22 +1175,17 @@ mod tests {
     fn build_agent_args_with_resume_sets_flag() {
         let run_id = "run-resume-sets-flag";
         let prompt = "short prompt";
-        let args = super::build_agent_args(
-            run_id,
-            "/tmp/wt",
-            prompt,
-            Some("sess-abc"),
-            None,
-            None,
-            &[],
-        )
-        .unwrap();
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", prompt, Some("sess-abc"), None, None, &[])
+                .unwrap();
         let resume_idx = args
             .iter()
             .position(|a| a == "--resume")
             .expect("--resume flag missing");
         assert_eq!(args[resume_idx + 1], "sess-abc");
-        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")));
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1240,7 +1235,9 @@ mod tests {
             args.iter().any(|a| a == "--dangerously-skip-permissions"),
             "expected --dangerously-skip-permissions flag"
         );
-        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")));
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1262,7 +1259,9 @@ mod tests {
             args.iter().any(|a| a == "--enable-auto-mode"),
             "expected --enable-auto-mode flag"
         );
-        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")));
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1292,7 +1291,9 @@ mod tests {
             !args.iter().any(|a| a == "--allowedTools"),
             "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
         );
-        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")));
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1326,7 +1327,9 @@ mod tests {
             !args.iter().any(|a| a == "--allowedTools"),
             "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
         );
-        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")));
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1379,7 +1382,9 @@ mod tests {
                 || a == "--permission-mode"),
             "no permission flag should appear when mode is None"
         );
-        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")));
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1401,7 +1406,9 @@ mod tests {
             .position(|a| a == "--model")
             .expect("expected --model flag");
         assert_eq!(args[idx + 1], "claude-sonnet-4-6");
-        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")));
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1423,7 +1430,9 @@ mod tests {
             .position(|a| a == "--bot-name")
             .expect("expected --bot-name flag");
         assert_eq!(args[idx + 1], "my-bot");
-        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")));
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
