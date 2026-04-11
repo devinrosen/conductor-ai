@@ -84,6 +84,44 @@ pub fn process_started_at(pid: u32) -> Option<std::time::SystemTime> {
     Some(SystemTime::UNIX_EPOCH + Duration::new(secs, nanos))
 }
 
+/// Returns `true` if the process with the given PID appears to have been recycled by the OS
+/// after the original subprocess (recorded at `run_started_at`) exited.
+///
+/// Compares the OS-recorded process start time against `run_started_at`. If they differ by
+/// more than 60 seconds the PID was almost certainly reused for a different process.
+///
+/// Always returns `false` on non-macOS platforms (only macOS exposes `process_started_at`).
+/// Returns `false` if `run_started_at` cannot be parsed as RFC 3339 (logs a warning).
+/// Returns `false` if the OS start time is unavailable.
+#[cfg(target_os = "macos")]
+pub fn pid_was_recycled(pid: u32, run_started_at: &str) -> bool {
+    let proc_start = match process_started_at(pid) {
+        Some(t) => t,
+        None => return false,
+    };
+    let run_start = match chrono::DateTime::parse_from_rfc3339(run_started_at) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(
+                "pid_was_recycled: failed to parse run started_at {:?}: {e}",
+                run_started_at
+            );
+            return false;
+        }
+    };
+    let proc_secs = proc_start
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    (proc_secs - run_start.timestamp()).abs() > 60
+}
+
+/// Always returns `false` on non-macOS platforms.
+#[cfg(not(target_os = "macos"))]
+pub fn pid_was_recycled(_pid: u32, _run_started_at: &str) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -101,6 +139,23 @@ mod tests {
         assert!(
             start < std::time::SystemTime::now(),
             "process start time should be in the past"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn process_started_at_dead_process() {
+        // Spawn a short-lived child, wait for it to exit, then confirm that
+        // process_started_at returns None for the now-dead PID.
+        // Note: there is a theoretical PID-reuse race, but it is negligible in practice.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        // Give the OS a moment to fully reap the child.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            super::process_started_at(pid).is_none(),
+            "process_started_at should return None for a dead PID"
         );
     }
 

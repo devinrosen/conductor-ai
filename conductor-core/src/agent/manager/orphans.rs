@@ -39,6 +39,24 @@ fn cleanup_stale_stderr_files() {
 }
 
 impl<'a> AgentManager<'a> {
+    /// Attempt log recovery for a run, falling back to marking it failed.
+    ///
+    /// Tries `try_recover_from_log` first; if no result is found in the log,
+    /// marks the run as `failed` with `fail_msg`.
+    fn reap_one(&self, run_id: &str, fail_msg: &str) -> crate::error::Result<()> {
+        if try_recover_from_log(self, run_id).is_some() {
+            tracing::info!(
+                "reap_orphaned_runs: recovered result from log for run {run_id}"
+            );
+            return Ok(());
+        }
+        tracing::warn!(
+            "reap_orphaned_runs: no log recovery for run {run_id}, marking as failed"
+        );
+        self.update_run_failed(run_id, fail_msg)?;
+        Ok(())
+    }
+
     /// Reap orphaned agent runs whose tmux windows have disappeared.
     ///
     /// Queries all runs with an active status (`running` or `waiting_for_feedback`),
@@ -91,42 +109,16 @@ impl<'a> AgentManager<'a> {
             if let Some(pid) = run.subprocess_pid {
                 if crate::process_utils::pid_is_alive(pid as u32) {
                     // PID is alive — guard against PID reuse by comparing the OS-recorded
-                    // process start time against run.started_at (macOS only).
+                    // process start time against run.started_at.
                     // If start times differ by >60 s, the PID was recycled by the OS after
                     // the original subprocess exited and should be reaped.
-                    #[cfg(target_os = "macos")]
-                    let pid_recycled = {
-                        crate::process_utils::process_started_at(pid as u32)
-                            .and_then(|proc_start| {
-                                let run_start =
-                                    chrono::DateTime::parse_from_rfc3339(&run.started_at).ok()?;
-                                let proc_secs = proc_start
-                                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                                    .map(|d| d.as_secs() as i64)
-                                    .unwrap_or(0);
-                                Some((proc_secs - run_start.timestamp()).abs() > 60)
-                            })
-                            .unwrap_or(false)
-                    };
-                    #[cfg(not(target_os = "macos"))]
-                    let pid_recycled = false;
-
-                    if pid_recycled {
+                    if crate::process_utils::pid_was_recycled(pid as u32, &run.started_at) {
                         tracing::warn!(
                             "reap_orphaned_runs: PID {pid} recycled for run {} (started_at={})",
                             run.id,
                             run.started_at,
                         );
-                        // Fall through to reap with recycled-PID message.
-                        if try_recover_from_log(self, &run.id).is_some() {
-                            tracing::info!(
-                                "reap_orphaned_runs: recovered result from log for run {}",
-                                run.id
-                            );
-                            reaped += 1;
-                            continue;
-                        }
-                        self.update_run_failed(
+                        self.reap_one(
                             &run.id,
                             "subprocess PID recycled — agent may have completed but result was not captured",
                         )?;
@@ -142,20 +134,7 @@ impl<'a> AgentManager<'a> {
                     run.started_at,
                     run.worktree_id,
                 );
-                // PID is dead — try log recovery first, then mark failed.
-                if try_recover_from_log(self, &run.id).is_some() {
-                    tracing::info!(
-                        "reap_orphaned_runs: recovered result from log for run {}",
-                        run.id
-                    );
-                    reaped += 1;
-                    continue;
-                }
-                tracing::warn!(
-                    "reap_orphaned_runs: no log recovery for run {}, marking as failed",
-                    run.id
-                );
-                self.update_run_failed(
+                self.reap_one(
                     &run.id,
                     "subprocess exited unexpectedly — agent may have completed but result was not captured",
                 )?;
@@ -183,21 +162,8 @@ impl<'a> AgentManager<'a> {
                     run.worktree_id,
                 );
             }
-            // Window is gone — try to recover result from log file
-            if try_recover_from_log(self, &run.id).is_some() {
-                tracing::info!(
-                    "reap_orphaned_runs: recovered result from log for run {}",
-                    run.id
-                );
-                reaped += 1;
-                continue;
-            }
-            // No result in log — mark as failed
-            tracing::warn!(
-                "reap_orphaned_runs: no log recovery possible for run {}, marking as failed",
-                run.id
-            );
-            self.update_run_failed(
+            // Window is gone — try to recover result from log file, then mark failed.
+            self.reap_one(
                 &run.id,
                 "tmux session lost — agent may have completed but result was not captured",
             )?;
