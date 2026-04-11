@@ -81,10 +81,46 @@ impl<'a> AgentManager<'a> {
 
         let mut reaped = 0;
         for run in &active_runs {
-            // Skip runs that are parent runs of active workflows.
+            // 1. Skip runs that are parent runs of active workflows.
             if active_wf_parent_ids.contains(&run.id) {
                 continue;
             }
+
+            // 2. Headless subprocess run — check PID liveness via kill(0).
+            #[cfg(unix)]
+            if let Some(pid) = run.subprocess_pid {
+                if crate::process_utils::pid_is_alive(pid as u32) {
+                    // Process is still alive — skip.
+                    continue;
+                }
+                tracing::warn!(
+                    "reap_orphaned_runs: subprocess pid {pid} gone for run {} (started_at={}, worktree={:?})",
+                    run.id,
+                    run.started_at,
+                    run.worktree_id,
+                );
+                // PID is dead — try log recovery first, then mark failed.
+                if try_recover_from_log(self, &run.id).is_some() {
+                    tracing::info!(
+                        "reap_orphaned_runs: recovered result from log for run {}",
+                        run.id
+                    );
+                    reaped += 1;
+                    continue;
+                }
+                tracing::warn!(
+                    "reap_orphaned_runs: no log recovery for run {}, marking as failed",
+                    run.id
+                );
+                self.update_run_failed(
+                    &run.id,
+                    "subprocess exited unexpectedly — agent may have completed but result was not captured",
+                )?;
+                reaped += 1;
+                continue;
+            }
+
+            // 3. tmux-based run — check window liveness.
             if let Some(ref name) = run.tmux_window {
                 if live_windows.contains(name.as_str()) {
                     continue;
@@ -96,6 +132,7 @@ impl<'a> AgentManager<'a> {
                     run.worktree_id,
                 );
             } else {
+                // 4. Neither subprocess_pid nor tmux_window — always reap.
                 tracing::warn!(
                     "reap_orphaned_runs: run {} has no tmux_window (started_at={}, worktree={:?})",
                     run.id,
@@ -287,5 +324,67 @@ mod tests {
             mgr.get_run(&r3.id).unwrap().unwrap().status,
             AgentRunStatus::Completed
         );
+    }
+
+    /// A run with a subprocess_pid pointing to a dead process should be reaped.
+    #[cfg(unix)]
+    #[test]
+    fn test_reap_orphaned_runs_subprocess_pid_dead() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Spawn a short-lived child, record its PID, wait for it to exit.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        // Wait for it to finish so the PID is definitely gone.
+        child.wait().unwrap();
+        // Give the OS a moment to fully reap the child.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let run = mgr
+            .create_run(Some("w1"), "headless task", None, None)
+            .unwrap();
+        // Set subprocess_pid to the dead PID.
+        conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
+            params![dead_pid as i64, run.id],
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 1);
+
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::Failed);
+        assert!(updated
+            .result_text
+            .as_deref()
+            .unwrap()
+            .contains("subprocess exited unexpectedly"));
+    }
+
+    /// A run with a subprocess_pid pointing to the current (live) process must NOT be reaped.
+    #[cfg(unix)]
+    #[test]
+    fn test_reap_orphaned_runs_subprocess_pid_alive_skips() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let live_pid = std::process::id();
+
+        let run = mgr
+            .create_run(Some("w1"), "headless task alive", None, None)
+            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
+            params![live_pid as i64, run.id],
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 0, "live subprocess must not be reaped");
+
+        let after = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(after.status, AgentRunStatus::Running);
     }
 }

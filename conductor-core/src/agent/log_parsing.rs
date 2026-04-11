@@ -117,6 +117,8 @@ pub(crate) fn try_recover_from_log_at(
 }
 
 /// Parse a single stream-json log line into zero or more display events.
+///
+/// Parses the JSON string and delegates to [`parse_events_from_value`].
 pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
     let line = line.trim();
     if line.is_empty() {
@@ -125,7 +127,13 @@ pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return Vec::new();
     };
+    parse_events_from_value(&value)
+}
 
+/// Parse a pre-parsed JSON value into zero or more display events.
+///
+/// Used by [`drain_stream_json`] to avoid double-parsing the same JSON line.
+pub fn parse_events_from_value(value: &serde_json::Value) -> Vec<AgentEvent> {
     let mut events = Vec::new();
     let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
 

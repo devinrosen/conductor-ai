@@ -317,6 +317,35 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Store the OS PID for a headless agent run immediately after spawn.
+    pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
+            params![pid as i64, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Eagerly save model and session_id from the stream-json system/init event.
+    ///
+    /// Uses COALESCE so the write is idempotent and cannot clobber a value already
+    /// written by the subprocess itself — only sets the column if the incoming value
+    /// is not NULL.
+    pub fn update_run_model_and_session(
+        &self,
+        run_id: &str,
+        model: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs \
+             SET model = COALESCE(?1, model), claude_session_id = COALESCE(?2, claude_session_id) \
+             WHERE id = ?3",
+            params![model, session_id, run_id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_run_log_file(&self, run_id: &str, path: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
@@ -823,6 +852,44 @@ mod tests {
             fetched.result_text.as_deref(),
             Some("original error"),
             "result_text must not be overwritten when run is not running"
+        );
+    }
+
+    #[test]
+    fn test_update_run_model_and_session_coalesce_idempotency() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a run with a known model
+        let run = mgr
+            .create_run(Some("w1"), "test", None, Some("original-model"))
+            .unwrap();
+        assert_eq!(run.model.as_deref(), Some("original-model"));
+
+        // Update with model=None — COALESCE should preserve original
+        mgr.update_run_model_and_session(&run.id, None, Some("sess-abc"))
+            .unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.model.as_deref(),
+            Some("original-model"),
+            "model should not be clobbered by NULL"
+        );
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-abc"));
+
+        // Update again with session_id=None — COALESCE should preserve original session
+        mgr.update_run_model_and_session(&run.id, Some("new-model"), None)
+            .unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.model.as_deref(),
+            Some("new-model"),
+            "model should be updated when not NULL"
+        );
+        assert_eq!(
+            fetched.claude_session_id.as_deref(),
+            Some("sess-abc"),
+            "session should not be clobbered by NULL"
         );
     }
 }
