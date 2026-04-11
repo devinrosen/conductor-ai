@@ -1559,13 +1559,26 @@ fn test_parallel_drain_signal_race_condition_db_guard() {
         .create_workflow_run("test-wf", None, &run.id, false, "manual", None)
         .expect("create_workflow_run should succeed");
     wf_mgr
-        .update_workflow_status(&wf_run.id, crate::workflow::status::WorkflowRunStatus::Running, None, None)
+        .update_workflow_status(
+            &wf_run.id,
+            crate::workflow::status::WorkflowRunStatus::Running,
+            None,
+            None,
+        )
         .expect("update_workflow_status to Running should succeed");
     let step_id = wf_mgr
         .insert_step(&wf_run.id, "test-agent", "actor", false, 0, 1)
         .expect("insert_step should succeed");
     wf_mgr
-        .update_step_status(&step_id, WorkflowStepStatus::Running, None, None, None, None, None)
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .expect("update_step_status to Running should succeed");
     let wf_run_id = wf_run.id.as_str();
 
