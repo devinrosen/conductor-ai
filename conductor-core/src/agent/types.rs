@@ -70,6 +70,9 @@ pub struct AgentRun {
     pub bot_name: Option<String>,
     /// Conversation this run belongs to (if created via the conversation API).
     pub conversation_id: Option<String>,
+    /// PID of the headless subprocess running this agent (RFC 016).
+    /// None for tmux-based runs or pre-migration rows.
+    pub subprocess_pid: Option<i64>,
 }
 
 impl AgentRun {

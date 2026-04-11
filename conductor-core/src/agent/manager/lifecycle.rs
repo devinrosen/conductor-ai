@@ -155,6 +155,7 @@ impl<'a> AgentManager<'a> {
             cache_creation_input_tokens: None,
             bot_name: bot_name.map(String::from),
             conversation_id: conversation_id.map(String::from),
+            subprocess_pid: None,
         };
 
         self.conn.execute(

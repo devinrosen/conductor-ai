@@ -15,7 +15,7 @@ pub(super) const AGENT_RUN_SELECT: &str =
      cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
      model, plan, parent_run_id, \
      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-     bot_name, conversation_id FROM agent_runs";
+     bot_name, conversation_id, subprocess_pid FROM agent_runs";
 
 /// Generate an `agent_runs` column list with a given table alias.
 ///
@@ -74,7 +74,9 @@ macro_rules! agent_run_cols {
             $alias,
             "bot_name, ",
             $alias,
-            "conversation_id"
+            "conversation_id, ",
+            $alias,
+            "subprocess_pid"
         )
     };
     ($alias:literal, null_plan) => {
@@ -123,7 +125,9 @@ macro_rules! agent_run_cols {
             $alias,
             "bot_name, ",
             $alias,
-            "conversation_id"
+            "conversation_id, ",
+            $alias,
+            "subprocess_pid"
         )
     };
 }
@@ -230,6 +234,7 @@ pub(super) fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun
         cache_creation_input_tokens: row.get(20)?,
         bot_name: row.get(21)?,
         conversation_id: row.get(22)?,
+        subprocess_pid: row.get(23)?,
     })
 }
 
@@ -287,6 +292,7 @@ mod tests {
         "cache_creation_input_tokens",
         "bot_name",
         "conversation_id",
+        "subprocess_pid",
     ];
 
     #[test]
@@ -428,6 +434,7 @@ mod tests {
         assert_eq!(run.cache_creation_input_tokens, Some(100));
         assert_eq!(run.bot_name.as_deref(), Some("my-bot"));
         assert!(run.conversation_id.is_none());
+        assert!(run.subprocess_pid.is_none());
     }
 
     #[test]
@@ -463,6 +470,7 @@ mod tests {
         assert!(run.cache_creation_input_tokens.is_none());
         assert!(run.bot_name.is_none());
         assert!(run.conversation_id.is_none());
+        assert!(run.subprocess_pid.is_none());
     }
 
     #[test]
