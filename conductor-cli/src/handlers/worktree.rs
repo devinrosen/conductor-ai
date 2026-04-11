@@ -142,7 +142,7 @@ pub fn handle_worktree(
         }
         WorktreeCommands::List { repo } => {
             let mgr = WorktreeManager::new(conn, config);
-            let worktrees = mgr.list(repo.as_deref(), false)?;
+            let worktrees = mgr.list(repo.as_deref(), false, None, None)?;
             if worktrees.is_empty() {
                 println!("No worktrees.");
             } else {

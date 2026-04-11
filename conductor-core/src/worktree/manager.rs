@@ -535,25 +535,38 @@ impl<'a> WorktreeManager<'a> {
         query_collect(self.conn, &query, params![repo_id], map_worktree_row)
     }
 
-    pub fn list(&self, repo_slug: Option<&str>, active_only: bool) -> Result<Vec<Worktree>> {
+    pub fn list(
+        &self,
+        repo_slug: Option<&str>,
+        active_only: bool,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Worktree>> {
         let status_filter = if active_only {
             " AND status = 'active'"
         } else {
             ""
         };
 
+        let pagination = match limit {
+            Some(lim) => format!(" LIMIT {} OFFSET {}", lim, offset.unwrap_or(0)),
+            None => String::new(),
+        };
+
         let query = match repo_slug {
             Some(_) => {
                 format!(
-                    "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+                    "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at{}",
                     &*WORKTREE_COLUMNS_W,
-                    status_filter
+                    status_filter,
+                    pagination,
                 )
             }
             None => {
                 format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE 1=1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
-                    status_filter
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE 1=1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at{}",
+                    status_filter,
+                    pagination,
                 )
             }
         };
@@ -646,7 +659,7 @@ impl<'a> WorktreeManager<'a> {
     ///
     /// Returns `None` when no registered worktree matches.
     pub fn find_by_cwd(&self, cwd: &Path) -> Result<Option<Worktree>> {
-        let worktrees = self.list(None, false)?;
+        let worktrees = self.list(None, false, None, None)?;
         let found = worktrees
             .into_iter()
             .filter(|wt| cwd.starts_with(Path::new(&wt.path)))

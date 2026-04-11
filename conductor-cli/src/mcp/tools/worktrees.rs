@@ -3,7 +3,7 @@ use std::path::Path;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_arg_usize, open_db_and_config, tool_err, tool_ok};
 
 /// Returns `true` if `s` looks like a ULID: exactly 26 uppercase alphanumeric chars.
 /// Used to distinguish internal ULIDs (e.g. "01HXYZ...") from external source IDs (e.g. "680").
@@ -27,12 +27,14 @@ pub(super) fn tool_list_worktrees(
             ))
         }
     };
+    let limit = get_arg_usize(args, "limit").unwrap_or(50);
+    let offset = get_arg_usize(args, "offset").unwrap_or(0);
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    let worktrees = match wt_mgr.list(Some(repo_slug), active_only) {
+    let worktrees = match wt_mgr.list(Some(repo_slug), active_only, Some(limit), Some(offset)) {
         Ok(w) => w,
         Err(e) => return tool_err(e),
     };
@@ -41,10 +43,17 @@ pub(super) fn tool_list_worktrees(
         return tool_ok(format!("No {scope}worktrees for {repo_slug}."));
     }
     let mut out = String::new();
-    for wt in worktrees {
+    for wt in &worktrees {
         out.push_str(&format!(
             "slug: {}\nbranch: {}\nstatus: {}\npath: {}\n\n",
             wt.slug, wt.branch, wt.status, wt.path
+        ));
+    }
+    if worktrees.len() == limit {
+        out.push_str(&format!(
+            "Showing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
+            end = offset + worktrees.len(),
+            next = offset + limit,
         ));
     }
     tool_ok(out)

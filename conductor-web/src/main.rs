@@ -272,7 +272,7 @@ async fn main() -> Result<()> {
 
                 // Detect agent run terminal transitions and fire notifications.
                 let latest_runs = mgr.latest_runs_by_worktree()?;
-                let worktrees = wt_mgr.list(None, false)?;
+                let worktrees = wt_mgr.list(None, false, None, None)?;
                 let wt_slugs: std::collections::HashMap<&str, &str> = worktrees
                     .iter()
                     .map(|wt| (wt.id.as_str(), wt.slug.as_str()))
