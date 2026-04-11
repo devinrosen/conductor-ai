@@ -1,14 +1,12 @@
-%% Generated 2026-03-15 — Entity-relationship diagram for conductor.db (36 migrations)
+%% Updated 2026-04-10 — Entity-relationship diagram for conductor.db (63 migrations)
 erDiagram
     repos {
         text id PK
         text slug
         text local_path
         text remote_url
-        text default_branch
         text workspace_dir
         text created_at
-        text model
         bool allow_agent_issue_creation
     }
 
@@ -47,6 +45,8 @@ erDiagram
         text url
         text synced_at
         text raw_json
+        text workflow
+        text agent_map
     }
 
     ticket_labels {
@@ -55,9 +55,33 @@ erDiagram
         text color
     }
 
+    ticket_dependencies {
+        text from_ticket_id FK
+        text to_ticket_id FK
+        text dep_type
+    }
+
+    features {
+        text id PK
+        text repo_id FK
+        text name
+        text branch
+        text base_branch
+        text status
+        text created_at
+        text merged_at
+    }
+
+    feature_tickets {
+        text feature_id FK
+        text ticket_id FK
+    }
+
     agent_runs {
         text id PK
         text worktree_id FK
+        text repo_id FK
+        text conversation_id FK
         text claude_session_id
         text prompt
         text status
@@ -118,6 +142,18 @@ erDiagram
         text status
         text created_at
         text responded_at
+        text feedback_type
+        text options_json
+        int timeout_secs
+    }
+
+    conversations {
+        text id PK
+        text scope
+        text scope_id
+        text title
+        text created_at
+        text last_active_at
     }
 
     workflow_runs {
@@ -125,6 +161,7 @@ erDiagram
         text workflow_name
         text worktree_id FK
         text parent_run_id FK
+        text feature_id FK
         text status
         bool dry_run
         text trigger
@@ -138,6 +175,17 @@ erDiagram
         text parent_workflow_run_id FK
         text target_label
         text default_bot_name
+        int iteration
+        text blocked_on
+        text error
+        text model
+        int total_input_tokens
+        int total_output_tokens
+        int total_cache_read_input_tokens
+        int total_cache_creation_input_tokens
+        int total_turns
+        real total_cost_usd
+        int total_duration_ms
     }
 
     workflow_run_steps {
@@ -165,7 +213,38 @@ erDiagram
         text gate_approved_by
         text gate_approved_at
         text gate_feedback
+        text gate_options
+        text gate_selections
         text structured_output
+        text output_file
+    }
+
+    notifications {
+        text id PK
+        text kind
+        text title
+        text body
+        text severity
+        text entity_id
+        text entity_type
+        bool read
+        text created_at
+        text read_at
+    }
+
+    notification_log {
+        text entity_id PK
+        text event_type PK
+        text fired_at
+    }
+
+    push_subscriptions {
+        text id PK
+        text endpoint
+        text p256dh
+        text auth
+        text created_at
+        text updated_at
     }
 
     _conductor_meta {
@@ -176,18 +255,25 @@ erDiagram
     repos ||--o{ repo_issue_sources : "has"
     repos ||--o{ worktrees : "has"
     repos ||--o{ tickets : "has"
+    repos ||--o{ features : "has"
     repos ||--o{ agent_created_issues : "has"
     repos ||--o{ workflow_runs : "targets"
     worktrees ||--o{ agent_runs : "has"
     worktrees ||--o{ workflow_runs : "runs in"
     tickets ||--o{ worktrees : "linked to"
     tickets ||--o{ workflow_runs : "targets"
+    tickets ||--o{ ticket_labels : "has"
+    tickets ||--o{ ticket_dependencies : "blocks"
+    tickets ||--o{ ticket_dependencies : "blocked by"
+    tickets ||--o{ feature_tickets : "in"
+    features ||--o{ feature_tickets : "groups"
+    features ||--o{ workflow_runs : "for"
     agent_runs ||--o{ agent_run_steps : "has"
     agent_runs ||--o{ agent_run_events : "emits"
     agent_runs ||--o{ feedback_requests : "requests"
     agent_runs ||--o{ agent_created_issues : "creates"
     agent_runs ||--o| agent_runs : "parent"
+    conversations ||--o{ agent_runs : "contains"
     workflow_runs ||--o{ workflow_run_steps : "has"
     workflow_runs ||--o| workflow_runs : "parent"
     workflow_run_steps ||--o| agent_runs : "spawns"
-    ticket_labels }o--|| tickets : "labels"
