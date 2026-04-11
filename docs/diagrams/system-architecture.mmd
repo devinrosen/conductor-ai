@@ -1,9 +1,10 @@
-%% Generated 2026-03-15 — High-level component/module graph for conductor-ai
+%% Updated 2026-04-10 — High-level component/module graph for conductor-ai
 graph TD
-    subgraph Binaries["Binaries (conductor-cli / conductor-tui / conductor-web)"]
+    subgraph Binaries["Binaries (conductor-cli / conductor-tui / conductor-web / conductor-desktop)"]
         CLI["conductor-cli\n(clap subcommands)"]
         TUI["conductor-tui\n(ratatui + crossterm)"]
         WEB["conductor-web\n(axum + React frontend)"]
+        DESKTOP["conductor-desktop\n(Tauri v2 native macOS)"]
     end
 
     subgraph Core["conductor-core (library)"]
@@ -45,6 +46,7 @@ graph TD
     CLI --> RM & WM & AM & TS & WFM
     TUI --> RM & WM & AM & TS & WFM
     WEB --> RM & WM & AM & TS & WFM
+    DESKTOP --> WEB
 
     Managers --> DB
     DB --> SQLITE
