@@ -1143,6 +1143,100 @@ mod tests {
         ).unwrap();
     }
 
+    fn insert_repo(conn: &Connection) {
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r1','test-repo','/tmp/repo','https://github.com/x/y.git','/tmp/ws','2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+    }
+
+    fn insert_wt(conn: &Connection, id: &str, slug: &str, created_at: &str) {
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, 'r1', ?2, 'feat/test', '/tmp/ws', 'active', ?3)",
+            rusqlite::params![id, slug, created_at],
+        ).unwrap();
+    }
+
+    #[test]
+    fn list_pagination_limit_truncates_results() {
+        let conn = crate::test_helpers::create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "slug-a", "2024-01-01T00:00:00Z");
+        insert_wt(&conn, "wt2", "slug-b", "2024-01-02T00:00:00Z");
+        insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let results = mgr.list(Some("test-repo"), false, Some(2), Some(0)).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn list_pagination_offset_skips_results() {
+        let conn = crate::test_helpers::create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "slug-a", "2024-01-01T00:00:00Z");
+        insert_wt(&conn, "wt2", "slug-b", "2024-01-02T00:00:00Z");
+        insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        // Offset 2 should return only the last row (ordered by active-first, then created_at)
+        let results = mgr.list(Some("test-repo"), false, Some(10), Some(2)).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn list_pagination_limit_offset_second_page() {
+        let conn = crate::test_helpers::create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "slug-a", "2024-01-01T00:00:00Z");
+        insert_wt(&conn, "wt2", "slug-b", "2024-01-02T00:00:00Z");
+        insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
+        insert_wt(&conn, "wt4", "slug-d", "2024-01-04T00:00:00Z");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let page1 = mgr.list(Some("test-repo"), false, Some(2), Some(0)).unwrap();
+        let page2 = mgr.list(Some("test-repo"), false, Some(2), Some(2)).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page2.len(), 2);
+        // Pages must not overlap
+        let ids1: Vec<_> = page1.iter().map(|w| w.id.clone()).collect();
+        let ids2: Vec<_> = page2.iter().map(|w| w.id.clone()).collect();
+        assert!(ids1.iter().all(|id| !ids2.contains(id)));
+    }
+
+    #[test]
+    fn list_no_pagination_returns_all() {
+        let conn = crate::test_helpers::create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "slug-a", "2024-01-01T00:00:00Z");
+        insert_wt(&conn, "wt2", "slug-b", "2024-01-02T00:00:00Z");
+        insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let results = mgr.list(Some("test-repo"), false, None, None).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn list_pagination_no_repo_slug_uses_all_repos() {
+        let conn = crate::test_helpers::create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "slug-a", "2024-01-01T00:00:00Z");
+        insert_wt(&conn, "wt2", "slug-b", "2024-01-02T00:00:00Z");
+        insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let results = mgr.list(None, false, Some(2), Some(0)).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
     #[test]
     fn resolve_parent_branch_returns_none_for_non_vantage_ticket() {
         let conn = create_test_conn();
