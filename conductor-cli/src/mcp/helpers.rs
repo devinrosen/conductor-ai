@@ -95,6 +95,16 @@ macro_rules! require_arg {
     };
 }
 
+/// Returns a pagination hint string like "Showing 0–50 (limit 50). Pass offset=50 for more."
+/// Call this when the result count equals the page limit, then append the result to your output.
+pub(crate) fn pagination_hint(offset: usize, count: usize, limit: usize) -> String {
+    format!(
+        "Showing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
+        end = offset + count,
+        next = offset + limit,
+    )
+}
+
 /// Helper: open the database and load config.
 pub(crate) fn open_db_and_config(
     db_path: &Path,

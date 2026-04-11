@@ -3,7 +3,9 @@ use std::path::Path;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, get_arg_usize, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{
+    get_arg, get_arg_usize, open_db_and_config, pagination_hint, tool_err, tool_ok,
+};
 
 /// Returns `true` if `s` looks like a ULID: exactly 26 uppercase alphanumeric chars.
 /// Used to distinguish internal ULIDs (e.g. "01HXYZ...") from external source IDs (e.g. "680").
@@ -50,11 +52,7 @@ pub(super) fn tool_list_worktrees(
         ));
     }
     if worktrees.len() == limit {
-        out.push_str(&format!(
-            "Showing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
-            end = offset + worktrees.len(),
-            next = offset + limit,
-        ));
+        out.push_str(&pagination_hint(offset, worktrees.len(), limit));
     }
     tool_ok(out)
 }

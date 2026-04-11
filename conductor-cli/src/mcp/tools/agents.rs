@@ -3,7 +3,7 @@ use std::path::Path;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, open_db_and_config, pagination_hint, tool_err, tool_ok};
 
 pub(super) fn tool_list_agent_runs(
     db_path: &Path,
@@ -151,11 +151,7 @@ pub(super) fn tool_list_agent_runs(
     }
 
     if runs.len() == limit {
-        out.push_str(&format!(
-            "Showing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
-            end = offset + runs.len(),
-            next = offset + limit,
-        ));
+        out.push_str(&pagination_hint(offset, runs.len(), limit));
     }
 
     tool_ok(out)

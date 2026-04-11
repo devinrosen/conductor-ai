@@ -1224,6 +1224,23 @@ mod tests {
     }
 
     #[test]
+    fn list_offset_without_limit_is_ignored() {
+        // When limit=None no LIMIT/OFFSET clause is emitted, so offset is silently ignored
+        // and all rows are returned regardless of the offset value.
+        let conn = crate::test_helpers::create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "slug-a", "2024-01-01T00:00:00Z");
+        insert_wt(&conn, "wt2", "slug-b", "2024-01-02T00:00:00Z");
+        insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        // offset=Some(2) with limit=None — offset has no effect
+        let results = mgr.list(Some("test-repo"), false, None, Some(2)).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
     fn list_pagination_no_repo_slug_uses_all_repos() {
         let conn = crate::test_helpers::create_test_conn();
         let config = crate::config::Config::default();
