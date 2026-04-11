@@ -165,6 +165,7 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let run_id = run.id.clone();
+        let subprocess_pid = run.subprocess_pid;
         let tmux_window = run.tmux_window.clone();
 
         self.state.modal = crate::state::Modal::Progress {
@@ -186,7 +187,13 @@ impl App {
             };
             let mgr = AgentManager::new(&conn);
 
-            if let Some(ref window) = tmux_window {
+            if let Some(pid) = subprocess_pid {
+                // Headless path: signal the subprocess directly.
+                // subprocess_pid is i64 in DB (SQLite integer); cast to u32 is
+                // safe for realistic PID values.
+                conductor_core::agent_runtime::cancel_subprocess(pid as u32);
+            } else if let Some(ref window) = tmux_window {
+                // Tmux path: capture scrollback then kill the window.
                 mgr.capture_agent_log(&run_id, window);
                 let _ = Command::new("tmux")
                     .args(["kill-window", "-t", &format!(":{window}")])
@@ -852,6 +859,7 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let run_id = run.id.clone();
+        let subprocess_pid = run.subprocess_pid;
         let tmux_window = run.tmux_window.clone();
 
         self.state.modal = crate::state::Modal::Progress {
@@ -873,7 +881,13 @@ impl App {
             };
             let mgr = AgentManager::new(&conn);
 
-            if let Some(ref window) = tmux_window {
+            if let Some(pid) = subprocess_pid {
+                // Headless path: signal the subprocess directly.
+                // subprocess_pid is i64 in DB (SQLite integer); cast to u32 is
+                // safe for realistic PID values.
+                conductor_core::agent_runtime::cancel_subprocess(pid as u32);
+            } else if let Some(ref window) = tmux_window {
+                // Tmux path: capture scrollback then kill the window.
                 mgr.capture_agent_log(&run_id, window);
                 let _ = Command::new("tmux")
                     .args(["kill-window", "-t", &format!(":{window}")])

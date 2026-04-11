@@ -693,20 +693,47 @@ pub fn drain_stream_json(
     DrainOutcome::NoResult
 }
 
-/// Send SIGTERM to the process group rooted at `pid`.
+/// Send SIGTERM to the process group rooted at `pid`, wait up to 5 seconds
+/// for graceful exit, then escalate to SIGKILL if still alive.
 ///
 /// The negative PID targets the entire process group (agent + any children it
-/// spawned). Does not wait — caller is responsible for DB status update.
+/// spawned). `pid_is_alive` checks the positive PID (the group leader); if the
+/// leader is dead the group is effectively terminated.
+///
+/// This call **blocks** for up to 5 seconds. Call from a background thread or
+/// inside `tokio::task::spawn_blocking` — never from the TUI main thread or an
+/// async task directly.
 ///
 /// NOTE: per RFC 016 Q2, SIGTERM does NOT cause Claude CLI to flush a `result`
-/// event. The caller must mark the run as `cancelled` directly after calling
-/// this function.
+/// event. The caller must mark the run as `cancelled` in the DB before calling
+/// this function to prevent a concurrent drain from overwriting the status.
 #[cfg(unix)]
 pub fn cancel_subprocess(pid: u32) {
+    // Step 1: SIGTERM to entire process group.
     let ret = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
     if ret != 0 {
         let err = std::io::Error::last_os_error();
-        tracing::warn!("cancel_subprocess: kill(-{pid}, SIGTERM) failed: {err}");
+        tracing::warn!("cancel_subprocess: SIGTERM to -{pid} failed: {err}");
+    }
+
+    // Step 2: Poll up to 5 s for graceful exit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if !crate::process_utils::pid_is_alive(pid) {
+            return; // Clean exit — done.
+        }
+        if std::time::Instant::now() >= deadline {
+            break; // Timed out — escalate to SIGKILL.
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Step 3: SIGKILL — process group still alive after 5 s.
+    tracing::warn!("cancel_subprocess: pid {pid} still alive after 5s, sending SIGKILL");
+    let ret = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+    if ret != 0 {
+        let err = std::io::Error::last_os_error();
+        tracing::warn!("cancel_subprocess: SIGKILL to -{pid} failed: {err}");
     }
 }
 
@@ -1566,5 +1593,32 @@ mod tests {
         assert_eq!(fetched.output_tokens, Some(100));
         assert_eq!(fetched.cache_read_input_tokens, Some(40));
         assert_eq!(fetched.cache_creation_input_tokens, Some(20));
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod cancel_tests {
+    use std::os::unix::process::CommandExt;
+
+    use super::cancel_subprocess;
+    use crate::process_utils::pid_is_alive;
+
+    #[test]
+    fn test_cancel_subprocess_terminates_process() {
+        let mut child = std::process::Command::new("sleep")
+            .args(["100"])
+            .process_group(0) // matches spawn_headless() behavior
+            .spawn()
+            .expect("failed to spawn sleep");
+
+        let pid = child.id();
+        assert!(pid_is_alive(pid), "process should be alive before cancel");
+
+        cancel_subprocess(pid);
+
+        // Reap the child so it does not become a zombie.
+        let _ = child.wait();
+        assert!(!pid_is_alive(pid), "process should be dead after cancel");
     }
 }
