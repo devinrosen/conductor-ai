@@ -814,6 +814,21 @@ fn seed_agent_run(conn: &Connection) {
         .unwrap();
 }
 
+/// Seed a worktree agent run with `subprocess_pid` set to a non-existent PID.
+/// This exercises the `subprocess_pid=Some` branch in `cancel_agent_blocking`
+/// without spawning a real process — the PID is safely out of range on all
+/// supported platforms, so `cancel_subprocess` returns immediately after the
+/// failed SIGTERM attempt.
+fn seed_agent_run_with_subprocess_pid(conn: &Connection) {
+    seed_repo_and_worktree(conn);
+    let mgr = AgentManager::new(conn);
+    let run = mgr
+        .create_run(Some("w1"), "test prompt", None, None)
+        .unwrap();
+    // Use a PID that definitely does not exist (far above any realistic pid_max).
+    mgr.update_run_subprocess_pid(&run.id, 999_999_999).unwrap();
+}
+
 fn seed_repo_agent_run(conn: &Connection) {
     let config = Config::default();
     let repo_mgr = RepoManager::new(conn, &config);
@@ -828,6 +843,26 @@ fn seed_repo_agent_run(conn: &Connection) {
     let mgr = AgentManager::new(conn);
     mgr.create_repo_run(&repo.id, "repo prompt", None, None)
         .unwrap();
+}
+
+/// Seed a repo agent run with `subprocess_pid` set to a non-existent PID.
+/// See `seed_agent_run_with_subprocess_pid` for rationale.
+fn seed_repo_agent_run_with_subprocess_pid(conn: &Connection) {
+    let config = Config::default();
+    let repo_mgr = RepoManager::new(conn, &config);
+    let repo = repo_mgr
+        .register(
+            "test-repo",
+            "/tmp/repo",
+            "https://github.com/test/repo.git",
+            None,
+        )
+        .unwrap();
+    let mgr = AgentManager::new(conn);
+    let run = mgr
+        .create_repo_run(&repo.id, "repo prompt", None, None)
+        .unwrap();
+    mgr.update_run_subprocess_pid(&run.id, 999_999_999).unwrap();
 }
 
 fn seed_notification(conn: &Connection) {
@@ -1583,6 +1618,58 @@ async fn test_stop_repo_agent_already_stopped() {
     assert!(
         resp.status().is_client_error() || resp.status().is_server_error(),
         "stopping an already-cancelled run should error"
+    );
+}
+
+// ── Stop agent / repo-agent with subprocess_pid set ─────────────────────────
+
+#[tokio::test]
+async fn test_stop_agent_with_subprocess_pid() {
+    // The seeded run has subprocess_pid = 999_999_999 (non-existent PID).
+    // This exercises the subprocess_pid=Some branch in cancel_agent_blocking;
+    // cancel_subprocess returns quickly after the failed SIGTERM to a non-existent group.
+    let base = spawn_test_server_with_setup(seed_agent_run_with_subprocess_pid).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/worktrees/w1/agent/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "stop_agent should succeed even when subprocess_pid points to a non-existent PID"
+    );
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["status"], "cancelled",
+        "run should be marked cancelled regardless of subprocess kill outcome"
+    );
+}
+
+#[tokio::test]
+async fn test_stop_repo_agent_with_subprocess_pid() {
+    let base = spawn_test_server_with_setup(seed_repo_agent_run_with_subprocess_pid).await;
+    let client = reqwest::Client::new();
+    let (repo_id, run_id) = fetch_repo_and_run_id(&base).await;
+
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/agent/{run_id}/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "stop_repo_agent should succeed even when subprocess_pid points to a non-existent PID"
+    );
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["status"], "cancelled",
+        "run should be marked cancelled regardless of subprocess kill outcome"
     );
 }
 

@@ -709,6 +709,20 @@ pub fn drain_stream_json(
 /// this function to prevent a concurrent drain from overwriting the status.
 #[cfg(unix)]
 pub fn cancel_subprocess(pid: u32) {
+    cancel_subprocess_with_grace(pid, std::time::Duration::from_secs(5));
+}
+
+/// Inner implementation of [`cancel_subprocess`] with a configurable grace period.
+/// Exposed as `pub(crate)` for unit-test coverage of the SIGKILL escalation path.
+#[cfg(unix)]
+pub(crate) fn cancel_subprocess_with_grace(pid: u32, grace_period: std::time::Duration) {
+    if pid == 0 {
+        // kill(-0, sig) and kill(0, sig) both signal the current process group —
+        // refusing here prevents conductor from accidentally killing itself.
+        tracing::warn!("cancel_subprocess: pid 0 is invalid, refusing to signal process group");
+        return;
+    }
+
     // Step 1: SIGTERM to entire process group.
     let ret = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
     if ret != 0 {
@@ -716,8 +730,8 @@ pub fn cancel_subprocess(pid: u32) {
         tracing::warn!("cancel_subprocess: SIGTERM to -{pid} failed: {err}");
     }
 
-    // Step 2: Poll up to 5 s for graceful exit.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // Step 2: Poll up to grace_period for graceful exit.
+    let deadline = std::time::Instant::now() + grace_period;
     loop {
         if !crate::process_utils::pid_is_alive(pid) {
             return; // Clean exit — done.
@@ -728,8 +742,11 @@ pub fn cancel_subprocess(pid: u32) {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    // Step 3: SIGKILL — process group still alive after 5 s.
-    tracing::warn!("cancel_subprocess: pid {pid} still alive after 5s, sending SIGKILL");
+    // Step 3: SIGKILL — process group still alive after grace_period.
+    tracing::warn!(
+        "cancel_subprocess: pid {pid} still alive after {}ms, sending SIGKILL",
+        grace_period.as_millis()
+    );
     let ret = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
     if ret != 0 {
         let err = std::io::Error::last_os_error();
@@ -1601,7 +1618,7 @@ mod tests {
 mod cancel_tests {
     use std::os::unix::process::CommandExt;
 
-    use super::cancel_subprocess;
+    use super::{cancel_subprocess, cancel_subprocess_with_grace};
     use crate::process_utils::pid_is_alive;
 
     #[test]
@@ -1620,5 +1637,40 @@ mod cancel_tests {
         // Reap the child so it does not become a zombie.
         let _ = child.wait();
         assert!(!pid_is_alive(pid), "process should be dead after cancel");
+    }
+
+    #[test]
+    fn test_cancel_subprocess_pid_zero_is_noop() {
+        // pid == 0 must not signal the current process group; calling it should
+        // return without panicking or killing the test process.
+        cancel_subprocess(0);
+        // If we reach here without crashing the process, the guard works.
+        assert!(
+            pid_is_alive(std::process::id()),
+            "test process should still be alive"
+        );
+    }
+
+    #[test]
+    fn test_cancel_subprocess_sigkill_escalation() {
+        // Spawn a process that ignores SIGTERM so SIGKILL escalation is required.
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; sleep 100"])
+            .process_group(0)
+            .spawn()
+            .expect("failed to spawn SIGTERM-ignoring process");
+
+        let pid = child.id();
+        assert!(pid_is_alive(pid), "process should be alive before cancel");
+
+        // Use a very short grace period so the test completes quickly.
+        cancel_subprocess_with_grace(pid, std::time::Duration::from_millis(300));
+
+        // Reap the child so it does not become a zombie.
+        let _ = child.wait();
+        assert!(
+            !pid_is_alive(pid),
+            "process should be dead after SIGKILL escalation"
+        );
     }
 }
