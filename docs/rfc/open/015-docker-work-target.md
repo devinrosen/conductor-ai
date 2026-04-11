@@ -1,4 +1,4 @@
-# RFC 014: Docker Work Target
+# RFC 015: Docker Work Target
 
 **Status:** Draft
 **Date:** 2026-04-08
