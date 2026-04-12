@@ -521,8 +521,8 @@ pub async fn stop_agent(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
 ) -> Result<Json<AgentRun>, ApiError> {
-    // Phase 1: DB operations under lock — validate + mark cancelled immediately.
-    let (run, subprocess_pid) = {
+    // Phase 1: DB read under lock — validate only, no writes.
+    let (run_id, subprocess_pid) = {
         let db = state.db.lock().await;
         let agent_mgr = AgentManager::new(&db);
 
@@ -541,28 +541,34 @@ pub async fn stop_agent(
             .into());
         }
 
-        agent_mgr.update_run_cancelled(&run.id)?;
-
-        let subprocess_pid = run.subprocess_pid;
-        (run, subprocess_pid)
+        (run.id, run.subprocess_pid)
     };
     // DB lock is now dropped.
 
-    // Phase 2: subprocess cleanup on a blocking thread (no lock held).
-    if let Some(pid) = subprocess_pid {
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            conductor_core::agent_runtime::cancel_subprocess(pid as u32);
-        })
-        .await
-        {
-            warn!(run_id = %run.id, %e, "stop_agent: subprocess cancel task panicked");
-        }
-    }
+    // Phase 2: cancel via AgentManager::cancel_run() on a blocking thread (no lock held).
+    // cancel_run() marks the DB cancelled first, then best-effort kills the subprocess.
+    let db_path = state.db_path.clone();
+    let run_id_clone = run_id.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = conductor_core::db::open_database(&db_path)?;
+        AgentManager::new(&conn).cancel_run(&run_id_clone, subprocess_pid)
+    })
+    .await
+    .map_err(|e| {
+        warn!(run_id = %run_id, %e, "stop_agent: cancel task panicked");
+        ConductorError::Agent(format!("cancel task panicked: {e}"))
+    })??;
 
     // Re-fetch under lock to return the updated record.
-    let db = state.db.lock().await;
-    let agent_mgr = AgentManager::new(&db);
-    let updated = agent_mgr.latest_for_worktree(&worktree_id)?.unwrap_or(run);
+    let updated = {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+        agent_mgr
+            .latest_for_worktree(&worktree_id)?
+            .ok_or_else(|| {
+                ConductorError::Agent("No agent run found for this worktree".to_string())
+            })?
+    };
 
     state.events.emit(ConductorEvent::AgentStopped {
         run_id: updated.id.clone(),
@@ -1401,8 +1407,8 @@ pub async fn stop_repo_agent(
     State(state): State<AppState>,
     Path((repo_id, run_id)): Path<(String, String)>,
 ) -> Result<Json<AgentRun>, ApiError> {
-    // Phase 1: DB operations under lock — validate + mark cancelled immediately.
-    let (run, subprocess_pid) = {
+    // Phase 1: DB read under lock — validate only, no writes.
+    let subprocess_pid = {
         let db = state.db.lock().await;
         let agent_mgr = AgentManager::new(&db);
 
@@ -1419,28 +1425,32 @@ pub async fn stop_repo_agent(
             return Err(ConductorError::Agent("Agent is not running".to_string()).into());
         }
 
-        agent_mgr.update_run_cancelled(&run.id)?;
-
-        let subprocess_pid = run.subprocess_pid;
-        (run, subprocess_pid)
+        run.subprocess_pid
     };
     // DB lock is now dropped.
 
-    // Phase 2: subprocess cleanup on a blocking thread (no lock held).
-    if let Some(pid) = subprocess_pid {
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            conductor_core::agent_runtime::cancel_subprocess(pid as u32);
-        })
-        .await
-        {
-            warn!(run_id = %run.id, %e, "stop_repo_agent: subprocess cancel task panicked");
-        }
-    }
+    // Phase 2: cancel via AgentManager::cancel_run() on a blocking thread (no lock held).
+    // cancel_run() marks the DB cancelled first, then best-effort kills the subprocess.
+    let db_path = state.db_path.clone();
+    let run_id_clone = run_id.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = conductor_core::db::open_database(&db_path)?;
+        AgentManager::new(&conn).cancel_run(&run_id_clone, subprocess_pid)
+    })
+    .await
+    .map_err(|e| {
+        warn!(run_id = %run_id, %e, "stop_repo_agent: cancel task panicked");
+        ConductorError::Agent(format!("cancel task panicked: {e}"))
+    })??;
 
     // Re-fetch under lock to return the updated record.
-    let db = state.db.lock().await;
-    let agent_mgr = AgentManager::new(&db);
-    let updated = agent_mgr.get_run(&run_id)?.unwrap_or(run);
+    let updated = {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+        agent_mgr
+            .get_run(&run_id)?
+            .ok_or_else(|| ConductorError::Agent("Agent run not found".to_string()))?
+    };
 
     state.events.emit(ConductorEvent::RepoAgentStopped {
         run_id: updated.id.clone(),

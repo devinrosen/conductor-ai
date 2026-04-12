@@ -1137,4 +1137,23 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.status, AgentRunStatus::Cancelled);
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_cancel_run_with_subprocess_pid() {
+        // cancel_run with Some(pid) must update the DB and attempt a best-effort
+        // subprocess kill. Using a nonexistent PID (i64::MAX) exercises the
+        // Some(pid) branch without killing any real process; cancel_subprocess
+        // handles ESRCH gracefully via a warn! log.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        // i64::MAX is guaranteed not to be a real PID on any platform.
+        mgr.cancel_run(&run.id, Some(i64::MAX)).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Cancelled);
+        assert!(fetched.ended_at.is_some());
+    }
 }
