@@ -362,6 +362,36 @@ impl HeadlessHandle {
         })
     }
 
+    /// Decompose the handle into a stdout pipe for draining and a finish closure.
+    ///
+    /// The typical drain pattern moves `stdout` into [`drain_stream_json`] and
+    /// then needs to drop `stderr` **before** calling `child.wait()`.  Because
+    /// `drain_stream_json` consumes `stdout` as a value, the `HeadlessHandle` is
+    /// partially moved after that call and `self`-consuming methods cannot be
+    /// called on it.
+    ///
+    /// `into_drain_parts` splits the handle before any partial move:
+    ///
+    /// ```ignore
+    /// let (stdout, finish) = handle.into_drain_parts();
+    /// drain_stream_json(stdout, &run_id, &log_path, &mgr, on_event);
+    /// finish();  // drops stderr, then waits — no deadlock
+    /// ```
+    ///
+    /// The returned `finish` closure drops `stderr` first so the child receives
+    /// EPIPE on any pending stderr writes and can exit; `wait()` then returns
+    /// immediately.
+    pub fn into_drain_parts(self) -> (std::process::ChildStdout, impl FnOnce()) {
+        let stdout = self.stdout;
+        let stderr = self.stderr;
+        let mut child = self.child;
+        let finish = move || {
+            drop(stderr);
+            let _ = child.wait();
+        };
+        (stdout, finish)
+    }
+
     /// Abort the subprocess without deadlocking on pipe buffers.
     ///
     /// Closes the read ends of stdout and stderr **before** calling `wait()`.
