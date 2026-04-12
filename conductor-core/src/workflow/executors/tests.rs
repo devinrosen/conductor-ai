@@ -99,7 +99,10 @@ fn test_execute_script_success() {
         "output_file should be set in context"
     );
     // subprocess_pid must be cleared after the step completes (Succeeded path).
-    let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id).unwrap();
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
     let step_id = &steps[0].id;
     let pid: Option<i64> = conn
         .query_row(
@@ -108,7 +111,10 @@ fn test_execute_script_success() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!(pid.is_none(), "subprocess_pid should be NULL after Succeeded");
+    assert!(
+        pid.is_none(),
+        "subprocess_pid should be NULL after Succeeded"
+    );
 }
 
 #[test]
@@ -154,7 +160,10 @@ fn test_execute_script_failure_captures_stdout() {
         "stdout should be captured in failure result, got: {result_text}"
     );
     // subprocess_pid must be cleared after the step completes (Failed path).
-    let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id).unwrap();
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
     let step_id = &steps[0].id;
     let pid: Option<i64> = conn
         .query_row(
@@ -469,7 +478,10 @@ fn test_execute_script_timeout() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!(pid.is_none(), "subprocess_pid should be NULL after TimedOut");
+    assert!(
+        pid.is_none(),
+        "subprocess_pid should be NULL after TimedOut"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -530,7 +542,10 @@ fn test_execute_script_cancelled() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!(pid.is_none(), "subprocess_pid should be NULL after Cancelled");
+    assert!(
+        pid.is_none(),
+        "subprocess_pid should be NULL after Cancelled"
+    );
 }
 
 // -----------------------------------------------------------------------

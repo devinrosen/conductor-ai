@@ -243,12 +243,18 @@ mod tests {
             .expect("failed to spawn sleep");
 
         let pid = child.id();
-        assert!(super::pid_is_alive(pid), "process should be alive before cancel");
+        assert!(
+            super::pid_is_alive(pid),
+            "process should be alive before cancel"
+        );
 
         super::cancel_subprocess(pid);
 
         let _ = child.wait();
-        assert!(!super::pid_is_alive(pid), "process should be dead after cancel");
+        assert!(
+            !super::pid_is_alive(pid),
+            "process should be dead after cancel"
+        );
     }
 
     #[test]
@@ -272,7 +278,10 @@ mod tests {
             .expect("failed to spawn SIGTERM-ignoring process");
 
         let pid = child.id();
-        assert!(super::pid_is_alive(pid), "process should be alive before cancel");
+        assert!(
+            super::pid_is_alive(pid),
+            "process should be alive before cancel"
+        );
 
         super::cancel_subprocess_with_grace(pid, std::time::Duration::from_millis(300));
 
