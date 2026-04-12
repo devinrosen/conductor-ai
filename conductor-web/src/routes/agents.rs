@@ -167,9 +167,27 @@ async fn spawn_headless_agent(
                 run_id = %run_id_for_panic,
                 "drain thread panicked: {panic_err}; marking run as failed"
             );
-            if let Ok(conn) = conductor_core::db::open_database(&db_path_for_panic) {
-                let mgr = AgentManager::new(&conn);
-                let _ = mgr.update_run_failed(&run_id_for_panic, "drain thread panicked");
+            match conductor_core::db::open_database(&db_path_for_panic) {
+                Err(db_open_err) => {
+                    tracing::error!(
+                        run_id = %run_id_for_panic,
+                        "drain panic handler: failed to open DB for recovery: {db_open_err}"
+                    );
+                }
+                Ok(conn) => {
+                    let mgr = AgentManager::new(&conn);
+                    // Use update_run_failed_if_running to avoid clobbering a `completed`
+                    // status written by drain_stream_json before the panic occurred (e.g.
+                    // during the trailing remove_file / child.wait cleanup).
+                    if let Err(update_err) =
+                        mgr.update_run_failed_if_running(&run_id_for_panic, "drain thread panicked")
+                    {
+                        tracing::error!(
+                            run_id = %run_id_for_panic,
+                            "drain panic handler: failed to mark run as failed: {update_err}"
+                        );
+                    }
+                }
             }
         }
     });
@@ -1653,6 +1671,96 @@ mod tests {
             runs[0].status,
             AgentRunStatus::Failed,
             "run should be marked failed after spawn error"
+        );
+    }
+
+    /// Verify the DB-level operations in the PID-persist failure path (lines 106–120).
+    ///
+    /// When `update_run_subprocess_pid` fails, `spawn_headless_agent` calls
+    /// `update_run_failed` and returns an error so the run is never stuck in `running`.
+    ///
+    /// Note: the full HTTP-layer integration path cannot be exercised in unit tests
+    /// because it requires a live `conductor` subprocess to spawn (the PID-persist step
+    /// only runs after a successful spawn). This test covers the DB state transition the
+    /// failure path relies on.
+    #[tokio::test]
+    async fn pid_persist_failure_path_marks_run_failed() {
+        let (state, _tmp) = seeded_state();
+        let run_id = "pid-persist-fail-run";
+
+        // Simulate: a run was created in 'running' state (as start_agent does).
+        {
+            let db = state.db.lock().await;
+            conductor_core::test_helpers::insert_test_agent_run(&db, run_id, "w1");
+        }
+
+        // Simulate what the PID-persist failure path does: call update_run_failed with
+        // the same message format to prevent the run from being stuck in 'running'.
+        let pid_err = "disk I/O error";
+        let msg = format!("failed to persist subprocess pid: {pid_err}");
+        {
+            let db = state.db.lock().await;
+            AgentManager::new(&db)
+                .update_run_failed(run_id, &msg)
+                .expect("update_run_failed must succeed");
+        }
+
+        // The run must now be failed, not stuck in 'running'.
+        let db = state.db.lock().await;
+        let run = AgentManager::new(&db)
+            .get_run(run_id)
+            .unwrap()
+            .expect("run must exist");
+        assert_eq!(run.status, AgentRunStatus::Failed, "run should be failed");
+        assert!(
+            run.result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("persist subprocess pid"),
+            "result_text should reference 'persist subprocess pid', got: {:?}",
+            run.result_text
+        );
+    }
+
+    /// Verify that the drain-panic monitor does NOT clobber a `completed` run.
+    ///
+    /// `update_run_failed_if_running` is used in the panic handler so that if
+    /// `drain_stream_json` already finalized the run (e.g. `completed`) before the
+    /// drain thread panicked in the trailing cleanup, the `completed` status is preserved.
+    #[tokio::test]
+    async fn drain_panic_monitor_does_not_clobber_completed_run() {
+        let (state, _tmp) = seeded_state();
+        let run_id = "drain-panic-completed-run";
+
+        // Seed a run, then mark it completed (simulating drain_stream_json success).
+        {
+            let db = state.db.lock().await;
+            conductor_core::test_helpers::insert_test_agent_run(&db, run_id, "w1");
+            let mgr = AgentManager::new(&db);
+            // Mark completed so the run is no longer 'running'.
+            mgr.update_run_completed_if_running(run_id, "done")
+                .expect("update_run_completed_if_running must succeed");
+        }
+
+        // Simulate what the panic monitor does: update_run_failed_if_running.
+        // Because the run is already 'completed', this must be a no-op.
+        {
+            let db = state.db.lock().await;
+            AgentManager::new(&db)
+                .update_run_failed_if_running(run_id, "drain thread panicked")
+                .expect("update_run_failed_if_running must not return an error");
+        }
+
+        // Status must still be 'completed' — not overwritten by the panic handler.
+        let db = state.db.lock().await;
+        let run = AgentManager::new(&db)
+            .get_run(run_id)
+            .unwrap()
+            .expect("run must exist");
+        assert_eq!(
+            run.status,
+            AgentRunStatus::Completed,
+            "completed run must not be clobbered by drain panic handler"
         );
     }
 }
