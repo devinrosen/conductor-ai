@@ -321,21 +321,26 @@ pub fn build_orchestrate_args(
 
 /// Handle to a headless agent subprocess.
 ///
-/// Caller must pass `stdout` to [`drain_stream_json`] to consume events and
-/// finalize the run in the DB.  `pid` should be stored via
-/// `AgentManager::update_run_subprocess_pid()` immediately after spawn.
+/// All resource access is through safe decomposition methods:
+/// - [`HeadlessHandle::pid`] — read the subprocess PID (store via
+///   `AgentManager::update_run_subprocess_pid()` immediately after spawn).
+/// - [`HeadlessHandle::into_drain_parts`] — simple sequential drain: stdout →
+///   [`drain_stream_json`], then finish closure drops stderr and waits.
+/// - [`HeadlessHandle::into_stderr_drain_parts`] — concurrent drain: caller
+///   owns stderr for a dedicated drain thread; finish only waits.
+/// - [`HeadlessHandle::abort`] — kill and reap without deadlocking.
 ///
-/// The `child` field keeps the `Child` handle alive (and its stdio pipes open)
-/// for the duration of the drain. After [`drain_stream_json`] completes, call
-/// `child.wait()` to collect the exit status and avoid zombie processes.
+/// The `stdout`, `stderr`, and `child` fields are private to prevent callers
+/// from bypassing the safe decomposition methods and re-introducing the
+/// pipe-buffer deadlock those methods were designed to prevent.
 ///
 /// **Not for use on the TUI main thread** — `drain_stream_json` is blocking.
 #[cfg(unix)]
 pub struct HeadlessHandle {
-    pub pid: u32,
-    pub stdout: std::process::ChildStdout,
-    pub stderr: std::process::ChildStderr,
-    pub child: std::process::Child,
+    pid: u32,
+    stdout: std::process::ChildStdout,
+    stderr: std::process::ChildStderr,
+    child: std::process::Child,
 }
 
 #[cfg(unix)]
@@ -360,6 +365,50 @@ impl HeadlessHandle {
             stderr,
             child,
         })
+    }
+
+    /// Returns the PID of the headless subprocess.
+    ///
+    /// Store this immediately after spawn via
+    /// `AgentManager::update_run_subprocess_pid()`.
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Decompose the handle into stderr, stdout, and a finish closure for
+    /// concurrent draining.
+    ///
+    /// Use this when you need to drain `stderr` on a dedicated thread
+    /// concurrently with draining `stdout` — for example when the subprocess
+    /// writes many KB to stderr and you must keep the kernel pipe buffer from
+    /// filling while draining stdout in a separate thread.
+    ///
+    /// ```ignore
+    /// let (stderr_pipe, stdout_pipe, finish) = handle.into_stderr_drain_parts();
+    /// std::thread::spawn(move || drain_stderr(stderr_pipe));
+    /// drain_stream_json(stdout_pipe, ...);
+    /// finish();  // waits for child exit — does NOT drop stderr (caller owns it)
+    /// ```
+    ///
+    /// The caller **must** drain `stderr` concurrently; the `finish` closure
+    /// only calls `child.wait()` and does not drop `stderr`.  For the simple
+    /// sequential case, prefer [`into_drain_parts`] instead.
+    ///
+    /// [`into_drain_parts`]: HeadlessHandle::into_drain_parts
+    pub fn into_stderr_drain_parts(
+        self,
+    ) -> (
+        std::process::ChildStderr,
+        std::process::ChildStdout,
+        impl FnOnce(),
+    ) {
+        let stderr = self.stderr;
+        let stdout = self.stdout;
+        let mut child = self.child;
+        let finish = move || {
+            let _ = child.wait();
+        };
+        (stderr, stdout, finish)
     }
 
     /// Decompose the handle into a stdout pipe for draining and a finish closure.
