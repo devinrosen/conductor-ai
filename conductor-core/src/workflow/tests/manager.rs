@@ -1238,31 +1238,17 @@ fn test_find_resumable_child_run_picks_most_recent() {
 fn test_reap_orphaned_workflow_runs_dead_parent() {
     let conn = setup_db();
     let run_id = "run-dead-parent";
-    insert_waiting_run_with_gate(&conn, run_id, "failed", Some("86400s"), None);
+    let step_id = insert_waiting_run_with_gate(&conn, run_id, "failed", Some("86400s"), None);
 
     let mgr = WorkflowManager::new(&conn);
     let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
     assert_eq!(reaped, 1);
 
     // Run should be cancelled.
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "cancelled");
+    assert_eq!(get_run_status(&conn, run_id), "cancelled");
 
     // Gate step should be timed_out.
-    let step_status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE workflow_run_id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(step_status, "timed_out");
+    assert_eq!(get_step_status(&conn, &step_id), "timed_out");
 }
 
 #[test]
@@ -1282,14 +1268,7 @@ fn test_reap_orphaned_workflow_runs_gate_timeout_elapsed() {
     let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
     assert_eq!(reaped, 1);
 
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "cancelled");
+    assert_eq!(get_run_status(&conn, run_id), "cancelled");
 }
 
 #[test]
@@ -1310,14 +1289,7 @@ fn test_reap_orphaned_workflow_runs_skips_active_parent() {
     let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
     assert_eq!(reaped, 0);
 
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "waiting", "run must remain waiting");
+    assert_eq!(get_run_status(&conn, run_id), "waiting", "run must remain waiting");
 }
 
 #[test]
@@ -1375,14 +1347,7 @@ fn test_reap_orphaned_workflow_runs_purged_parent() {
         "purged parent should cause the workflow run to be reaped"
     );
 
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "cancelled");
+    assert_eq!(get_run_status(&conn, run_id), "cancelled");
 }
 
 #[test]
@@ -1407,25 +1372,16 @@ fn test_reap_orphaned_workflow_runs_multiple_dead_parents() {
     assert_eq!(reaped, 3, "exactly the 3 dead-parent runs should be reaped");
 
     for dead_id in &["run-dead-1", "run-dead-2", "run-dead-3"] {
-        let status: String = conn
-            .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                params![dead_id],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(status, "cancelled", "{dead_id} should be cancelled");
+        assert_eq!(
+            get_run_status(&conn, dead_id),
+            "cancelled",
+            "{dead_id} should be cancelled"
+        );
     }
 
-    let active_status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params!["run-active"],
-            |r| r.get(0),
-        )
-        .unwrap();
     assert_eq!(
-        active_status, "waiting",
+        get_run_status(&conn, "run-active"),
+        "waiting",
         "active-parent run must remain waiting"
     );
 }
@@ -1495,14 +1451,7 @@ fn test_reap_orphaned_script_steps_dead_pid() {
     let reaped = mgr.reap_orphaned_script_steps().unwrap();
     assert_eq!(reaped, 1);
 
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "failed");
+    assert_eq!(get_step_status(&conn, &step_id), "failed");
 
     let result: String = conn
         .query_row(
@@ -1549,14 +1498,7 @@ fn test_reap_orphaned_script_steps_skips_completed() {
     let reaped = mgr.reap_orphaned_script_steps().unwrap();
     assert_eq!(reaped, 0);
 
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "completed");
+    assert_eq!(get_step_status(&conn, &step_id), "completed");
 }
 
 /// A running step with child_run_id set (agent step) must NOT be reaped.
@@ -1621,24 +1563,18 @@ fn test_reap_orphaned_script_steps_multiple() {
     assert_eq!(reaped, 2, "only the 2 dead-PID steps should be reaped");
 
     for dead_step in &[s1, s2] {
-        let status: String = conn
-            .query_row(
-                "SELECT status FROM workflow_run_steps WHERE id = ?1",
-                params![dead_step],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(status, "failed", "{dead_step} should be failed");
+        assert_eq!(
+            get_step_status(&conn, dead_step),
+            "failed",
+            "{dead_step} should be failed"
+        );
     }
 
-    let live_status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![s3],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(live_status, "running", "live step must remain running");
+    assert_eq!(
+        get_step_status(&conn, &s3),
+        "running",
+        "live step must remain running"
+    );
 }
 
 #[test]
@@ -2812,6 +2748,15 @@ fn get_run_status(conn: &Connection, run_id: &str) -> String {
     conn.query_row(
         "SELECT status FROM workflow_runs WHERE id = ?1",
         params![run_id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+fn get_step_status(conn: &Connection, step_id: &str) -> String {
+    conn.query_row(
+        "SELECT status FROM workflow_run_steps WHERE id = ?1",
+        params![step_id],
         |r| r.get(0),
     )
     .unwrap()
