@@ -80,7 +80,13 @@ async fn wire_headless_drain(
                 if let Some(ref pf) = prompt_file {
                     let _ = std::fs::remove_file(pf);
                 }
-                // wait() to reap the child and avoid a zombie process.
+                // Drop stdout/stderr before wait() to close the read ends of
+                // the pipes.  If the child has filled its stdout buffer it is
+                // blocked trying to write; wait() would also block waiting for
+                // the child to exit — a deadlock.  Closing the pipes first
+                // causes the child's writes to fail with EPIPE so it can exit.
+                drop(handle.stdout);
+                drop(handle.stderr);
                 let _ = handle.child.wait();
                 return;
             }
@@ -1590,13 +1596,20 @@ pub async fn get_agent_run_events_by_id(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
     use conductor_core::agent::{AgentManager, AgentRunStatus};
+    use conductor_core::config::Config;
 
+    use crate::events::EventBus;
     use crate::routes::api_router;
+    use crate::state::AppState;
     use crate::test_helpers::seeded_state;
 
     /// Verify that when `try_spawn_headless_run` fails (working dir does not exist,
@@ -1745,5 +1758,101 @@ mod tests {
             AgentRunStatus::Completed,
             "completed run must not be clobbered by drain panic handler"
         );
+    }
+
+    /// Regression test: drain-thread DB-open failure must not deadlock.
+    ///
+    /// **Bug (pre-fix):** `handle.child.wait()` was called while `handle.stdout`
+    /// was still open.  The test child writes 128 KiB — more than the 64 KiB
+    /// default pipe buffer — so it blocks after filling the buffer.  `wait()`
+    /// then blocks waiting for the child to exit, and neither makes progress.
+    ///
+    /// **Fix:** `stdout` and `stderr` are dropped before `wait()` so the child
+    /// receives EPIPE and exits; `wait()` returns immediately.
+    ///
+    /// The test gives the background drain task 5 seconds to complete.  Without
+    /// the fix it would hang the full 5 seconds and then panic.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drain_db_open_failure_no_pipe_deadlock() {
+        use std::process::{Command, Stdio};
+
+        // Spawn a process that writes 128 KiB to stdout — enough to fill the
+        // 64 KiB pipe buffer and leave the child blocked on its next write if
+        // the read end is not closed before wait().
+        let mut child = Command::new("sh")
+            .args(["-c", "dd if=/dev/zero bs=131072 count=1 2>/dev/null"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn dd writer");
+
+        let child_pid = child.id();
+        let stdout = child.stdout.take().expect("stdout pipe");
+        let stderr = child.stderr.take().expect("stderr pipe");
+        let handle = conductor_core::agent_runtime::HeadlessHandle {
+            pid: child_pid,
+            stdout,
+            stderr,
+            child,
+        };
+
+        // Build an AppState with a valid shared DB (so update_run_subprocess_pid
+        // succeeds) but a non-existent db_path (so the drain thread's secondary
+        // DB open fails and exercises the failure branch).
+        let tmp = tempfile::NamedTempFile::new().expect("temp db");
+        let conn = conductor_core::db::open_database(tmp.path()).expect("open db");
+        conductor_core::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        conductor_core::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let run = AgentManager::new(&conn)
+            .create_run(Some("w1"), "test prompt", None, None)
+            .expect("create run");
+        let run_id = run.id.clone();
+        let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(Config::default())),
+            events: EventBus::new(8),
+            // Deliberately bad path so the drain thread's DB open fails.
+            db_path: std::path::PathBuf::from("/nonexistent/__conductor_drain_test.db"),
+            workflow_done_notify: None,
+        };
+
+        // wire_headless_drain returns Ok quickly (persists PID, spawns tasks).
+        super::wire_headless_drain(&state, &run_id, handle, None, None)
+            .await
+            .expect("wire_headless_drain should return Ok");
+
+        // Poll until the child process disappears from the process table.
+        // `ps -p <pid>` exits 0 while the process exists (running or zombie),
+        // non-zero once it has been fully reaped by wait().
+        // Without the fix the child fills its pipe and neither wait() nor the
+        // child can make progress — this loop would time out.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let alive = Command::new("ps")
+                .args(["-p", &child_pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child PID {child_pid} still in process table after 5 s \
+                 — likely pipe-buffer deadlock in drain thread (stdout/stderr \
+                 not dropped before wait())"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Keep _tmp alive until the DB is no longer needed.
+        let _ = tmp;
     }
 }
