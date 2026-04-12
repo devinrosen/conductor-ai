@@ -127,6 +127,11 @@ pub(super) struct ExecutionState<'a> {
 }
 
 impl ExecutionState<'_> {
+    /// Create a fresh heartbeat counter, initialized to 0 so the first tick fires immediately.
+    pub(super) fn new_heartbeat() -> Arc<AtomicI64> {
+        Arc::new(AtomicI64::new(0))
+    }
+
     /// Accumulate metrics from a completed agent run into this execution state.
     ///
     /// Centralises the per-field `if let Some` pattern so parallel.rs and any
@@ -523,7 +528,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         triggered_by_hook: input.triggered_by_hook,
         conductor_bin_dir: input.conductor_bin_dir.clone(),
         extra_plugin_dirs: input.extra_plugin_dirs.clone(),
-        last_heartbeat_at: Arc::new(AtomicI64::new(0)),
+        last_heartbeat_at: ExecutionState::new_heartbeat(),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -1085,7 +1090,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         triggered_by_hook: wf_run.is_triggered_by_hook(),
         conductor_bin_dir: input.conductor_bin_dir.clone(),
         extra_plugin_dirs: vec![],
-        last_heartbeat_at: Arc::new(AtomicI64::new(0)),
+        last_heartbeat_at: ExecutionState::new_heartbeat(),
     };
 
     run_workflow_engine(&mut state, &workflow)

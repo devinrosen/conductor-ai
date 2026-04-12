@@ -2808,6 +2808,15 @@ fn insert_orphaned_root_run(
     id
 }
 
+fn get_run_status(conn: &Connection, run_id: &str) -> String {
+    conn.query_row(
+        "SELECT status FROM workflow_runs WHERE id = ?1",
+        params![run_id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
 /// A stale last_heartbeat (> threshold) should be reaped and resumed.
 #[test]
 fn test_reap_heartbeat_stuck_stale_heartbeat() {
@@ -2823,14 +2832,11 @@ fn test_reap_heartbeat_stuck_stale_heartbeat() {
 
     assert_eq!(count, 1, "expected 1 run reaped");
     // Status must be flipped to 'failed' by the CAS.
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "failed", "run status must be failed after CAS flip");
+    assert_eq!(
+        get_run_status(&conn, &run_id),
+        "failed",
+        "run status must be failed after CAS flip"
+    );
 }
 
 /// A fresh last_heartbeat (< threshold) must NOT be reaped.
@@ -2846,14 +2852,11 @@ fn test_reap_heartbeat_stuck_fresh_heartbeat() {
     let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
 
     assert_eq!(count, 0, "fresh run must not be reaped");
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "running", "run status must still be running");
+    assert_eq!(
+        get_run_status(&conn, &run_id),
+        "running",
+        "run status must still be running"
+    );
 }
 
 /// NULL heartbeat falls back to started_at — stale started_at must be reaped.
@@ -2868,14 +2871,7 @@ fn test_reap_heartbeat_stuck_null_heartbeat_stale_started() {
     let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
 
     assert_eq!(count, 1, "stale run with NULL heartbeat must be reaped");
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "failed");
+    assert_eq!(get_run_status(&conn, &run_id), "failed");
 }
 
 /// NULL heartbeat falls back to started_at — fresh started_at must NOT be reaped.
@@ -2890,14 +2886,7 @@ fn test_reap_heartbeat_stuck_null_heartbeat_fresh_started() {
     let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
 
     assert_eq!(count, 0, "fresh run with NULL heartbeat must not be reaped");
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "running");
+    assert_eq!(get_run_status(&conn, &run_id), "running");
 }
 
 /// A run with an active child step (status='pending') must NOT be reaped, even
@@ -2922,14 +2911,7 @@ fn test_reap_heartbeat_stuck_active_child_step() {
     let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
 
     assert_eq!(count, 0, "run with active step must not be reaped");
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(status, "running");
+    assert_eq!(get_run_status(&conn, &run_id), "running");
 }
 
 /// Two sequential calls on the same orphan: first wins the CAS (count=1),
@@ -2997,15 +2979,9 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
     let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
     assert_eq!(count, 1, "only root run should be reaped");
 
-    let child_status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![child_run_id],
-            |r| r.get(0),
-        )
-        .unwrap();
     assert_eq!(
-        child_status, "running",
+        get_run_status(&conn, &child_run_id),
+        "running",
         "sub-workflow run must not be reaped"
     );
 }
