@@ -184,7 +184,7 @@ fn execute_call_with_schema(
             }
         };
 
-        let pid = handle.pid;
+        let pid = handle.pid();
         if let Err(e) = state
             .agent_mgr
             .update_run_subprocess_pid(&child_run.id, pid)
@@ -197,6 +197,9 @@ fn execute_call_with_schema(
         let log_path = crate::config::agent_log_path(&child_run.id);
         let (tx, rx) = std::sync::mpsc::channel::<crate::agent_runtime::DrainOutcome>();
 
+        // Decompose the handle so stderr and stdout can be handed to separate threads.
+        let (stderr_pipe, stdout_pipe, finish) = handle.into_stderr_drain_parts();
+
         // Drain subprocess stderr on a dedicated thread.
         //
         // The subprocess (`conductor agent run`) is spawned with stderr piped
@@ -208,7 +211,6 @@ fn execute_call_with_schema(
         // flowing.  Output is intentionally discarded: forwarding to our own
         // stderr corrupts the TUI (which owns the terminal in raw mode), and the
         // subprocess already writes the useful stream-json events to its stdout.
-        let stderr_pipe = handle.stderr;
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
             let reader = BufReader::new(stderr_pipe);
@@ -229,17 +231,14 @@ fn execute_call_with_schema(
             };
             let mgr = crate::agent::AgentManager::new(&conn);
             let outcome = crate::agent_runtime::drain_stream_json(
-                handle.stdout,
+                stdout_pipe,
                 &run_id_clone,
                 &log_path,
                 &mgr,
                 |_| {},
             );
             let _ = std::fs::remove_file(&prompt_file);
-            let _ = {
-                let mut c = handle.child;
-                c.wait()
-            };
+            finish();
             let _ = tx.send(outcome);
         });
 

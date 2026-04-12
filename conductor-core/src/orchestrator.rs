@@ -179,7 +179,7 @@ pub fn orchestrate_run(
             }
         };
 
-        let pid = handle.pid;
+        let pid = handle.pid();
         if let Err(e) = mgr.update_run_subprocess_pid(&child_run.id, pid) {
             tracing::warn!("Failed to persist subprocess pid: {e}");
         }

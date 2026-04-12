@@ -91,7 +91,7 @@ async fn wire_headless_drain(
     // before any cancellation request arrives.
     let pid_result = {
         let db = state.db.lock().await;
-        AgentManager::new(&db).update_run_subprocess_pid(run_id, handle.pid)
+        AgentManager::new(&db).update_run_subprocess_pid(run_id, handle.pid())
     };
     if let Err(e) = pid_result {
         // PID not persisted — stop_agent can't reach this process.

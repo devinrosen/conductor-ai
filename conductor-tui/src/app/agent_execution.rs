@@ -385,7 +385,7 @@ impl App {
                 }
             };
 
-            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid) {
+            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
                 tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
             }
 
@@ -696,7 +696,7 @@ impl App {
                 }
             };
 
-            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid) {
+            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
                 tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
             }
 
@@ -842,7 +842,7 @@ impl App {
                 }
             };
 
-            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid) {
+            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
                 tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
             }
 
@@ -954,7 +954,7 @@ impl App {
                 }
             };
 
-            if let Err(e) = mgr.update_run_subprocess_pid(&new_run.id, handle.pid) {
+            if let Err(e) = mgr.update_run_subprocess_pid(&new_run.id, handle.pid()) {
                 tracing::warn!("failed to store subprocess PID for run {}: {e}", new_run.id);
             }
 
