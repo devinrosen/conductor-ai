@@ -333,7 +333,7 @@ impl<'a> AgentManager<'a> {
         if let Some(pid) = subprocess_pid {
             // subprocess_pid is i64 in DB (SQLite integer); cast to u32 is safe for
             // realistic PID values.
-            crate::agent_runtime::cancel_subprocess(pid as u32);
+            crate::process_utils::cancel_subprocess(pid as u32);
         }
 
         Ok(())
