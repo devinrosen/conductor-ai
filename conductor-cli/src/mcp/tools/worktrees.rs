@@ -564,8 +564,7 @@ mod tests {
 
     /// Set up a test DB with one registered repo and 2 inserted worktrees.
     /// Returns the tempfile guard (keep alive), the db path, and the repo slug.
-    fn make_pagination_test_db()
-    -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    fn make_pagination_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
