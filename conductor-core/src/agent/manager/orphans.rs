@@ -96,7 +96,29 @@ impl<'a> AgentManager<'a> {
                 continue;
             }
 
-            // 3. No subprocess_pid — always reap.
+            // 3. No subprocess_pid.
+            //
+            // Guard against a race between the workflow executor spawning the subprocess
+            // and storing the PID in the DB:
+            //   t0: executor creates run (status=running, subprocess_pid=None)
+            //   t1: executor spawns subprocess
+            //   t2: subprocess starts and calls reap_orphaned_runs() ← here
+            //   t3: executor calls update_run_subprocess_pid()        ← not yet
+            //
+            // At t2, the run looks orphaned (no PID) but it is alive.
+            // We detect this by checking whether the run is a child of an active workflow
+            // (i.e. its parent_run_id is a current workflow parent run).  If so, skip it —
+            // the PID will be written momentarily by the executor.
+            if let Some(ref parent_id) = run.parent_run_id {
+                if active_wf_parent_ids.contains(parent_id) {
+                    tracing::debug!(
+                        "reap_orphaned_runs: skipping run {} — child of active workflow (PID not yet stored)",
+                        run.id,
+                    );
+                    continue;
+                }
+            }
+
             tracing::warn!(
                 "reap_orphaned_runs: run {} has no subprocess_pid (started_at={}, worktree={:?})",
                 run.id,
@@ -355,6 +377,53 @@ mod tests {
                 .unwrap()
                 .contains("PID recycled"),
             "result_text should mention PID recycled"
+        );
+    }
+
+    /// A child run of an active workflow whose subprocess_pid has not yet been stored
+    /// (the spawn-vs-PID-persist race) must NOT be reaped.
+    ///
+    /// Scenario reproduced by the real workflow failure 01KP0R81BP6J6FMXTR9WR7BKY3:
+    ///   1. Workflow executor creates child run (status=running, subprocess_pid=None).
+    ///   2. Executor spawns `conductor agent run` subprocess.
+    ///   3. Subprocess calls reap_orphaned_runs() before executor writes the PID.
+    ///   4. Without this fix the subprocess would reap its own run.
+    #[test]
+    fn test_reap_orphaned_runs_skips_active_workflow_child_no_pid() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Parent run of an active workflow (no subprocess_pid by design).
+        let parent_run = mgr
+            .create_run(Some("w1"), "workflow parent", None, None)
+            .unwrap();
+
+        // Insert an active workflow run whose parent is the run above.
+        let wf_run_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
+             VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
+            rusqlite::params![wf_run_id, parent_run.id],
+        )
+        .unwrap();
+
+        // Child run (e.g. plan step) — subprocess_pid not yet stored.
+        let child_run = mgr
+            .create_child_run(Some("w1"), "plan prompt", None, None, &parent_run.id, None)
+            .unwrap();
+        assert_eq!(child_run.status, AgentRunStatus::Running);
+        assert!(child_run.subprocess_pid.is_none());
+
+        // Neither the parent nor the child should be reaped.
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 0, "active workflow child run (no PID yet) must not be reaped");
+
+        let child_after = mgr.get_run(&child_run.id).unwrap().unwrap();
+        assert_eq!(
+            child_after.status,
+            AgentRunStatus::Running,
+            "child run status must remain running"
         );
     }
 
