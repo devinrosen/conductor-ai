@@ -1985,12 +1985,7 @@ mod tests {
         // file so that any subsequent SQL write fails.
         let tmp_real = tempfile::NamedTempFile::new().expect("temp db");
         let real_conn = conductor_core::db::open_database(tmp_real.path()).expect("open db");
-        conductor_core::test_helpers::insert_test_repo(
-            &real_conn,
-            "r1",
-            "test-repo",
-            "/tmp/repo",
-        );
+        conductor_core::test_helpers::insert_test_repo(&real_conn, "r1", "test-repo", "/tmp/repo");
         conductor_core::test_helpers::insert_test_worktree(
             &real_conn,
             "w1",
@@ -2007,8 +2002,7 @@ mod tests {
         // Open a connection to an empty temp file — schema-less, so any
         // SQL UPDATE will fail immediately with "no such table".
         let tmp_bad = tempfile::NamedTempFile::new().expect("temp bad db");
-        let bad_conn =
-            rusqlite::Connection::open(tmp_bad.path()).expect("open bad connection");
+        let bad_conn = rusqlite::Connection::open(tmp_bad.path()).expect("open bad connection");
 
         let state = AppState {
             db: Arc::new(Mutex::new(bad_conn)),
