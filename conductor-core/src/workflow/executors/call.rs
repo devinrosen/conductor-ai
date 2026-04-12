@@ -155,6 +155,7 @@ fn execute_call_with_schema(
             &child_run.id,
             &state.working_dir,
             &prompt,
+            None,
             step_model,
             effective_bot_name,
             Some(&state.config.general.agent_permission_mode),

@@ -241,14 +241,14 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Mark a run as failed only if it is currently `running`.
-    /// Used by background reapers to avoid overwriting a run that has already
-    /// been finalized by another path.
+    /// Mark a run as failed only if it is currently `running` or `waiting_for_feedback`.
+    /// Used by background reapers and panic monitors to avoid overwriting a run that has
+    /// already been finalized (e.g. `completed`, `failed`, `cancelled`) by another path.
     pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE agent_runs SET status = 'failed', result_text = ?1, ended_at = ?2 \
-             WHERE id = ?3 AND status = 'running'",
+             WHERE id = ?3 AND status IN ('running', 'waiting_for_feedback')",
             params![error, now, run_id],
         )?;
         Ok(())
@@ -1048,6 +1048,44 @@ mod tests {
             fetched.claude_session_id.as_deref(),
             Some("sess-abc"),
             "session should not be clobbered by NULL"
+        );
+    }
+
+    #[test]
+    fn test_update_run_failed_if_running_transitions_waiting_for_feedback() {
+        // `update_run_failed_if_running` guards on `status IN ('running',
+        // 'waiting_for_feedback')`.  A run stuck in `waiting_for_feedback`
+        // (e.g. the drain thread panicked before the agent could answer a
+        // feedback request) must be moved to `failed` so it does not stay
+        // stuck indefinitely.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.request_feedback(&run.id, "what should I do?", None)
+            .expect("request_feedback must succeed");
+
+        // Confirm transition to WaitingForFeedback.
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::WaitingForFeedback);
+
+        // Simulate drain-panic monitor: must succeed and flip to Failed.
+        mgr.update_run_failed_if_running(&run.id, "drain thread panicked")
+            .expect("update_run_failed_if_running must not return an error");
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.status,
+            AgentRunStatus::Failed,
+            "waiting_for_feedback run must be transitioned to failed"
+        );
+        assert!(
+            fetched
+                .result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("drain thread panicked"),
+            "result_text should record the panic reason"
         );
     }
 }

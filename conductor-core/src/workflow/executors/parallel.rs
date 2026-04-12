@@ -171,6 +171,7 @@ pub fn execute_parallel(
             &child_run.id,
             &state.working_dir,
             &prompt,
+            None,
             step_model,
             state.default_bot_name.as_deref(),
             Some(&permission_mode),
