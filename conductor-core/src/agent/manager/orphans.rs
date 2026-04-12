@@ -376,6 +376,23 @@ mod tests {
         )
         .unwrap();
 
+        // On macOS the PID reuse guard computes abs(process_started_at(pid) - run.started_at).
+        // The cargo test process has been running for much longer than the 60s threshold, so
+        // create_run()'s "now()" started_at would trigger a false-positive reap. Fix: update
+        // started_at to the kernel-reported start time of this exact PID so the delta is <1s.
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(proc_start) = crate::process_utils::process_started_at(live_pid) {
+                let started_at_str =
+                    chrono::DateTime::<chrono::Utc>::from(proc_start).to_rfc3339();
+                conn.execute(
+                    "UPDATE agent_runs SET started_at = ?1 WHERE id = ?2",
+                    params![started_at_str, run.id],
+                )
+                .unwrap();
+            }
+        }
+
         let reaped = mgr.reap_orphaned_runs().unwrap();
         assert_eq!(reaped, 0, "live subprocess must not be reaped");
 
