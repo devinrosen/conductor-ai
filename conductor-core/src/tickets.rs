@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 
@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::db::{query_collect, with_in_clause};
 use crate::error::{ConductorError, Result};
-use crate::github::has_merged_pr;
+use crate::github::merged_branches_for_repo;
 use crate::worktree::WorktreeManager;
 
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -872,13 +872,13 @@ impl<'a> TicketSyncer<'a> {
     /// [`TicketSyncer::close_missing_tickets`].
     /// Returns the number of worktrees updated.
     pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str) -> Result<usize> {
-        self.mark_worktrees_for_closed_tickets_with_merge_check(repo_id, has_merged_pr)
+        self.mark_worktrees_for_closed_tickets_with_merge_check(repo_id, merged_branches_for_repo)
     }
 
     fn mark_worktrees_for_closed_tickets_with_merge_check(
         &self,
         repo_id: &str,
-        merge_check: impl Fn(&str, &str) -> bool,
+        merge_check: impl Fn(&str, &[String]) -> HashSet<String>,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
         let artifacts: Vec<(String, String, String, String)> = query_collect(
@@ -888,11 +888,24 @@ impl<'a> TicketSyncer<'a> {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
 
+        // Group branches by remote_url and batch-check merged status per repo.
+        let mut branches_by_remote: HashMap<&str, Vec<String>> = HashMap::new();
+        for (_, _, branch, remote_url) in &artifacts {
+            branches_by_remote
+                .entry(remote_url.as_str())
+                .or_default()
+                .push(branch.clone());
+        }
+        let mut merged_branches: HashSet<String> = HashSet::new();
+        for (remote_url, branches) in &branches_by_remote {
+            merged_branches.extend(merge_check(remote_url, branches));
+        }
+
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
-        for (repo_path, worktree_path, branch, remote_url) in &artifacts {
-            if !merge_check(remote_url, branch) {
+        for (repo_path, worktree_path, branch, _remote_url) in &artifacts {
+            if !merged_branches.contains(branch) {
                 // Ticket is closed but PR not yet merged — leave the worktree alone.
                 continue;
             }
@@ -1565,7 +1578,9 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, branches: &[String]| {
+                branches.iter().cloned().collect::<HashSet<_>>()
+            })
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
@@ -1589,7 +1604,9 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, branches: &[String]| {
+                branches.iter().cloned().collect::<HashSet<_>>()
+            })
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
@@ -1719,7 +1736,9 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, branches: &[String]| {
+                branches.iter().cloned().collect::<HashSet<_>>()
+            })
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
@@ -1753,7 +1772,9 @@ mod tests {
             .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
         syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, branches: &[String]| {
+                branches.iter().cloned().collect::<HashSet<_>>()
+            })
             .unwrap();
 
         let after: Option<String> = conn
@@ -1802,7 +1823,9 @@ mod tests {
         // The key behavioral change being tested: artifact cleanup now happens unconditionally
         // for all paths that call mark_worktrees_for_closed_tickets (previously it was conditional)
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, branches: &[String]| {
+                branches.iter().cloned().collect::<HashSet<_>>()
+            })
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt-cleanup"), "merged");
@@ -1875,7 +1898,9 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, branches: &[String]| {
+                branches.iter().cloned().collect::<HashSet<_>>()
+            })
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
@@ -1901,7 +1926,9 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| false)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _: &[String]| {
+                HashSet::new()
+            })
             .unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
@@ -1926,7 +1953,9 @@ mod tests {
             .unwrap();
 
         let count = syncer
-            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, branches: &[String]| {
+                branches.iter().cloned().collect::<HashSet<_>>()
+            })
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
