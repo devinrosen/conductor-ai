@@ -13,6 +13,16 @@ const OPUS_KEYWORDS = [
   "implement", "rewrite", "migrate", "complex",
 ];
 
+/**
+ * Fallback used when /config/known-models is unavailable.
+ * Mirrors conductor-core/src/models.rs KNOWN_MODELS — update both if models change.
+ */
+const FALLBACK_MODELS: KnownModel[] = [
+  { id: "claude-opus-4-6",           alias: "opus",   tier: 3, tier_label: "Powerful", description: "Planning, architecture, complex analysis" },
+  { id: "claude-sonnet-4-6",         alias: "sonnet", tier: 2, tier_label: "Balanced", description: "General implementation (default)" },
+  { id: "claude-haiku-4-5-20251001", alias: "haiku",  tier: 1, tier_label: "Fast",     description: "Commit messages, formatting, quick edits" },
+];
+
 function suggestModel(prompt: string): string {
   const lower = prompt.toLowerCase();
   for (const kw of HAIKU_KEYWORDS) {
@@ -53,7 +63,12 @@ export function AgentPromptModal({
 
   useEffect(() => {
     if (open && models.length === 0) {
-      api.listKnownModels().then(setModels).catch(() => {});
+      api.listKnownModels()
+        .then(setModels)
+        .catch((err) => {
+          console.error("[AgentPromptModal] Failed to load known models, using fallback:", err);
+          setModels(FALLBACK_MODELS);
+        });
     }
   }, [open, models.length]);
 
