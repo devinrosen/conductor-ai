@@ -107,6 +107,27 @@ async fn wire_headless_drain(
                 // deadlock where a child that has filled its stdout buffer can
                 // never exit, so wait() would block forever.
                 handle.abort();
+                // Mark the run failed so it doesn't stay stuck in 'running'
+                // until the orphan reaper's next poll. Retry open on the same
+                // path — the first failure may have been transient. If this
+                // retry also fails, the orphan reaper remains the backstop.
+                let msg = format!("drain thread failed to open DB: {e}");
+                match conductor_core::db::open_database(&db_path) {
+                    Ok(conn2) => {
+                        if let Err(update_err) = AgentManager::new(&conn2)
+                            .update_run_failed_if_running(&run_id_owned, &msg)
+                        {
+                            tracing::warn!(
+                                "[wire_headless_drain] drain: failed to mark run failed after DB open error: {update_err}"
+                            );
+                        }
+                    }
+                    Err(open_err) => {
+                        tracing::warn!(
+                            "[wire_headless_drain] drain: could not open DB for failure recovery: {open_err}"
+                        );
+                    }
+                }
                 return;
             }
         };
