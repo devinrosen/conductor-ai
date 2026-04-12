@@ -12,6 +12,10 @@ pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
             .get("result")
             .and_then(|v| v.as_str())
             .map(String::from),
+        session_id: event
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
         num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
         duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
@@ -117,6 +121,8 @@ pub(crate) fn try_recover_from_log_at(
 }
 
 /// Parse a single stream-json log line into zero or more display events.
+///
+/// Parses the JSON string and delegates to [`parse_events_from_value`].
 pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
     let line = line.trim();
     if line.is_empty() {
@@ -125,7 +131,13 @@ pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return Vec::new();
     };
+    parse_events_from_value(&value)
+}
 
+/// Parse a pre-parsed JSON value into zero or more display events.
+///
+/// Used by [`drain_stream_json`] to avoid double-parsing the same JSON line.
+pub fn parse_events_from_value(value: &serde_json::Value) -> Vec<AgentEvent> {
     let mut events = Vec::new();
     let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -370,6 +382,7 @@ pub fn count_turns_incremental(path: &str, prev_offset: u64, prev_count: i64) ->
 ///
 /// Only complete lines (up to the last `\n`) are processed to avoid counting
 /// a partially-written JSON event.
+#[cfg(test)]
 pub(crate) fn scan_partial_token_usage(path: &str) -> (i64, i64, i64, i64) {
     use std::io::{Read as _, Seek, SeekFrom};
 

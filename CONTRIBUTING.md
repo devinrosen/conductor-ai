@@ -12,7 +12,6 @@ Conductor exists to make AI-assisted development repeatable and observable. The 
 
 - Rust stable toolchain
 - [GitHub CLI (`gh`)](https://cli.github.com/) — installed and authenticated
-- [tmux](https://github.com/tmux/tmux)
 - [Node.js](https://nodejs.org/) (only needed if touching the web UI)
 
 ### 2. Clone and build

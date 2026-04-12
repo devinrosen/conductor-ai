@@ -504,7 +504,7 @@ impl App {
             Action::RepoDetailInfoCopy => self.handle_repo_detail_info_copy(),
             Action::WorkflowRunDetailCopy => self.handle_workflow_run_detail_copy(),
 
-            // Agent (tmux-based)
+            // Agent
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::PromptRepoAgent => self.handle_prompt_repo_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
@@ -1041,6 +1041,77 @@ impl App {
                         self.state.modal = Modal::Error { message: e };
                     }
                 }
+            }
+            Action::AgentEvent { run_id, event } => {
+                let now = chrono::Utc::now().to_rfc3339();
+                let run_event = conductor_core::agent::AgentRunEvent {
+                    id: conductor_core::new_id(),
+                    run_id: run_id.clone(),
+                    kind: event.kind,
+                    summary: event.summary,
+                    started_at: now,
+                    ended_at: None,
+                    metadata: event.metadata,
+                };
+                // Find which worktree owns this run_id, then append to cache.
+                let wt_id = self
+                    .state
+                    .data
+                    .latest_agent_runs
+                    .iter()
+                    .find_map(|(id, run)| {
+                        if run.id == run_id {
+                            Some(id.clone())
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(wt_id) = wt_id {
+                    self.state
+                        .data
+                        .all_worktree_agent_events
+                        .entry(wt_id)
+                        .or_default()
+                        .push(run_event);
+                    self.reload_agent_events();
+                    let len = self.state.data.agent_activity_len();
+                    let cur = self.state.agent_list_state.borrow().selected();
+                    let at_bottom = cur.is_none_or(|idx| idx + 1 >= len);
+                    if at_bottom && len > 0 {
+                        self.state
+                            .agent_list_state
+                            .borrow_mut()
+                            .select(Some(len - 1));
+                    }
+                } else {
+                    // Check repo-scoped runs
+                    let repo_id =
+                        self.state
+                            .data
+                            .latest_repo_agent_runs
+                            .iter()
+                            .find_map(|(id, run)| {
+                                if run.id == run_id {
+                                    Some(id.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                    if let Some(repo_id) = repo_id {
+                        self.state
+                            .data
+                            .all_repo_agent_events
+                            .entry(repo_id)
+                            .or_default()
+                            .push(run_event);
+                        self.reload_repo_agent_events();
+                    }
+                }
+                return true;
+            }
+            Action::AgentComplete { .. } => {
+                // Trigger a DB poll to pick up the finalized run status, cost, and tokens.
+                self.refresh_data();
             }
             Action::BackgroundError { message } => {
                 self.state.modal = Modal::Error { message };

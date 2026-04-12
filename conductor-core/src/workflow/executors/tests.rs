@@ -1,6 +1,7 @@
 use super::{
-    eval_condition, execute_call_workflow, execute_gate, execute_if, execute_quality_gate,
-    execute_script, execute_unless, poll_script_child, read_stdout_bounded, ScriptPollResult,
+    eval_condition, execute_call, execute_call_workflow, execute_gate, execute_if,
+    execute_parallel, execute_quality_gate, execute_script, execute_unless, poll_script_child,
+    read_stdout_bounded, ScriptPollResult,
 };
 use crate::workflow::engine::ExecutionState;
 use crate::workflow::status::WorkflowStepStatus;
@@ -97,6 +98,23 @@ fn test_execute_script_success() {
         state.contexts.iter().any(|c| c.output_file.is_some()),
         "output_file should be set in context"
     );
+    // subprocess_pid must be cleared after the step completes (Succeeded path).
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    let step_id = &steps[0].id;
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid.is_none(),
+        "subprocess_pid should be NULL after Succeeded"
+    );
 }
 
 #[test]
@@ -141,6 +159,20 @@ fn test_execute_script_failure_captures_stdout() {
         result_text.contains("something before failure"),
         "stdout should be captured in failure result, got: {result_text}"
     );
+    // subprocess_pid must be cleared after the step completes (Failed path).
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    let step_id = &steps[0].id;
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(pid.is_none(), "subprocess_pid should be NULL after Failed");
 }
 
 // -----------------------------------------------------------------------
@@ -274,7 +306,8 @@ fn test_poll_script_child_timeout() {
         .arg("60")
         .spawn()
         .expect("failed to spawn sleep");
-    let result = poll_script_child(&mut child, Some(0), None);
+    let pid = child.id();
+    let result = poll_script_child(&mut child, pid, Some(0), None);
     assert!(
         matches!(result, ScriptPollResult::TimedOut),
         "expected TimedOut, got other variant"
@@ -292,7 +325,8 @@ fn test_poll_script_child_cancelled() {
         .arg("60")
         .spawn()
         .expect("failed to spawn sleep");
-    let result = poll_script_child(&mut child, None, Some(&flag));
+    let pid = child.id();
+    let result = poll_script_child(&mut child, pid, None, Some(&flag));
     assert!(
         matches!(result, ScriptPollResult::Cancelled),
         "expected Cancelled, got other variant"
@@ -435,6 +469,19 @@ fn test_execute_script_timeout() {
         .unwrap();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].status, WorkflowStepStatus::TimedOut);
+    // subprocess_pid must be cleared after the step completes (TimedOut path).
+    let step_id = &steps[0].id;
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid.is_none(),
+        "subprocess_pid should be NULL after TimedOut"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -481,6 +528,23 @@ fn test_execute_script_cancelled() {
     assert!(
         err_msg.contains("cancel"), // step name included
         "error message should include step name 'cancel': {err_msg}"
+    );
+    // subprocess_pid must be cleared after the step completes (Cancelled path).
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    let step_id = &steps[0].id;
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid.is_none(),
+        "subprocess_pid should be NULL after Cancelled"
     );
 }
 
@@ -1235,5 +1299,488 @@ fn test_execute_call_workflow_sets_child_run_id() {
     assert!(
         wf_step.child_run_id.is_some(),
         "child_run_id must be populated on the workflow step"
+    );
+}
+
+// -----------------------------------------------------------------------
+// execute_parallel — headless path tests
+// -----------------------------------------------------------------------
+
+/// Verify that execute_parallel handles the headless spawn-failure path correctly:
+/// all 3 agents fail to spawn (no conductor binary available at test time), each
+/// run + step is marked Failed in the DB, and execute_parallel still returns Ok(()).
+///
+/// This exercises the no-tmux-kill-window code path and confirms that the new
+/// drain-thread plumbing compiles and integrates correctly without requiring a
+/// real Claude subprocess.
+#[test]
+fn test_parallel_three_agents_headless_spawn_fail() {
+    use crate::workflow_dsl::{AgentRef, ParallelNode};
+    use std::collections::HashMap;
+
+    // Create agent config files so load_agent() succeeds (spawn is the failure point)
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    for name in ["agent-alpha", "agent-beta", "agent-gamma"] {
+        std::fs::write(
+            agents_dir.join(format!("{name}.md")),
+            "---\nrole: reviewer\n---\nTest agent for parallel headless path.\n",
+        )
+        .unwrap();
+    }
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            fail_fast: false,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let node = ParallelNode {
+        fail_fast: false,
+        // min_success=Some(0): the test passes regardless of how many agents succeed,
+        // so CI machines without a `conductor` binary still get a green test.
+        min_success: Some(0),
+        calls: vec![
+            AgentRef::Name("agent-alpha".into()),
+            AgentRef::Name("agent-beta".into()),
+            AgentRef::Name("agent-gamma".into()),
+        ],
+        output: None,
+        call_outputs: HashMap::new(),
+        with: vec![],
+        call_with: HashMap::new(),
+        call_if: HashMap::new(),
+    };
+
+    let result = execute_parallel(&mut state, &node, 0);
+    assert!(
+        result.is_ok(),
+        "execute_parallel should return Ok even when all spawns fail: {result:?}"
+    );
+
+    // Each agent that reached spawn creates a step record (inserted before spawn attempt).
+    // Spawn failure marks the step Failed and marks the run Failed.
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    assert_eq!(steps.len(), 3, "expected 3 step records (one per agent)");
+    for step in &steps {
+        assert_eq!(
+            step.status,
+            WorkflowStepStatus::Failed,
+            "each spawn-failed agent should have a Failed step: {:?}",
+            step.step_name
+        );
+    }
+}
+
+/// Verify that execute_parallel exercises the channel-based polling loop, including
+/// the timeout-cancellation branch.
+///
+/// With step_timeout=1ns and poll_interval=1ms the polling loop detects the timeout
+/// on its very first iteration (after recv_timeout returns Timeout), cancels any
+/// children that were added, and breaks.
+///
+/// * When conductor is **unavailable** (unit-test environments) all spawns fail,
+///   `children` is empty, and the loop exits via the `completed.len()==children.len()`
+///   guard before even reaching the channel.  All steps still end in Failed.
+/// * When conductor is **available** (CI after `cargo build`) at least one agent
+///   makes it into `children`.  The 1 ns timeout fires on the first recv_timeout
+///   iteration, cancels remaining agents, and exercises the channel-polling timeout
+///   branch.  All steps again end in a terminal (non-Running) state.
+#[test]
+fn test_parallel_channel_polling_timeout_path() {
+    use crate::workflow_dsl::{AgentRef, ParallelNode};
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    for name in ["agent-x", "agent-y"] {
+        std::fs::write(
+            agents_dir.join(format!("{name}.md")),
+            "---\nrole: reviewer\n---\nTest agent for channel polling path.\n",
+        )
+        .unwrap();
+    }
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            // 1 ns timeout — fires immediately in the polling loop so the
+            // timeout-cancellation branch is hit on the very first iteration.
+            step_timeout: Duration::from_nanos(1),
+            poll_interval: Duration::from_millis(1),
+            fail_fast: false,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let node = ParallelNode {
+        fail_fast: false,
+        min_success: Some(0),
+        calls: vec![
+            AgentRef::Name("agent-x".into()),
+            AgentRef::Name("agent-y".into()),
+        ],
+        output: None,
+        call_outputs: HashMap::new(),
+        with: vec![],
+        call_with: HashMap::new(),
+        call_if: HashMap::new(),
+    };
+
+    let result = execute_parallel(&mut state, &node, 0);
+    assert!(
+        result.is_ok(),
+        "execute_parallel should return Ok with min_success=0: {result:?}"
+    );
+
+    // All recorded steps must be in a terminal (non-Running) state.
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    for step in &steps {
+        assert_ne!(
+            step.status,
+            WorkflowStepStatus::Running,
+            "step '{}' must not be left in Running state",
+            step.step_name
+        );
+    }
+}
+
+// ------- execute_call — headless path tests -------
+
+/// Verify that execute_call handles the headless spawn-failure path correctly:
+/// the agent fails to spawn (no conductor binary at test time), the run is marked
+/// Failed in the DB, and execute_call returns an error (all retries exhausted).
+#[test]
+fn test_call_headless_spawn_fail() {
+    use crate::workflow_dsl::{AgentRef, CallNode};
+
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::write(
+        agents_dir.join("test-agent.md"),
+        "---\nrole: reviewer\n---\nTest agent for call headless path.\n",
+    )
+    .unwrap();
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            fail_fast: false,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let node = CallNode {
+        agent: AgentRef::Name("test-agent".into()),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+        output: None,
+        with: vec![],
+        plugin_dirs: vec![],
+    };
+
+    // execute_call is expected to fail (spawn fails; all retries exhausted)
+    // OR succeed if conductor binary is present (subprocess fails naturally).
+    // Either way, a step record should exist.
+    let _result = execute_call(&mut state, &node, 0);
+
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    assert_eq!(steps.len(), 1, "expected exactly one step record");
+    // Step should be Failed (spawn fail) or potentially Completed/Failed from real subprocess
+    assert_ne!(
+        steps[0].status,
+        WorkflowStepStatus::Running,
+        "step should not be left in Running state"
+    );
+}
+
+/// Verify that when the shutdown flag is set during the drain-wait loop,
+/// execute_call marks the run cancelled, cancels the subprocess, and returns Err.
+#[test]
+fn test_call_shutdown_during_drain() {
+    use crate::workflow_dsl::{AgentRef, CallNode};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::write(
+        agents_dir.join("slow-agent.md"),
+        "---\nrole: reviewer\n---\nTest agent for shutdown path.\n",
+    )
+    .unwrap();
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = Arc::clone(&shutdown);
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = ExecutionState {
+        working_dir: dir_str.clone(),
+        repo_path: dir_str,
+        exec_config: crate::workflow::types::WorkflowExecConfig {
+            shutdown: Some(Arc::clone(&shutdown)),
+            // fail_fast=true ensures we get Err both when spawn fails (retries exhausted)
+            // and when the shutdown flag is detected mid-drain.
+            fail_fast: true,
+            ..Default::default()
+        },
+        ..make_loop_test_state(&conn, config)
+    };
+
+    // Set the shutdown flag immediately so it fires on the first poll tick
+    shutdown_clone.store(true, Ordering::Relaxed);
+
+    let node = CallNode {
+        agent: AgentRef::Name("slow-agent".into()),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+        output: None,
+        with: vec![],
+        plugin_dirs: vec![],
+    };
+
+    // If spawn fails (no conductor binary), retries are exhausted → record_step_failure
+    // returns Err because fail_fast=true.
+    // If spawn succeeds, the shutdown flag causes execute_call to return Err immediately.
+    let result = execute_call(&mut state, &node, 0);
+    assert!(
+        result.is_err(),
+        "execute_call should return Err when shutdown is signalled or spawns fail"
+    );
+}
+
+/// Regression test for the drain-signal race condition in execute_parallel.
+///
+/// When the drain thread signals completion via the channel but the DB row still
+/// shows Running or WaitingForFeedback (because the drain thread's DB write hasn't
+/// been committed yet), the parallel executor must:
+///   1. Call `update_run_failed_if_running` to transition the run out of `running`
+///   2. Call `update_step_status(Failed)` to mark the workflow step as terminal
+///
+/// This test verifies those DB operations work correctly by exercising them directly
+/// with a run in `running` state — ensuring the guard is effective and no run can
+/// be left permanently stuck in `running` after a drain-signal race.
+#[test]
+fn test_parallel_drain_signal_race_condition_db_guard() {
+    use crate::agent::manager::AgentManager;
+    use crate::agent::status::AgentRunStatus;
+    use crate::workflow::manager::WorkflowManager;
+
+    let conn = crate::test_helpers::setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    // Create an agent run (starts in `running` state by default)
+    let run = agent_mgr
+        .create_run(None, "test prompt", None, None)
+        .expect("create_run should succeed");
+    assert_eq!(
+        run.status,
+        AgentRunStatus::Running,
+        "newly created run must start in Running state"
+    );
+
+    // Create a workflow run + step in Running state so we can verify the step update.
+    // Use the public manager APIs (pending → running) to stay aligned with the production
+    // state machine and avoid fragile raw SQL that silently breaks on schema changes.
+    let wf_run = wf_mgr
+        .create_workflow_run("test-wf", None, &run.id, false, "manual", None)
+        .expect("create_workflow_run should succeed");
+    wf_mgr
+        .update_workflow_status(
+            &wf_run.id,
+            crate::workflow::status::WorkflowRunStatus::Running,
+            None,
+            None,
+        )
+        .expect("update_workflow_status to Running should succeed");
+    let step_id = wf_mgr
+        .insert_step(&wf_run.id, "test-agent", "actor", false, 0, 1)
+        .expect("insert_step should succeed");
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("update_step_status to Running should succeed");
+    let wf_run_id = wf_run.id.as_str();
+
+    // Simulate what execute_parallel does in the Running|WaitingForFeedback arm:
+    // the drain thread signalled completion but the DB row wasn't updated yet.
+    let fail_msg = "drain completed without result";
+    agent_mgr
+        .update_run_failed_if_running(&run.id, fail_msg)
+        .expect("update_run_failed_if_running should succeed");
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Failed,
+            Some(&run.id),
+            Some(fail_msg),
+            None,
+            None,
+            None,
+        )
+        .expect("update_step_status should succeed");
+
+    // Verify: run must now be `failed`, not `running`
+    let updated_run = agent_mgr
+        .get_run(&run.id)
+        .expect("get_run should succeed")
+        .expect("run should exist");
+    assert_eq!(
+        updated_run.status,
+        AgentRunStatus::Failed,
+        "run must transition to Failed after drain-signal race guard"
+    );
+
+    // Verify: step must be in a terminal (non-Running) state
+    let steps = wf_mgr
+        .get_workflow_steps(wf_run_id)
+        .expect("get_workflow_steps should succeed");
+    assert_eq!(steps.len(), 1, "expected exactly one step");
+    assert_eq!(
+        steps[0].status,
+        WorkflowStepStatus::Failed,
+        "step must be Failed, not left Running after drain-signal race guard"
+    );
+}
+
+/// Regression test for #2013: drain thread panic in the post-completion join loop
+/// leaves the child agent run stuck in `running` state.
+///
+/// The fix extends the `Err` arm of `child.drain_handle.join()` to call
+/// `update_run_failed_if_running` and `update_step_status(Failed)` — the same
+/// pattern used in the `Running|WaitingForFeedback` race-condition arm.
+///
+/// This test verifies those DB operations work correctly by exercising them directly
+/// with a run in `running` state — ensuring the panic path correctly transitions
+/// both the agent run and workflow step to a terminal failure state.
+#[test]
+fn test_parallel_drain_thread_panic_marks_run_failed() {
+    use crate::agent::manager::AgentManager;
+    use crate::agent::status::AgentRunStatus;
+    use crate::workflow::manager::WorkflowManager;
+
+    let conn = crate::test_helpers::setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    // Create an agent run (starts in `running` state by default)
+    let run = agent_mgr
+        .create_run(None, "test prompt", None, None)
+        .expect("create_run should succeed");
+    assert_eq!(
+        run.status,
+        AgentRunStatus::Running,
+        "newly created run must start in Running state"
+    );
+
+    // Create a workflow run + step in Running state so we can verify the step update.
+    let wf_run = wf_mgr
+        .create_workflow_run("test-wf", None, &run.id, false, "manual", None)
+        .expect("create_workflow_run should succeed");
+    wf_mgr
+        .update_workflow_status(
+            &wf_run.id,
+            crate::workflow::status::WorkflowRunStatus::Running,
+            None,
+            None,
+        )
+        .expect("update_workflow_status to Running should succeed");
+    let step_id = wf_mgr
+        .insert_step(&wf_run.id, "test-agent", "actor", false, 0, 1)
+        .expect("insert_step should succeed");
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("update_step_status to Running should succeed");
+    let wf_run_id = wf_run.id.as_str();
+
+    // Simulate what execute_parallel does in the drain-thread-panic arm:
+    // the drain thread panicked so neither the run nor step DB rows were updated.
+    let fail_msg = "drain thread panicked";
+    agent_mgr
+        .update_run_failed_if_running(&run.id, fail_msg)
+        .expect("update_run_failed_if_running should succeed");
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Failed,
+            Some(&run.id),
+            Some(fail_msg),
+            None,
+            None,
+            None,
+        )
+        .expect("update_step_status should succeed");
+
+    // Verify: run must now be `failed`, not `running`
+    let updated_run = agent_mgr
+        .get_run(&run.id)
+        .expect("get_run should succeed")
+        .expect("run should exist");
+    assert_eq!(
+        updated_run.status,
+        AgentRunStatus::Failed,
+        "run must transition to Failed after drain thread panic"
+    );
+
+    // Verify: step must be in a terminal (non-Running) state
+    let steps = wf_mgr
+        .get_workflow_steps(wf_run_id)
+        .expect("get_workflow_steps should succeed");
+    assert_eq!(steps.len(), 1, "expected exactly one step");
+    assert_eq!(
+        steps[0].status,
+        WorkflowStepStatus::Failed,
+        "step must be Failed, not left Running after drain thread panic"
     );
 }

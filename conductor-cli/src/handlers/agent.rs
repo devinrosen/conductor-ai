@@ -32,6 +32,9 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
         if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
             eprintln!("Warning: reap_orphaned_workflow_runs failed: {e}");
         }
+        if let Err(e) = wf_mgr.reap_orphaned_script_steps() {
+            eprintln!("Warning: reap_orphaned_script_steps failed: {e}");
+        }
     }
 
     match command {
@@ -423,6 +426,16 @@ pub(crate) fn run_agent(
                 // Write every line to the log file
                 if let Some(ref mut f) = log_file {
                     let _ = writeln!(f, "{line}");
+                }
+
+                // Relay every line to our own stdout so the parent workflow
+                // executor (call.rs drain_stream_json) can process events in
+                // real-time without polling the log file.
+                {
+                    use std::io::Write;
+                    let stdout_handle = std::io::stdout();
+                    let mut out = stdout_handle.lock();
+                    let _ = writeln!(out, "{line}");
                 }
 
                 let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -829,7 +842,6 @@ fn run_orchestrate(
     let orch_config = OrchestratorConfig {
         fail_fast,
         child_timeout: std::time::Duration::from_secs(child_timeout_secs),
-        ..Default::default()
     };
 
     match orchestrator::orchestrate_run(conn, config, run_id, worktree_path, model, &orch_config) {

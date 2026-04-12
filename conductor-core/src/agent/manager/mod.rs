@@ -5,7 +5,6 @@ pub(crate) mod lifecycle;
 pub(crate) mod orphans;
 pub(crate) mod plan_steps;
 pub(crate) mod queries;
-pub(crate) mod tmux;
 
 use rusqlite::Connection;
 

@@ -25,32 +25,13 @@ pub fn handle_workflow(
             Ok(_) => {}
             Err(e) => eprintln!("Warning: reap_finalization_stuck_workflow_runs failed: {e}"),
         }
-        match wf_mgr.detect_stuck_workflow_run_ids(60) {
-            Ok(ids) if !ids.is_empty() => {
-                let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                for run_id in ids {
-                    let config_clone = config.clone();
-                    let bin_dir = conductor_bin_dir.clone();
-                    std::thread::spawn(move || {
-                        let params = conductor_core::workflow::WorkflowResumeStandalone {
-                            config: config_clone,
-                            workflow_run_id: run_id.clone(),
-                            model: None,
-                            from_step: None,
-                            restart: false,
-                            db_path: None,
-                            conductor_bin_dir: bin_dir,
-                        };
-                        if let Err(e) =
-                            conductor_core::workflow::resume_workflow_standalone(&params)
-                        {
-                            eprintln!("Warning: auto-resume of stuck run {run_id} failed: {e}");
-                        }
-                    });
-                }
+        {
+            let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+            match wf_mgr.reap_heartbeat_stuck_runs(config, 60, conductor_bin_dir) {
+                Ok(n) if n > 0 => eprintln!("Info: auto-resuming {n} stuck workflow run(s)"),
+                Ok(_) => {}
+                Err(e) => eprintln!("Warning: reap_heartbeat_stuck_runs failed: {e}"),
             }
-            Ok(_) => {}
-            Err(e) => eprintln!("Warning: detect_stuck_workflow_run_ids failed: {e}"),
         }
     }
 

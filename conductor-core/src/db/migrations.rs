@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 63;
+pub const LATEST_SCHEMA_VERSION: u32 = 66;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1051,6 +1051,46 @@ pub fn run(conn: &Connection) -> Result<()> {
             conn.execute_batch(include_str!("migrations/063_workflow_run_error.sql"))?;
         }
         bump_version(conn, 63)?;
+    }
+
+    // Migration 064: add subprocess_pid for headless agent tracking (RFC 016).
+    if version < 64 {
+        let has_col: bool = conn
+            .prepare("SELECT subprocess_pid FROM agent_runs LIMIT 0")
+            .is_ok();
+        if !has_col {
+            conn.execute_batch(include_str!("migrations/064_subprocess_pid.sql"))?;
+        }
+        bump_version(conn, 64)?;
+    }
+
+    // Migration 065: add subprocess_pid to workflow_run_steps for script step
+    // orphan detection (RFC 016).
+    if version < 65 {
+        let has_col: bool = conn
+            .prepare("SELECT subprocess_pid FROM workflow_run_steps LIMIT 0")
+            .is_ok();
+        if !has_col {
+            conn.execute_batch(include_str!(
+                "migrations/065_workflow_step_subprocess_pid.sql"
+            ))?;
+        }
+        bump_version(conn, 65)?;
+    }
+
+    // Migration 066: add last_heartbeat column to workflow_runs for the
+    // heartbeat-based watchdog (#2041). NULL is handled by COALESCE(last_heartbeat, started_at)
+    // in the detection query.
+    if version < 66 {
+        let has_col: bool = conn
+            .prepare("SELECT last_heartbeat FROM workflow_runs LIMIT 0")
+            .is_ok();
+        if !has_col {
+            conn.execute_batch(include_str!(
+                "migrations/066_workflow_run_last_heartbeat.sql"
+            ))?;
+        }
+        bump_version(conn, 66)?;
     }
 
     Ok(())

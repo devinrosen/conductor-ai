@@ -1,53 +1,32 @@
-use std::time::{Duration, SystemTime};
-
 use crate::db::{active_workflow_parent_run_ids, query_collect};
 use crate::error::Result;
 
 use super::super::db::{row_to_agent_run, AGENT_RUN_SELECT};
 use super::super::log_parsing::try_recover_from_log;
-use super::super::tmux::list_live_tmux_windows;
 use super::AgentManager;
 
-/// Remove stale `/tmp/conductor-agent-*.err` files older than 1 hour.
-///
-/// Best-effort: silently ignores any I/O errors (permissions, concurrent delete, etc.).
-fn cleanup_stale_stderr_files() {
-    let one_hour = Duration::from_secs(3600);
-    let Ok(entries) = std::fs::read_dir("/tmp") else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if !name_str.starts_with("conductor-agent-") || !name_str.ends_with(".err") {
-            continue;
-        }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        let Ok(modified) = metadata.modified() else {
-            continue;
-        };
-        if SystemTime::now()
-            .duration_since(modified)
-            .unwrap_or(Duration::ZERO)
-            > one_hour
-        {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
-}
-
 impl<'a> AgentManager<'a> {
-    /// Reap orphaned agent runs whose tmux windows have disappeared.
+    /// Attempt log recovery for a run, falling back to marking it failed.
+    ///
+    /// Tries `try_recover_from_log` first; if no result is found in the log,
+    /// marks the run as `failed` with `fail_msg`.
+    fn reap_one(&self, run_id: &str, fail_msg: &str) -> crate::error::Result<()> {
+        if try_recover_from_log(self, run_id).is_some() {
+            tracing::info!("reap_orphaned_runs: recovered result from log for run {run_id}");
+            return Ok(());
+        }
+        tracing::warn!("reap_orphaned_runs: no log recovery for run {run_id}, marking as failed");
+        self.update_run_failed(run_id, fail_msg)?;
+        Ok(())
+    }
+
+    /// Reap orphaned agent runs whose subprocess has exited.
     ///
     /// Queries all runs with an active status (`running` or `waiting_for_feedback`),
-    /// checks whether their tmux window still exists, and for any orphans:
+    /// checks whether their subprocess is still alive, and for any orphans:
     /// 1. Attempts log-file recovery via `try_recover_from_log()` (the agent may
     ///    have completed but the handler didn't fire).
     /// 2. If no result is found in the log, marks the run as `failed`.
-    ///
-    /// Also cleans up stale stderr capture files older than 1 hour.
     ///
     /// Returns the number of orphaned runs that were reaped.
     pub fn reap_orphaned_runs(&self) -> Result<usize> {
@@ -68,58 +47,87 @@ impl<'a> AgentManager<'a> {
         );
 
         // Fetch parent_run_ids of active (non-terminal) workflow runs.
-        // Workflow parent runs are created with tmux_window = None by design
+        // Workflow parent runs are created without a subprocess_pid by design
         // and must not be reaped while their workflow is still active.
         let active_wf_parent_ids = active_workflow_parent_run_ids(self.conn)?;
 
-        // Fetch all live tmux window names once (avoids N+1 subprocess spawns).
-        let live_windows = list_live_tmux_windows();
-        tracing::debug!(
-            "reap_orphaned_runs: {} live tmux window(s)",
-            live_windows.len()
-        );
-
         let mut reaped = 0;
         for run in &active_runs {
-            // Skip runs that are parent runs of active workflows.
+            // 1. Skip runs that are parent runs of active workflows.
             if active_wf_parent_ids.contains(&run.id) {
                 continue;
             }
-            if let Some(ref name) = run.tmux_window {
-                if live_windows.contains(name.as_str()) {
+
+            // 2. Headless subprocess run — check PID liveness via kill(0).
+            #[cfg(unix)]
+            if let Some(pid) = run.subprocess_pid {
+                if crate::process_utils::pid_is_alive(pid as u32) {
+                    // PID is alive — guard against PID reuse by comparing the OS-recorded
+                    // process start time against run.started_at.
+                    // If start times differ by >60 s, the PID was recycled by the OS after
+                    // the original subprocess exited and should be reaped.
+                    if crate::process_utils::pid_was_recycled(pid as u32, &run.started_at) {
+                        tracing::warn!(
+                            "reap_orphaned_runs: PID {pid} recycled for run {} (started_at={})",
+                            run.id,
+                            run.started_at,
+                        );
+                        self.reap_one(
+                            &run.id,
+                            "subprocess PID recycled — agent may have completed but result was not captured",
+                        )?;
+                        reaped += 1;
+                        continue;
+                    }
+                    // Start time is consistent — process is genuinely still running.
                     continue;
                 }
                 tracing::warn!(
-                    "reap_orphaned_runs: tmux window {name:?} gone for run {} (started_at={}, worktree={:?})",
+                    "reap_orphaned_runs: subprocess pid {pid} gone for run {} (started_at={}, worktree={:?})",
                     run.id,
                     run.started_at,
                     run.worktree_id,
                 );
-            } else {
-                tracing::warn!(
-                    "reap_orphaned_runs: run {} has no tmux_window (started_at={}, worktree={:?})",
-                    run.id,
-                    run.started_at,
-                    run.worktree_id,
-                );
-            }
-            // Window is gone — try to recover result from log file
-            if try_recover_from_log(self, &run.id).is_some() {
-                tracing::info!(
-                    "reap_orphaned_runs: recovered result from log for run {}",
-                    run.id
-                );
+                self.reap_one(
+                    &run.id,
+                    "subprocess exited unexpectedly — agent may have completed but result was not captured",
+                )?;
                 reaped += 1;
                 continue;
             }
-            // No result in log — mark as failed
+
+            // 3. No subprocess_pid.
+            //
+            // Guard against a race between the workflow executor spawning the subprocess
+            // and storing the PID in the DB:
+            //   t0: executor creates run (status=running, subprocess_pid=None)
+            //   t1: executor spawns subprocess
+            //   t2: subprocess starts and calls reap_orphaned_runs() ← here
+            //   t3: executor calls update_run_subprocess_pid()        ← not yet
+            //
+            // At t2, the run looks orphaned (no PID) but it is alive.
+            // We detect this by checking whether the run is a child of an active workflow
+            // (i.e. its parent_run_id is a current workflow parent run).  If so, skip it —
+            // the PID will be written momentarily by the executor.
+            if let Some(ref parent_id) = run.parent_run_id {
+                if active_wf_parent_ids.contains(parent_id) {
+                    tracing::debug!(
+                        "reap_orphaned_runs: skipping run {} — child of active workflow (PID not yet stored)",
+                        run.id,
+                    );
+                    continue;
+                }
+            }
+
             tracing::warn!(
-                "reap_orphaned_runs: no log recovery possible for run {}, marking as failed",
-                run.id
+                "reap_orphaned_runs: run {} has no subprocess_pid (started_at={}, worktree={:?})",
+                run.id,
+                run.started_at,
+                run.worktree_id,
             );
-            self.update_run_failed(
+            self.reap_one(
                 &run.id,
-                "tmux session lost — agent may have completed but result was not captured",
+                "agent process gone — may have completed but result was not captured",
             )?;
             reaped += 1;
         }
@@ -127,9 +135,6 @@ impl<'a> AgentManager<'a> {
         if reaped > 0 {
             tracing::info!("reap_orphaned_runs: reaped {reaped} orphaned run(s)");
         }
-
-        // Best-effort cleanup of stale stderr capture files (older than 1 hour).
-        cleanup_stale_stderr_files();
 
         Ok(reaped)
     }
@@ -143,7 +148,7 @@ mod tests {
     use rusqlite::params;
 
     #[test]
-    fn test_reap_orphaned_runs_no_tmux_window() {
+    fn test_reap_orphaned_runs_no_subprocess_pid() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
@@ -161,12 +166,14 @@ mod tests {
             .result_text
             .as_deref()
             .unwrap()
-            .contains("tmux session lost"));
+            .contains("agent process gone"));
         assert!(updated.ended_at.is_some());
     }
 
     #[test]
-    fn test_reap_orphaned_runs_nonexistent_tmux_window() {
+    fn test_reap_orphaned_runs_with_legacy_tmux_window_field() {
+        // Runs with a tmux_window set but no subprocess_pid (legacy rows) should
+        // still be reaped since we can't check subprocess liveness without a PID.
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
@@ -287,5 +294,180 @@ mod tests {
             mgr.get_run(&r3.id).unwrap().unwrap().status,
             AgentRunStatus::Completed
         );
+    }
+
+    /// A run with a subprocess_pid pointing to a dead process should be reaped.
+    #[cfg(unix)]
+    #[test]
+    fn test_reap_orphaned_runs_subprocess_pid_dead() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Spawn a short-lived child, record its PID, wait for it to exit.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        // Wait for it to finish so the PID is definitely gone.
+        child.wait().unwrap();
+        // Give the OS a moment to fully reap the child.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let run = mgr
+            .create_run(Some("w1"), "headless task", None, None)
+            .unwrap();
+        // Set subprocess_pid to the dead PID.
+        conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
+            params![dead_pid as i64, run.id],
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 1);
+
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::Failed);
+        assert!(updated
+            .result_text
+            .as_deref()
+            .unwrap()
+            .contains("subprocess exited unexpectedly"));
+    }
+
+    /// A run with a subprocess_pid pointing to a live process whose start time is years in the
+    /// past (simulating PID reuse) must be reaped with the "PID recycled" message.
+    #[cfg(all(test, target_os = "macos"))]
+    #[test]
+    fn test_reap_orphaned_runs_subprocess_pid_recycled() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Spawn a long-lived child — its PID is alive, but we'll tell the reaper
+        // it started years ago to simulate OS PID reuse.
+        let mut child = std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap();
+        let live_pid = child.id();
+
+        let run = mgr
+            .create_run(Some("w1"), "headless task recycled", None, None)
+            .unwrap();
+
+        // Backdate started_at to 2020 — far outside the 60-second tolerance.
+        conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1, started_at = ?2 WHERE id = ?3",
+            rusqlite::params![live_pid as i64, "2020-01-01T00:00:00Z", run.id],
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+
+        // Always kill the child, even if the assertion below panics.
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(reaped, 1, "recycled PID run should have been reaped");
+
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::Failed);
+        assert!(
+            updated
+                .result_text
+                .as_deref()
+                .unwrap()
+                .contains("PID recycled"),
+            "result_text should mention PID recycled"
+        );
+    }
+
+    /// A child run of an active workflow whose subprocess_pid has not yet been stored
+    /// (the spawn-vs-PID-persist race) must NOT be reaped.
+    ///
+    /// Scenario reproduced by the real workflow failure 01KP0R81BP6J6FMXTR9WR7BKY3:
+    ///   1. Workflow executor creates child run (status=running, subprocess_pid=None).
+    ///   2. Executor spawns `conductor agent run` subprocess.
+    ///   3. Subprocess calls reap_orphaned_runs() before executor writes the PID.
+    ///   4. Without this fix the subprocess would reap its own run.
+    #[test]
+    fn test_reap_orphaned_runs_skips_active_workflow_child_no_pid() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Parent run of an active workflow (no subprocess_pid by design).
+        let parent_run = mgr
+            .create_run(Some("w1"), "workflow parent", None, None)
+            .unwrap();
+
+        // Insert an active workflow run whose parent is the run above.
+        let wf_run_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
+             VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
+            rusqlite::params![wf_run_id, parent_run.id],
+        )
+        .unwrap();
+
+        // Child run (e.g. plan step) — subprocess_pid not yet stored.
+        let child_run = mgr
+            .create_child_run(Some("w1"), "plan prompt", None, None, &parent_run.id, None)
+            .unwrap();
+        assert_eq!(child_run.status, AgentRunStatus::Running);
+        assert!(child_run.subprocess_pid.is_none());
+
+        // Neither the parent nor the child should be reaped.
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(
+            reaped, 0,
+            "active workflow child run (no PID yet) must not be reaped"
+        );
+
+        let child_after = mgr.get_run(&child_run.id).unwrap().unwrap();
+        assert_eq!(
+            child_after.status,
+            AgentRunStatus::Running,
+            "child run status must remain running"
+        );
+    }
+
+    /// A run with a subprocess_pid pointing to the current (live) process must NOT be reaped.
+    #[cfg(unix)]
+    #[test]
+    fn test_reap_orphaned_runs_subprocess_pid_alive_skips() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let live_pid = std::process::id();
+
+        let run = mgr
+            .create_run(Some("w1"), "headless task alive", None, None)
+            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
+            params![live_pid as i64, run.id],
+        )
+        .unwrap();
+
+        // On macOS the PID reuse guard computes abs(process_started_at(pid) - run.started_at).
+        // The cargo test process has been running for much longer than the 60s threshold, so
+        // create_run()'s "now()" started_at would trigger a false-positive reap. Fix: update
+        // started_at to the kernel-reported start time of this exact PID so the delta is <1s.
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(proc_start) = crate::process_utils::process_started_at(live_pid) {
+                let started_at_str = chrono::DateTime::<chrono::Utc>::from(proc_start).to_rfc3339();
+                conn.execute(
+                    "UPDATE agent_runs SET started_at = ?1 WHERE id = ?2",
+                    params![started_at_str, run.id],
+                )
+                .unwrap();
+            }
+        }
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 0, "live subprocess must not be reaped");
+
+        let after = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(after.status, AgentRunStatus::Running);
     }
 }

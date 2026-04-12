@@ -724,7 +724,7 @@ mod tests {
             duration_ms: None,
             started_at: "2026-01-01T00:00:00Z".into(),
             ended_at: None,
-            tmux_window: Some("feat-test".into()),
+            tmux_window: None,
             log_file: None,
             model: None,
             plan: None,
@@ -735,6 +735,7 @@ mod tests {
             cache_creation_input_tokens: None,
             bot_name: None,
             conversation_id: None,
+            subprocess_pid: None,
         }
     }
 
