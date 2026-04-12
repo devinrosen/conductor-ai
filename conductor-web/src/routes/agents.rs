@@ -21,41 +21,6 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
 
-/// Spawn a tmux window on a blocking thread and mark the agent run as failed
-/// if the spawn panics or returns an error.
-pub(super) async fn spawn_tmux_blocking(
-    state: &AppState,
-    run_id: &str,
-    args: Vec<Cow<'static, str>>,
-    window: String,
-) -> Result<(), ApiError> {
-    let spawn_result = tokio::task::spawn_blocking(move || {
-        conductor_core::agent_runtime::spawn_tmux_window(&args, &window)
-    })
-    .await;
-
-    match spawn_result {
-        Err(join_err) => {
-            let msg = format!("spawn task panicked: {join_err}");
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            if let Err(db_err) = agent_mgr.update_run_failed(run_id, &msg) {
-                warn!(run_id, %db_err, "failed to mark agent run as failed after spawn panic");
-            }
-            Err(ConductorError::Agent(msg).into())
-        }
-        Ok(Err(tmux_err)) => {
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            if let Err(db_err) = agent_mgr.update_run_failed(run_id, &tmux_err) {
-                warn!(run_id, %db_err, "failed to mark agent run as failed after tmux error");
-            }
-            Err(ConductorError::Agent(tmux_err).into())
-        }
-        Ok(Ok(())) => Ok(()),
-    }
-}
-
 /// Spawn a headless conductor subprocess and wire its stdout to the SSE event bus.
 ///
 /// Calls [`conductor_core::agent_runtime::try_spawn_headless_run`], persists the
@@ -63,7 +28,7 @@ pub(super) async fn spawn_tmux_blocking(
 /// (fire-and-forget) that emits [`ConductorEvent::AgentLiveEvent`] for every
 /// event parsed from stdout.
 #[allow(clippy::too_many_arguments)]
-async fn spawn_headless_agent(
+pub(super) async fn spawn_headless_agent(
     state: &AppState,
     run_id: &str,
     working_dir: &str,
@@ -185,6 +150,119 @@ async fn spawn_headless_agent(
                         tracing::error!(
                             run_id = %run_id_for_panic,
                             "drain panic handler: failed to mark run as failed: {update_err}"
+                        );
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Spawn a headless orchestrate subprocess and wire its stdout to the SSE event bus.
+///
+/// Similar to [`spawn_headless_agent`] but takes pre-built args from
+/// [`conductor_core::agent_runtime::build_orchestrate_args`] and runs headless
+/// instead of in a tmux window.
+#[cfg(unix)]
+async fn spawn_headless_orchestrate(
+    state: &AppState,
+    run_id: &str,
+    args: Vec<Cow<'static, str>>,
+    wt_path: String,
+    worktree_id: String,
+) -> Result<(), ApiError> {
+    let mut handle = match conductor_core::agent_runtime::spawn_headless(
+        &args,
+        std::path::Path::new(&wt_path),
+    ) {
+        Err(err) => {
+            let db = state.db.lock().await;
+            if let Err(e) = AgentManager::new(&db).update_run_failed(run_id, &err) {
+                warn!(run_id, %e, "failed to mark run failed after orchestrate spawn error");
+            }
+            return Err(ConductorError::Agent(err).into());
+        }
+        Ok(h) => h,
+    };
+
+    // Persist subprocess PID synchronously — stop_agent relies on this being visible
+    // before any cancellation request arrives.
+    let pid_result = {
+        let db = state.db.lock().await;
+        AgentManager::new(&db).update_run_subprocess_pid(run_id, handle.pid)
+    };
+    if let Err(e) = pid_result {
+        let msg = format!("failed to persist subprocess pid: {e}");
+        {
+            let db = state.db.lock().await;
+            if let Err(db_err) = AgentManager::new(&db).update_run_failed(run_id, &msg) {
+                warn!(run_id, %db_err, "failed to mark run failed after PID persist error");
+            }
+        }
+        let _ = handle.child.kill();
+        let _ = handle.child.wait();
+        return Err(ConductorError::Agent(msg).into());
+    }
+
+    let run_id_owned = run_id.to_owned();
+    let log_path = conductor_core::config::agent_log_path(&run_id_owned);
+    let events = state.events.clone();
+    let db_path = state.db_path.clone();
+    let run_id_for_panic = run_id_owned.clone();
+    let db_path_for_panic = db_path.clone();
+
+    let drain_handle = tokio::task::spawn_blocking(move || {
+        let conn = match conductor_core::db::open_database(&db_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("[spawn_headless_orchestrate] drain: failed to open DB: {e}");
+                return;
+            }
+        };
+        let mgr = AgentManager::new(&conn);
+        conductor_core::agent_runtime::drain_stream_json(
+            handle.stdout,
+            &run_id_owned,
+            &log_path,
+            &mgr,
+            |event| {
+                events.emit(ConductorEvent::AgentLiveEvent {
+                    run_id: run_id_owned.clone(),
+                    worktree_id: Some(worktree_id.clone()),
+                    kind: event.kind.clone(),
+                    summary: event.summary.clone(),
+                });
+            },
+        );
+        let _ = {
+            let mut c = handle.child;
+            c.wait()
+        };
+    });
+
+    tokio::spawn(async move {
+        if let Err(panic_err) = drain_handle.await {
+            tracing::error!(
+                run_id = %run_id_for_panic,
+                "orchestrate drain thread panicked: {panic_err}; marking run as failed"
+            );
+            match conductor_core::db::open_database(&db_path_for_panic) {
+                Err(db_open_err) => {
+                    tracing::error!(
+                        run_id = %run_id_for_panic,
+                        "orchestrate drain panic handler: failed to open DB for recovery: {db_open_err}"
+                    );
+                }
+                Ok(conn) => {
+                    let mgr = AgentManager::new(&conn);
+                    if let Err(update_err) =
+                        mgr.update_run_failed_if_running(&run_id_for_panic, "drain thread panicked")
+                    {
+                        tracing::error!(
+                            run_id = %run_id_for_panic,
+                            "orchestrate drain panic handler: failed to mark run as failed: {update_err}"
                         );
                     }
                 }
@@ -382,7 +460,7 @@ pub struct StartAgentRequest {
     pub parent_run_id: Option<String>,
 }
 
-/// Start an agent for a worktree. Creates a DB record and spawns a tmux window.
+/// Start an agent for a worktree. Creates a DB record and spawns a headless subprocess.
 #[utoipa::path(
     post,
     path = "/api/worktrees/{id}/agent/start",
@@ -476,8 +554,8 @@ pub async fn start_agent(
     Ok((StatusCode::CREATED, Json(run)))
 }
 
-/// Stop a running agent: mark cancelled under lock, then capture scrollback
-/// and kill tmux on a blocking thread without holding the DB mutex.
+/// Stop a running agent: mark cancelled under lock, then signal the subprocess
+/// on a blocking thread without holding the DB mutex.
 #[utoipa::path(
     post,
     path = "/api/worktrees/{id}/agent/stop",
@@ -495,7 +573,7 @@ pub async fn stop_agent(
     Path(worktree_id): Path<String>,
 ) -> Result<Json<AgentRun>, ApiError> {
     // Phase 1: DB operations under lock — validate + mark cancelled immediately.
-    let (run, tmux_window, subprocess_pid) = {
+    let (run, subprocess_pid) = {
         let db = state.db.lock().await;
         let agent_mgr = AgentManager::new(&db);
 
@@ -517,13 +595,12 @@ pub async fn stop_agent(
         agent_mgr.update_run_cancelled(&run.id)?;
 
         let subprocess_pid = run.subprocess_pid;
-        let tmux_window = run.tmux_window.clone();
-        (run, tmux_window, subprocess_pid)
+        (run, subprocess_pid)
     };
     // DB lock is now dropped.
 
-    // Phase 2: subprocess or tmux cleanup on a blocking thread (no lock held).
-    cancel_agent_blocking(&state, &run.id, tmux_window, subprocess_pid).await;
+    // Phase 2: subprocess cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&run.id, subprocess_pid).await;
 
     // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
@@ -882,7 +959,7 @@ fn default_child_timeout_secs() -> u64 {
 }
 
 /// Start an orchestrated agent run: generate a plan, then spawn child agents
-/// for each step sequentially. The orchestrator runs in a tmux window.
+/// for each step sequentially. The orchestrator runs headless.
 #[utoipa::path(
     post,
     path = "/api/worktrees/{id}/agent/orchestrate",
@@ -902,7 +979,7 @@ pub async fn orchestrate_agent(
     Json(body): Json<OrchestrateRequest>,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
     // Scope DB + config access so locks are dropped before the blocking spawn.
-    let (run, args, wt_slug, wt_id) = {
+    let (run, args, wt_path, wt_id) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
 
@@ -931,12 +1008,7 @@ pub async fn orchestrate_agent(
             .map(str::to_string);
 
         // Create parent run record (this is the orchestrator run)
-        let run = agent_mgr.create_run(
-            Some(&worktree_id),
-            &body.prompt,
-            Some(&wt.slug),
-            model.as_deref(),
-        )?;
+        let run = agent_mgr.create_run(Some(&worktree_id), &body.prompt, None, model.as_deref())?;
 
         // Build conductor agent orchestrate command
         let args = conductor_core::agent_runtime::build_orchestrate_args(
@@ -947,12 +1019,12 @@ pub async fn orchestrate_agent(
             Some(body.child_timeout_secs),
         );
 
-        (run, args, wt.slug.clone(), wt.id.clone())
+        (run, args, wt.path.clone(), wt.id.clone())
     };
     // DB and config locks are now dropped.
 
-    // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    spawn_tmux_blocking(&state, &run.id, args, wt_slug.clone()).await?;
+    // Spawn headless subprocess and wire stdout to the SSE event bus.
+    spawn_headless_orchestrate(&state, &run.id, args, wt_path, wt_id.clone()).await?;
 
     state.events.emit(ConductorEvent::AgentStarted {
         run_id: run.id.clone(),
@@ -1176,7 +1248,7 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
 }
 
 /// Restart a failed/cancelled agent run by creating a new run with the
-/// same prompt/config and re-spawning a tmux window.
+/// same prompt/config and re-spawning a headless subprocess.
 #[utoipa::path(
     post,
     path = "/api/worktrees/{id}/agent/runs/{run_id}/restart",
@@ -1252,19 +1324,13 @@ pub async fn restart_agent(
 /// Send a cancellation signal to an agent run on a blocking thread.
 ///
 /// For headless runs (`subprocess_pid` is `Some`): sends SIGTERM, waits up to
-/// 5 s, then escalates to SIGKILL. For tmux runs (`tmux_window` is `Some`):
-/// captures scrollback and kills the tmux window. Best-effort — failures are
-/// logged but do not fail the request.
+/// Signal the subprocess to stop. Sends SIGTERM, waits up to 5 s, then
+/// escalates to SIGKILL. Best-effort — failures are logged but do not fail
+/// the request.
 ///
 /// The `subprocess_pid` is stored as `i64` in the DB (SQLite integer) but cast
 /// to `u32` here; the cast is safe for realistic PID values.
-async fn cancel_agent_blocking(
-    state: &AppState,
-    run_id: &str,
-    tmux_window: Option<String>,
-    subprocess_pid: Option<i64>,
-) {
-    // Headless path: signal the subprocess directly.
+async fn cancel_agent_blocking(run_id: &str, subprocess_pid: Option<i64>) {
     if let Some(pid) = subprocess_pid {
         if let Err(e) = tokio::task::spawn_blocking(move || {
             conductor_core::agent_runtime::cancel_subprocess(pid as u32);
@@ -1272,35 +1338,6 @@ async fn cancel_agent_blocking(
         .await
         {
             warn!(run_id, %e, "cancel_agent_blocking: subprocess cancel task panicked");
-        }
-        return;
-    }
-
-    // Tmux path: original behavior unchanged.
-    let Some(window) = tmux_window else {
-        return;
-    };
-
-    let rid = run_id.to_owned();
-    let w = window.clone();
-    let log_path = match tokio::task::spawn_blocking(move || {
-        conductor_core::agent::capture_and_kill_tmux_window(&rid, &w)
-    })
-    .await
-    {
-        Ok(path) => path,
-        Err(e) => {
-            warn!(run_id, %e, "cancel_agent_blocking: spawn_blocking task panicked");
-            None
-        }
-    };
-
-    // Persist log file path under a brief lock (best-effort).
-    if let Some(path) = log_path {
-        let db = state.db.lock().await;
-        let agent_mgr = AgentManager::new(&db);
-        if let Err(e) = agent_mgr.update_run_log_file(run_id, &path) {
-            warn!(run_id, %e, "failed to record agent log path in DB after cancel");
         }
     }
 }
@@ -1429,7 +1466,7 @@ pub async fn stop_repo_agent(
     Path((repo_id, run_id)): Path<(String, String)>,
 ) -> Result<Json<AgentRun>, ApiError> {
     // Phase 1: DB operations under lock — validate + mark cancelled immediately.
-    let (run, tmux_window, subprocess_pid) = {
+    let (run, subprocess_pid) = {
         let db = state.db.lock().await;
         let agent_mgr = AgentManager::new(&db);
 
@@ -1449,13 +1486,12 @@ pub async fn stop_repo_agent(
         agent_mgr.update_run_cancelled(&run.id)?;
 
         let subprocess_pid = run.subprocess_pid;
-        let tmux_window = run.tmux_window.clone();
-        (run, tmux_window, subprocess_pid)
+        (run, subprocess_pid)
     };
     // DB lock is now dropped.
 
-    // Phase 2: subprocess or tmux cleanup on a blocking thread (no lock held).
-    cancel_agent_blocking(&state, &run.id, tmux_window, subprocess_pid).await;
+    // Phase 2: subprocess cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&run.id, subprocess_pid).await;
 
     // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;

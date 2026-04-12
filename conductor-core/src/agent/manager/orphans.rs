@@ -1,42 +1,9 @@
-use std::time::{Duration, SystemTime};
-
 use crate::db::{active_workflow_parent_run_ids, query_collect};
 use crate::error::Result;
 
 use super::super::db::{row_to_agent_run, AGENT_RUN_SELECT};
 use super::super::log_parsing::try_recover_from_log;
-use super::super::tmux::list_live_tmux_windows;
 use super::AgentManager;
-
-/// Remove stale `/tmp/conductor-agent-*.err` files older than 1 hour.
-///
-/// Best-effort: silently ignores any I/O errors (permissions, concurrent delete, etc.).
-fn cleanup_stale_stderr_files() {
-    let one_hour = Duration::from_secs(3600);
-    let Ok(entries) = std::fs::read_dir("/tmp") else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if !name_str.starts_with("conductor-agent-") || !name_str.ends_with(".err") {
-            continue;
-        }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        let Ok(modified) = metadata.modified() else {
-            continue;
-        };
-        if SystemTime::now()
-            .duration_since(modified)
-            .unwrap_or(Duration::ZERO)
-            > one_hour
-        {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
-}
 
 impl<'a> AgentManager<'a> {
     /// Attempt log recovery for a run, falling back to marking it failed.
@@ -53,15 +20,13 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Reap orphaned agent runs whose tmux windows have disappeared.
+    /// Reap orphaned agent runs whose subprocess has exited.
     ///
     /// Queries all runs with an active status (`running` or `waiting_for_feedback`),
-    /// checks whether their tmux window still exists, and for any orphans:
+    /// checks whether their subprocess is still alive, and for any orphans:
     /// 1. Attempts log-file recovery via `try_recover_from_log()` (the agent may
     ///    have completed but the handler didn't fire).
     /// 2. If no result is found in the log, marks the run as `failed`.
-    ///
-    /// Also cleans up stale stderr capture files older than 1 hour.
     ///
     /// Returns the number of orphaned runs that were reaped.
     pub fn reap_orphaned_runs(&self) -> Result<usize> {
@@ -82,16 +47,9 @@ impl<'a> AgentManager<'a> {
         );
 
         // Fetch parent_run_ids of active (non-terminal) workflow runs.
-        // Workflow parent runs are created with tmux_window = None by design
+        // Workflow parent runs are created without a subprocess_pid by design
         // and must not be reaped while their workflow is still active.
         let active_wf_parent_ids = active_workflow_parent_run_ids(self.conn)?;
-
-        // Fetch all live tmux window names once (avoids N+1 subprocess spawns).
-        let live_windows = list_live_tmux_windows();
-        tracing::debug!(
-            "reap_orphaned_runs: {} live tmux window(s)",
-            live_windows.len()
-        );
 
         let mut reaped = 0;
         for run in &active_runs {
@@ -138,30 +96,16 @@ impl<'a> AgentManager<'a> {
                 continue;
             }
 
-            // 3. tmux-based run — check window liveness.
-            if let Some(ref name) = run.tmux_window {
-                if live_windows.contains(name.as_str()) {
-                    continue;
-                }
-                tracing::warn!(
-                    "reap_orphaned_runs: tmux window {name:?} gone for run {} (started_at={}, worktree={:?})",
-                    run.id,
-                    run.started_at,
-                    run.worktree_id,
-                );
-            } else {
-                // 4. Neither subprocess_pid nor tmux_window — always reap.
-                tracing::warn!(
-                    "reap_orphaned_runs: run {} has no tmux_window (started_at={}, worktree={:?})",
-                    run.id,
-                    run.started_at,
-                    run.worktree_id,
-                );
-            }
-            // Window is gone — try to recover result from log file, then mark failed.
+            // 3. No subprocess_pid — always reap.
+            tracing::warn!(
+                "reap_orphaned_runs: run {} has no subprocess_pid (started_at={}, worktree={:?})",
+                run.id,
+                run.started_at,
+                run.worktree_id,
+            );
             self.reap_one(
                 &run.id,
-                "tmux session lost — agent may have completed but result was not captured",
+                "agent process gone — may have completed but result was not captured",
             )?;
             reaped += 1;
         }
@@ -169,9 +113,6 @@ impl<'a> AgentManager<'a> {
         if reaped > 0 {
             tracing::info!("reap_orphaned_runs: reaped {reaped} orphaned run(s)");
         }
-
-        // Best-effort cleanup of stale stderr capture files (older than 1 hour).
-        cleanup_stale_stderr_files();
 
         Ok(reaped)
     }
@@ -185,7 +126,7 @@ mod tests {
     use rusqlite::params;
 
     #[test]
-    fn test_reap_orphaned_runs_no_tmux_window() {
+    fn test_reap_orphaned_runs_no_subprocess_pid() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
@@ -203,12 +144,14 @@ mod tests {
             .result_text
             .as_deref()
             .unwrap()
-            .contains("tmux session lost"));
+            .contains("agent process gone"));
         assert!(updated.ended_at.is_some());
     }
 
     #[test]
-    fn test_reap_orphaned_runs_nonexistent_tmux_window() {
+    fn test_reap_orphaned_runs_with_legacy_tmux_window_field() {
+        // Runs with a tmux_window set but no subprocess_pid (legacy rows) should
+        // still be reaped since we can't check subprocess liveness without a PID.
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 

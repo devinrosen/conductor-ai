@@ -27,7 +27,6 @@ Conductor handles that overhead. It gives you one place to see all your repos, w
 - [Rust](https://rustup.rs/) (stable toolchain)
 - [Node.js](https://nodejs.org/) (for the web UI frontend)
 - [GitHub CLI (`gh`)](https://cli.github.com/) — installed and authenticated (for GitHub issue sync)
-- [tmux](https://github.com/tmux/tmux) (for AI agent sessions)
 - [Claude Code CLI (`claude`)](https://docs.anthropic.com/en/docs/claude-code) — installed and authenticated
 
 ## Build
@@ -79,7 +78,7 @@ cargo run --bin conductor -- repo list
 
 ### TUI
 
-Interactive terminal UI for browsing repos, worktrees, and tickets. Supports launching Claude agent sessions in tmux.
+Interactive terminal UI for browsing repos, worktrees, and tickets. Supports launching Claude agent sessions.
 
 ```bash
 conductor-tui                        # After install
