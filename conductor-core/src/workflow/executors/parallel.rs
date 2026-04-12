@@ -167,16 +167,17 @@ pub fn execute_parallel(
         )?;
 
         // Build headless args and spawn
-        let (handle, prompt_file) = match crate::agent_runtime::try_spawn_headless_run(
-            &child_run.id,
-            &state.working_dir,
-            &prompt,
-            None,
-            step_model,
-            state.default_bot_name.as_deref(),
-            Some(&permission_mode),
-            &state.extra_plugin_dirs,
-        ) {
+        let params = crate::agent_runtime::SpawnHeadlessParams {
+            run_id: &child_run.id,
+            working_dir: &state.working_dir,
+            prompt: &prompt,
+            resume_session_id: None,
+            model: step_model,
+            bot_name: state.default_bot_name.as_deref(),
+            permission_mode: Some(&permission_mode),
+            plugin_dirs: &state.extra_plugin_dirs,
+        };
+        let (handle, prompt_file) = match crate::agent_runtime::try_spawn_headless_run(&params) {
             Ok(pair) => pair,
             Err(err_msg) => {
                 tracing::warn!("parallel: agent '{agent_label}': {err_msg}");

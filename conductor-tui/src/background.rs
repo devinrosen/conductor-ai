@@ -335,10 +335,10 @@ pub fn poll_data() -> Option<PollResult> {
     let ticket_syncer = TicketSyncer::new(&conn);
     let agent_mgr = AgentManager::new(&conn);
 
-    // Reap orphaned runs whose tmux windows have disappeared and clean up
+    // Reap orphaned runs whose subprocess PID is no longer live and clean up
     // stale worktrees whose artifacts persist on disk after merge/abandon.
-    // Throttle to at most once every 30 seconds to avoid spawning tmux
-    // subprocesses on every poll tick.
+    // Throttle to at most once every 30 seconds to avoid subprocess liveness
+    // checks on every poll tick.
     {
         static LAST_REAP: AtomicI64 = AtomicI64::new(0);
         let now = std::time::SystemTime::now()

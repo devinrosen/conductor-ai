@@ -487,37 +487,43 @@ pub fn spawn_headless(
     HeadlessHandle::from_child(child)
 }
 
+/// Parameters for spawning a headless agent subprocess.
+///
+/// Groups the eight shared parameters across [`build_headless_agent_args`] and
+/// [`try_spawn_headless_run`] to keep call sites readable and avoid a
+/// `#[allow(clippy::too_many_arguments)]` suppression.
+pub struct SpawnHeadlessParams<'a> {
+    pub run_id: &'a str,
+    pub working_dir: &'a str,
+    pub prompt: &'a str,
+    pub resume_session_id: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub bot_name: Option<&'a str>,
+    pub permission_mode: Option<&'a crate::config::AgentPermissionMode>,
+    pub plugin_dirs: &'a [String],
+}
+
 /// Build headless args and spawn the conductor subprocess in one step.
 ///
 /// Combines [`build_headless_agent_args`] and [`spawn_headless`] into a single
 /// call.  On spawn failure the prompt file is cleaned up before returning the
 /// error string so the caller doesn't need to manage it.
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
 pub fn try_spawn_headless_run(
-    run_id: &str,
-    working_dir: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    model: Option<&str>,
-    bot_name: Option<&str>,
-    permission_mode: Option<&crate::config::AgentPermissionMode>,
-    plugin_dirs: &[String],
+    params: &SpawnHeadlessParams<'_>,
 ) -> std::result::Result<(HeadlessHandle, std::path::PathBuf), String> {
-    let (args, pf) = build_headless_agent_args(
-        run_id,
-        working_dir,
-        prompt,
-        resume_session_id,
-        model,
-        bot_name,
-        permission_mode,
-        plugin_dirs,
-    )
-    .map_err(|e| format!("failed to prepare agent args: {e}"))?;
-    let h = spawn_headless(&args, std::path::Path::new(working_dir)).map_err(|e| {
+    let (args, pf) = build_headless_agent_args(params).map_err(|e| {
+        format!(
+            "failed to prepare agent args for run {} (working_dir={}): {e}",
+            params.run_id, params.working_dir
+        )
+    })?;
+    let h = spawn_headless(&args, std::path::Path::new(params.working_dir)).map_err(|e| {
         let _ = std::fs::remove_file(&pf);
-        format!("spawn failed: {e}")
+        format!(
+            "spawn failed for run {} (working_dir={}): {e}",
+            params.run_id, params.working_dir
+        )
     })?;
     Ok((h, pf))
 }
@@ -705,17 +711,17 @@ pub fn cancel_subprocess(pid: u32) {
 /// after [`drain_stream_json`] completes.
 ///
 /// The existing [`build_agent_args_with_mode`] always writes the prompt to the temp dir.
-#[allow(clippy::too_many_arguments)]
 pub fn build_headless_agent_args(
-    run_id: &str,
-    working_dir: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    model: Option<&str>,
-    bot_name: Option<&str>,
-    permission_mode: Option<&crate::config::AgentPermissionMode>,
-    extra_plugin_dirs: &[String],
+    params: &SpawnHeadlessParams<'_>,
 ) -> std::result::Result<(Vec<Cow<'static, str>>, std::path::PathBuf), String> {
+    let run_id = params.run_id;
+    let working_dir = params.working_dir;
+    let prompt = params.prompt;
+    let resume_session_id = params.resume_session_id;
+    let model = params.model;
+    let bot_name = params.bot_name;
+    let permission_mode = params.permission_mode;
+    let extra_plugin_dirs = params.plugin_dirs;
     // Always write to temp dir — no worktree dir leakage, no size threshold.
     let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
     {
@@ -1211,16 +1217,16 @@ mod tests {
 
     #[test]
     fn build_headless_agent_args_includes_run_id_and_worktree() {
-        let (args, _prompt_file) = super::build_headless_agent_args(
-            "run-h-1",
-            "/tmp/wt",
-            "test prompt",
-            None,
-            None,
-            None,
-            None,
-            &[],
-        )
+        let (args, _prompt_file) = super::build_headless_agent_args(&super::SpawnHeadlessParams {
+            run_id: "run-h-1",
+            working_dir: "/tmp/wt",
+            prompt: "test prompt",
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: None,
+            plugin_dirs: &[],
+        })
         .unwrap();
         let pos = args.iter().position(|a| a == "--run-id").unwrap();
         assert_eq!(args[pos + 1], "run-h-1");
@@ -1231,16 +1237,16 @@ mod tests {
     #[test]
     fn build_headless_agent_args_with_all_options() {
         use crate::config::AgentPermissionMode;
-        let (args, _prompt_file) = super::build_headless_agent_args(
-            "run-h-2",
-            "/tmp/wt",
-            "test prompt",
-            Some("sess-abc"),
-            Some("claude-opus-4-6"),
-            Some("bot-y"),
-            Some(&AgentPermissionMode::Plan),
-            &["dir1".to_string()],
-        )
+        let (args, _prompt_file) = super::build_headless_agent_args(&super::SpawnHeadlessParams {
+            run_id: "run-h-2",
+            working_dir: "/tmp/wt",
+            prompt: "test prompt",
+            resume_session_id: Some("sess-abc"),
+            model: Some("claude-opus-4-6"),
+            bot_name: Some("bot-y"),
+            permission_mode: Some(&AgentPermissionMode::Plan),
+            plugin_dirs: &["dir1".to_string()],
+        })
         .unwrap();
 
         let pos = args.iter().position(|a| a == "--resume").unwrap();
@@ -1255,16 +1261,16 @@ mod tests {
 
     #[test]
     fn build_headless_agent_args_prompt_file_written() {
-        let (args, prompt_file) = super::build_headless_agent_args(
-            "run-h-3",
-            "/tmp/wt",
-            "hello world",
-            None,
-            None,
-            None,
-            None,
-            &[],
-        )
+        let (args, prompt_file) = super::build_headless_agent_args(&super::SpawnHeadlessParams {
+            run_id: "run-h-3",
+            working_dir: "/tmp/wt",
+            prompt: "hello world",
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: None,
+            plugin_dirs: &[],
+        })
         .unwrap();
         assert!(prompt_file.exists());
         let content = std::fs::read_to_string(&prompt_file).unwrap();
@@ -1279,6 +1285,38 @@ mod tests {
         let _ = std::fs::remove_file(&prompt_file);
         // --prompt-file should be in args
         assert!(args.iter().any(|a| a == "--prompt-file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_spawn_headless_run_bad_working_dir_error_contains_run_id_and_path() {
+        // A non-existent working_dir causes spawn_headless to fail; the error
+        // string must contain both run_id and working_dir for diagnostics.
+        let run_id = "run-spawn-err-01";
+        let working_dir = "/this/path/does/not/exist/at/all";
+        let params = super::SpawnHeadlessParams {
+            run_id,
+            working_dir,
+            prompt: "test prompt",
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: None,
+            plugin_dirs: &[],
+        };
+        let result = super::try_spawn_headless_run(&params);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("should fail with non-existent working_dir"),
+        };
+        assert!(
+            err.contains(run_id),
+            "error must contain run_id ({run_id}): {err}"
+        );
+        assert!(
+            err.contains(working_dir),
+            "error must contain working_dir ({working_dir}): {err}"
+        );
     }
 
     #[test]
@@ -1459,6 +1497,50 @@ mod tests {
             elapsed.as_secs() < 5,
             "abort() took {:?} on a pipe-filling child — kill() before wait() is required",
             elapsed
+        );
+    }
+
+    /// `from_child()` must return an error when stdout was not piped.
+    #[cfg(unix)]
+    #[test]
+    fn from_child_rejects_missing_stdout() {
+        use std::process::{Command, Stdio};
+
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn child");
+
+        let err = super::HeadlessHandle::from_child(child)
+            .err()
+            .expect("expected Err for missing stdout");
+        assert!(
+            err.contains("no stdout pipe"),
+            "error message should mention 'no stdout pipe', got: {err}"
+        );
+    }
+
+    /// `from_child()` must return an error when stderr was not piped.
+    #[cfg(unix)]
+    #[test]
+    fn from_child_rejects_missing_stderr() {
+        use std::process::{Command, Stdio};
+
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn child");
+
+        let err = super::HeadlessHandle::from_child(child)
+            .err()
+            .expect("expected Err for missing stderr");
+        assert!(
+            err.contains("no stderr pipe"),
+            "error message should mention 'no stderr pipe', got: {err}"
         );
     }
 }

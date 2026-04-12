@@ -113,12 +113,7 @@ pub fn handle_worktree(
                             );
                             let model = resolved_model.as_deref();
                             let agent_mgr = AgentManager::new(conn);
-                            let run = agent_mgr.create_run(
-                                Some(&wt.id),
-                                &prompt,
-                                Some(&wt.slug),
-                                model,
-                            )?;
+                            let run = agent_mgr.create_run(Some(&wt.id), &prompt, None, model)?;
                             run_agent(
                                 conn,
                                 &run.id,

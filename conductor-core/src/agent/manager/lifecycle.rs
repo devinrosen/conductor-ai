@@ -459,6 +459,31 @@ impl<'a> AgentManager<'a> {
             None,
         )
     }
+
+    /// Open the database and mark the run failed if it is still in `running` status.
+    ///
+    /// Best-effort: logs a warning if the DB cannot be opened or the update fails, but
+    /// never panics. Used to clean up on drain-thread DB-open errors and drain-thread
+    /// panics so the run does not stay stuck in `running` until the orphan reaper fires.
+    pub fn try_mark_run_failed_in_db(
+        db_path: &std::path::Path,
+        run_id: &str,
+        msg: &str,
+        log_prefix: &str,
+    ) {
+        match crate::db::open_database(db_path) {
+            Err(open_err) => {
+                tracing::warn!("[{log_prefix}] could not open DB for failure recovery: {open_err}");
+            }
+            Ok(conn) => {
+                if let Err(update_err) =
+                    AgentManager::new(&conn).update_run_failed_if_running(run_id, msg)
+                {
+                    tracing::warn!("[{log_prefix}] failed to mark run failed: {update_err}");
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -897,6 +922,35 @@ mod tests {
     }
 
     #[test]
+    fn test_update_run_failed_if_running_noop_when_already_completed() {
+        // The `AND status IN ('running', 'waiting_for_feedback')` guard must also
+        // preserve a run already in `completed` state (drain-panic-monitor scenario:
+        // drain_stream_json succeeds, then the panic monitor fires after the fact).
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_completed_if_running(&run.id, "done")
+            .unwrap();
+
+        // Panic-monitor path must be a no-op on an already-completed run.
+        mgr.update_run_failed_if_running(&run.id, "drain thread panicked")
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.status,
+            AgentRunStatus::Completed,
+            "completed run must not be clobbered by drain panic handler"
+        );
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("done"),
+            "result_text must not be overwritten when run is already completed"
+        );
+    }
+
+    #[test]
     fn test_update_run_completed_if_running_noop_when_already_failed() {
         // The `AND status = 'running'` guard must prevent overwriting a run that
         // has already been finalized (e.g. by another reaper path).
@@ -1155,5 +1209,91 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.status, AgentRunStatus::Cancelled);
         assert!(fetched.ended_at.is_some());
+    }
+
+    #[test]
+    fn test_pid_persist_failure_path_marks_run_failed() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+
+        let pid_err = "disk I/O error";
+        let msg = format!("failed to persist subprocess pid: {pid_err}");
+        mgr.update_run_failed(&run.id, &msg)
+            .expect("update_run_failed must succeed");
+
+        let fetched = mgr.get_run(&run.id).unwrap().expect("run must exist");
+        assert_eq!(
+            fetched.status,
+            AgentRunStatus::Failed,
+            "run should be failed"
+        );
+        assert!(
+            fetched
+                .result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("persist subprocess pid"),
+            "result_text should reference 'persist subprocess pid', got: {:?}",
+            fetched.result_text
+        );
+    }
+
+    /// Verify that `AgentManager::try_mark_run_failed_in_db` transitions the run to `Failed`
+    /// when the retry DB open succeeds.
+    ///
+    /// The `drain_db_open_failure_no_pipe_deadlock` test uses a permanently bad
+    /// `db_path` so the retry also fails silently.  This test uses a real temp
+    /// DB to confirm the status transition when the retry succeeds.
+    #[test]
+    fn drain_db_open_failure_marks_run_failed() {
+        let tmp = tempfile::NamedTempFile::new().expect("temp db");
+        let conn = crate::db::open_database(tmp.path()).expect("open db");
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        crate::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let run = AgentManager::new(&conn)
+            .create_run(Some("w1"), "test prompt", None, None)
+            .expect("create run");
+        let run_id = run.id.clone();
+
+        // Drop conn so the DB file is fully flushed before try_mark_run_failed_in_db
+        // opens its own connection.
+        drop(conn);
+
+        let err_msg = "drain thread failed to open DB: io error";
+        AgentManager::try_mark_run_failed_in_db(tmp.path(), &run_id, err_msg, "test");
+
+        // Re-open to read back the final state.
+        let conn2 = crate::db::open_database(tmp.path()).expect("re-open db");
+        let run_after = AgentManager::new(&conn2)
+            .get_run(&run_id)
+            .unwrap()
+            .expect("run must exist");
+
+        assert_eq!(
+            run_after.status,
+            AgentRunStatus::Failed,
+            "run should be marked failed after drain DB-open error"
+        );
+        assert!(
+            run_after
+                .result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("drain thread failed to open DB"),
+            "result_text should contain the error message, got: {:?}",
+            run_after.result_text
+        );
+
+        let _ = tmp;
     }
 }

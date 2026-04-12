@@ -15,6 +15,19 @@ use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{StepKey, WorkflowResumeStandalone, WorkflowRun};
 
+macro_rules! reset_sql {
+    ($where:literal) => {
+        concat!(
+            "UPDATE workflow_run_steps \
+             SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
+             context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
+             subprocess_pid = NULL \
+             ",
+            $where
+        )
+    };
+}
+
 impl<'a> WorkflowManager<'a> {
     /// Reap workflow_run_steps stuck in `running` status whose script subprocess
     /// has died while conductor was not running.
@@ -563,23 +576,14 @@ impl<'a> WorkflowManager<'a> {
             .optional()?)
     }
 
-    const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \
-         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
-         subprocess_pid = NULL \
-         WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')";
+    const SQL_RESET_FAILED: &'static str =
+        reset_sql!("WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')");
 
-    const SQL_RESET_COMPLETED: &'static str = "UPDATE workflow_run_steps \
-         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
-         subprocess_pid = NULL \
-         WHERE workflow_run_id = ?1 AND status = 'completed'";
+    const SQL_RESET_COMPLETED: &'static str =
+        reset_sql!("WHERE workflow_run_id = ?1 AND status = 'completed'");
 
-    const SQL_RESET_FROM_POS: &'static str = "UPDATE workflow_run_steps \
-         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
-         subprocess_pid = NULL \
-         WHERE workflow_run_id = ?1 AND position >= ?2";
+    const SQL_RESET_FROM_POS: &'static str =
+        reset_sql!("WHERE workflow_run_id = ?1 AND position >= ?2");
 
     /// Reset all non-completed steps for a workflow run back to `pending`.
     ///

@@ -44,31 +44,6 @@ async fn cancel_run_blocking(
     Ok(())
 }
 
-/// Open the database and mark the run failed if it is still in `running` status.
-///
-/// Best-effort: logs a warning if the DB cannot be opened or the update fails, but
-/// never panics. Used to clean up on drain-thread DB-open errors and drain-thread
-/// panics so the run does not stay stuck in `running` until the orphan reaper fires.
-pub(super) fn try_mark_run_failed_in_db(
-    db_path: &std::path::Path,
-    run_id: &str,
-    msg: &str,
-    log_prefix: &str,
-) {
-    match conductor_core::db::open_database(db_path) {
-        Err(open_err) => {
-            tracing::warn!("[{log_prefix}] could not open DB for failure recovery: {open_err}");
-        }
-        Ok(conn) => {
-            if let Err(update_err) =
-                AgentManager::new(&conn).update_run_failed_if_running(run_id, msg)
-            {
-                tracing::warn!("[{log_prefix}] failed to mark run failed: {update_err}");
-            }
-        }
-    }
-}
-
 /// Wire up PID persistence, drain thread, and panic monitor for a headless subprocess.
 ///
 /// Shared lifecycle logic used by both [`spawn_headless_agent`] and
@@ -85,8 +60,10 @@ async fn wire_headless_drain(
     run_id: &str,
     handle: conductor_core::agent_runtime::HeadlessHandle,
     prompt_file: Option<std::path::PathBuf>,
-    worktree_id: Option<String>,
+    worktree_id: Option<&str>,
 ) -> Result<(), ApiError> {
+    // Convert to owned so the value can be moved into the spawn_blocking closure.
+    let worktree_id: Option<String> = worktree_id.map(str::to_owned);
     // Persist subprocess PID synchronously — stop_agent relies on this being visible
     // before any cancellation request arrives.
     let pid_result = {
@@ -136,7 +113,7 @@ async fn wire_headless_drain(
                 // path — the first failure may have been transient. If this
                 // retry also fails, the orphan reaper remains the backstop.
                 let msg = format!("drain thread failed to open DB: {e}");
-                try_mark_run_failed_in_db(
+                AgentManager::try_mark_run_failed_in_db(
                     &db_path,
                     &run_id_owned,
                     &msg,
@@ -179,7 +156,7 @@ async fn wire_headless_drain(
             // status written by drain_stream_json before the panic occurred (e.g.
             // during the trailing remove_file / child.wait cleanup).
             let msg = format!("drain thread panicked: {panic_err}");
-            try_mark_run_failed_in_db(
+            AgentManager::try_mark_run_failed_in_db(
                 &db_path_for_panic,
                 &run_id_for_panic,
                 &msg,
@@ -197,28 +174,13 @@ async fn wire_headless_drain(
 /// subprocess PID via [`wire_headless_drain`], then fires a
 /// `tokio::task::spawn_blocking` drain thread (fire-and-forget) that emits
 /// [`ConductorEvent::AgentLiveEvent`] for every event parsed from stdout.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn spawn_headless_agent(
     state: &AppState,
-    run_id: &str,
-    working_dir: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    model: Option<&str>,
-    bot_name: Option<&str>,
-    permission_mode: Option<&conductor_core::config::AgentPermissionMode>,
-    worktree_id: Option<String>,
+    params: &conductor_core::agent_runtime::SpawnHeadlessParams<'_>,
+    worktree_id: Option<&str>,
 ) -> Result<(), ApiError> {
-    let spawn_result = conductor_core::agent_runtime::try_spawn_headless_run(
-        run_id,
-        working_dir,
-        prompt,
-        resume_session_id,
-        model,
-        bot_name,
-        permission_mode,
-        &[],
-    );
+    let run_id = params.run_id;
+    let spawn_result = conductor_core::agent_runtime::try_spawn_headless_run(params);
 
     let (handle, prompt_file) = match spawn_result {
         Err(err) => {
@@ -262,7 +224,7 @@ async fn spawn_headless_orchestrate(
         Ok(h) => h,
     };
 
-    wire_headless_drain(state, run_id, handle, None, Some(worktree_id)).await
+    wire_headless_drain(state, run_id, handle, None, Some(worktree_id.as_str())).await
 }
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
@@ -526,18 +488,17 @@ pub async fn start_agent(
     // DB and config locks are now dropped.
 
     // Spawn headless subprocess and wire stdout to the SSE event bus.
-    spawn_headless_agent(
-        &state,
-        &run.id,
-        &wt_path,
-        &prompt,
-        resume_session_id.as_deref(),
-        model.as_deref(),
-        None,
-        None,
-        Some(wt_id.clone()),
-    )
-    .await?;
+    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+        run_id: &run.id,
+        working_dir: &wt_path,
+        prompt: &prompt,
+        resume_session_id: resume_session_id.as_deref(),
+        model: model.as_deref(),
+        bot_name: None,
+        permission_mode: None,
+        plugin_dirs: &[],
+    };
+    spawn_headless_agent(&state, &spawn_params, Some(wt_id.as_str())).await?;
 
     state.events.emit(ConductorEvent::AgentStarted {
         run_id: run.id.clone(),
@@ -1302,18 +1263,17 @@ pub async fn restart_agent(
     // DB and config locks are now dropped.
 
     // Spawn headless subprocess and wire stdout to the SSE event bus.
-    spawn_headless_agent(
-        &state,
-        &new_run.id,
-        &wt_path,
-        &new_run.prompt,
-        None,
-        new_run.model.as_deref(),
-        new_run.bot_name.as_deref(),
-        None,
-        Some(worktree_id.clone()),
-    )
-    .await?;
+    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+        run_id: &new_run.id,
+        working_dir: &wt_path,
+        prompt: &new_run.prompt,
+        resume_session_id: None,
+        model: new_run.model.as_deref(),
+        bot_name: new_run.bot_name.as_deref(),
+        permission_mode: None,
+        plugin_dirs: &[],
+    };
+    spawn_headless_agent(&state, &spawn_params, Some(worktree_id.as_str())).await?;
 
     state.events.emit(ConductorEvent::AgentRestarted {
         run_id: new_run.id.clone(),
@@ -1386,18 +1346,17 @@ pub async fn start_repo_agent(
 
     // Spawn headless subprocess with repo-safe permission mode and wire stdout to SSE.
     let repo_safe = conductor_core::config::AgentPermissionMode::RepoSafe;
-    spawn_headless_agent(
-        &state,
-        &run.id,
-        &repo_path,
-        &run.prompt,
-        resume_session_id.as_deref(),
-        model.as_deref(),
-        None,
-        Some(&repo_safe),
-        None,
-    )
-    .await?;
+    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+        run_id: &run.id,
+        working_dir: &repo_path,
+        prompt: &run.prompt,
+        resume_session_id: resume_session_id.as_deref(),
+        model: model.as_deref(),
+        bot_name: None,
+        permission_mode: Some(&repo_safe),
+        plugin_dirs: &[],
+    };
+    spawn_headless_agent(&state, &spawn_params, None).await?;
 
     state.events.emit(ConductorEvent::RepoAgentStarted {
         run_id: run.id.clone(),
@@ -1706,96 +1665,6 @@ mod tests {
         );
     }
 
-    /// Verify the DB-level operations in the PID-persist failure path (lines 106–120).
-    ///
-    /// When `update_run_subprocess_pid` fails, `spawn_headless_agent` calls
-    /// `update_run_failed` and returns an error so the run is never stuck in `running`.
-    ///
-    /// Note: the full HTTP-layer integration path cannot be exercised in unit tests
-    /// because it requires a live `conductor` subprocess to spawn (the PID-persist step
-    /// only runs after a successful spawn). This test covers the DB state transition the
-    /// failure path relies on.
-    #[tokio::test]
-    async fn pid_persist_failure_path_marks_run_failed() {
-        let (state, _tmp) = seeded_state();
-        let run_id = "pid-persist-fail-run";
-
-        // Simulate: a run was created in 'running' state (as start_agent does).
-        {
-            let db = state.db.lock().await;
-            conductor_core::test_helpers::insert_test_agent_run(&db, run_id, "w1");
-        }
-
-        // Simulate what the PID-persist failure path does: call update_run_failed with
-        // the same message format to prevent the run from being stuck in 'running'.
-        let pid_err = "disk I/O error";
-        let msg = format!("failed to persist subprocess pid: {pid_err}");
-        {
-            let db = state.db.lock().await;
-            AgentManager::new(&db)
-                .update_run_failed(run_id, &msg)
-                .expect("update_run_failed must succeed");
-        }
-
-        // The run must now be failed, not stuck in 'running'.
-        let db = state.db.lock().await;
-        let run = AgentManager::new(&db)
-            .get_run(run_id)
-            .unwrap()
-            .expect("run must exist");
-        assert_eq!(run.status, AgentRunStatus::Failed, "run should be failed");
-        assert!(
-            run.result_text
-                .as_deref()
-                .unwrap_or("")
-                .contains("persist subprocess pid"),
-            "result_text should reference 'persist subprocess pid', got: {:?}",
-            run.result_text
-        );
-    }
-
-    /// Verify that the drain-panic monitor does NOT clobber a `completed` run.
-    ///
-    /// `update_run_failed_if_running` is used in the panic handler so that if
-    /// `drain_stream_json` already finalized the run (e.g. `completed`) before the
-    /// drain thread panicked in the trailing cleanup, the `completed` status is preserved.
-    #[tokio::test]
-    async fn drain_panic_monitor_does_not_clobber_completed_run() {
-        let (state, _tmp) = seeded_state();
-        let run_id = "drain-panic-completed-run";
-
-        // Seed a run, then mark it completed (simulating drain_stream_json success).
-        {
-            let db = state.db.lock().await;
-            conductor_core::test_helpers::insert_test_agent_run(&db, run_id, "w1");
-            let mgr = AgentManager::new(&db);
-            // Mark completed so the run is no longer 'running'.
-            mgr.update_run_completed_if_running(run_id, "done")
-                .expect("update_run_completed_if_running must succeed");
-        }
-
-        // Simulate what the panic monitor does: update_run_failed_if_running.
-        // Because the run is already 'completed', this must be a no-op.
-        {
-            let db = state.db.lock().await;
-            AgentManager::new(&db)
-                .update_run_failed_if_running(run_id, "drain thread panicked")
-                .expect("update_run_failed_if_running must not return an error");
-        }
-
-        // Status must still be 'completed' — not overwritten by the panic handler.
-        let db = state.db.lock().await;
-        let run = AgentManager::new(&db)
-            .get_run(run_id)
-            .unwrap()
-            .expect("run must exist");
-        assert_eq!(
-            run.status,
-            AgentRunStatus::Completed,
-            "completed run must not be clobbered by drain panic handler"
-        );
-    }
-
     /// Regression test: drain-thread DB-open failure must not deadlock.
     ///
     /// **Bug (pre-fix):** `handle.child.wait()` was called while `handle.stdout`
@@ -1883,61 +1752,6 @@ mod tests {
         }
 
         // Keep _tmp alive until the DB is no longer needed.
-        let _ = tmp;
-    }
-
-    /// Verify that `try_mark_run_failed_in_db` transitions the run to `Failed`
-    /// when the retry DB open succeeds.
-    ///
-    /// The `drain_db_open_failure_no_pipe_deadlock` test uses a permanently bad
-    /// `db_path` so the retry also fails silently.  This test uses a real temp
-    /// DB to confirm the status transition when the retry succeeds.
-    #[tokio::test]
-    async fn drain_db_open_failure_marks_run_failed() {
-        let tmp = tempfile::NamedTempFile::new().expect("temp db");
-        let conn = conductor_core::db::open_database(tmp.path()).expect("open db");
-        conductor_core::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
-        conductor_core::test_helpers::insert_test_worktree(
-            &conn,
-            "w1",
-            "r1",
-            "feat-test",
-            "/tmp/ws/feat-test",
-        );
-        let run = AgentManager::new(&conn)
-            .create_run(Some("w1"), "test prompt", None, None)
-            .expect("create run");
-        let run_id = run.id.clone();
-
-        // Drop conn so the DB file is fully flushed before try_mark_run_failed_in_db
-        // opens its own connection.
-        drop(conn);
-
-        let err_msg = "drain thread failed to open DB: io error";
-        super::try_mark_run_failed_in_db(tmp.path(), &run_id, err_msg, "test");
-
-        // Re-open to read back the final state.
-        let conn2 = conductor_core::db::open_database(tmp.path()).expect("re-open db");
-        let run_after = AgentManager::new(&conn2)
-            .get_run(&run_id)
-            .unwrap()
-            .expect("run must exist");
-
-        assert_eq!(
-            run_after.status,
-            AgentRunStatus::Failed,
-            "run should be marked failed after drain DB-open error"
-        );
-        assert!(
-            run_after
-                .result_text
-                .as_deref()
-                .unwrap_or("")
-                .contains("drain thread failed to open DB"),
-            "result_text should contain the error message, got: {:?}",
-            run_after.result_text
-        );
-
         let _ = tmp;
     }
 
