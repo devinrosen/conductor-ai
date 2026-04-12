@@ -562,6 +562,84 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
     }
 
+    /// Set up a test DB with one registered repo and 2 inserted worktrees.
+    /// Returns the tempfile guard (keep alive), the db path, and the repo slug.
+    fn make_pagination_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let config = Config::default();
+
+        let repo = RepoManager::new(&conn, &config)
+            .register(
+                "my-repo",
+                "/tmp/my-repo",
+                "https://github.com/org/my-repo.git",
+                None,
+            )
+            .expect("register repo");
+
+        // Insert 2 worktrees directly to avoid git subprocess calls.
+        for i in 0..2 {
+            conn.execute(
+                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, '/tmp/wt', 'active', datetime('now'))",
+                rusqlite::params![
+                    format!("01JTEST000000000000000WTP{i}"),
+                    repo.id,
+                    format!("feat-pg-{i}"),
+                    format!("feat/pg-{i}"),
+                ],
+            )
+            .expect("insert worktree");
+        }
+
+        (_f, db)
+    }
+
+    #[test]
+    fn test_list_worktrees_pagination_hint_shown_when_full_page() {
+        let (_f, db) = make_pagination_test_db();
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("my-repo".into()));
+        // limit == number of rows → full page → hint should appear
+        args.insert("limit".into(), Value::Number(2.into()));
+        let result = tool_list_worktrees(&db, &args);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Pass offset="),
+            "expected pagination hint in output, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_list_worktrees_pagination_hint_not_shown_when_partial_page() {
+        let (_f, db) = make_pagination_test_db();
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("my-repo".into()));
+        // limit > number of rows → partial page → hint should NOT appear
+        args.insert("limit".into(), Value::Number(3.into()));
+        let result = tool_list_worktrees(&db, &args);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            !text.contains("Pass offset="),
+            "expected no pagination hint in output, got: {text}"
+        );
+    }
+
     #[test]
     fn test_dispatch_get_worktree_by_branch() {
         use conductor_core::db::open_database;
