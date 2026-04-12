@@ -205,16 +205,15 @@ fn execute_call_with_schema(
         // of human-readable output to it.  If nobody reads the pipe the kernel
         // buffer fills (~64 KB on macOS) and the write blocks — freezing the
         // claude subprocess and stalling stdout too.  Drain here to keep the pipe
-        // flowing; output is forwarded to our own stderr so it still appears in
-        // any parent terminal / log collector.
+        // flowing.  Output is intentionally discarded: forwarding to our own
+        // stderr corrupts the TUI (which owns the terminal in raw mode), and the
+        // subprocess already writes the useful stream-json events to its stdout.
         let stderr_pipe = handle.stderr;
         std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader, Write};
+            use std::io::{BufRead, BufReader};
             let reader = BufReader::new(stderr_pipe);
-            let stderr_out = std::io::stderr();
             for line in reader.lines().map_while(|l| l.ok()) {
-                let mut out = stderr_out.lock();
-                let _ = writeln!(out, "{line}");
+                tracing::trace!(target: "conductor::agent::stderr", "{line}");
             }
         });
 

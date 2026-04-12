@@ -207,15 +207,14 @@ pub fn execute_parallel(
         }
 
         // Drain subprocess stderr to prevent the pipe buffer from filling.
-        // See call.rs for a detailed explanation.
+        // See call.rs for a detailed explanation.  Output is discarded rather
+        // than forwarded to stderr to avoid corrupting the TUI terminal.
         let stderr_pipe = handle.stderr;
         std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader, Write};
+            use std::io::{BufRead, BufReader};
             let reader = BufReader::new(stderr_pipe);
-            let stderr_out = std::io::stderr();
             for line in reader.lines().map_while(|l| l.ok()) {
-                let mut out = stderr_out.lock();
-                let _ = writeln!(out, "{line}");
+                tracing::trace!(target: "conductor::agent::stderr", "{line}");
             }
         });
 
