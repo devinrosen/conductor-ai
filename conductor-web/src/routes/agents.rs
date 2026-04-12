@@ -80,14 +80,10 @@ async fn wire_headless_drain(
                 if let Some(ref pf) = prompt_file {
                     let _ = std::fs::remove_file(pf);
                 }
-                // Drop stdout/stderr before wait() to close the read ends of
-                // the pipes.  If the child has filled its stdout buffer it is
-                // blocked trying to write; wait() would also block waiting for
-                // the child to exit — a deadlock.  Closing the pipes first
-                // causes the child's writes to fail with EPIPE so it can exit.
-                drop(handle.stdout);
-                drop(handle.stderr);
-                let _ = handle.child.wait();
+                // abort() drops the pipe read-ends before wait() to prevent a
+                // deadlock where a child that has filled its stdout buffer can
+                // never exit, so wait() would block forever.
+                handle.abort();
                 return;
             }
         };
@@ -1780,7 +1776,7 @@ mod tests {
         // Spawn a process that writes 128 KiB to stdout — enough to fill the
         // 64 KiB pipe buffer and leave the child blocked on its next write if
         // the read end is not closed before wait().
-        let mut child = Command::new("sh")
+        let child = Command::new("sh")
             .args(["-c", "dd if=/dev/zero bs=131072 count=1 2>/dev/null"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1788,14 +1784,8 @@ mod tests {
             .expect("spawn dd writer");
 
         let child_pid = child.id();
-        let stdout = child.stdout.take().expect("stdout pipe");
-        let stderr = child.stderr.take().expect("stderr pipe");
-        let handle = conductor_core::agent_runtime::HeadlessHandle {
-            pid: child_pid,
-            stdout,
-            stderr,
-            child,
-        };
+        let handle = conductor_core::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child");
 
         // Build an AppState with a valid shared DB (so update_run_subprocess_pid
         // succeeds) but a non-existent db_path (so the drain thread's secondary

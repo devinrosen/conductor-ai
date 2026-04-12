@@ -334,6 +334,45 @@ pub struct HeadlessHandle {
     pub child: std::process::Child,
 }
 
+#[cfg(unix)]
+impl HeadlessHandle {
+    /// Build a `HeadlessHandle` from a freshly-spawned `Child` with piped stdio.
+    ///
+    /// Extracts `stdout` and `stderr` from the child.  Returns an error if
+    /// the pipes are missing (i.e. `Stdio::piped()` was not configured).
+    pub fn from_child(mut child: std::process::Child) -> std::result::Result<Self, String> {
+        let pid = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "HeadlessHandle: child has no stdout pipe".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "HeadlessHandle: child has no stderr pipe".to_string())?;
+        Ok(Self {
+            pid,
+            stdout,
+            stderr,
+            child,
+        })
+    }
+
+    /// Abort the subprocess without deadlocking on pipe buffers.
+    ///
+    /// Closes the read ends of stdout and stderr **before** calling `wait()`.
+    /// If the child has filled the pipe buffer it is blocked on a write; calling
+    /// `wait()` while the read end is still open would deadlock because the child
+    /// can never exit.  Dropping the pipes first causes the child's writes to
+    /// fail with EPIPE so it can exit, after which `wait()` reaps it immediately.
+    pub fn abort(self) {
+        drop(self.stdout);
+        drop(self.stderr);
+        let mut child = self.child;
+        let _ = child.wait();
+    }
+}
+
 /// Spawn a headless `conductor agent run` subprocess.
 ///
 /// The child is placed in its own process group (`process_group(0)`) so it
