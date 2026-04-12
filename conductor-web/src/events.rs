@@ -75,6 +75,13 @@ pub enum ConductorEvent {
         #[serde(rename = "stepIndex", skip_serializing_if = "Option::is_none")]
         step_index: Option<i64>,
     },
+    #[serde(rename = "agent_live_event")]
+    AgentLiveEvent {
+        run_id: String,
+        worktree_id: Option<String>,
+        kind: String,
+        summary: String,
+    },
 }
 
 impl ConductorEvent {
@@ -100,6 +107,7 @@ impl ConductorEvent {
             Self::WorkflowGateWaiting { .. } => "workflow_gate_waiting",
             Self::NotificationCreated { .. } => "notification_created",
             Self::AgentStep { .. } => "agent_step",
+            Self::AgentLiveEvent { .. } => "agent_live_event",
         }
     }
 }
@@ -292,6 +300,15 @@ mod tests {
                     step_index: None,
                 },
                 "agent_step",
+            ),
+            (
+                ConductorEvent::AgentLiveEvent {
+                    run_id: "".into(),
+                    worktree_id: None,
+                    kind: "".into(),
+                    summary: "".into(),
+                },
+                "agent_live_event",
             ),
         ];
         for (event, expected) in cases {

@@ -56,6 +56,98 @@ pub(super) async fn spawn_tmux_blocking(
     }
 }
 
+/// Spawn a headless conductor subprocess and wire its stdout to the SSE event bus.
+///
+/// Calls [`conductor_core::agent_runtime::try_spawn_headless_run`], persists the
+/// subprocess PID, then fires a `tokio::task::spawn_blocking` drain thread
+/// (fire-and-forget) that emits [`ConductorEvent::AgentLiveEvent`] for every
+/// event parsed from stdout.
+#[allow(clippy::too_many_arguments)]
+async fn spawn_headless_agent(
+    state: &AppState,
+    run_id: &str,
+    working_dir: &str,
+    prompt: &str,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&conductor_core::config::AgentPermissionMode>,
+    worktree_id: Option<String>,
+) -> Result<(), ApiError> {
+    let spawn_result = conductor_core::agent_runtime::try_spawn_headless_run(
+        run_id,
+        working_dir,
+        prompt,
+        resume_session_id,
+        model,
+        bot_name,
+        permission_mode,
+        &[],
+    );
+
+    let (handle, prompt_file) = match spawn_result {
+        Err(err) => {
+            let db = state.db.lock().await;
+            let agent_mgr = AgentManager::new(&db);
+            if let Err(e) = agent_mgr.update_run_failed(run_id, &err) {
+                warn!(run_id, %e, "failed to mark agent run as failed after headless spawn error");
+            }
+            return Err(ConductorError::Agent(err).into());
+        }
+        Ok(pair) => pair,
+    };
+
+    // Persist subprocess PID synchronously — stop_agent relies on this being visible
+    // before any cancellation request arrives.
+    {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+        if let Err(e) = agent_mgr.update_run_subprocess_pid(run_id, handle.pid) {
+            warn!(run_id, %e, "failed to persist subprocess pid");
+        }
+    }
+
+    let run_id_owned = run_id.to_owned();
+    let log_path = conductor_core::config::agent_log_path(&run_id_owned);
+    let events = state.events.clone();
+    let db_path = state.db_path.clone();
+
+    // Fire-and-forget drain thread: reads stdout, persists events to DB, and emits
+    // AgentLiveEvent on the SSE bus for connected browsers.
+    drop(tokio::task::spawn_blocking(move || {
+        let conn = match conductor_core::db::open_database(&db_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("[spawn_headless_agent] drain: failed to open DB: {e}");
+                let _ = std::fs::remove_file(&prompt_file);
+                return;
+            }
+        };
+        let mgr = AgentManager::new(&conn);
+        conductor_core::agent_runtime::drain_stream_json(
+            handle.stdout,
+            &run_id_owned,
+            &log_path,
+            &mgr,
+            |event| {
+                events.emit(ConductorEvent::AgentLiveEvent {
+                    run_id: run_id_owned.clone(),
+                    worktree_id: worktree_id.clone(),
+                    kind: event.kind.clone(),
+                    summary: event.summary.clone(),
+                });
+            },
+        );
+        let _ = std::fs::remove_file(&prompt_file);
+        let _ = {
+            let mut c = handle.child;
+            c.wait()
+        };
+    }));
+
+    Ok(())
+}
+
 // ── Agent stats (aggregates) ──────────────────────────────────────────
 
 #[utoipa::path(
@@ -263,7 +355,7 @@ pub async fn start_agent(
     Json(body): Json<StartAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
     // Scope DB + config access so locks are dropped before the blocking spawn.
-    let (run, args, wt_slug, wt_id) = {
+    let (run, wt_path, wt_id, prompt, resume_session_id, model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
 
@@ -296,41 +388,39 @@ pub async fn start_agent(
             agent_mgr.create_child_run(
                 Some(&worktree_id),
                 &body.prompt,
-                Some(&wt.slug),
+                None,
                 model.as_deref(),
                 parent_id,
                 None,
             )?
         } else {
-            agent_mgr.create_run(
-                Some(&worktree_id),
-                &body.prompt,
-                Some(&wt.slug),
-                model.as_deref(),
-            )?
+            agent_mgr.create_run(Some(&worktree_id), &body.prompt, None, model.as_deref())?
         };
 
-        // Build conductor agent run command
-        let args = conductor_core::agent_runtime::build_agent_args(
-            &run.id,
-            &wt.path,
-            &body.prompt,
-            body.resume_session_id.as_deref(),
-            model.as_deref(),
-            None,
-            &[],
+        (
+            run,
+            wt.path.clone(),
+            wt.id.clone(),
+            body.prompt.clone(),
+            body.resume_session_id.clone(),
+            model,
         )
-        .map_err(|e| {
-            let _ = agent_mgr.update_run_failed(&run.id, &e);
-            ConductorError::Agent(e)
-        })?;
-
-        (run, args, wt.slug.clone(), wt.id.clone())
     };
     // DB and config locks are now dropped.
 
-    // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    spawn_tmux_blocking(&state, &run.id, args, wt_slug.clone()).await?;
+    // Spawn headless subprocess and wire stdout to the SSE event bus.
+    spawn_headless_agent(
+        &state,
+        &run.id,
+        &wt_path,
+        &prompt,
+        resume_session_id.as_deref(),
+        model.as_deref(),
+        None,
+        None,
+        Some(wt_id.clone()),
+    )
+    .await?;
 
     state.events.emit(ConductorEvent::AgentStarted {
         run_id: run.id.clone(),
@@ -1058,7 +1148,7 @@ pub async fn restart_agent(
     Path((worktree_id, run_id)): Path<(String, String)>,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
     // Scope DB + config access so locks are dropped before the blocking spawn.
-    let (new_run, args, window_name) = {
+    let (new_run, wt_path) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
 
@@ -1086,32 +1176,23 @@ pub async fn restart_agent(
                 .expect("worktree_id verified above"),
         )?;
 
-        let window_name = new_run
-            .tmux_window
-            .as_deref()
-            .unwrap_or(&wt.slug)
-            .to_string();
-
-        let args = conductor_core::agent_runtime::build_agent_args(
-            &new_run.id,
-            &wt.path,
-            &new_run.prompt,
-            None,
-            new_run.model.as_deref(),
-            new_run.bot_name.as_deref(),
-            &[],
-        )
-        .map_err(|e| {
-            let _ = agent_mgr.update_run_failed(&new_run.id, &e);
-            ConductorError::Agent(e)
-        })?;
-
-        (new_run, args, window_name)
+        (new_run, wt.path.clone())
     };
     // DB and config locks are now dropped.
 
-    // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    spawn_tmux_blocking(&state, &new_run.id, args, window_name.clone()).await?;
+    // Spawn headless subprocess and wire stdout to the SSE event bus.
+    spawn_headless_agent(
+        &state,
+        &new_run.id,
+        &wt_path,
+        &new_run.prompt,
+        None,
+        new_run.model.as_deref(),
+        new_run.bot_name.as_deref(),
+        None,
+        Some(worktree_id.clone()),
+    )
+    .await?;
 
     state.events.emit(ConductorEvent::AgentRestarted {
         run_id: new_run.id.clone(),
@@ -1209,7 +1290,7 @@ pub async fn start_repo_agent(
     Json(body): Json<StartRepoAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
     // Scope DB + config access so locks are dropped before the blocking spawn.
-    let (run, args, window_name) = {
+    let (run, repo_path, resume_session_id, model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
@@ -1232,41 +1313,26 @@ pub async fn start_repo_agent(
                 .and_then(|run| run.claude_session_id)
         };
 
-        // Tmux window name: repo-<slug>-<short_id>
-        let run_id = conductor_core::new_id();
-        let window_name =
-            conductor_core::agent_runtime::repo_agent_window_name(&repo.slug, &run_id);
+        let run = agent_mgr.create_repo_run(&repo_id, &body.prompt, None, model.as_deref())?;
 
-        let run = agent_mgr.create_repo_run(
-            &repo_id,
-            &body.prompt,
-            Some(&window_name),
-            model.as_deref(),
-        )?;
-
-        // Build args with repo-safe permission mode (read-only tools, unrestricted Bash/gh)
-        let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
-        let args = conductor_core::agent_runtime::build_agent_args_with_mode(
-            &run.id,
-            &repo.local_path,
-            &body.prompt,
-            resume_session_id.as_deref(),
-            model.as_deref(),
-            None,
-            Some(&plan_mode),
-            &[],
-        )
-        .map_err(|e| {
-            let _ = agent_mgr.update_run_failed(&run.id, &e);
-            ConductorError::Agent(e)
-        })?;
-
-        (run, args, window_name)
+        (run, repo.local_path.clone(), resume_session_id, model)
     };
     // DB and config locks are now dropped.
 
-    // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    spawn_tmux_blocking(&state, &run.id, args, window_name.clone()).await?;
+    // Spawn headless subprocess with repo-safe permission mode and wire stdout to SSE.
+    let repo_safe = conductor_core::config::AgentPermissionMode::RepoSafe;
+    spawn_headless_agent(
+        &state,
+        &run.id,
+        &repo_path,
+        &run.prompt,
+        resume_session_id.as_deref(),
+        model.as_deref(),
+        None,
+        Some(&repo_safe),
+        None,
+    )
+    .await?;
 
     state.events.emit(ConductorEvent::RepoAgentStarted {
         run_id: run.id.clone(),

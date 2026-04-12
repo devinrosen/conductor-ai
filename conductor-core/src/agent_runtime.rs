@@ -572,10 +572,12 @@ pub fn spawn_headless(
 /// call.  On spawn failure the prompt file is cleaned up before returning the
 /// error string so the caller doesn't need to manage it.
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 pub fn try_spawn_headless_run(
     run_id: &str,
     working_dir: &str,
     prompt: &str,
+    resume_session_id: Option<&str>,
     model: Option<&str>,
     bot_name: Option<&str>,
     permission_mode: Option<&crate::config::AgentPermissionMode>,
@@ -585,7 +587,7 @@ pub fn try_spawn_headless_run(
         run_id,
         working_dir,
         prompt,
-        None,
+        resume_session_id,
         model,
         bot_name,
         permission_mode,
