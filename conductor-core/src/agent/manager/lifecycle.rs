@@ -897,6 +897,35 @@ mod tests {
     }
 
     #[test]
+    fn test_update_run_failed_if_running_noop_when_already_completed() {
+        // The `AND status IN ('running', 'waiting_for_feedback')` guard must also
+        // preserve a run already in `completed` state (drain-panic-monitor scenario:
+        // drain_stream_json succeeds, then the panic monitor fires after the fact).
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_completed_if_running(&run.id, "done")
+            .unwrap();
+
+        // Panic-monitor path must be a no-op on an already-completed run.
+        mgr.update_run_failed_if_running(&run.id, "drain thread panicked")
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.status,
+            AgentRunStatus::Completed,
+            "completed run must not be clobbered by drain panic handler"
+        );
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("done"),
+            "result_text must not be overwritten when run is already completed"
+        );
+    }
+
+    #[test]
     fn test_update_run_completed_if_running_noop_when_already_failed() {
         // The `AND status = 'running'` guard must prevent overwriting a run that
         // has already been finalized (e.g. by another reaper path).
