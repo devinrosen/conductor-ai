@@ -2683,3 +2683,102 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
     let recovered = mgr.recover_stuck_steps().unwrap();
     assert_eq!(recovered, 1, "should recover the stuck step");
 }
+
+// ---------------------------------------------------------------------------
+// subprocess_pid cleared on reset tests
+// ---------------------------------------------------------------------------
+
+/// reset_failed_steps must clear subprocess_pid so the orphan reaper doesn't
+/// see a stale PID on the freshly-reset pending step.
+#[test]
+fn test_reset_failed_steps_clears_subprocess_pid() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    // Insert a failed step that has a stale subprocess_pid.
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-failed', 'script', 0, 'failed', 0, 12345)",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    mgr.reset_failed_steps(&run_id).unwrap();
+
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid.is_none(),
+        "subprocess_pid must be NULL after reset_failed_steps"
+    );
+}
+
+/// reset_completed_steps must clear subprocess_pid.
+#[test]
+fn test_reset_completed_steps_clears_subprocess_pid() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-done', 'script', 0, 'completed', 0, 99999)",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    mgr.reset_completed_steps(&run_id).unwrap();
+
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid.is_none(),
+        "subprocess_pid must be NULL after reset_completed_steps"
+    );
+}
+
+/// reset_steps_from_position must clear subprocess_pid.
+#[test]
+fn test_reset_steps_from_position_clears_subprocess_pid() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-pos', 'script', 2, 'failed', 0, 55555)",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    mgr.reset_steps_from_position(&run_id, 2).unwrap();
+
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid.is_none(),
+        "subprocess_pid must be NULL after reset_steps_from_position"
+    );
+}

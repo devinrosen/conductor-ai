@@ -459,17 +459,20 @@ impl<'a> WorkflowManager<'a> {
 
     const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \
          SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
+         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
+         subprocess_pid = NULL \
          WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')";
 
     const SQL_RESET_COMPLETED: &'static str = "UPDATE workflow_run_steps \
          SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
+         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
+         subprocess_pid = NULL \
          WHERE workflow_run_id = ?1 AND status = 'completed'";
 
     const SQL_RESET_FROM_POS: &'static str = "UPDATE workflow_run_steps \
          SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
+         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
+         subprocess_pid = NULL \
          WHERE workflow_run_id = ?1 AND position >= ?2";
 
     /// Reset all non-completed steps for a workflow run back to `pending`.
