@@ -559,6 +559,34 @@ pub fn execute_parallel(
                 "parallel: drain thread for '{}' panicked: {e:?}",
                 child.agent_name
             );
+            // The drain thread panicked before it could update the DB.
+            // Mark the run and step failed so the workflow doesn't hang and
+            // min_success accounting is correct.
+            let fail_msg = "drain thread panicked";
+            if let Err(db_err) = state
+                .agent_mgr
+                .update_run_failed_if_running(&child.child_run_id, fail_msg)
+            {
+                tracing::warn!(
+                    "parallel: failed to mark run failed for '{}': {db_err}",
+                    child.agent_name
+                );
+            }
+            if let Err(db_err) = state.wf_mgr.update_step_status(
+                &child.step_id,
+                WorkflowStepStatus::Failed,
+                Some(&child.child_run_id),
+                Some(fail_msg),
+                None,
+                None,
+                None,
+            ) {
+                tracing::warn!(
+                    "parallel: failed to update step status for '{}': {db_err}",
+                    child.agent_name
+                );
+            }
+            failures += 1;
         }
         let _ = std::fs::remove_file(&child.prompt_file);
     }

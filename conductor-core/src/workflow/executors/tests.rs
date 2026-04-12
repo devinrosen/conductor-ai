@@ -1685,3 +1685,102 @@ fn test_parallel_drain_signal_race_condition_db_guard() {
         "step must be Failed, not left Running after drain-signal race guard"
     );
 }
+
+/// Regression test for #2013: drain thread panic in the post-completion join loop
+/// leaves the child agent run stuck in `running` state.
+///
+/// The fix extends the `Err` arm of `child.drain_handle.join()` to call
+/// `update_run_failed_if_running` and `update_step_status(Failed)` — the same
+/// pattern used in the `Running|WaitingForFeedback` race-condition arm.
+///
+/// This test verifies those DB operations work correctly by exercising them directly
+/// with a run in `running` state — ensuring the panic path correctly transitions
+/// both the agent run and workflow step to a terminal failure state.
+#[test]
+fn test_parallel_drain_thread_panic_marks_run_failed() {
+    use crate::agent::manager::AgentManager;
+    use crate::agent::status::AgentRunStatus;
+    use crate::workflow::manager::WorkflowManager;
+
+    let conn = crate::test_helpers::setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    // Create an agent run (starts in `running` state by default)
+    let run = agent_mgr
+        .create_run(None, "test prompt", None, None)
+        .expect("create_run should succeed");
+    assert_eq!(
+        run.status,
+        AgentRunStatus::Running,
+        "newly created run must start in Running state"
+    );
+
+    // Create a workflow run + step in Running state so we can verify the step update.
+    let wf_run = wf_mgr
+        .create_workflow_run("test-wf", None, &run.id, false, "manual", None)
+        .expect("create_workflow_run should succeed");
+    wf_mgr
+        .update_workflow_status(
+            &wf_run.id,
+            crate::workflow::status::WorkflowRunStatus::Running,
+            None,
+            None,
+        )
+        .expect("update_workflow_status to Running should succeed");
+    let step_id = wf_mgr
+        .insert_step(&wf_run.id, "test-agent", "actor", false, 0, 1)
+        .expect("insert_step should succeed");
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("update_step_status to Running should succeed");
+    let wf_run_id = wf_run.id.as_str();
+
+    // Simulate what execute_parallel does in the drain-thread-panic arm:
+    // the drain thread panicked so neither the run nor step DB rows were updated.
+    let fail_msg = "drain thread panicked";
+    agent_mgr
+        .update_run_failed_if_running(&run.id, fail_msg)
+        .expect("update_run_failed_if_running should succeed");
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Failed,
+            Some(&run.id),
+            Some(fail_msg),
+            None,
+            None,
+            None,
+        )
+        .expect("update_step_status should succeed");
+
+    // Verify: run must now be `failed`, not `running`
+    let updated_run = agent_mgr
+        .get_run(&run.id)
+        .expect("get_run should succeed")
+        .expect("run should exist");
+    assert_eq!(
+        updated_run.status,
+        AgentRunStatus::Failed,
+        "run must transition to Failed after drain thread panic"
+    );
+
+    // Verify: step must be in a terminal (non-Running) state
+    let steps = wf_mgr
+        .get_workflow_steps(wf_run_id)
+        .expect("get_workflow_steps should succeed");
+    assert_eq!(steps.len(), 1, "expected exactly one step");
+    assert_eq!(
+        steps[0].status,
+        WorkflowStepStatus::Failed,
+        "step must be Failed, not left Running after drain thread panic"
+    );
+}
