@@ -562,8 +562,10 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
     }
 
-    #[test]
-    fn test_list_worktrees_pagination_hint_shown_when_full_page() {
+    /// Set up a test DB with one registered repo and 2 inserted worktrees.
+    /// Returns the tempfile guard (keep alive), the db path, and the repo slug.
+    fn make_pagination_test_db()
+    -> (tempfile::NamedTempFile, std::path::PathBuf) {
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
@@ -587,14 +589,21 @@ mod tests {
                 "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
                  VALUES (?1, ?2, ?3, ?4, '/tmp/wt', 'active', datetime('now'))",
                 rusqlite::params![
-                    format!("01JTEST000000000000000WTA{i}"),
+                    format!("01JTEST000000000000000WTP{i}"),
                     repo.id,
-                    format!("feat-wt-{i}"),
-                    format!("feat/wt-{i}"),
+                    format!("feat-pg-{i}"),
+                    format!("feat/pg-{i}"),
                 ],
             )
             .expect("insert worktree");
         }
+
+        (_f, db)
+    }
+
+    #[test]
+    fn test_list_worktrees_pagination_hint_shown_when_full_page() {
+        let (_f, db) = make_pagination_test_db();
 
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("my-repo".into()));
@@ -614,37 +623,7 @@ mod tests {
 
     #[test]
     fn test_list_worktrees_pagination_hint_not_shown_when_partial_page() {
-        use conductor_core::config::Config;
-        use conductor_core::db::open_database;
-        use conductor_core::repo::RepoManager;
-
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
-        let config = Config::default();
-
-        let repo = RepoManager::new(&conn, &config)
-            .register(
-                "my-repo",
-                "/tmp/my-repo",
-                "https://github.com/org/my-repo.git",
-                None,
-            )
-            .expect("register repo");
-
-        // Insert 2 worktrees directly to avoid git subprocess calls.
-        for i in 0..2 {
-            conn.execute(
-                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, '/tmp/wt', 'active', datetime('now'))",
-                rusqlite::params![
-                    format!("01JTEST000000000000000WTB{i}"),
-                    repo.id,
-                    format!("feat-wt2-{i}"),
-                    format!("feat/wt2-{i}"),
-                ],
-            )
-            .expect("insert worktree");
-        }
+        let (_f, db) = make_pagination_test_db();
 
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("my-repo".into()));
