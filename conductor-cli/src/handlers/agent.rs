@@ -829,7 +829,6 @@ fn run_orchestrate(
     let orch_config = OrchestratorConfig {
         fail_fast,
         child_timeout: std::time::Duration::from_secs(child_timeout_secs),
-        ..Default::default()
     };
 
     match orchestrator::orchestrate_run(conn, config, run_id, worktree_path, model, &orch_config) {
