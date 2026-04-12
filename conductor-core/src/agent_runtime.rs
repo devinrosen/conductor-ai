@@ -1359,6 +1359,66 @@ mod tests {
         assert_eq!(fetched.cache_read_input_tokens, Some(40));
         assert_eq!(fetched.cache_creation_input_tokens, Some(20));
     }
+
+    /// Verify that `abort()` terminates a non-I/O-blocked child (e.g. `sleep 60`)
+    /// promptly.  Without `kill()` before `wait()`, `abort()` would block until
+    /// the child exits naturally — i.e. for 60 seconds.
+    #[cfg(unix)]
+    #[test]
+    fn abort_kills_non_io_blocked_child() {
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn sleep 60");
+
+        let handle = super::HeadlessHandle::from_child(child).expect("from_child failed");
+
+        let start = Instant::now();
+        handle.abort();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_secs() < 5,
+            "abort() took {:?} — kill() before wait() is required to avoid blocking",
+            elapsed
+        );
+    }
+
+    /// Verify that `abort()` terminates a child that is filling its stdout pipe
+    /// (e.g. `yes`) promptly, even when the caller never reads from stdout.
+    /// The pipe buffer fills and the child blocks on write; `kill()` must be sent
+    /// so the child can exit rather than waiting for the buffer to drain.
+    #[cfg(unix)]
+    #[test]
+    fn abort_kills_pipe_filling_child() {
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+
+        let child = Command::new("/bin/sh")
+            .args(["-c", "yes"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn yes via /bin/sh");
+
+        let handle = super::HeadlessHandle::from_child(child).expect("from_child failed");
+
+        // Do NOT read stdout — let the pipe buffer fill so the child blocks on write.
+        let start = Instant::now();
+        handle.abort();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_secs() < 5,
+            "abort() took {:?} on a pipe-filling child — kill() before wait() is required",
+            elapsed
+        );
+    }
 }
 
 // cancel_subprocess tests have moved to crate::process_utils (the canonical home
