@@ -650,6 +650,13 @@ pub fn drain_stream_json(
 /// this function to prevent a concurrent drain from overwriting the status.
 ///
 /// Implementation lives in [`crate::process_utils::cancel_subprocess`].
+///
+/// # Deprecated
+/// Use [`crate::process_utils::cancel_subprocess`] directly instead.
+#[deprecated(
+    since = "0.1.0",
+    note = "use conductor_core::process_utils::cancel_subprocess instead"
+)]
 #[cfg(unix)]
 pub fn cancel_subprocess(pid: u32) {
     crate::process_utils::cancel_subprocess(pid);

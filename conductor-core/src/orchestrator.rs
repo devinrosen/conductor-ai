@@ -221,7 +221,7 @@ pub fn orchestrate_run(
                         );
                         // Mark cancelled BEFORE sending SIGTERM (RFC 016 Q2)
                         let _ = mgr.update_run_cancelled(&child_run.id);
-                        agent_runtime::cancel_subprocess(pid);
+                        crate::process_utils::cancel_subprocess(pid);
                         let _ = rx.recv_timeout(Duration::from_secs(6));
                         break agent_runtime::DrainOutcome::NoResult;
                     }
