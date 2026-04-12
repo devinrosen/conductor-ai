@@ -1,4 +1,4 @@
-//! Shared runtime helpers for spawning and polling agent runs in tmux.
+//! Shared runtime helpers for spawning and polling agent runs.
 //!
 //! Used by both `orchestrator.rs` (plan-step orchestration) and
 //! `workflow.rs` (workflow engine execution).
@@ -12,15 +12,7 @@ use rusqlite::Connection;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-use crate::agent::{list_live_tmux_windows, AgentManager, AgentRun, AgentRunStatus};
-
-/// Build a tmux window name for a repo-scoped agent run.
-///
-/// Format: `repo-{slug}-{short_id}` where `short_id` is the first 8 chars of `run_id`.
-pub fn repo_agent_window_name(slug: &str, run_id: &str) -> String {
-    let short_id = &run_id[..8.min(run_id.len())];
-    format!("repo-{slug}-{short_id}")
-}
+use crate::agent::{AgentManager, AgentRun, AgentRunStatus};
 
 /// Resolve the path to the `conductor` binary.
 ///
@@ -38,186 +30,6 @@ fn resolve_conductor_bin() -> String {
         .unwrap_or_else(|| "conductor".to_string());
     tracing::debug!("[conductor] resolved binary: {resolved}");
     resolved
-}
-
-/// Build the path for the stderr capture file for a given tmux window name.
-///
-/// The window name is sanitized to replace path separators and other
-/// potentially dangerous characters, ensuring the file always lands in `/tmp`.
-fn stderr_file_path(window_name: &str) -> String {
-    let sanitized: String = window_name
-        .chars()
-        .map(|c| {
-            if c == '/' || c == '\\' || c == '\0' {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    format!("/tmp/conductor-agent-{sanitized}.err")
-}
-
-/// Spawn a new tmux window running `conductor <args>`, then verify it is alive.
-///
-/// `args` are the arguments passed to the `conductor` binary (e.g.
-/// `["agent", "run", "--run-id", …]`).  `window_name` is used as the tmux
-/// window name (`-n`) and for post-spawn verification.
-///
-/// If no tmux server is running, a detached session named `conductor` is
-/// created automatically so agents can run without a pre-existing tmux session.
-///
-/// The spawned process's stderr is redirected to a temp file so that crash
-/// output is available if the process exits immediately. The file is cleaned
-/// up on success; on failure its contents are included in the error message.
-pub fn spawn_tmux_window(
-    args: &[Cow<'static, str>],
-    window_name: &str,
-) -> std::result::Result<(), String> {
-    let conductor_bin = resolve_conductor_bin();
-    let err_file = stderr_file_path(window_name);
-
-    // Build the shell command: conductor <args> 2>/tmp/conductor-agent-<name>.err
-    let shell_cmd = build_shell_command(&conductor_bin, args, &err_file);
-
-    let tmux_args: Vec<Cow<'static, str>> = vec![
-        Cow::Borrowed("new-window"),
-        Cow::Borrowed("-d"),
-        Cow::Borrowed("-n"),
-        Cow::Owned(window_name.to_string()),
-        Cow::Borrowed("--"),
-        Cow::Borrowed("bash"),
-        Cow::Borrowed("-c"),
-        Cow::Owned(shell_cmd.clone()),
-    ];
-
-    let result = Command::new("tmux")
-        .args(tmux_args.iter().map(|a| a.as_ref()))
-        .output()
-        .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
-
-    if result.status.success() {
-        return verify_tmux_window(window_name, &err_file);
-    }
-
-    // No tmux server running — create a detached session and retry.
-    // tmux error messages for a missing server vary across versions and platforms
-    // ("no server running on …", "error connecting to …", "No such file or directory"),
-    // so we attempt the session fallback on any new-window failure.
-    let session_args: Vec<Cow<'static, str>> = vec![
-        Cow::Borrowed("new-session"),
-        Cow::Borrowed("-d"),
-        Cow::Borrowed("-s"),
-        Cow::Borrowed("conductor"),
-        Cow::Borrowed("-n"),
-        Cow::Owned(window_name.to_string()),
-        Cow::Borrowed("--"),
-        Cow::Borrowed("bash"),
-        Cow::Borrowed("-c"),
-        Cow::Owned(shell_cmd),
-    ];
-
-    let retry = Command::new("tmux")
-        .args(session_args.iter().map(|a| a.as_ref()))
-        .output()
-        .map_err(|e| format!("Failed to start tmux session: {e}"))?;
-
-    if retry.status.success() {
-        return verify_tmux_window(window_name, &err_file);
-    }
-    let retry_stderr = String::from_utf8_lossy(&retry.stderr);
-    Err(format!("Failed to start tmux session: {retry_stderr}"))
-}
-
-/// Build a shell command string that runs conductor with stderr redirected.
-///
-/// Each argument is single-quoted with internal single quotes escaped as `'\''`.
-fn build_shell_command(conductor_bin: &str, args: &[Cow<'static, str>], err_file: &str) -> String {
-    let mut parts = Vec::with_capacity(args.len() + 3);
-    parts.push(shell_escape(conductor_bin));
-    for arg in args {
-        parts.push(shell_escape(arg.as_ref()));
-    }
-    format!("{} 2>{}", parts.join(" "), shell_escape(err_file))
-}
-
-/// Shell-escape a string by wrapping it in single quotes.
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// Parse conductor-specific failure patterns from stderr output and format a
-/// clean, actionable error message.
-///
-/// Looks for:
-/// - `[conductor] Agent failed: {reason}` — the real failure reason
-/// - `[conductor] Agent log saved to {path}` — the agent log path
-///
-/// Returns `Some(formatted_message)` if the conductor failure pattern is found,
-/// or `None` if no conductor-specific patterns are present (caller should fall
-/// through to existing raw-stderr behavior).
-fn format_spawn_failure_error(_window_name: &str, stderr: &str) -> Option<String> {
-    let mut failure_reason: Option<&str> = None;
-    let mut log_path: Option<&str> = None;
-
-    for line in stderr.lines() {
-        if let Some(reason) = line.strip_prefix("[conductor] Agent failed: ") {
-            failure_reason = Some(reason);
-        } else if let Some(path) = line.strip_prefix("[conductor] Agent log saved to ") {
-            log_path = Some(path);
-        }
-    }
-
-    let reason = failure_reason?;
-
-    Some(match log_path {
-        Some(path) => format!("Agent exited immediately: {reason}\nSee full log: {path}"),
-        None => format!("Agent exited immediately: {reason}"),
-    })
-}
-
-/// After a successful `tmux new-window`, wait briefly and verify the window
-/// actually exists. Retries once with a longer delay before declaring failure.
-///
-/// On success, cleans up the stderr capture file. On failure, reads the
-/// stderr file contents and includes them in the error message.
-fn verify_tmux_window(window_name: &str, err_file: &str) -> std::result::Result<(), String> {
-    // First check: 300ms after spawn.
-    thread::sleep(Duration::from_millis(300));
-
-    let live = list_live_tmux_windows();
-    if live.contains(window_name) {
-        let _ = std::fs::remove_file(err_file);
-        return Ok(());
-    }
-
-    // Retry: wait another 500ms (800ms total) before declaring failure.
-    thread::sleep(Duration::from_millis(500));
-
-    let live = list_live_tmux_windows();
-    if live.contains(window_name) {
-        let _ = std::fs::remove_file(err_file);
-        return Ok(());
-    }
-
-    // Window never appeared — read stderr capture for diagnostics.
-    let stderr_output = std::fs::read_to_string(err_file).unwrap_or_default();
-    let _ = std::fs::remove_file(err_file);
-
-    // Try to extract a clean, actionable error from conductor-specific patterns.
-    if let Some(friendly) = format_spawn_failure_error(window_name, &stderr_output) {
-        return Err(friendly);
-    }
-
-    let detail = if stderr_output.trim().is_empty() {
-        String::new()
-    } else {
-        format!("\n\nCaptured stderr:\n{stderr_output}")
-    };
-
-    Err(format!(
-        "tmux window '{window_name}' not found after spawn — agent process may have exited immediately{detail}"
-    ))
 }
 
 /// Typed error returned by [`poll_child_completion`].
@@ -328,10 +140,8 @@ const AGENT_ARGS_CAPACITY: usize = 18;
 
 /// Build the `conductor agent run` argument list for a child agent.
 ///
-/// If the prompt exceeds the safe tmux command-length threshold, it is written
-/// to a temp file (`<working_dir>/.conductor-prompt-<run_id>.txt`) and
-/// `--prompt-file` is used instead of `--prompt`.  Returns the argument list
-/// ready to pass to [`spawn_tmux_window`].
+/// The prompt is written to a temp file and passed via `--prompt-file`.
+/// Returns the argument list ready to pass to [`spawn_headless`].
 ///
 /// `permission_mode` optionally overrides the configured permission mode
 /// (e.g. `Some(AgentPermissionMode::RepoSafe)` for repo-scoped read-only agents).
@@ -356,7 +166,7 @@ pub fn build_agent_args(
     )
 }
 
-/// Push optional agent flags shared between tmux and headless arg builders.
+/// Push optional agent flags shared between arg builders.
 fn push_optional_agent_flags(
     args: &mut Vec<Cow<'static, str>>,
     resume_session_id: Option<&str>,
@@ -396,9 +206,9 @@ fn push_optional_agent_flags(
 /// subprocess differ and are resolved in `run_agent()` via `claude_permission_flag()`.
 ///
 /// The prompt is always written to `temp_dir()/conductor-prompt-{run_id}.txt` (mode
-/// 0o600 on Unix) and passed via `--prompt-file`, keeping it out of the git worktree
-/// and avoiding tmux command-line length limits.  The CLI child subprocess reads and
-/// deletes the file via `read_and_maybe_cleanup_prompt_file`.
+/// 0o600 on Unix) and passed via `--prompt-file`, keeping it out of the git worktree.
+/// The CLI child subprocess reads and deletes the file via
+/// `read_and_maybe_cleanup_prompt_file`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_agent_args_with_mode(
     run_id: &str,
@@ -522,6 +332,45 @@ pub struct HeadlessHandle {
     pub stdout: std::process::ChildStdout,
     pub stderr: std::process::ChildStderr,
     pub child: std::process::Child,
+}
+
+#[cfg(unix)]
+impl HeadlessHandle {
+    /// Build a `HeadlessHandle` from a freshly-spawned `Child` with piped stdio.
+    ///
+    /// Extracts `stdout` and `stderr` from the child.  Returns an error if
+    /// the pipes are missing (i.e. `Stdio::piped()` was not configured).
+    pub fn from_child(mut child: std::process::Child) -> std::result::Result<Self, String> {
+        let pid = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "HeadlessHandle: child has no stdout pipe".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "HeadlessHandle: child has no stderr pipe".to_string())?;
+        Ok(Self {
+            pid,
+            stdout,
+            stderr,
+            child,
+        })
+    }
+
+    /// Abort the subprocess without deadlocking on pipe buffers.
+    ///
+    /// Closes the read ends of stdout and stderr **before** calling `wait()`.
+    /// If the child has filled the pipe buffer it is blocked on a write; calling
+    /// `wait()` while the read end is still open would deadlock because the child
+    /// can never exit.  Dropping the pipes first causes the child's writes to
+    /// fail with EPIPE so it can exit, after which `wait()` reaps it immediately.
+    pub fn abort(self) {
+        drop(self.stdout);
+        drop(self.stderr);
+        let mut child = self.child;
+        let _ = child.wait();
+    }
 }
 
 /// Spawn a headless `conductor agent run` subprocess.
@@ -774,7 +623,7 @@ pub fn cancel_subprocess(pid: u32) {
 /// Returns `(args, prompt_file_path)` so the caller can delete the prompt file
 /// after [`drain_stream_json`] completes.
 ///
-/// The existing [`build_agent_args_with_mode`] is untouched (tmux path unchanged).
+/// The existing [`build_agent_args_with_mode`] always writes the prompt to the temp dir.
 #[allow(clippy::too_many_arguments)]
 pub fn build_headless_agent_args(
     run_id: &str,
@@ -845,50 +694,9 @@ pub fn build_headless_agent_args(
     Ok((args, prompt_file_path))
 }
 
-/// Spawn a child agent in a new tmux window.
-pub fn spawn_child_tmux(
-    run_id: &str,
-    worktree_path: &str,
-    prompt: &str,
-    model: Option<&str>,
-    window_name: &str,
-    bot_name: Option<&str>,
-    extra_plugin_dirs: &[String],
-) -> std::result::Result<(), String> {
-    let args = build_agent_args(
-        run_id,
-        worktree_path,
-        prompt,
-        None,
-        model,
-        bot_name,
-        extra_plugin_dirs,
-    )?;
-    spawn_tmux_window(&args, window_name)
-}
-
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-
-    #[test]
-    fn repo_agent_window_name_basic() {
-        let name = super::repo_agent_window_name("my-repo", "01ABCDEF99XYZW");
-        assert_eq!(name, "repo-my-repo-01ABCDEF");
-    }
-
-    #[test]
-    fn repo_agent_window_name_short_run_id() {
-        // run_id shorter than 8 chars — should use full run_id
-        let name = super::repo_agent_window_name("r", "abc");
-        assert_eq!(name, "repo-r-abc");
-    }
-
-    #[test]
-    fn repo_agent_window_name_exact_8_chars() {
-        let name = super::repo_agent_window_name("slug", "12345678");
-        assert_eq!(name, "repo-slug-12345678");
-    }
 
     fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str, expected_path: &str) {
         let file_idx = args
@@ -908,177 +716,6 @@ mod tests {
         assert!(
             !args.iter().any(|a| a == "--prompt"),
             "--prompt should not appear"
-        );
-    }
-
-    #[test]
-    fn verify_tmux_window_rejects_nonexistent_window() {
-        // Whether or not tmux is running, a bogus window name should fail.
-        let err_file = "/tmp/conductor-agent-test-nonexistent.err";
-        let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99999", err_file);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn stderr_file_path_format() {
-        let path = super::stderr_file_path("my-window-123");
-        assert_eq!(path, "/tmp/conductor-agent-my-window-123.err");
-    }
-
-    #[test]
-    fn stderr_file_path_sanitizes_slashes() {
-        let path = super::stderr_file_path("../../etc/passwd");
-        assert_eq!(path, "/tmp/conductor-agent-.._.._etc_passwd.err");
-        assert!(!path.contains('/') || path.starts_with("/tmp/conductor-agent-"));
-    }
-
-    #[test]
-    fn stderr_file_path_sanitizes_backslashes() {
-        let path = super::stderr_file_path("foo\\bar");
-        assert_eq!(path, "/tmp/conductor-agent-foo_bar.err");
-    }
-
-    #[test]
-    fn stderr_file_path_sanitizes_null_bytes() {
-        let path = super::stderr_file_path("foo\0bar");
-        assert_eq!(path, "/tmp/conductor-agent-foo_bar.err");
-    }
-
-    #[test]
-    fn build_shell_command_basic() {
-        use std::borrow::Cow;
-        let args = vec![
-            Cow::Borrowed("agent"),
-            Cow::Borrowed("run"),
-            Cow::Borrowed("--run-id"),
-            Cow::Owned("abc123".to_string()),
-        ];
-        let cmd = super::build_shell_command("/usr/local/bin/conductor", &args, "/tmp/test.err");
-        assert!(cmd.starts_with("'/usr/local/bin/conductor'"));
-        assert!(cmd.contains("'agent'"));
-        assert!(cmd.contains("'run'"));
-        assert!(cmd.contains("'--run-id'"));
-        assert!(cmd.contains("'abc123'"));
-        assert!(cmd.ends_with("2>'/tmp/test.err'"));
-    }
-
-    #[test]
-    fn shell_escape_handles_single_quotes() {
-        let escaped = super::shell_escape("it's a test");
-        assert_eq!(escaped, "'it'\\''s a test'");
-    }
-
-    #[test]
-    fn verify_tmux_window_includes_stderr_on_failure() {
-        // Write a fake stderr file, then verify it's included in the error message.
-        let err_file = format!(
-            "/tmp/conductor-agent-verify-test-{}.err",
-            std::process::id()
-        );
-        std::fs::write(&err_file, "Error: something broke\n").unwrap();
-
-        let result =
-            super::verify_tmux_window("conductor-test-nonexistent-stderr-99999", &err_file);
-        assert!(result.is_err());
-        let msg = result.unwrap_err();
-        assert!(
-            msg.contains("Error: something broke"),
-            "error should include stderr contents: {msg}"
-        );
-        // File should have been cleaned up
-        assert!(
-            !std::path::Path::new(&err_file).exists(),
-            "stderr file should be cleaned up after read"
-        );
-    }
-
-    #[test]
-    fn format_spawn_failure_error_with_failure_and_log_path() {
-        let stderr = "[conductor] Agent failed: Claude exited with status: exit status: 1\n\
-                      [conductor] Agent log saved to /Users/devin/.conductor/agent-logs/01ABC.log\n";
-        let result = super::format_spawn_failure_error("my-window", stderr);
-        assert!(result.is_some());
-        let msg = result.unwrap();
-        assert_eq!(
-            msg,
-            "Agent exited immediately: Claude exited with status: exit status: 1\n\
-             See full log: /Users/devin/.conductor/agent-logs/01ABC.log"
-        );
-    }
-
-    #[test]
-    fn format_spawn_failure_error_with_failure_only() {
-        let stderr = "[conductor] Agent failed: Claude exited with status: exit status: 1\n";
-        let result = super::format_spawn_failure_error("my-window", stderr);
-        assert!(result.is_some());
-        let msg = result.unwrap();
-        assert_eq!(
-            msg,
-            "Agent exited immediately: Claude exited with status: exit status: 1"
-        );
-        assert!(!msg.contains("See full log"), "no log path should appear");
-    }
-
-    #[test]
-    fn format_spawn_failure_error_with_log_only() {
-        // Log path alone without failure line → None (not actionable without reason)
-        let stderr =
-            "[conductor] Agent log saved to /Users/devin/.conductor/agent-logs/01ABC.log\n";
-        let result = super::format_spawn_failure_error("my-window", stderr);
-        assert!(
-            result.is_none(),
-            "expected None when no failure line present"
-        );
-    }
-
-    #[test]
-    fn format_spawn_failure_error_empty() {
-        let result = super::format_spawn_failure_error("my-window", "");
-        assert!(result.is_none(), "expected None for empty stderr");
-    }
-
-    #[test]
-    fn verify_tmux_window_surfaces_conductor_error() {
-        // Write a fake err file with conductor-specific patterns.
-        let err_file = format!(
-            "/tmp/conductor-agent-conductor-error-test-{}.err",
-            std::process::id()
-        );
-        let stderr_content =
-            "[conductor] Agent failed: Claude exited with status: exit status: 1\n\
-             [conductor] Agent log saved to /tmp/fake-agent-run.log\n";
-        std::fs::write(&err_file, stderr_content).unwrap();
-
-        let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99998", &err_file);
-        assert!(result.is_err());
-        let msg = result.unwrap_err();
-
-        // Should show the friendly message, not the raw tmux "not found" message
-        assert!(
-            msg.contains("Agent exited immediately:"),
-            "expected friendly error prefix: {msg}"
-        );
-        assert!(
-            msg.contains("Claude exited with status: exit status: 1"),
-            "expected failure reason in message: {msg}"
-        );
-        assert!(
-            msg.contains("See full log:"),
-            "expected log path hint: {msg}"
-        );
-        assert!(
-            !msg.contains("tmux window"),
-            "should not contain raw tmux error: {msg}"
-        );
-        assert!(
-            !msg.contains("Captured stderr:"),
-            "should not contain raw 'Captured stderr:' prefix: {msg}"
-        );
-
-        // File should have been cleaned up
-        assert!(
-            !std::path::Path::new(&err_file).exists(),
-            "stderr file should be cleaned up"
         );
     }
 

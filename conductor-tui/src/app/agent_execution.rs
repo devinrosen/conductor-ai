@@ -166,7 +166,6 @@ impl App {
         let tx = tx.clone();
         let run_id = run.id.clone();
         let subprocess_pid = run.subprocess_pid;
-        let tmux_window = run.tmux_window.clone();
 
         self.state.modal = crate::state::Modal::Progress {
             message: "Stopping agent…".into(),
@@ -192,8 +191,8 @@ impl App {
                 .map(|()| "Agent cancelled".to_string())
                 .map_err(|e| format!("Failed to cancel agent: {e}"));
 
-            // Step 2: terminate the subprocess or tmux window (best-effort).
-            kill_subprocess_or_tmux(&mgr, &run_id, subprocess_pid, tmux_window.as_deref());
+            // Step 2: terminate the subprocess (best-effort).
+            kill_subprocess(subprocess_pid);
 
             let _ = tx.send(Action::AgentStopComplete { result });
         });
@@ -1016,7 +1015,6 @@ impl App {
         let tx = tx.clone();
         let run_id = run.id.clone();
         let subprocess_pid = run.subprocess_pid;
-        let tmux_window = run.tmux_window.clone();
 
         self.state.modal = crate::state::Modal::Progress {
             message: "Stopping repo agent…".into(),
@@ -1042,8 +1040,8 @@ impl App {
                 .map(|()| "Repo agent cancelled".to_string())
                 .map_err(|e| format!("Failed to cancel repo agent: {e}"));
 
-            // Step 2: terminate the subprocess or tmux window (best-effort).
-            kill_subprocess_or_tmux(&mgr, &run_id, subprocess_pid, tmux_window.as_deref());
+            // Step 2: terminate the subprocess (best-effort).
+            kill_subprocess(subprocess_pid);
 
             let _ = tx.send(Action::RepoAgentStopComplete { result });
         });
@@ -1106,26 +1104,16 @@ impl App {
     }
 }
 
-/// Terminate the subprocess (headless path) or tmux window (legacy path).
+/// Terminate the subprocess.
 ///
 /// Called on a background thread after `update_run_cancelled` has already
 /// written to the DB — the DB update must precede this call so that a concurrent
 /// drain cannot overwrite the `cancelled` status once the process exits.
-fn kill_subprocess_or_tmux(
-    mgr: &conductor_core::agent::AgentManager,
-    run_id: &str,
-    subprocess_pid: Option<i64>,
-    tmux_window: Option<&str>,
-) {
+fn kill_subprocess(subprocess_pid: Option<i64>) {
     if let Some(pid) = subprocess_pid {
-        // Headless path: signal the subprocess directly.
         // subprocess_pid is i64 in DB (SQLite integer); cast to u32 is safe for
         // realistic PID values.
         conductor_core::agent_runtime::cancel_subprocess(pid as u32);
-    } else if let Some(window) = tmux_window {
-        // Tmux path: capture scrollback then kill the window.
-        mgr.capture_agent_log(run_id, window);
-        conductor_core::agent::kill_tmux_window(window);
     }
 }
 

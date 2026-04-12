@@ -21,82 +21,24 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
 
-/// Spawn a tmux window on a blocking thread and mark the agent run as failed
-/// if the spawn panics or returns an error.
-pub(super) async fn spawn_tmux_blocking(
-    state: &AppState,
-    run_id: &str,
-    args: Vec<Cow<'static, str>>,
-    window: String,
-) -> Result<(), ApiError> {
-    let spawn_result = tokio::task::spawn_blocking(move || {
-        conductor_core::agent_runtime::spawn_tmux_window(&args, &window)
-    })
-    .await;
-
-    match spawn_result {
-        Err(join_err) => {
-            let msg = format!("spawn task panicked: {join_err}");
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            if let Err(db_err) = agent_mgr.update_run_failed(run_id, &msg) {
-                warn!(run_id, %db_err, "failed to mark agent run as failed after spawn panic");
-            }
-            Err(ConductorError::Agent(msg).into())
-        }
-        Ok(Err(tmux_err)) => {
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            if let Err(db_err) = agent_mgr.update_run_failed(run_id, &tmux_err) {
-                warn!(run_id, %db_err, "failed to mark agent run as failed after tmux error");
-            }
-            Err(ConductorError::Agent(tmux_err).into())
-        }
-        Ok(Ok(())) => Ok(()),
-    }
-}
-
-/// Spawn a headless conductor subprocess and wire its stdout to the SSE event bus.
+/// Wire up PID persistence, drain thread, and panic monitor for a headless subprocess.
 ///
-/// Calls [`conductor_core::agent_runtime::try_spawn_headless_run`], persists the
-/// subprocess PID, then fires a `tokio::task::spawn_blocking` drain thread
-/// (fire-and-forget) that emits [`ConductorEvent::AgentLiveEvent`] for every
-/// event parsed from stdout.
-#[allow(clippy::too_many_arguments)]
-async fn spawn_headless_agent(
+/// Shared lifecycle logic used by both [`spawn_headless_agent`] and
+/// [`spawn_headless_orchestrate`]: persists the subprocess PID, spawns a
+/// `spawn_blocking` drain thread that emits [`ConductorEvent::AgentLiveEvent`]
+/// for each parsed event, and launches a panic-monitor task that marks the run
+/// failed if the drain thread panics.
+///
+/// `prompt_file` is the temp file written by
+/// [`conductor_core::agent_runtime::try_spawn_headless_run`]; pass `None` for
+/// the orchestrate path which has no prompt file.
+async fn wire_headless_drain(
     state: &AppState,
     run_id: &str,
-    working_dir: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    model: Option<&str>,
-    bot_name: Option<&str>,
-    permission_mode: Option<&conductor_core::config::AgentPermissionMode>,
+    mut handle: conductor_core::agent_runtime::HeadlessHandle,
+    prompt_file: Option<std::path::PathBuf>,
     worktree_id: Option<String>,
 ) -> Result<(), ApiError> {
-    let spawn_result = conductor_core::agent_runtime::try_spawn_headless_run(
-        run_id,
-        working_dir,
-        prompt,
-        resume_session_id,
-        model,
-        bot_name,
-        permission_mode,
-        &[],
-    );
-
-    let (mut handle, prompt_file) = match spawn_result {
-        Err(err) => {
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            if let Err(e) = agent_mgr.update_run_failed(run_id, &err) {
-                warn!(run_id, %e, "failed to mark agent run as failed after headless spawn error");
-            }
-            return Err(ConductorError::Agent(err).into());
-        }
-        Ok(pair) => pair,
-    };
-
     // Persist subprocess PID synchronously — stop_agent relies on this being visible
     // before any cancellation request arrives.
     let pid_result = {
@@ -113,7 +55,9 @@ async fn spawn_headless_agent(
                 warn!(run_id, %db_err, "failed to mark run failed after PID persist error");
             }
         }
-        let _ = std::fs::remove_file(&prompt_file);
+        if let Some(ref pf) = prompt_file {
+            let _ = std::fs::remove_file(pf);
+        }
         let _ = handle.child.kill();
         let _ = handle.child.wait();
         return Err(ConductorError::Agent(msg).into());
@@ -132,8 +76,14 @@ async fn spawn_headless_agent(
         let conn = match conductor_core::db::open_database(&db_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("[spawn_headless_agent] drain: failed to open DB: {e}");
-                let _ = std::fs::remove_file(&prompt_file);
+                tracing::warn!("[wire_headless_drain] drain: failed to open DB: {e}");
+                if let Some(ref pf) = prompt_file {
+                    let _ = std::fs::remove_file(pf);
+                }
+                // abort() drops the pipe read-ends before wait() to prevent a
+                // deadlock where a child that has filled its stdout buffer can
+                // never exit, so wait() would block forever.
+                handle.abort();
                 return;
             }
         };
@@ -152,7 +102,9 @@ async fn spawn_headless_agent(
                 });
             },
         );
-        let _ = std::fs::remove_file(&prompt_file);
+        if let Some(ref pf) = prompt_file {
+            let _ = std::fs::remove_file(pf);
+        }
         let _ = {
             let mut c = handle.child;
             c.wait()
@@ -179,8 +131,9 @@ async fn spawn_headless_agent(
                     // Use update_run_failed_if_running to avoid clobbering a `completed`
                     // status written by drain_stream_json before the panic occurred (e.g.
                     // during the trailing remove_file / child.wait cleanup).
+                    let msg = format!("drain thread panicked: {panic_err}");
                     if let Err(update_err) =
-                        mgr.update_run_failed_if_running(&run_id_for_panic, "drain thread panicked")
+                        mgr.update_run_failed_if_running(&run_id_for_panic, &msg)
                     {
                         tracing::error!(
                             run_id = %run_id_for_panic,
@@ -193,6 +146,80 @@ async fn spawn_headless_agent(
     });
 
     Ok(())
+}
+
+/// Spawn a headless conductor subprocess and wire its stdout to the SSE event bus.
+///
+/// Calls [`conductor_core::agent_runtime::try_spawn_headless_run`], persists the
+/// subprocess PID via [`wire_headless_drain`], then fires a
+/// `tokio::task::spawn_blocking` drain thread (fire-and-forget) that emits
+/// [`ConductorEvent::AgentLiveEvent`] for every event parsed from stdout.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn spawn_headless_agent(
+    state: &AppState,
+    run_id: &str,
+    working_dir: &str,
+    prompt: &str,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&conductor_core::config::AgentPermissionMode>,
+    worktree_id: Option<String>,
+) -> Result<(), ApiError> {
+    let spawn_result = conductor_core::agent_runtime::try_spawn_headless_run(
+        run_id,
+        working_dir,
+        prompt,
+        resume_session_id,
+        model,
+        bot_name,
+        permission_mode,
+        &[],
+    );
+
+    let (handle, prompt_file) = match spawn_result {
+        Err(err) => {
+            let db = state.db.lock().await;
+            let agent_mgr = AgentManager::new(&db);
+            if let Err(e) = agent_mgr.update_run_failed(run_id, &err) {
+                warn!(run_id, %e, "failed to mark agent run as failed after headless spawn error");
+            }
+            return Err(ConductorError::Agent(err).into());
+        }
+        Ok(pair) => pair,
+    };
+
+    wire_headless_drain(state, run_id, handle, Some(prompt_file), worktree_id).await
+}
+
+/// Spawn a headless orchestrate subprocess and wire its stdout to the SSE event bus.
+///
+/// Calls [`conductor_core::agent_runtime::spawn_headless`] with pre-built args
+/// from [`conductor_core::agent_runtime::build_orchestrate_args`], then delegates
+/// PID persistence and drain wiring to [`wire_headless_drain`].
+#[cfg(unix)]
+async fn spawn_headless_orchestrate(
+    state: &AppState,
+    run_id: &str,
+    args: Vec<Cow<'static, str>>,
+    wt_path: String,
+    worktree_id: String,
+) -> Result<(), ApiError> {
+    let handle = match conductor_core::agent_runtime::spawn_headless(
+        &args,
+        std::path::Path::new(&wt_path),
+    ) {
+        Err(err) => {
+            let db = state.db.lock().await;
+            if let Err(e) = AgentManager::new(&db).update_run_failed(run_id, &err) {
+                warn!(run_id, %e, "failed to mark run failed after orchestrate spawn error");
+            }
+            return Err(ConductorError::Agent(err).into());
+        }
+        Ok(h) => h,
+    };
+
+    wire_headless_drain(state, run_id, handle, None, Some(worktree_id)).await
 }
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
@@ -382,7 +409,7 @@ pub struct StartAgentRequest {
     pub parent_run_id: Option<String>,
 }
 
-/// Start an agent for a worktree. Creates a DB record and spawns a tmux window.
+/// Start an agent for a worktree. Creates a DB record and spawns a headless subprocess.
 #[utoipa::path(
     post,
     path = "/api/worktrees/{id}/agent/start",
@@ -476,8 +503,8 @@ pub async fn start_agent(
     Ok((StatusCode::CREATED, Json(run)))
 }
 
-/// Stop a running agent: mark cancelled under lock, then capture scrollback
-/// and kill tmux on a blocking thread without holding the DB mutex.
+/// Stop a running agent: mark cancelled under lock, then signal the subprocess
+/// on a blocking thread without holding the DB mutex.
 #[utoipa::path(
     post,
     path = "/api/worktrees/{id}/agent/stop",
@@ -495,7 +522,7 @@ pub async fn stop_agent(
     Path(worktree_id): Path<String>,
 ) -> Result<Json<AgentRun>, ApiError> {
     // Phase 1: DB operations under lock — validate + mark cancelled immediately.
-    let (run, tmux_window, subprocess_pid) = {
+    let (run, subprocess_pid) = {
         let db = state.db.lock().await;
         let agent_mgr = AgentManager::new(&db);
 
@@ -517,13 +544,12 @@ pub async fn stop_agent(
         agent_mgr.update_run_cancelled(&run.id)?;
 
         let subprocess_pid = run.subprocess_pid;
-        let tmux_window = run.tmux_window.clone();
-        (run, tmux_window, subprocess_pid)
+        (run, subprocess_pid)
     };
     // DB lock is now dropped.
 
-    // Phase 2: subprocess or tmux cleanup on a blocking thread (no lock held).
-    cancel_agent_blocking(&state, &run.id, tmux_window, subprocess_pid).await;
+    // Phase 2: subprocess cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&run.id, subprocess_pid).await;
 
     // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
@@ -882,7 +908,7 @@ fn default_child_timeout_secs() -> u64 {
 }
 
 /// Start an orchestrated agent run: generate a plan, then spawn child agents
-/// for each step sequentially. The orchestrator runs in a tmux window.
+/// for each step sequentially. The orchestrator runs headless.
 #[utoipa::path(
     post,
     path = "/api/worktrees/{id}/agent/orchestrate",
@@ -902,7 +928,7 @@ pub async fn orchestrate_agent(
     Json(body): Json<OrchestrateRequest>,
 ) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
     // Scope DB + config access so locks are dropped before the blocking spawn.
-    let (run, args, wt_slug, wt_id) = {
+    let (run, args, wt_path, wt_id) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
 
@@ -931,12 +957,7 @@ pub async fn orchestrate_agent(
             .map(str::to_string);
 
         // Create parent run record (this is the orchestrator run)
-        let run = agent_mgr.create_run(
-            Some(&worktree_id),
-            &body.prompt,
-            Some(&wt.slug),
-            model.as_deref(),
-        )?;
+        let run = agent_mgr.create_run(Some(&worktree_id), &body.prompt, None, model.as_deref())?;
 
         // Build conductor agent orchestrate command
         let args = conductor_core::agent_runtime::build_orchestrate_args(
@@ -947,12 +968,12 @@ pub async fn orchestrate_agent(
             Some(body.child_timeout_secs),
         );
 
-        (run, args, wt.slug.clone(), wt.id.clone())
+        (run, args, wt.path.clone(), wt.id.clone())
     };
     // DB and config locks are now dropped.
 
-    // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    spawn_tmux_blocking(&state, &run.id, args, wt_slug.clone()).await?;
+    // Spawn headless subprocess and wire stdout to the SSE event bus.
+    spawn_headless_orchestrate(&state, &run.id, args, wt_path, wt_id.clone()).await?;
 
     state.events.emit(ConductorEvent::AgentStarted {
         run_id: run.id.clone(),
@@ -1176,7 +1197,7 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
 }
 
 /// Restart a failed/cancelled agent run by creating a new run with the
-/// same prompt/config and re-spawning a tmux window.
+/// same prompt/config and re-spawning a headless subprocess.
 #[utoipa::path(
     post,
     path = "/api/worktrees/{id}/agent/runs/{run_id}/restart",
@@ -1252,19 +1273,13 @@ pub async fn restart_agent(
 /// Send a cancellation signal to an agent run on a blocking thread.
 ///
 /// For headless runs (`subprocess_pid` is `Some`): sends SIGTERM, waits up to
-/// 5 s, then escalates to SIGKILL. For tmux runs (`tmux_window` is `Some`):
-/// captures scrollback and kills the tmux window. Best-effort — failures are
-/// logged but do not fail the request.
+/// Signal the subprocess to stop. Sends SIGTERM, waits up to 5 s, then
+/// escalates to SIGKILL. Best-effort — failures are logged but do not fail
+/// the request.
 ///
 /// The `subprocess_pid` is stored as `i64` in the DB (SQLite integer) but cast
 /// to `u32` here; the cast is safe for realistic PID values.
-async fn cancel_agent_blocking(
-    state: &AppState,
-    run_id: &str,
-    tmux_window: Option<String>,
-    subprocess_pid: Option<i64>,
-) {
-    // Headless path: signal the subprocess directly.
+async fn cancel_agent_blocking(run_id: &str, subprocess_pid: Option<i64>) {
     if let Some(pid) = subprocess_pid {
         if let Err(e) = tokio::task::spawn_blocking(move || {
             conductor_core::agent_runtime::cancel_subprocess(pid as u32);
@@ -1272,35 +1287,6 @@ async fn cancel_agent_blocking(
         .await
         {
             warn!(run_id, %e, "cancel_agent_blocking: subprocess cancel task panicked");
-        }
-        return;
-    }
-
-    // Tmux path: original behavior unchanged.
-    let Some(window) = tmux_window else {
-        return;
-    };
-
-    let rid = run_id.to_owned();
-    let w = window.clone();
-    let log_path = match tokio::task::spawn_blocking(move || {
-        conductor_core::agent::capture_and_kill_tmux_window(&rid, &w)
-    })
-    .await
-    {
-        Ok(path) => path,
-        Err(e) => {
-            warn!(run_id, %e, "cancel_agent_blocking: spawn_blocking task panicked");
-            None
-        }
-    };
-
-    // Persist log file path under a brief lock (best-effort).
-    if let Some(path) = log_path {
-        let db = state.db.lock().await;
-        let agent_mgr = AgentManager::new(&db);
-        if let Err(e) = agent_mgr.update_run_log_file(run_id, &path) {
-            warn!(run_id, %e, "failed to record agent log path in DB after cancel");
         }
     }
 }
@@ -1429,7 +1415,7 @@ pub async fn stop_repo_agent(
     Path((repo_id, run_id)): Path<(String, String)>,
 ) -> Result<Json<AgentRun>, ApiError> {
     // Phase 1: DB operations under lock — validate + mark cancelled immediately.
-    let (run, tmux_window, subprocess_pid) = {
+    let (run, subprocess_pid) = {
         let db = state.db.lock().await;
         let agent_mgr = AgentManager::new(&db);
 
@@ -1449,13 +1435,12 @@ pub async fn stop_repo_agent(
         agent_mgr.update_run_cancelled(&run.id)?;
 
         let subprocess_pid = run.subprocess_pid;
-        let tmux_window = run.tmux_window.clone();
-        (run, tmux_window, subprocess_pid)
+        (run, subprocess_pid)
     };
     // DB lock is now dropped.
 
-    // Phase 2: subprocess or tmux cleanup on a blocking thread (no lock held).
-    cancel_agent_blocking(&state, &run.id, tmux_window, subprocess_pid).await;
+    // Phase 2: subprocess cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&run.id, subprocess_pid).await;
 
     // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
@@ -1607,13 +1592,20 @@ pub async fn get_agent_run_events_by_id(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
     use conductor_core::agent::{AgentManager, AgentRunStatus};
+    use conductor_core::config::Config;
 
+    use crate::events::EventBus;
     use crate::routes::api_router;
+    use crate::state::AppState;
     use crate::test_helpers::seeded_state;
 
     /// Verify that when `try_spawn_headless_run` fails (working dir does not exist,
@@ -1762,5 +1754,95 @@ mod tests {
             AgentRunStatus::Completed,
             "completed run must not be clobbered by drain panic handler"
         );
+    }
+
+    /// Regression test: drain-thread DB-open failure must not deadlock.
+    ///
+    /// **Bug (pre-fix):** `handle.child.wait()` was called while `handle.stdout`
+    /// was still open.  The test child writes 128 KiB — more than the 64 KiB
+    /// default pipe buffer — so it blocks after filling the buffer.  `wait()`
+    /// then blocks waiting for the child to exit, and neither makes progress.
+    ///
+    /// **Fix:** `stdout` and `stderr` are dropped before `wait()` so the child
+    /// receives EPIPE and exits; `wait()` returns immediately.
+    ///
+    /// The test gives the background drain task 5 seconds to complete.  Without
+    /// the fix it would hang the full 5 seconds and then panic.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drain_db_open_failure_no_pipe_deadlock() {
+        use std::process::{Command, Stdio};
+
+        // Spawn a process that writes 128 KiB to stdout — enough to fill the
+        // 64 KiB pipe buffer and leave the child blocked on its next write if
+        // the read end is not closed before wait().
+        let child = Command::new("sh")
+            .args(["-c", "dd if=/dev/zero bs=131072 count=1 2>/dev/null"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn dd writer");
+
+        let child_pid = child.id();
+        let handle = conductor_core::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child");
+
+        // Build an AppState with a valid shared DB (so update_run_subprocess_pid
+        // succeeds) but a non-existent db_path (so the drain thread's secondary
+        // DB open fails and exercises the failure branch).
+        let tmp = tempfile::NamedTempFile::new().expect("temp db");
+        let conn = conductor_core::db::open_database(tmp.path()).expect("open db");
+        conductor_core::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        conductor_core::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let run = AgentManager::new(&conn)
+            .create_run(Some("w1"), "test prompt", None, None)
+            .expect("create run");
+        let run_id = run.id.clone();
+        let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(Config::default())),
+            events: EventBus::new(8),
+            // Deliberately bad path so the drain thread's DB open fails.
+            db_path: std::path::PathBuf::from("/nonexistent/__conductor_drain_test.db"),
+            workflow_done_notify: None,
+        };
+
+        // wire_headless_drain returns Ok quickly (persists PID, spawns tasks).
+        super::wire_headless_drain(&state, &run_id, handle, None, None)
+            .await
+            .expect("wire_headless_drain should return Ok");
+
+        // Poll until the child process disappears from the process table.
+        // `ps -p <pid>` exits 0 while the process exists (running or zombie),
+        // non-zero once it has been fully reaped by wait().
+        // Without the fix the child fills its pipe and neither wait() nor the
+        // child can make progress — this loop would time out.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let alive = Command::new("ps")
+                .args(["-p", &child_pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child PID {child_pid} still in process table after 5 s \
+                 — likely pipe-buffer deadlock in drain thread (stdout/stderr \
+                 not dropped before wait())"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Keep _tmp alive until the DB is no longer needed.
+        let _ = tmp;
     }
 }
