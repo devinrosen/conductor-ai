@@ -117,18 +117,6 @@ pub(super) struct ExecutionState<'a> {
 }
 
 impl ExecutionState<'_> {
-    /// Returns the prefix used for tmux window names: the worktree slug when
-    /// available, or the first 8 characters of the workflow run ID otherwise.
-    pub(super) fn window_prefix(&self) -> &str {
-        if self.worktree_slug.is_empty() {
-            self.workflow_run_id
-                .get(..8)
-                .unwrap_or(&self.workflow_run_id)
-        } else {
-            self.worktree_slug.as_str()
-        }
-    }
-
     /// Accumulate metrics from a completed agent run into this execution state.
     ///
     /// Centralises the per-field `if let Some` pattern so parallel.rs and any

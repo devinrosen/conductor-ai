@@ -382,6 +382,7 @@ pub fn count_turns_incremental(path: &str, prev_offset: u64, prev_count: i64) ->
 ///
 /// Only complete lines (up to the last `\n`) are processed to avoid counting
 /// a partially-written JSON event.
+#[cfg(test)]
 pub(crate) fn scan_partial_token_usage(path: &str) -> (i64, i64, i64, i64) {
     use std::io::{Read as _, Seek, SeekFrom};
 

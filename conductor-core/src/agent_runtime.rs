@@ -566,7 +566,41 @@ pub fn spawn_headless(
     })
 }
 
+/// Build headless args and spawn the conductor subprocess in one step.
+///
+/// Combines [`build_headless_agent_args`] and [`spawn_headless`] into a single
+/// call.  On spawn failure the prompt file is cleaned up before returning the
+/// error string so the caller doesn't need to manage it.
+#[cfg(unix)]
+pub fn try_spawn_headless_run(
+    run_id: &str,
+    working_dir: &str,
+    prompt: &str,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&crate::config::AgentPermissionMode>,
+    plugin_dirs: &[String],
+) -> std::result::Result<(HeadlessHandle, std::path::PathBuf), String> {
+    let (args, pf) = build_headless_agent_args(
+        run_id,
+        working_dir,
+        prompt,
+        None,
+        model,
+        bot_name,
+        permission_mode,
+        plugin_dirs,
+    )
+    .map_err(|e| format!("failed to prepare agent args: {e}"))?;
+    let h = spawn_headless(&args, std::path::Path::new(working_dir)).map_err(|e| {
+        let _ = std::fs::remove_file(&pf);
+        format!("spawn failed: {e}")
+    })?;
+    Ok((h, pf))
+}
+
 /// Result of draining a headless subprocess stdout stream.
+#[derive(Copy, Clone)]
 pub enum DrainOutcome {
     /// A `result` event was seen; the run was finalized in the DB.
     Completed,
