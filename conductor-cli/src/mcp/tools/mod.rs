@@ -40,10 +40,17 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_list_worktrees",
             "List worktrees for a repo. Defaults to active worktrees only; pass status=all to include merged/abandoned. \
-             Individual worktrees available in detail via the `conductor://worktree/{repo}/{slug}` resource.",
+             Individual worktrees available in detail via the `conductor://worktree/{repo}/{slug}` resource. \
+             Supports pagination via limit (default 50) and offset (default 0).",
             schema(&[
                 ("repo", "Repo slug", true),
                 ("status", "Filter by status: 'active' (default) or 'all'", false),
+                ("limit", "Max worktrees to return (default 50)", false),
+                (
+                    "offset",
+                    "Number of worktrees to skip for pagination (default 0)",
+                    false,
+                ),
             ]),
         ),
         Tool::new(

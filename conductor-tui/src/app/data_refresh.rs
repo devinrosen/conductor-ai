@@ -13,7 +13,7 @@ impl App {
         let agent_mgr = AgentManager::new(&self.conn);
 
         self.state.data.repos = repo_mgr.list().unwrap_or_default();
-        self.state.data.worktrees = wt_mgr.list(None, true).unwrap_or_default();
+        self.state.data.worktrees = wt_mgr.list(None, true, None, None).unwrap_or_default();
         self.state.data.tickets = ticket_syncer.list(None).unwrap_or_default();
 
         self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();

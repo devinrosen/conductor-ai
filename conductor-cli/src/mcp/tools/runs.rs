@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, open_db_and_config, pagination_hint, tool_err, tool_ok};
 use crate::mcp::resources::{
     format_run_detail_with_log, format_run_summary_line, format_run_summary_line_with_repo,
 };
@@ -97,11 +97,7 @@ pub(super) fn tool_list_runs(
             out.push_str(&format_run_summary_line(run, wt_slug, wt_branch));
         }
         if runs.len() == limit {
-            out.push_str(&format!(
-                "\nShowing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
-                end = offset + runs.len(),
-                next = offset + limit,
-            ));
+            out.push_str(&pagination_hint(offset, runs.len(), limit));
         }
         tool_ok(out)
     } else {
@@ -131,11 +127,7 @@ pub(super) fn tool_list_runs(
             out.push_str(&format_run_summary_line_with_repo(run, slug_for_run));
         }
         if runs.len() == limit {
-            out.push_str(&format!(
-                "\nShowing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
-                end = offset + runs.len(),
-                next = offset + limit,
-            ));
+            out.push_str(&pagination_hint(offset, runs.len(), limit));
         }
         tool_ok(out)
     }

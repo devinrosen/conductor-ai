@@ -256,7 +256,7 @@ No other schema changes. Log file path, result columns, and token columns are un
 
 1. **PID reuse.** OS PIDs are recycled. A PID stored in the DB could, after the agent exits, belong to an unrelated process. The orphan reaper should cross-check `started_at` against the process creation time from `/proc/{pid}/stat` (Linux) or `sysctl KERN_PROC` (macOS) to avoid false positives.
 
-2. **SIGTERM handling in Claude CLI.** Does `claude` flush its final `result` event to stdout before exiting on SIGTERM? If not, the stop-agent action leaves the run without a result, and log-based recovery is the fallback. Needs empirical testing before the stop keybinding is wired up.
+2. **SIGTERM handling in Claude CLI.** ~~Does `claude` flush its final `result` event to stdout before exiting on SIGTERM?~~ **Resolved (empirically tested 2026-04-10):** No. When SIGTERM is sent while Claude is executing a tool, the stream ends at EOF with no `result` event — the pipe simply closes. The cancellation path must therefore mark the run as `cancelled` directly in the DB after sending SIGTERM, rather than waiting for a `result` event that will never arrive. Log-based recovery is not appropriate for intentional cancellation. `drain_stream_json` must handle the no-result EOF case explicitly and return a synthetic `AgentRunResult { status: Cancelled, ... }`.
 
 3. **Parallel stdout multiplexing.** Parallel workflow blocks spawn multiple agents concurrently. Each agent's stdout must be drained on its own thread. The current parallel executor already uses threads; each thread should own one pipe. Worth explicit testing under load.
 

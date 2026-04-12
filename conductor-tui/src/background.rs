@@ -411,7 +411,7 @@ pub fn poll_data() -> Option<PollResult> {
     }
 
     let repos = repo_mgr.list().ok()?;
-    let worktrees = wt_mgr.list(None, true).ok()?;
+    let worktrees = wt_mgr.list(None, true, None, None).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
     let ticket_labels = ticket_syncer.get_all_labels().unwrap_or_default();
     let ticket_dependencies = ticket_syncer.get_all_dependencies().unwrap_or_default();
@@ -860,7 +860,7 @@ fn poll_workflow_data(
                 .map(|r| r.local_path)
                 .unwrap_or_default();
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for wt in wt_mgr.list(None, true).unwrap_or_default() {
+            for wt in wt_mgr.list(None, true, None, None).unwrap_or_default() {
                 if wt.repo_id != rid {
                     continue;
                 }
@@ -910,7 +910,7 @@ fn poll_workflow_data(
             let mut seen: std::collections::HashSet<(String, String)> =
                 std::collections::HashSet::new();
             let mut tagged: Vec<(String, String, WorkflowDef)> = Vec::new();
-            for wt in wt_mgr.list(None, true).unwrap_or_default() {
+            for wt in wt_mgr.list(None, true, None, None).unwrap_or_default() {
                 let (repo_slug, rp) = repos
                     .get(&wt.repo_id)
                     .map(|(s, p)| (s.as_str(), p.as_str()))
