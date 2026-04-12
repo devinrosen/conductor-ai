@@ -85,7 +85,7 @@ async fn spawn_headless_agent(
         &[],
     );
 
-    let (handle, prompt_file) = match spawn_result {
+    let (mut handle, prompt_file) = match spawn_result {
         Err(err) => {
             let db = state.db.lock().await;
             let agent_mgr = AgentManager::new(&db);
@@ -99,22 +99,36 @@ async fn spawn_headless_agent(
 
     // Persist subprocess PID synchronously — stop_agent relies on this being visible
     // before any cancellation request arrives.
-    {
+    let pid_result = {
         let db = state.db.lock().await;
-        let agent_mgr = AgentManager::new(&db);
-        if let Err(e) = agent_mgr.update_run_subprocess_pid(run_id, handle.pid) {
-            warn!(run_id, %e, "failed to persist subprocess pid");
+        AgentManager::new(&db).update_run_subprocess_pid(run_id, handle.pid)
+    };
+    if let Err(e) = pid_result {
+        // PID not persisted — stop_agent can't reach this process.
+        // Kill the subprocess immediately and fail the run.
+        let msg = format!("failed to persist subprocess pid: {e}");
+        {
+            let db = state.db.lock().await;
+            if let Err(db_err) = AgentManager::new(&db).update_run_failed(run_id, &msg) {
+                warn!(run_id, %db_err, "failed to mark run failed after PID persist error");
+            }
         }
+        let _ = std::fs::remove_file(&prompt_file);
+        let _ = handle.child.kill();
+        let _ = handle.child.wait();
+        return Err(ConductorError::Agent(msg).into());
     }
 
     let run_id_owned = run_id.to_owned();
     let log_path = conductor_core::config::agent_log_path(&run_id_owned);
     let events = state.events.clone();
     let db_path = state.db_path.clone();
+    let run_id_for_panic = run_id_owned.clone();
+    let db_path_for_panic = db_path.clone();
 
-    // Fire-and-forget drain thread: reads stdout, persists events to DB, and emits
-    // AgentLiveEvent on the SSE bus for connected browsers.
-    drop(tokio::task::spawn_blocking(move || {
+    // Drain thread: reads stdout, persists events to DB, and emits AgentLiveEvent
+    // on the SSE bus for connected browsers.
+    let drain_handle = tokio::task::spawn_blocking(move || {
         let conn = match conductor_core::db::open_database(&db_path) {
             Ok(c) => c,
             Err(e) => {
@@ -143,7 +157,22 @@ async fn spawn_headless_agent(
             let mut c = handle.child;
             c.wait()
         };
-    }));
+    });
+
+    // Monitor drain thread for panics — a panicking drain leaves the run permanently
+    // stuck in 'running'. Catch it and mark the run failed.
+    tokio::spawn(async move {
+        if let Err(panic_err) = drain_handle.await {
+            tracing::error!(
+                run_id = %run_id_for_panic,
+                "drain thread panicked: {panic_err}; marking run as failed"
+            );
+            if let Ok(conn) = conductor_core::db::open_database(&db_path_for_panic) {
+                let mgr = AgentManager::new(&conn);
+                let _ = mgr.update_run_failed(&run_id_for_panic, "drain thread panicked");
+            }
+        }
+    });
 
     Ok(())
 }
@@ -1556,4 +1585,74 @@ pub async fn get_agent_run_events_by_id(
         .unwrap_or_default();
 
     Ok(Json(events))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use conductor_core::agent::{AgentManager, AgentRunStatus};
+
+    use crate::routes::api_router;
+    use crate::test_helpers::seeded_state;
+
+    /// Verify that when `try_spawn_headless_run` fails (working dir does not exist,
+    /// or the `conductor` binary is not on PATH), the route:
+    ///   1. Returns a non-201 error response.
+    ///   2. Marks the newly-created agent run as `failed` in the DB.
+    #[tokio::test]
+    async fn start_agent_spawn_failure_marks_run_failed() {
+        let (state, _tmp) = seeded_state();
+
+        // Insert a worktree whose path is guaranteed not to exist so that
+        // `spawn_headless` fails with an OS error and exercises the error path.
+        {
+            let db = state.db.lock().await;
+            conductor_core::test_helpers::insert_test_worktree(
+                &db,
+                "w-bad",
+                "r1",
+                "bad-path-wt",
+                "/totally/nonexistent/conductor/test/path",
+            );
+        }
+
+        let app = api_router().with_state(state.clone());
+        let body = serde_json::json!({ "prompt": "do something" }).to_string();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/worktrees/w-bad/agent/start")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // spawn failure → ConductorError::Agent → 400 Bad Request
+        assert_ne!(
+            response.status(),
+            StatusCode::CREATED,
+            "expected an error response when spawn fails"
+        );
+
+        // The run created inside start_agent must be marked failed.
+        let db = state.db.lock().await;
+        let mgr = AgentManager::new(&db);
+        let runs = mgr.list_for_worktree("w-bad").unwrap();
+        assert_eq!(
+            runs.len(),
+            1,
+            "expected exactly one agent run to be created"
+        );
+        assert_eq!(
+            runs[0].status,
+            AgentRunStatus::Failed,
+            "run should be marked failed after spawn error"
+        );
+    }
 }
