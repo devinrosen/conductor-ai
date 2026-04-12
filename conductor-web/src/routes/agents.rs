@@ -49,7 +49,7 @@ async fn cancel_run_blocking(
 /// Best-effort: logs a warning if the DB cannot be opened or the update fails, but
 /// never panics. Used to clean up on drain-thread DB-open errors and drain-thread
 /// panics so the run does not stay stuck in `running` until the orphan reaper fires.
-pub(crate) fn try_mark_run_failed_in_db(
+pub(super) fn try_mark_run_failed_in_db(
     db_path: &std::path::Path,
     run_id: &str,
     msg: &str,
