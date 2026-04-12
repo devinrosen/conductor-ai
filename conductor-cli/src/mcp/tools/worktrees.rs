@@ -36,7 +36,7 @@ pub(super) fn tool_list_worktrees(
         Err(e) => return tool_err(e),
     };
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    let worktrees = match wt_mgr.list(Some(repo_slug), active_only, Some(limit), Some(offset)) {
+    let worktrees = match wt_mgr.list_paginated(Some(repo_slug), active_only, limit, offset) {
         Ok(w) => w,
         Err(e) => return tool_err(e),
     };
