@@ -1172,7 +1172,11 @@ mod tests {
             .expect("update_run_failed must succeed");
 
         let fetched = mgr.get_run(&run.id).unwrap().expect("run must exist");
-        assert_eq!(fetched.status, AgentRunStatus::Failed, "run should be failed");
+        assert_eq!(
+            fetched.status,
+            AgentRunStatus::Failed,
+            "run should be failed"
+        );
         assert!(
             fetched
                 .result_text
