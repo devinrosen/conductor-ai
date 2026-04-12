@@ -1242,6 +1242,52 @@ async fn test_restart_agent_wrong_worktree_id() {
     assert!(resp.status().is_client_error() || resp.status().is_server_error());
 }
 
+// ── Orchestrate agent route tests ────────────────────────────────────
+
+/// POST /api/worktrees/{id}/agent/orchestrate with an unknown worktree ID must
+/// return a 4xx error (worktree not found).
+#[tokio::test]
+async fn test_orchestrate_agent_unknown_worktree_404() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/nonexistent-wt/agent/orchestrate"
+        ))
+        .json(&serde_json::json!({
+            "prompt": "do something"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error(),
+        "expected 4xx for unknown worktree, got {}",
+        resp.status()
+    );
+}
+
+/// POST /api/worktrees/{id}/agent/orchestrate while an agent is already active
+/// must return a 4xx (conflict / agent already running).
+#[tokio::test]
+async fn test_orchestrate_agent_already_running_409() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/worktrees/w1/agent/orchestrate"))
+        .json(&serde_json::json!({
+            "prompt": "do something"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error(),
+        "expected 4xx when agent already running, got {}",
+        resp.status()
+    );
+}
+
 // ── Notification route tests ─────────────────────────────────────────
 
 #[tokio::test]

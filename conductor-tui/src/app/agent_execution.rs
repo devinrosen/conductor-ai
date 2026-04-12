@@ -192,7 +192,7 @@ impl App {
                 .map_err(|e| format!("Failed to cancel agent: {e}"));
 
             // Step 2: terminate the subprocess (best-effort).
-            kill_subprocess(&mgr, &run_id, subprocess_pid);
+            kill_subprocess(subprocess_pid);
 
             let _ = tx.send(Action::AgentStopComplete { result });
         });
@@ -1041,7 +1041,7 @@ impl App {
                 .map_err(|e| format!("Failed to cancel repo agent: {e}"));
 
             // Step 2: terminate the subprocess (best-effort).
-            kill_subprocess(&mgr, &run_id, subprocess_pid);
+            kill_subprocess(subprocess_pid);
 
             let _ = tx.send(Action::RepoAgentStopComplete { result });
         });
@@ -1109,11 +1109,7 @@ impl App {
 /// Called on a background thread after `update_run_cancelled` has already
 /// written to the DB — the DB update must precede this call so that a concurrent
 /// drain cannot overwrite the `cancelled` status once the process exits.
-fn kill_subprocess(
-    _mgr: &conductor_core::agent::AgentManager,
-    _run_id: &str,
-    subprocess_pid: Option<i64>,
-) {
+fn kill_subprocess(subprocess_pid: Option<i64>) {
     if let Some(pid) = subprocess_pid {
         // subprocess_pid is i64 in DB (SQLite integer); cast to u32 is safe for
         // realistic PID values.
