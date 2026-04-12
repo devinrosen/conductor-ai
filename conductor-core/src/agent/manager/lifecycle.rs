@@ -319,6 +319,26 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Cancel a run: mark DB as cancelled first, then best-effort kill the subprocess.
+    ///
+    /// The DB update precedes the process kill so that a concurrent drain cannot
+    /// overwrite the `cancelled` status after the process exits.
+    ///
+    /// Returns `Err` only if the DB update fails; subprocess kill is best-effort.
+    pub fn cancel_run(&self, run_id: &str, subprocess_pid: Option<i64>) -> Result<()> {
+        // Step 1: persist cancellation in DB before touching the process.
+        self.update_run_cancelled(run_id)?;
+
+        // Step 2: best-effort terminate the subprocess (if any).
+        if let Some(pid) = subprocess_pid {
+            // subprocess_pid is i64 in DB (SQLite integer); cast to u32 is safe for
+            // realistic PID values.
+            crate::agent_runtime::cancel_subprocess(pid as u32);
+        }
+
+        Ok(())
+    }
+
     /// Save the claude session_id as soon as it's known (before run completes).
     /// This enables resume even if the run fails or is cancelled.
     pub fn update_run_session_id(&self, run_id: &str, session_id: &str) -> Result<()> {
@@ -1087,5 +1107,53 @@ mod tests {
                 .contains("drain thread panicked"),
             "result_text should record the panic reason"
         );
+    }
+
+    #[test]
+    fn test_cancel_run_no_subprocess_pid() {
+        // cancel_run with subprocess_pid=None should only update the DB.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.cancel_run(&run.id, None).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Cancelled);
+        assert!(fetched.ended_at.is_some());
+    }
+
+    #[test]
+    fn test_cancel_run_idempotent() {
+        // Calling cancel_run twice on an already-cancelled run must not return an error.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.cancel_run(&run.id, None).unwrap();
+        // Second cancel should succeed — the UPDATE is a no-op but still OK.
+        mgr.cancel_run(&run.id, None).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Cancelled);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_cancel_run_with_subprocess_pid() {
+        // cancel_run with Some(pid) must update the DB and attempt a best-effort
+        // subprocess kill. Using a nonexistent PID (i64::MAX) exercises the
+        // Some(pid) branch without killing any real process; cancel_subprocess
+        // handles ESRCH gracefully via a warn! log.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        // i64::MAX is guaranteed not to be a real PID on any platform.
+        mgr.cancel_run(&run.id, Some(i64::MAX)).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Cancelled);
+        assert!(fetched.ended_at.is_some());
     }
 }

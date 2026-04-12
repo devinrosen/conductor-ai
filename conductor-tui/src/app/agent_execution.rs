@@ -184,15 +184,10 @@ impl App {
             };
             let mgr = AgentManager::new(&conn);
 
-            // Step 1: mark DB as cancelled BEFORE killing the subprocess so that a
-            // concurrent drain cannot overwrite the status after the process exits.
             let result = mgr
-                .update_run_cancelled(&run_id)
+                .cancel_run(&run_id, subprocess_pid)
                 .map(|()| "Agent cancelled".to_string())
                 .map_err(|e| format!("Failed to cancel agent: {e}"));
-
-            // Step 2: terminate the subprocess (best-effort).
-            kill_subprocess(subprocess_pid);
 
             let _ = tx.send(Action::AgentStopComplete { result });
         });
@@ -1033,15 +1028,10 @@ impl App {
             };
             let mgr = AgentManager::new(&conn);
 
-            // Step 1: mark DB as cancelled BEFORE killing the subprocess so that a
-            // concurrent drain cannot overwrite the status after the process exits.
             let result = mgr
-                .update_run_cancelled(&run_id)
+                .cancel_run(&run_id, subprocess_pid)
                 .map(|()| "Repo agent cancelled".to_string())
                 .map_err(|e| format!("Failed to cancel repo agent: {e}"));
-
-            // Step 2: terminate the subprocess (best-effort).
-            kill_subprocess(subprocess_pid);
 
             let _ = tx.send(Action::RepoAgentStopComplete { result });
         });
@@ -1101,19 +1091,6 @@ impl App {
             scroll_offset: 0,
             horizontal_offset: 0,
         };
-    }
-}
-
-/// Terminate the subprocess.
-///
-/// Called on a background thread after `update_run_cancelled` has already
-/// written to the DB — the DB update must precede this call so that a concurrent
-/// drain cannot overwrite the `cancelled` status once the process exits.
-fn kill_subprocess(subprocess_pid: Option<i64>) {
-    if let Some(pid) = subprocess_pid {
-        // subprocess_pid is i64 in DB (SQLite integer); cast to u32 is safe for
-        // realistic PID values.
-        conductor_core::agent_runtime::cancel_subprocess(pid as u32);
     }
 }
 
