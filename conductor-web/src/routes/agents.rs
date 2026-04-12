@@ -549,7 +549,15 @@ pub async fn stop_agent(
     // DB lock is now dropped.
 
     // Phase 2: subprocess cleanup on a blocking thread (no lock held).
-    cancel_agent_blocking(&run.id, subprocess_pid).await;
+    if let Some(pid) = subprocess_pid {
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            conductor_core::agent_runtime::cancel_subprocess(pid as u32);
+        })
+        .await
+        {
+            warn!(run_id = %run.id, %e, "stop_agent: subprocess cancel task panicked");
+        }
+    }
 
     // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
@@ -1270,27 +1278,6 @@ pub async fn restart_agent(
     Ok((StatusCode::CREATED, Json(new_run)))
 }
 
-/// Send a cancellation signal to an agent run on a blocking thread.
-///
-/// For headless runs (`subprocess_pid` is `Some`): sends SIGTERM, waits up to
-/// Signal the subprocess to stop. Sends SIGTERM, waits up to 5 s, then
-/// escalates to SIGKILL. Best-effort — failures are logged but do not fail
-/// the request.
-///
-/// The `subprocess_pid` is stored as `i64` in the DB (SQLite integer) but cast
-/// to `u32` here; the cast is safe for realistic PID values.
-async fn cancel_agent_blocking(run_id: &str, subprocess_pid: Option<i64>) {
-    if let Some(pid) = subprocess_pid {
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            conductor_core::agent_runtime::cancel_subprocess(pid as u32);
-        })
-        .await
-        {
-            warn!(run_id, %e, "cancel_agent_blocking: subprocess cancel task panicked");
-        }
-    }
-}
-
 // ── Repo-scoped agent routes ────────────────────────────────────────────
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -1440,7 +1427,15 @@ pub async fn stop_repo_agent(
     // DB lock is now dropped.
 
     // Phase 2: subprocess cleanup on a blocking thread (no lock held).
-    cancel_agent_blocking(&run.id, subprocess_pid).await;
+    if let Some(pid) = subprocess_pid {
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            conductor_core::agent_runtime::cancel_subprocess(pid as u32);
+        })
+        .await
+        {
+            warn!(run_id = %run.id, %e, "stop_repo_agent: subprocess cancel task panicked");
+        }
+    }
 
     // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
