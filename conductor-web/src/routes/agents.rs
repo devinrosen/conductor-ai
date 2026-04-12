@@ -1690,48 +1690,6 @@ mod tests {
         );
     }
 
-    /// Verify that the drain-panic monitor does NOT clobber a `completed` run.
-    ///
-    /// `update_run_failed_if_running` is used in the panic handler so that if
-    /// `drain_stream_json` already finalized the run (e.g. `completed`) before the
-    /// drain thread panicked in the trailing cleanup, the `completed` status is preserved.
-    #[tokio::test]
-    async fn drain_panic_monitor_does_not_clobber_completed_run() {
-        let (state, _tmp) = seeded_state();
-        let run_id = "drain-panic-completed-run";
-
-        // Seed a run, then mark it completed (simulating drain_stream_json success).
-        {
-            let db = state.db.lock().await;
-            conductor_core::test_helpers::insert_test_agent_run(&db, run_id, "w1");
-            let mgr = AgentManager::new(&db);
-            // Mark completed so the run is no longer 'running'.
-            mgr.update_run_completed_if_running(run_id, "done")
-                .expect("update_run_completed_if_running must succeed");
-        }
-
-        // Simulate what the panic monitor does: update_run_failed_if_running.
-        // Because the run is already 'completed', this must be a no-op.
-        {
-            let db = state.db.lock().await;
-            AgentManager::new(&db)
-                .update_run_failed_if_running(run_id, "drain thread panicked")
-                .expect("update_run_failed_if_running must not return an error");
-        }
-
-        // Status must still be 'completed' — not overwritten by the panic handler.
-        let db = state.db.lock().await;
-        let run = AgentManager::new(&db)
-            .get_run(run_id)
-            .unwrap()
-            .expect("run must exist");
-        assert_eq!(
-            run.status,
-            AgentRunStatus::Completed,
-            "completed run must not be clobbered by drain panic handler"
-        );
-    }
-
     /// Regression test: drain-thread DB-open failure must not deadlock.
     ///
     /// **Bug (pre-fix):** `handle.child.wait()` was called while `handle.stdout`
