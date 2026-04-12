@@ -512,29 +512,13 @@ pub fn execute_parallel(
                             child.agent_name
                         );
                         let fail_msg = "drain completed without result";
-                        if let Err(e) = state
-                            .agent_mgr
-                            .update_run_failed_if_running(&child.child_run_id, fail_msg)
-                        {
-                            tracing::warn!(
-                                "parallel: failed to mark run failed for '{}': {e}",
-                                child.agent_name
-                            );
-                        }
-                        if let Err(e) = state.wf_mgr.update_step_status(
+                        mark_parallel_child_failed(
+                            state,
+                            &child.agent_name,
+                            &child.child_run_id,
                             &child.step_id,
-                            WorkflowStepStatus::Failed,
-                            Some(&child.child_run_id),
-                            Some(fail_msg),
-                            None,
-                            None,
-                            None,
-                        ) {
-                            tracing::warn!(
-                                "parallel: failed to update step status for '{}': {e}",
-                                child.agent_name
-                            );
-                        }
+                            fail_msg,
+                        );
                         completed.insert(child_idx);
                         failures += 1;
                     }
@@ -563,29 +547,13 @@ pub fn execute_parallel(
             // Mark the run and step failed so the workflow doesn't hang and
             // min_success accounting is correct.
             let fail_msg = "drain thread panicked";
-            if let Err(db_err) = state
-                .agent_mgr
-                .update_run_failed_if_running(&child.child_run_id, fail_msg)
-            {
-                tracing::warn!(
-                    "parallel: failed to mark run failed for '{}': {db_err}",
-                    child.agent_name
-                );
-            }
-            if let Err(db_err) = state.wf_mgr.update_step_status(
+            mark_parallel_child_failed(
+                state,
+                &child.agent_name,
+                &child.child_run_id,
                 &child.step_id,
-                WorkflowStepStatus::Failed,
-                Some(&child.child_run_id),
-                Some(fail_msg),
-                None,
-                None,
-                None,
-            ) {
-                tracing::warn!(
-                    "parallel: failed to update step status for '{}': {db_err}",
-                    child.agent_name
-                );
-            }
+                fail_msg,
+            );
             failures += 1;
         }
         let _ = std::fs::remove_file(&child.prompt_file);
@@ -632,4 +600,41 @@ pub fn execute_parallel(
         .insert(format!("parallel:{}", group_id), synthetic_result);
 
     Ok(())
+}
+
+/// Mark a parallel child run and its workflow step as failed.
+///
+/// Used by both the race-condition recovery arm (drain signalled but DB not yet
+/// updated) and the panic-recovery arm (drain thread panicked before DB write),
+/// which share the same two-step update pattern.
+fn mark_parallel_child_failed(
+    state: &mut ExecutionState<'_>,
+    agent_name: &str,
+    child_run_id: &str,
+    step_id: &str,
+    fail_msg: &str,
+) {
+    if let Err(e) = state
+        .agent_mgr
+        .update_run_failed_if_running(child_run_id, fail_msg)
+    {
+        tracing::warn!(
+            "parallel: failed to mark run failed for '{}': {e}",
+            agent_name
+        );
+    }
+    if let Err(e) = state.wf_mgr.update_step_status(
+        step_id,
+        WorkflowStepStatus::Failed,
+        Some(child_run_id),
+        Some(fail_msg),
+        None,
+        None,
+        None,
+    ) {
+        tracing::warn!(
+            "parallel: failed to update step status for '{}': {e}",
+            agent_name
+        );
+    }
 }
