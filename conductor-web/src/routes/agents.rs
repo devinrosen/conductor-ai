@@ -85,8 +85,10 @@ async fn wire_headless_drain(
     run_id: &str,
     handle: conductor_core::agent_runtime::HeadlessHandle,
     prompt_file: Option<std::path::PathBuf>,
-    worktree_id: Option<String>,
+    worktree_id: Option<&str>,
 ) -> Result<(), ApiError> {
+    // Convert to owned so the value can be moved into the spawn_blocking closure.
+    let worktree_id: Option<String> = worktree_id.map(str::to_owned);
     // Persist subprocess PID synchronously — stop_agent relies on this being visible
     // before any cancellation request arrives.
     let pid_result = {
@@ -197,28 +199,13 @@ async fn wire_headless_drain(
 /// subprocess PID via [`wire_headless_drain`], then fires a
 /// `tokio::task::spawn_blocking` drain thread (fire-and-forget) that emits
 /// [`ConductorEvent::AgentLiveEvent`] for every event parsed from stdout.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn spawn_headless_agent(
     state: &AppState,
-    run_id: &str,
-    working_dir: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    model: Option<&str>,
-    bot_name: Option<&str>,
-    permission_mode: Option<&conductor_core::config::AgentPermissionMode>,
-    worktree_id: Option<String>,
+    params: &conductor_core::agent_runtime::SpawnHeadlessParams<'_>,
+    worktree_id: Option<&str>,
 ) -> Result<(), ApiError> {
-    let spawn_result = conductor_core::agent_runtime::try_spawn_headless_run(
-        run_id,
-        working_dir,
-        prompt,
-        resume_session_id,
-        model,
-        bot_name,
-        permission_mode,
-        &[],
-    );
+    let run_id = params.run_id;
+    let spawn_result = conductor_core::agent_runtime::try_spawn_headless_run(params);
 
     let (handle, prompt_file) = match spawn_result {
         Err(err) => {
@@ -262,7 +249,7 @@ async fn spawn_headless_orchestrate(
         Ok(h) => h,
     };
 
-    wire_headless_drain(state, run_id, handle, None, Some(worktree_id)).await
+    wire_headless_drain(state, run_id, handle, None, Some(worktree_id.as_str())).await
 }
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
@@ -526,18 +513,17 @@ pub async fn start_agent(
     // DB and config locks are now dropped.
 
     // Spawn headless subprocess and wire stdout to the SSE event bus.
-    spawn_headless_agent(
-        &state,
-        &run.id,
-        &wt_path,
-        &prompt,
-        resume_session_id.as_deref(),
-        model.as_deref(),
-        None,
-        None,
-        Some(wt_id.clone()),
-    )
-    .await?;
+    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+        run_id: &run.id,
+        working_dir: &wt_path,
+        prompt: &prompt,
+        resume_session_id: resume_session_id.as_deref(),
+        model: model.as_deref(),
+        bot_name: None,
+        permission_mode: None,
+        plugin_dirs: &[],
+    };
+    spawn_headless_agent(&state, &spawn_params, Some(wt_id.as_str())).await?;
 
     state.events.emit(ConductorEvent::AgentStarted {
         run_id: run.id.clone(),
@@ -1302,18 +1288,17 @@ pub async fn restart_agent(
     // DB and config locks are now dropped.
 
     // Spawn headless subprocess and wire stdout to the SSE event bus.
-    spawn_headless_agent(
-        &state,
-        &new_run.id,
-        &wt_path,
-        &new_run.prompt,
-        None,
-        new_run.model.as_deref(),
-        new_run.bot_name.as_deref(),
-        None,
-        Some(worktree_id.clone()),
-    )
-    .await?;
+    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+        run_id: &new_run.id,
+        working_dir: &wt_path,
+        prompt: &new_run.prompt,
+        resume_session_id: None,
+        model: new_run.model.as_deref(),
+        bot_name: new_run.bot_name.as_deref(),
+        permission_mode: None,
+        plugin_dirs: &[],
+    };
+    spawn_headless_agent(&state, &spawn_params, Some(worktree_id.as_str())).await?;
 
     state.events.emit(ConductorEvent::AgentRestarted {
         run_id: new_run.id.clone(),
@@ -1386,18 +1371,17 @@ pub async fn start_repo_agent(
 
     // Spawn headless subprocess with repo-safe permission mode and wire stdout to SSE.
     let repo_safe = conductor_core::config::AgentPermissionMode::RepoSafe;
-    spawn_headless_agent(
-        &state,
-        &run.id,
-        &repo_path,
-        &run.prompt,
-        resume_session_id.as_deref(),
-        model.as_deref(),
-        None,
-        Some(&repo_safe),
-        None,
-    )
-    .await?;
+    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+        run_id: &run.id,
+        working_dir: &repo_path,
+        prompt: &run.prompt,
+        resume_session_id: resume_session_id.as_deref(),
+        model: model.as_deref(),
+        bot_name: None,
+        permission_mode: Some(&repo_safe),
+        plugin_dirs: &[],
+    };
+    spawn_headless_agent(&state, &spawn_params, None).await?;
 
     state.events.emit(ConductorEvent::RepoAgentStarted {
         run_id: run.id.clone(),

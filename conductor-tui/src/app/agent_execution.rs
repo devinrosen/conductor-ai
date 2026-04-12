@@ -665,23 +665,25 @@ impl App {
                 }
             };
 
-            let (args, prompt_file) = match conductor_core::agent_runtime::build_headless_agent_args(
-                &run.id,
-                &worktree_path,
-                &prompt,
-                resume_session_id.as_deref(),
-                model.as_deref(),
-                None,
-                None,
-                &[],
-            ) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    let _ = mgr.update_run_failed(&run.id, &e);
-                    let _ = tx.send(Action::AgentLaunchComplete { result: Err(e) });
-                    return;
-                }
+            let build_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+                run_id: &run.id,
+                working_dir: &worktree_path,
+                prompt: &prompt,
+                resume_session_id: resume_session_id.as_deref(),
+                model: model.as_deref(),
+                bot_name: None,
+                permission_mode: None,
+                plugin_dirs: &[],
             };
+            let (args, prompt_file) =
+                match conductor_core::agent_runtime::build_headless_agent_args(&build_params) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        let _ = mgr.update_run_failed(&run.id, &e);
+                        let _ = tx.send(Action::AgentLaunchComplete { result: Err(e) });
+                        return;
+                    }
+                };
 
             let handle = match conductor_core::agent_runtime::spawn_headless(
                 &args,
@@ -811,23 +813,25 @@ impl App {
             };
 
             let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
-            let (args, prompt_file) = match conductor_core::agent_runtime::build_headless_agent_args(
-                &run.id,
-                &repo_path,
-                &prompt,
-                resume_session_id.as_deref(),
-                None,
-                None,
-                Some(&plan_mode),
-                &[],
-            ) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    let _ = mgr.update_run_failed(&run.id, &e);
-                    let _ = tx.send(Action::RepoAgentLaunched { result: Err(e) });
-                    return;
-                }
+            let build_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+                run_id: &run.id,
+                working_dir: &repo_path,
+                prompt: &prompt,
+                resume_session_id: resume_session_id.as_deref(),
+                model: None,
+                bot_name: None,
+                permission_mode: Some(&plan_mode),
+                plugin_dirs: &[],
             };
+            let (args, prompt_file) =
+                match conductor_core::agent_runtime::build_headless_agent_args(&build_params) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        let _ = mgr.update_run_failed(&run.id, &e);
+                        let _ = tx.send(Action::RepoAgentLaunched { result: Err(e) });
+                        return;
+                    }
+                };
 
             let handle = match conductor_core::agent_runtime::spawn_headless(
                 &args,
@@ -936,23 +940,25 @@ impl App {
                 }
             };
 
-            let (handle, prompt_file) = match conductor_core::agent_runtime::try_spawn_headless_run(
-                &new_run.id,
-                &worktree_path,
-                &new_run.prompt,
-                None,
-                new_run.model.as_deref(),
-                new_run.bot_name.as_deref(),
-                None,
-                &[],
-            ) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    let _ = mgr.update_run_failed(&new_run.id, &e);
-                    let _ = tx.send(Action::AgentRestartComplete { result: Err(e) });
-                    return;
-                }
+            let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+                run_id: &new_run.id,
+                working_dir: &worktree_path,
+                prompt: &new_run.prompt,
+                resume_session_id: None,
+                model: new_run.model.as_deref(),
+                bot_name: new_run.bot_name.as_deref(),
+                permission_mode: None,
+                plugin_dirs: &[],
             };
+            let (handle, prompt_file) =
+                match conductor_core::agent_runtime::try_spawn_headless_run(&spawn_params) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        let _ = mgr.update_run_failed(&new_run.id, &e);
+                        let _ = tx.send(Action::AgentRestartComplete { result: Err(e) });
+                        return;
+                    }
+                };
 
             if let Err(e) = mgr.update_run_subprocess_pid(&new_run.id, handle.pid()) {
                 tracing::warn!("failed to store subprocess PID for run {}: {e}", new_run.id);

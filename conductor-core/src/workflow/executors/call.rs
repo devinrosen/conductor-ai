@@ -151,16 +151,17 @@ fn execute_call_with_schema(
         );
 
         // Build args and spawn headless subprocess
-        let (handle, prompt_file) = match crate::agent_runtime::try_spawn_headless_run(
-            &child_run.id,
-            &state.working_dir,
-            &prompt,
-            None,
-            step_model,
-            effective_bot_name,
-            Some(&state.config.general.agent_permission_mode),
-            &merged_plugin_dirs,
-        ) {
+        let params = crate::agent_runtime::SpawnHeadlessParams {
+            run_id: &child_run.id,
+            working_dir: &state.working_dir,
+            prompt: &prompt,
+            resume_session_id: None,
+            model: step_model,
+            bot_name: effective_bot_name,
+            permission_mode: Some(&state.config.general.agent_permission_mode),
+            plugin_dirs: &merged_plugin_dirs,
+        };
+        let (handle, prompt_file) = match crate::agent_runtime::try_spawn_headless_run(&params) {
             Ok(pair) => pair,
             Err(err_msg) => {
                 tracing::warn!("Step '{}': {err_msg}", agent_label);
