@@ -1076,18 +1076,18 @@ impl App {
                     self.reload_agent_events();
                 } else {
                     // Check repo-scoped runs
-                    let repo_id = self
-                        .state
-                        .data
-                        .latest_repo_agent_runs
-                        .iter()
-                        .find_map(|(id, run)| {
-                            if run.id == run_id {
-                                Some(id.clone())
-                            } else {
-                                None
-                            }
-                        });
+                    let repo_id =
+                        self.state
+                            .data
+                            .latest_repo_agent_runs
+                            .iter()
+                            .find_map(|(id, run)| {
+                                if run.id == run_id {
+                                    Some(id.clone())
+                                } else {
+                                    None
+                                }
+                            });
                     if let Some(repo_id) = repo_id {
                         self.state
                             .data
