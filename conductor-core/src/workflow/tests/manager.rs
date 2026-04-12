@@ -1289,7 +1289,11 @@ fn test_reap_orphaned_workflow_runs_skips_active_parent() {
     let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
     assert_eq!(reaped, 0);
 
-    assert_eq!(get_run_status(&conn, run_id), "waiting", "run must remain waiting");
+    assert_eq!(
+        get_run_status(&conn, run_id),
+        "waiting",
+        "run must remain waiting"
+    );
 }
 
 #[test]
