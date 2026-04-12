@@ -1461,6 +1461,50 @@ mod tests {
             elapsed
         );
     }
+
+    /// `from_child()` must return an error when stdout was not piped.
+    #[cfg(unix)]
+    #[test]
+    fn from_child_rejects_missing_stdout() {
+        use std::process::{Command, Stdio};
+
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn child");
+
+        let err = super::HeadlessHandle::from_child(child)
+            .err()
+            .expect("expected Err for missing stdout");
+        assert!(
+            err.contains("no stdout pipe"),
+            "error message should mention 'no stdout pipe', got: {err}"
+        );
+    }
+
+    /// `from_child()` must return an error when stderr was not piped.
+    #[cfg(unix)]
+    #[test]
+    fn from_child_rejects_missing_stderr() {
+        use std::process::{Command, Stdio};
+
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn child");
+
+        let err = super::HeadlessHandle::from_child(child)
+            .err()
+            .expect("expected Err for missing stderr");
+        assert!(
+            err.contains("no stderr pipe"),
+            "error message should mention 'no stderr pipe', got: {err}"
+        );
+    }
 }
 
 // cancel_subprocess tests have moved to crate::process_utils (the canonical home
