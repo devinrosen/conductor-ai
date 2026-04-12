@@ -83,7 +83,7 @@ pub(super) fn try_mark_run_failed_in_db(
 async fn wire_headless_drain(
     state: &AppState,
     run_id: &str,
-    mut handle: conductor_core::agent_runtime::HeadlessHandle,
+    handle: conductor_core::agent_runtime::HeadlessHandle,
     prompt_file: Option<std::path::PathBuf>,
     worktree_id: Option<String>,
 ) -> Result<(), ApiError> {
@@ -106,8 +106,7 @@ async fn wire_headless_drain(
         if let Some(ref pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
         }
-        let _ = handle.child.kill();
-        let _ = handle.child.wait();
+        handle.abort();
         return Err(ConductorError::Agent(msg).into());
     }
 
@@ -1942,5 +1941,115 @@ mod tests {
         );
 
         let _ = tmp;
+    }
+
+    /// Regression test: PID-persist failure path must not deadlock.
+    ///
+    /// **Bug (pre-fix):** The PID-persist failure path called `handle.child.kill()`
+    /// then `handle.child.wait()` while `handle.stdout`/`handle.stderr` were still
+    /// open.  A child that wrote more than the 64 KiB pipe buffer would block
+    /// waiting for the read end to drain; `wait()` would then block waiting for
+    /// the child to exit — deadlock.
+    ///
+    /// **Fix:** The path now calls `handle.abort()`, which drops the pipe read-ends
+    /// before issuing the kill+wait, so the child receives EPIPE and exits cleanly.
+    ///
+    /// The test gives `wire_headless_drain` 5 seconds to kill and reap the child.
+    /// Without the fix the `wait()` would never return within that window.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pid_persist_failure_no_pipe_deadlock() {
+        use std::process::{Command, Stdio};
+
+        // Spawn a process that writes 128 KiB to stdout — enough to fill the
+        // 64 KiB pipe buffer and leave the child blocked on its next write if
+        // the read end is not closed before wait().
+        let child = Command::new("sh")
+            .args(["-c", "dd if=/dev/zero bs=131072 count=1 2>/dev/null"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn dd writer");
+
+        let child_pid = child.id();
+        let handle = conductor_core::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child");
+
+        // Build an AppState whose shared DB mutex holds a connection to a
+        // deliberately-invalid path so that `update_run_subprocess_pid` returns
+        // an error — triggering the PID-persist early-return path in
+        // wire_headless_drain.
+        //
+        // We open a real temp DB first to insert the run, then replace the
+        // connection inside the AppState with one opened against a corrupt/empty
+        // file so that any subsequent SQL write fails.
+        let tmp_real = tempfile::NamedTempFile::new().expect("temp db");
+        let real_conn = conductor_core::db::open_database(tmp_real.path()).expect("open db");
+        conductor_core::test_helpers::insert_test_repo(
+            &real_conn,
+            "r1",
+            "test-repo",
+            "/tmp/repo",
+        );
+        conductor_core::test_helpers::insert_test_worktree(
+            &real_conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let run = AgentManager::new(&real_conn)
+            .create_run(Some("w1"), "test prompt", None, None)
+            .expect("create run");
+        let run_id = run.id.clone();
+        drop(real_conn);
+
+        // Open a connection to an empty temp file — schema-less, so any
+        // SQL UPDATE will fail immediately with "no such table".
+        let tmp_bad = tempfile::NamedTempFile::new().expect("temp bad db");
+        let bad_conn =
+            rusqlite::Connection::open(tmp_bad.path()).expect("open bad connection");
+
+        let state = AppState {
+            db: Arc::new(Mutex::new(bad_conn)),
+            config: Arc::new(RwLock::new(Config::default())),
+            events: EventBus::new(8),
+            // Deliberately bad path so the drain thread (if it were ever
+            // reached) would also fail — but it won't be reached here.
+            db_path: std::path::PathBuf::from("/nonexistent/__conductor_pid_test.db"),
+            workflow_done_notify: None,
+        };
+
+        // wire_headless_drain should return Err quickly (PID-persist fails).
+        let result = super::wire_headless_drain(&state, &run_id, handle, None, None).await;
+        assert!(
+            result.is_err(),
+            "wire_headless_drain should return Err when PID persist fails"
+        );
+
+        // Poll until the child process disappears from the process table.
+        // Without the fix the child fills its pipe buffer and blocks; handle.child.wait()
+        // would block forever, so the child would still be alive when we poll.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let alive = Command::new("ps")
+                .args(["-p", &child_pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child PID {child_pid} still in process table after 5 s \
+                 — likely pipe-buffer deadlock in PID-persist failure path \
+                 (stdout/stderr not dropped before wait())"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let _ = tmp_real;
+        let _ = tmp_bad;
     }
 }
