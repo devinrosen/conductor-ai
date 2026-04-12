@@ -241,14 +241,14 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Mark a run as failed only if it is currently `running`.
-    /// Used by background reapers to avoid overwriting a run that has already
-    /// been finalized by another path.
+    /// Mark a run as failed only if it is currently `running` or `waiting_for_feedback`.
+    /// Used by background reapers and panic monitors to avoid overwriting a run that has
+    /// already been finalized (e.g. `completed`, `failed`, `cancelled`) by another path.
     pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE agent_runs SET status = 'failed', result_text = ?1, ended_at = ?2 \
-             WHERE id = ?3 AND status = 'running'",
+             WHERE id = ?3 AND status IN ('running', 'waiting_for_feedback')",
             params![error, now, run_id],
         )?;
         Ok(())

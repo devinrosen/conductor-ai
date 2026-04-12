@@ -1763,4 +1763,67 @@ mod tests {
             "completed run must not be clobbered by drain panic handler"
         );
     }
+
+    /// Verify that the drain-panic monitor DOES transition a `waiting_for_feedback` run
+    /// to `failed`.
+    ///
+    /// If the drain thread panics while the run is in `waiting_for_feedback` (e.g. the
+    /// agent emitted a feedback request but the drain thread panicked before writing a
+    /// final result), the panic monitor must still mark the run as `failed` so it does
+    /// not stay stuck indefinitely waiting for input that will never arrive.
+    #[tokio::test]
+    async fn drain_panic_monitor_transitions_waiting_for_feedback_run() {
+        let (state, _tmp) = seeded_state();
+        let run_id = "drain-panic-wff-run";
+
+        // Seed a run, then move it to waiting_for_feedback (simulating an in-flight
+        // feedback request from the agent).
+        {
+            let db = state.db.lock().await;
+            conductor_core::test_helpers::insert_test_agent_run(&db, run_id, "w1");
+            let mgr = AgentManager::new(&db);
+            mgr.request_feedback(run_id, "what should I do?", None)
+                .expect("request_feedback must succeed");
+        }
+
+        // Confirm the run is in waiting_for_feedback before the panic fires.
+        {
+            let db = state.db.lock().await;
+            let run = AgentManager::new(&db)
+                .get_run(run_id)
+                .unwrap()
+                .expect("run must exist");
+            assert_eq!(run.status, AgentRunStatus::WaitingForFeedback);
+        }
+
+        // Simulate what the panic monitor does: update_run_failed_if_running.
+        // Because waiting_for_feedback is an active (non-finalized) status, the run
+        // must be transitioned to failed.
+        {
+            let db = state.db.lock().await;
+            AgentManager::new(&db)
+                .update_run_failed_if_running(run_id, "drain thread panicked")
+                .expect("update_run_failed_if_running must not return an error");
+        }
+
+        // Status must now be 'failed' — panic monitor must handle waiting_for_feedback.
+        let db = state.db.lock().await;
+        let run = AgentManager::new(&db)
+            .get_run(run_id)
+            .unwrap()
+            .expect("run must exist");
+        assert_eq!(
+            run.status,
+            AgentRunStatus::Failed,
+            "waiting_for_feedback run must be transitioned to failed by drain panic handler"
+        );
+        assert!(
+            run.result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("drain thread panicked"),
+            "result_text should record panic reason, got: {:?}",
+            run.result_text
+        );
+    }
 }
