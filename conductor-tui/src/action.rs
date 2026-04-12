@@ -172,7 +172,7 @@ pub enum Action {
     // Toggle visibility of completed/cancelled workflow runs in the workflow column
     ToggleCompletedRuns,
 
-    // Agent triggers (tmux-based)
+    // Agent triggers
     LaunchAgent,
     PromptRepoAgent,
     OrchestrateAgent,

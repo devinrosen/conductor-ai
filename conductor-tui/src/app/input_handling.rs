@@ -598,7 +598,7 @@ impl App {
                 } else {
                     Some(value)
                 };
-                self.start_agent_tmux(
+                self.start_agent_headless(
                     prompt,
                     worktree_id,
                     worktree_path,
@@ -625,7 +625,7 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
-                self.start_repo_agent_tmux(value, repo_id, repo_path, repo_slug, resume_session_id);
+                self.start_repo_agent_headless(value, repo_id, repo_path, repo_slug, resume_session_id);
             }
             InputAction::OrchestratePrompt {
                 worktree_id,
@@ -635,7 +635,7 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
-                self.start_orchestrate_tmux(value, worktree_id, worktree_path, worktree_slug);
+                self.start_orchestrate_headless(value, worktree_id, worktree_path, worktree_slug);
             }
             InputAction::SetWorktreeModel {
                 worktree_id,
@@ -770,7 +770,7 @@ impl App {
                 } else {
                     Some(value)
                 };
-                self.start_agent_tmux(
+                self.start_agent_headless(
                     prompt,
                     worktree_id,
                     worktree_path,

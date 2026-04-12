@@ -1,7 +1,5 @@
 use std::process::Command;
 
-use crate::error::{ConductorError, Result};
-
 use super::AgentManager;
 
 /// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
@@ -92,64 +90,12 @@ impl<'a> AgentManager<'a> {
         }
     }
 
-    /// Switch the current tmux client to the given agent window.
-    ///
-    /// Runs `tmux select-window -t :{window}` and returns an error (including
-    /// tmux's stderr) if the command fails or tmux is unavailable.
-    pub fn attach_agent_window(&self, window: &str) -> Result<()> {
-        let output = Command::new("tmux")
-            .args(["select-window", "-t", &format!(":{window}")])
-            .output()
-            .map_err(|e| ConductorError::Agent(format!("could not execute tmux: {e}")))?;
-
-        if output.status.success() {
-            return Ok(());
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stderr = stderr.trim();
-
-        if stderr.is_empty() {
-            Err(ConductorError::Agent(
-                "tmux select-window failed".to_string(),
-            ))
-        } else if stderr.contains("No such file or directory")
-            || stderr.contains("error connecting to")
-            || stderr.contains("no server running")
-        {
-            Err(ConductorError::Agent(
-                "tmux is not running — start a tmux session first, then relaunch conductor"
-                    .to_string(),
-            ))
-        } else {
-            Err(ConductorError::Agent(format!(
-                "tmux select-window failed: {stderr}"
-            )))
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::setup_db;
     use super::*;
-
-    #[test]
-    fn test_attach_agent_window_no_tmux_returns_error() {
-        // When tmux is not running (no server), attach_agent_window must return
-        // a ConductorError::Agent rather than panicking.
-        let conn = setup_db();
-        let mgr = AgentManager::new(&conn);
-        let result = mgr.attach_agent_window("nonexistent-window-xyz");
-        assert!(
-            result.is_err(),
-            "expected error when tmux server is not running"
-        );
-        match result.unwrap_err() {
-            ConductorError::Agent(_) => {}
-            other => panic!("expected ConductorError::Agent, got {other:?}"),
-        }
-    }
 
     #[test]
     fn test_capture_agent_log_no_tmux_does_not_panic() {

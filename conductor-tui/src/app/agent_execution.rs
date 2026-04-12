@@ -326,7 +326,7 @@ impl App {
         };
     }
 
-    pub(super) fn start_orchestrate_tmux(
+    pub(super) fn start_orchestrate_headless(
         &mut self,
         prompt: String,
         worktree_id: String,
@@ -627,7 +627,7 @@ impl App {
         };
     }
 
-    pub(super) fn start_agent_tmux(
+    pub(super) fn start_agent_headless(
         &mut self,
         prompt: String,
         worktree_id: String,
@@ -778,7 +778,7 @@ impl App {
         };
     }
 
-    pub(super) fn start_repo_agent_tmux(
+    pub(super) fn start_repo_agent_headless(
         &mut self,
         prompt: String,
         repo_id: String,
@@ -946,6 +946,7 @@ impl App {
                 &new_run.id,
                 &worktree_path,
                 &new_run.prompt,
+                None,
                 new_run.model.as_deref(),
                 new_run.bot_name.as_deref(),
                 None,
