@@ -11,7 +11,6 @@ use tower_http::trace::TraceLayer;
 
 use conductor_web::assets::static_handler;
 use conductor_web::events::{ConductorEvent, EventBus};
-use conductor_web::notify;
 use conductor_web::openapi::ApiDoc;
 use conductor_web::push::{PushPayload, PushSubscriptionManager};
 use conductor_web::routes::api_router;
