@@ -328,6 +328,21 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Update the `last_heartbeat` timestamp for a workflow run.
+    ///
+    /// Called by the engine every ~5s to signal that the executor process is
+    /// still alive.  The `AND status = 'running'` guard prevents writing a
+    /// heartbeat after a watchdog has already flipped the run to `failed`.
+    pub fn tick_heartbeat(&self, run_id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE workflow_runs SET last_heartbeat = ?1 \
+             WHERE id = ?2 AND status = 'running'",
+            params![now, run_id],
+        )?;
+        Ok(())
+    }
+
     /// Mark a workflow run as failed and also fail its parent agent run.
     ///
     /// Marks a workflow run as failed.

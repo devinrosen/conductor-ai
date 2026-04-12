@@ -1,4 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
@@ -114,9 +117,21 @@ pub(super) struct ExecutionState<'a> {
     pub conductor_bin_dir: Option<std::path::PathBuf>,
     /// Additional plugin directories to pass to agent sessions.
     pub extra_plugin_dirs: Vec<String>,
+    /// Last time (Unix seconds) the heartbeat was written to the DB.
+    ///
+    /// Shared via `Arc` so sub-workflow `ExecutionState` instances cloned from
+    /// a parent share the same throttle counter — preventing double-writes when
+    /// a root run calls into a child workflow.  Initialized to 0 (forces an
+    /// immediate first tick); updated by `execute_nodes` at most once per 5s.
+    pub last_heartbeat_at: Arc<AtomicI64>,
 }
 
 impl ExecutionState<'_> {
+    /// Create a fresh heartbeat counter, initialized to 0 so the first tick fires immediately.
+    pub(super) fn new_heartbeat() -> Arc<AtomicI64> {
+        Arc::new(AtomicI64::new(0))
+    }
+
     /// Accumulate metrics from a completed agent run into this execution state.
     ///
     /// Centralises the per-field `if let Some` pattern so parallel.rs and any
@@ -513,6 +528,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         triggered_by_hook: input.triggered_by_hook,
         conductor_bin_dir: input.conductor_bin_dir.clone(),
         extra_plugin_dirs: input.extra_plugin_dirs.clone(),
+        last_heartbeat_at: ExecutionState::new_heartbeat(),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -1074,6 +1090,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         triggered_by_hook: wf_run.is_triggered_by_hook(),
         conductor_bin_dir: input.conductor_bin_dir.clone(),
         extra_plugin_dirs: vec![],
+        last_heartbeat_at: ExecutionState::new_heartbeat(),
     };
 
     run_workflow_engine(&mut state, &workflow)
@@ -1134,6 +1151,22 @@ pub(super) fn execute_nodes(
                     e
                 );
                 // Continue execution - don't fail the workflow due to a transient DB error
+            }
+        }
+        // Throttled heartbeat tick — write at most once every 5 seconds.
+        // Uses the root run's workflow_run_id so the watchdog can track executor
+        // liveness even when a parent run is blocked inside a sub-workflow step.
+        {
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let last = state.last_heartbeat_at.load(Ordering::Relaxed);
+            if now_secs - last >= 5 {
+                state.last_heartbeat_at.store(now_secs, Ordering::Relaxed);
+                if let Err(e) = state.wf_mgr.tick_heartbeat(&state.workflow_run_id) {
+                    tracing::warn!("tick_heartbeat failed (non-fatal): {e}");
+                }
             }
         }
         execute_single_node(state, node, 0)?;

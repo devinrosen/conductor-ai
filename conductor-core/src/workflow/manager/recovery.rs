@@ -1,9 +1,11 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use crate::agent::status::AgentRunStatus;
+use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::Result;
 
@@ -11,7 +13,7 @@ use super::helpers::{purge_where_clause, row_to_workflow_run};
 use super::WorkflowManager;
 use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{StepKey, WorkflowRun};
+use crate::workflow::types::{StepKey, WorkflowResumeStandalone, WorkflowRun};
 
 impl<'a> WorkflowManager<'a> {
     /// Reap workflow_run_steps stuck in `running` status whose script subprocess
@@ -330,6 +332,110 @@ impl<'a> WorkflowManager<'a> {
             params![threshold_secs],
             |row| row.get(0),
         )
+    }
+
+    /// Detect and auto-resume workflow runs that are stuck in `running` status
+    /// because the executor process died between steps.
+    ///
+    /// **Detection** — a root run is considered orphaned when ALL of the following hold:
+    /// 1. `status = 'running'`
+    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
+    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
+    /// 4. `COALESCE(last_heartbeat, started_at)` is older than `threshold_secs`
+    ///    (the `COALESCE` handles pre-migration rows that have `NULL` heartbeat)
+    ///
+    /// **CAS flip** — before calling `resume_workflow_standalone` the run is
+    /// atomically flipped to `failed` via:
+    /// `UPDATE ... WHERE id=? AND status='running'`
+    /// `changes() == 1` is required to proceed; a concurrent watchdog call that
+    /// already won the race sees `changes() == 0` and skips the run.
+    ///
+    /// This fixes the previously-broken `detect_stuck_workflow_run_ids` + resume
+    /// pattern: `validate_resume_preconditions` rejects resuming a `running`-status
+    /// run; the CAS flip to `failed` is the required precondition.
+    ///
+    /// Returns the count of runs successfully resumed.
+    pub fn reap_heartbeat_stuck_runs(
+        &self,
+        config: &Config,
+        threshold_secs: i64,
+        conductor_bin_dir: Option<PathBuf>,
+    ) -> Result<usize> {
+        // Step 1: find orphaned root runs.
+        let orphaned_ids: Vec<String> = query_collect(
+            self.conn,
+            "SELECT id FROM workflow_runs \
+             WHERE status = 'running' \
+               AND parent_workflow_run_id IS NULL \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM workflow_run_steps wrs \
+                 WHERE wrs.workflow_run_id = workflow_runs.id \
+                   AND wrs.status IN ('running', 'pending', 'waiting') \
+               ) \
+               AND ( \
+                 CAST(strftime('%s', 'now') AS INTEGER) - \
+                 CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
+               ) > ?1",
+            params![threshold_secs],
+            |row| row.get(0),
+        )?;
+
+        if orphaned_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut resumed = 0usize;
+
+        for run_id in orphaned_ids {
+            // Step 2: CAS flip running → failed.
+            // If another watchdog already won the race, changes() == 0 and we skip.
+            let changed = self.conn.execute(
+                "UPDATE workflow_runs \
+                 SET status = 'failed', \
+                     error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
+                 WHERE id = ?1 AND status = 'running'",
+                params![run_id],
+            )?;
+
+            if changed != 1 {
+                tracing::debug!(
+                    run_id = %run_id,
+                    "reap_heartbeat_stuck_runs: CAS lost race for run (already reaped)"
+                );
+                continue;
+            }
+
+            tracing::info!(
+                run_id = %run_id,
+                "reap_heartbeat_stuck_runs: reaped orphaned run, resuming"
+            );
+
+            // Step 3: resume — status is now `failed`, which validate_resume_preconditions accepts.
+            let config_clone = config.clone();
+            let bin_dir = conductor_bin_dir.clone();
+            let run_id_clone = run_id.clone();
+            std::thread::spawn(move || {
+                let params = WorkflowResumeStandalone {
+                    config: config_clone,
+                    workflow_run_id: run_id_clone.clone(),
+                    model: None,
+                    from_step: None,
+                    restart: false,
+                    db_path: None,
+                    conductor_bin_dir: bin_dir,
+                };
+                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
+                    tracing::warn!(
+                        run_id = %run_id_clone,
+                        "reap_heartbeat_stuck_runs: auto-resume failed: {e}"
+                    );
+                }
+            });
+
+            resumed += 1;
+        }
+
+        Ok(resumed)
     }
 
     /// Directly finalize workflow runs that are stuck in `running` status because

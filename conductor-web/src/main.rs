@@ -11,7 +11,6 @@ use tower_http::trace::TraceLayer;
 
 use conductor_web::assets::static_handler;
 use conductor_web::events::{ConductorEvent, EventBus};
-use conductor_web::notify;
 use conductor_web::openapi::ApiDoc;
 use conductor_web::push::{PushPayload, PushSubscriptionManager};
 use conductor_web::routes::api_router;
@@ -138,38 +137,15 @@ async fn main() -> Result<()> {
                 tracing::warn!("reap_finalization_stuck_workflow_runs failed on startup: {e}")
             }
         }
-        match wf_mgr.detect_stuck_workflow_run_ids(60) {
-            Ok(ids) if !ids.is_empty() => {
-                let n = ids.len();
-                tracing::info!("Auto-resuming {n} stuck workflow run(s) on startup");
-                notify::fire_orphan_resumed_notification(&conn, &config.notifications, &ids);
-                let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                for run_id in ids {
-                    let config_clone = config.clone();
-                    let bin_dir = conductor_bin_dir.clone();
-                    std::thread::spawn(move || {
-                        let params = conductor_core::workflow::WorkflowResumeStandalone {
-                            config: config_clone,
-                            workflow_run_id: run_id.clone(),
-                            model: None,
-                            from_step: None,
-                            restart: false,
-                            db_path: None,
-                            conductor_bin_dir: bin_dir,
-                        };
-                        if let Err(e) =
-                            conductor_core::workflow::resume_workflow_standalone(&params)
-                        {
-                            tracing::warn!(
-                                run_id = %run_id,
-                                "Auto-resume of stuck workflow run failed: {e}"
-                            );
-                        }
-                    });
+        {
+            let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+            match wf_mgr.reap_heartbeat_stuck_runs(&config, 60, conductor_bin_dir) {
+                Ok(n) if n > 0 => {
+                    tracing::info!("Auto-resuming {n} stuck workflow run(s) on startup")
                 }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_heartbeat_stuck_runs failed on startup: {e}"),
             }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed on startup: {e}"),
         }
     }
 
@@ -239,43 +215,15 @@ async fn main() -> Result<()> {
                         tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}")
                     }
                 }
-                match wf_mgr.detect_stuck_workflow_run_ids(60) {
-                    Ok(ids) if !ids.is_empty() => {
-                        let n = ids.len();
-                        tracing::info!("Auto-resuming {n} stuck workflow run(s)");
-                        conductor_core::notify::fire_orphan_resumed_notification(
-                            &conn,
-                            &cfg.notifications,
-                            &ids,
-                        );
-                        let conductor_bin_dir =
-                            conductor_core::workflow::resolve_conductor_bin_dir();
-                        for run_id in ids {
-                            let cfg_clone = (*cfg).clone();
-                            let bin_dir = conductor_bin_dir.clone();
-                            std::thread::spawn(move || {
-                                let params = conductor_core::workflow::WorkflowResumeStandalone {
-                                    config: cfg_clone,
-                                    workflow_run_id: run_id.clone(),
-                                    model: None,
-                                    from_step: None,
-                                    restart: false,
-                                    db_path: None,
-                                    conductor_bin_dir: bin_dir,
-                                };
-                                if let Err(e) =
-                                    conductor_core::workflow::resume_workflow_standalone(&params)
-                                {
-                                    tracing::warn!(
-                                        run_id = %run_id,
-                                        "Auto-resume of stuck workflow run failed: {e}"
-                                    );
-                                }
-                            });
+                {
+                    let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+                    match wf_mgr.reap_heartbeat_stuck_runs(&cfg, 60, conductor_bin_dir) {
+                        Ok(n) if n > 0 => {
+                            tracing::info!("Auto-resuming {n} stuck workflow run(s)")
                         }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("reap_heartbeat_stuck_runs failed: {e}"),
                     }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
                 }
 
                 // Detect agent run terminal transitions and fire notifications.
