@@ -512,11 +512,18 @@ pub struct SpawnHeadlessParams<'a> {
 pub fn try_spawn_headless_run(
     params: &SpawnHeadlessParams<'_>,
 ) -> std::result::Result<(HeadlessHandle, std::path::PathBuf), String> {
-    let (args, pf) = build_headless_agent_args(params)
-        .map_err(|e| format!("failed to prepare agent args: {e}"))?;
+    let (args, pf) = build_headless_agent_args(params).map_err(|e| {
+        format!(
+            "failed to prepare agent args for run {} (working_dir={}): {e}",
+            params.run_id, params.working_dir
+        )
+    })?;
     let h = spawn_headless(&args, std::path::Path::new(params.working_dir)).map_err(|e| {
         let _ = std::fs::remove_file(&pf);
-        format!("spawn failed: {e}")
+        format!(
+            "spawn failed for run {} (working_dir={}): {e}",
+            params.run_id, params.working_dir
+        )
     })?;
     Ok((h, pf))
 }
@@ -1278,6 +1285,38 @@ mod tests {
         let _ = std::fs::remove_file(&prompt_file);
         // --prompt-file should be in args
         assert!(args.iter().any(|a| a == "--prompt-file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_spawn_headless_run_bad_working_dir_error_contains_run_id_and_path() {
+        // A non-existent working_dir causes spawn_headless to fail; the error
+        // string must contain both run_id and working_dir for diagnostics.
+        let run_id = "run-spawn-err-01";
+        let working_dir = "/this/path/does/not/exist/at/all";
+        let params = super::SpawnHeadlessParams {
+            run_id,
+            working_dir,
+            prompt: "test prompt",
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: None,
+            plugin_dirs: &[],
+        };
+        let result = super::try_spawn_headless_run(&params);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("should fail with non-existent working_dir"),
+        };
+        assert!(
+            err.contains(run_id),
+            "error must contain run_id ({run_id}): {err}"
+        );
+        assert!(
+            err.contains(working_dir),
+            "error must contain working_dir ({working_dir}): {err}"
+        );
     }
 
     #[test]
