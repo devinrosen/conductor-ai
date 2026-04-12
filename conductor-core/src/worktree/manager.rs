@@ -535,12 +535,14 @@ impl<'a> WorktreeManager<'a> {
         query_collect(self.conn, &query, params![repo_id], map_worktree_row)
     }
 
-    pub fn list(
+    /// Shared query builder for [`list`] and [`list_paginated`].
+    ///
+    /// `pagination` is `Some((limit, offset))` to add `LIMIT ?N OFFSET ?M`; `None` for unbounded.
+    fn list_inner(
         &self,
         repo_slug: Option<&str>,
         active_only: bool,
-        limit: Option<usize>,
-        offset: Option<usize>,
+        pagination: Option<(usize, usize)>,
     ) -> Result<Vec<Worktree>> {
         let status_filter = if active_only {
             " AND status = 'active'"
@@ -548,35 +550,56 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
 
-        let pagination = match limit {
-            Some(lim) => format!(" LIMIT {} OFFSET {}", lim, offset.unwrap_or(0)),
-            None => String::new(),
+        let base_query = match repo_slug {
+            Some(_) => format!(
+                "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+                &*WORKTREE_COLUMNS_W,
+                status_filter,
+            ),
+            None => format!(
+                "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE 1=1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
+                status_filter,
+            ),
         };
 
-        let query = match repo_slug {
-            Some(_) => {
-                format!(
-                    "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at{}",
-                    &*WORKTREE_COLUMNS_W,
-                    status_filter,
-                    pagination,
+        match (repo_slug, pagination) {
+            (Some(slug), Some((limit, offset))) => {
+                let query = format!("{base_query} LIMIT ?2 OFFSET ?3");
+                query_collect(
+                    self.conn,
+                    &query,
+                    params![slug, limit as i64, offset as i64],
+                    map_worktree_row,
                 )
             }
-            None => {
-                format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE 1=1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at{}",
-                    status_filter,
-                    pagination,
+            (Some(slug), None) => {
+                query_collect(self.conn, &base_query, params![slug], map_worktree_row)
+            }
+            (None, Some((limit, offset))) => {
+                let query = format!("{base_query} LIMIT ?1 OFFSET ?2");
+                query_collect(
+                    self.conn,
+                    &query,
+                    params![limit as i64, offset as i64],
+                    map_worktree_row,
                 )
             }
-        };
+            (None, None) => query_collect(self.conn, &base_query, [], map_worktree_row),
+        }
+    }
 
-        let worktrees = if let Some(slug) = repo_slug {
-            query_collect(self.conn, &query, params![slug], map_worktree_row)?
-        } else {
-            query_collect(self.conn, &query, [], map_worktree_row)?
-        };
-        Ok(worktrees)
+    pub fn list(&self, repo_slug: Option<&str>, active_only: bool) -> Result<Vec<Worktree>> {
+        self.list_inner(repo_slug, active_only, None)
+    }
+
+    pub fn list_paginated(
+        &self,
+        repo_slug: Option<&str>,
+        active_only: bool,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Worktree>> {
+        self.list_inner(repo_slug, active_only, Some((limit, offset)))
     }
 
     /// List all worktrees joined with the status of each worktree's latest agent run.
@@ -659,7 +682,7 @@ impl<'a> WorktreeManager<'a> {
     ///
     /// Returns `None` when no registered worktree matches.
     pub fn find_by_cwd(&self, cwd: &Path) -> Result<Option<Worktree>> {
-        let worktrees = self.list(None, false, None, None)?;
+        let worktrees = self.list(None, false)?;
         let found = worktrees
             .into_iter()
             .filter(|wt| cwd.starts_with(Path::new(&wt.path)))
@@ -1170,9 +1193,7 @@ mod tests {
         insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
 
         let mgr = WorktreeManager::new(&conn, &config);
-        let results = mgr
-            .list(Some("test-repo"), false, Some(2), Some(0))
-            .unwrap();
+        let results = mgr.list_paginated(Some("test-repo"), false, 2, 0).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -1187,9 +1208,7 @@ mod tests {
 
         let mgr = WorktreeManager::new(&conn, &config);
         // Offset 2 should return only the last row (ordered by active-first, then created_at)
-        let results = mgr
-            .list(Some("test-repo"), false, Some(10), Some(2))
-            .unwrap();
+        let results = mgr.list_paginated(Some("test-repo"), false, 10, 2).unwrap();
         assert_eq!(results.len(), 1);
     }
 
@@ -1204,12 +1223,8 @@ mod tests {
         insert_wt(&conn, "wt4", "slug-d", "2024-01-04T00:00:00Z");
 
         let mgr = WorktreeManager::new(&conn, &config);
-        let page1 = mgr
-            .list(Some("test-repo"), false, Some(2), Some(0))
-            .unwrap();
-        let page2 = mgr
-            .list(Some("test-repo"), false, Some(2), Some(2))
-            .unwrap();
+        let page1 = mgr.list_paginated(Some("test-repo"), false, 2, 0).unwrap();
+        let page2 = mgr.list_paginated(Some("test-repo"), false, 2, 2).unwrap();
         assert_eq!(page1.len(), 2);
         assert_eq!(page2.len(), 2);
         // Pages must not overlap
@@ -1228,24 +1243,7 @@ mod tests {
         insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
 
         let mgr = WorktreeManager::new(&conn, &config);
-        let results = mgr.list(Some("test-repo"), false, None, None).unwrap();
-        assert_eq!(results.len(), 3);
-    }
-
-    #[test]
-    fn list_offset_without_limit_is_ignored() {
-        // When limit=None no LIMIT/OFFSET clause is emitted, so offset is silently ignored
-        // and all rows are returned regardless of the offset value.
-        let conn = crate::test_helpers::create_test_conn();
-        let config = crate::config::Config::default();
-        insert_repo(&conn);
-        insert_wt(&conn, "wt1", "slug-a", "2024-01-01T00:00:00Z");
-        insert_wt(&conn, "wt2", "slug-b", "2024-01-02T00:00:00Z");
-        insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
-
-        let mgr = WorktreeManager::new(&conn, &config);
-        // offset=Some(2) with limit=None — offset has no effect
-        let results = mgr.list(Some("test-repo"), false, None, Some(2)).unwrap();
+        let results = mgr.list(Some("test-repo"), false).unwrap();
         assert_eq!(results.len(), 3);
     }
 
@@ -1259,7 +1257,7 @@ mod tests {
         insert_wt(&conn, "wt3", "slug-c", "2024-01-03T00:00:00Z");
 
         let mgr = WorktreeManager::new(&conn, &config);
-        let results = mgr.list(None, false, Some(2), Some(0)).unwrap();
+        let results = mgr.list_paginated(None, false, 2, 0).unwrap();
         assert_eq!(results.len(), 2);
     }
 
