@@ -116,7 +116,7 @@ pub fn handle_worktree(
                             let run = agent_mgr.create_run(
                                 Some(&wt.id),
                                 &prompt,
-                                Some(&wt.slug),
+                                None,
                                 model,
                             )?;
                             run_agent(

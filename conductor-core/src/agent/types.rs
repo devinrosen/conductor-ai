@@ -71,7 +71,7 @@ pub struct AgentRun {
     /// Conversation this run belongs to (if created via the conversation API).
     pub conversation_id: Option<String>,
     /// PID of the headless subprocess running this agent (RFC 016).
-    /// None for tmux-based runs or pre-migration rows.
+    /// None for pre-migration rows or when the subprocess PID has not yet been stored by the workflow executor.
     pub subprocess_pid: Option<i64>,
 }
 

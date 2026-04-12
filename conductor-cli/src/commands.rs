@@ -27,7 +27,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: TicketCommands,
     },
-    /// Run Claude agent (used internally by TUI tmux windows)
+    /// Run Claude agent (used internally as a headless subprocess)
     Agent {
         #[command(subcommand)]
         command: AgentCommands,
@@ -101,7 +101,7 @@ pub enum SetupCommands {
 
 #[derive(Subcommand)]
 pub enum AgentCommands {
-    /// Run a Claude agent for a worktree (spawned by TUI in tmux)
+    /// Run a Claude agent for a worktree (spawned as a headless subprocess)
     Run {
         /// Agent run ID (from agent_runs table)
         #[arg(long)]
