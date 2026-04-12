@@ -145,6 +145,7 @@ pub fn orchestrate_run(
             &child_run.id,
             worktree_path,
             &child_prompt,
+            None,
             model,
             None,
             Some(&config.general.agent_permission_mode),

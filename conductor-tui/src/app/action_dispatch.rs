@@ -504,7 +504,7 @@ impl App {
             Action::RepoDetailInfoCopy => self.handle_repo_detail_info_copy(),
             Action::WorkflowRunDetailCopy => self.handle_workflow_run_detail_copy(),
 
-            // Agent (tmux-based)
+            // Agent
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::PromptRepoAgent => self.handle_prompt_repo_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
@@ -1074,6 +1074,15 @@ impl App {
                         .or_default()
                         .push(run_event);
                     self.reload_agent_events();
+                    let len = self.state.data.agent_activity_len();
+                    let cur = self.state.agent_list_state.borrow().selected();
+                    let at_bottom = cur.is_none_or(|idx| idx + 1 >= len);
+                    if at_bottom && len > 0 {
+                        self.state
+                            .agent_list_state
+                            .borrow_mut()
+                            .select(Some(len - 1));
+                    }
                 } else {
                     // Check repo-scoped runs
                     let repo_id =
