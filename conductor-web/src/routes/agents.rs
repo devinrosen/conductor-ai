@@ -49,7 +49,12 @@ async fn cancel_run_blocking(
 /// Best-effort: logs a warning if the DB cannot be opened or the update fails, but
 /// never panics. Used to clean up on drain-thread DB-open errors and drain-thread
 /// panics so the run does not stay stuck in `running` until the orphan reaper fires.
-fn try_mark_run_failed_in_db(db_path: &std::path::Path, run_id: &str, msg: &str, log_prefix: &str) {
+pub(super) fn try_mark_run_failed_in_db(
+    db_path: &std::path::Path,
+    run_id: &str,
+    msg: &str,
+    log_prefix: &str,
+) {
     match conductor_core::db::open_database(db_path) {
         Err(open_err) => {
             tracing::warn!("[{log_prefix}] could not open DB for failure recovery: {open_err}");
@@ -1881,6 +1886,61 @@ mod tests {
         }
 
         // Keep _tmp alive until the DB is no longer needed.
+        let _ = tmp;
+    }
+
+    /// Verify that `try_mark_run_failed_in_db` transitions the run to `Failed`
+    /// when the retry DB open succeeds.
+    ///
+    /// The `drain_db_open_failure_no_pipe_deadlock` test uses a permanently bad
+    /// `db_path` so the retry also fails silently.  This test uses a real temp
+    /// DB to confirm the status transition when the retry succeeds.
+    #[tokio::test]
+    async fn drain_db_open_failure_marks_run_failed() {
+        let tmp = tempfile::NamedTempFile::new().expect("temp db");
+        let conn = conductor_core::db::open_database(tmp.path()).expect("open db");
+        conductor_core::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        conductor_core::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let run = AgentManager::new(&conn)
+            .create_run(Some("w1"), "test prompt", None, None)
+            .expect("create run");
+        let run_id = run.id.clone();
+
+        // Drop conn so the DB file is fully flushed before try_mark_run_failed_in_db
+        // opens its own connection.
+        drop(conn);
+
+        let err_msg = "drain thread failed to open DB: io error";
+        super::try_mark_run_failed_in_db(tmp.path(), &run_id, err_msg, "test");
+
+        // Re-open to read back the final state.
+        let conn2 = conductor_core::db::open_database(tmp.path()).expect("re-open db");
+        let run_after = AgentManager::new(&conn2)
+            .get_run(&run_id)
+            .unwrap()
+            .expect("run must exist");
+
+        assert_eq!(
+            run_after.status,
+            AgentRunStatus::Failed,
+            "run should be marked failed after drain DB-open error"
+        );
+        assert!(
+            run_after
+                .result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("drain thread failed to open DB"),
+            "result_text should contain the error message, got: {:?}",
+            run_after.result_text
+        );
+
         let _ = tmp;
     }
 }
