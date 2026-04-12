@@ -171,30 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn test_reap_orphaned_runs_with_legacy_tmux_window_field() {
-        // Runs with a tmux_window set but no subprocess_pid (legacy rows) should
-        // still be reaped since we can't check subprocess liveness without a PID.
-        let conn = setup_db();
-        let mgr = AgentManager::new(&conn);
-
-        let run = mgr
-            .create_run(
-                Some("w1"),
-                "test prompt",
-                Some("nonexistent-window-xyz-999"),
-                None,
-            )
-            .unwrap();
-        assert_eq!(run.status, AgentRunStatus::Running);
-
-        let reaped = mgr.reap_orphaned_runs().unwrap();
-        assert_eq!(reaped, 1);
-
-        let updated = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(updated.status, AgentRunStatus::Failed);
-    }
-
-    #[test]
     fn test_reap_orphaned_runs_skips_completed() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
@@ -221,15 +197,14 @@ mod tests {
     }
 
     /// A run that is the parent_run_id of an active workflow run must NOT be
-    /// reaped, even if it has no tmux_window. Workflow parent runs are created
-    /// without a tmux window by design and are long-lived while the workflow
-    /// executes.
+    /// reaped. Workflow parent runs are created without a subprocess PID by
+    /// design and are long-lived while the workflow executes.
     #[test]
     fn test_reap_orphaned_runs_skips_active_workflow_parent() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        // Create an agent run with no tmux window (would normally be reaped).
+        // Create an agent run with no subprocess PID (would normally be reaped).
         let parent_run = mgr
             .create_run(Some("w1"), "workflow parent", None, None)
             .unwrap();

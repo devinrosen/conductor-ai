@@ -162,10 +162,10 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
     Ok(())
 }
 
-/// Run a Claude agent for a worktree. Called inside a tmux window by the TUI.
+/// Run a Claude agent for a worktree as a headless subprocess.
 ///
-/// Uses `--output-format json` (single JSON result) since the tmux terminal IS the display.
-/// Claude's interactive output goes directly to the terminal; we only parse the final JSON result.
+/// Uses `--output-format stream-json` to emit structured events. Claude's output is streamed
+/// and parsed for result metadata; a human-readable summary is printed to stderr.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_agent(
     conn: &rusqlite::Connection,
@@ -313,7 +313,7 @@ pub(crate) fn run_agent(
 
         // ── build command for this turn ───────────────────────────────────────
         // stdout: stream-json events (piped, parsed for result metadata)
-        // stderr: verbose turn-by-turn output (inherited, visible in tmux)
+        // stderr: verbose turn-by-turn output (inherited, visible in the terminal)
         let mut cmd = Command::new("claude");
         if let Some(ref feedback) = feedback_response_for_resume {
             // Feedback resume turn: deliver the human response as the next message
@@ -442,7 +442,7 @@ pub(crate) fn run_agent(
                     continue;
                 };
 
-                // Display human-readable activity in the tmux terminal
+                // Display human-readable activity on stderr
                 print_event_summary(&event);
 
                 // Capture session_id from init message and save immediately for resume
@@ -861,7 +861,7 @@ fn run_orchestrate(
     Ok(())
 }
 
-/// Print a human-readable summary of a stream-json event to stderr (visible in tmux).
+/// Print a human-readable summary of a stream-json event to stderr.
 fn print_event_summary(event: &serde_json::Value) {
     let msg_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
