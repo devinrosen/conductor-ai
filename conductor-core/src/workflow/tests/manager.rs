@@ -2782,3 +2782,230 @@ fn test_reset_steps_from_position_clears_subprocess_pid() {
         "subprocess_pid must be NULL after reset_steps_from_position"
     );
 }
+
+// ---------------------------------------------------------------------------
+// reap_heartbeat_stuck_runs tests
+// ---------------------------------------------------------------------------
+
+/// Helper: insert a minimal running root workflow_run with explicit started_at
+/// and optional last_heartbeat. Returns the run's id.
+fn insert_orphaned_root_run(
+    conn: &Connection,
+    started_at: &str,
+    last_heartbeat: Option<&str>,
+) -> String {
+    let agent_mgr = AgentManager::new(conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id, last_heartbeat) \
+         VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', ?3, NULL, ?4)",
+        params![id, parent.id, started_at, last_heartbeat],
+    )
+    .unwrap();
+    id
+}
+
+/// A stale last_heartbeat (> threshold) should be reaped and resumed.
+#[test]
+fn test_reap_heartbeat_stuck_stale_heartbeat() {
+    let conn = setup_db();
+    // Heartbeat 200 seconds ago — stale with threshold=60.
+    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
+    let stale_str = stale.to_rfc3339();
+    let run_id = insert_orphaned_root_run(&conn, &stale_str, Some(&stale_str));
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = crate::config::Config::default();
+    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+
+    assert_eq!(count, 1, "expected 1 run reaped");
+    // Status must be flipped to 'failed' by the CAS.
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params![run_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "failed", "run status must be failed after CAS flip");
+}
+
+/// A fresh last_heartbeat (< threshold) must NOT be reaped.
+#[test]
+fn test_reap_heartbeat_stuck_fresh_heartbeat() {
+    let conn = setup_db();
+    let fresh = chrono::Utc::now() - chrono::Duration::seconds(10);
+    let fresh_str = fresh.to_rfc3339();
+    let run_id = insert_orphaned_root_run(&conn, &fresh_str, Some(&fresh_str));
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = crate::config::Config::default();
+    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+
+    assert_eq!(count, 0, "fresh run must not be reaped");
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params![run_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "running", "run status must still be running");
+}
+
+/// NULL heartbeat falls back to started_at — stale started_at must be reaped.
+#[test]
+fn test_reap_heartbeat_stuck_null_heartbeat_stale_started() {
+    let conn = setup_db();
+    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
+    let run_id = insert_orphaned_root_run(&conn, &stale.to_rfc3339(), None);
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = crate::config::Config::default();
+    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+
+    assert_eq!(count, 1, "stale run with NULL heartbeat must be reaped");
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params![run_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "failed");
+}
+
+/// NULL heartbeat falls back to started_at — fresh started_at must NOT be reaped.
+#[test]
+fn test_reap_heartbeat_stuck_null_heartbeat_fresh_started() {
+    let conn = setup_db();
+    let fresh = chrono::Utc::now() - chrono::Duration::seconds(10);
+    let run_id = insert_orphaned_root_run(&conn, &fresh.to_rfc3339(), None);
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = crate::config::Config::default();
+    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+
+    assert_eq!(count, 0, "fresh run with NULL heartbeat must not be reaped");
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params![run_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "running");
+}
+
+/// A run with an active child step (status='pending') must NOT be reaped, even
+/// when the heartbeat is stale — the NOT EXISTS guard blocks it.
+#[test]
+fn test_reap_heartbeat_stuck_active_child_step() {
+    let conn = setup_db();
+    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
+    let run_id = insert_orphaned_root_run(&conn, &stale.to_rfc3339(), None);
+
+    // Insert a pending step — makes the NOT EXISTS guard fire.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration) \
+         VALUES ('step-1', ?1, 'step-a', 'actor', 0, 'pending', 0)",
+        params![run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = crate::config::Config::default();
+    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+
+    assert_eq!(count, 0, "run with active step must not be reaped");
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params![run_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "running");
+}
+
+/// Two sequential calls on the same orphan: first wins the CAS (count=1),
+/// second sees changes()=0 (count=0).
+#[test]
+fn test_reap_heartbeat_stuck_concurrent_race() {
+    let conn = setup_db();
+    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
+    let _run_id = insert_orphaned_root_run(&conn, &stale.to_rfc3339(), None);
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = crate::config::Config::default();
+
+    // First call wins the CAS.
+    let count1 = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+    assert_eq!(count1, 1, "first call should win the CAS");
+
+    // Second call sees status='failed' — detection query excludes it, count=0.
+    let count2 = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+    assert_eq!(count2, 0, "second call must see no orphaned runs");
+}
+
+/// Sub-workflow runs (parent_workflow_run_id IS NOT NULL) must never be reaped.
+#[test]
+fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
+    let conn = setup_db();
+    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
+
+    // First create a parent run (to satisfy FK).
+    let parent_agent = AgentManager::new(&conn)
+        .create_run(None, "workflow", None, None)
+        .unwrap();
+    let parent_run_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id, last_heartbeat) \
+         VALUES (?1, 'parent-wf', NULL, ?2, 'running', 0, 'manual', ?3, NULL, NULL)",
+        params![parent_run_id, parent_agent.id, stale.to_rfc3339()],
+    )
+    .unwrap();
+
+    // Now create a sub-workflow run with parent_workflow_run_id set.
+    let child_agent = AgentManager::new(&conn)
+        .create_run(None, "workflow", None, None)
+        .unwrap();
+    let child_run_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id, last_heartbeat) \
+         VALUES (?1, 'child-wf', NULL, ?2, 'running', 0, 'manual', ?3, ?4, NULL)",
+        params![
+            child_run_id,
+            child_agent.id,
+            stale.to_rfc3339(),
+            parent_run_id
+        ],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = crate::config::Config::default();
+    // Only the parent root run should be reaped (count=1); the child is excluded.
+    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+    assert_eq!(count, 1, "only root run should be reaped");
+
+    let child_status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params![child_run_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        child_status, "running",
+        "sub-workflow run must not be reaped"
+    );
+}

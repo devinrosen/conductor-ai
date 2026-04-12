@@ -205,6 +205,7 @@ mod tests {
             triggered_by_hook: false,
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],
+            last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
         }
     }
 
