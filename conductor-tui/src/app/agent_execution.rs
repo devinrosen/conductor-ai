@@ -409,6 +409,7 @@ impl App {
                 },
             );
 
+            drop(handle.stderr);
             let mut child = handle.child;
             let _ = child.wait();
             let _ = tx.send(Action::AgentComplete { run_id });
@@ -721,6 +722,7 @@ impl App {
             );
 
             let _ = std::fs::remove_file(&prompt_file);
+            drop(handle.stderr);
             let mut child = handle.child;
             let _ = child.wait();
             let _ = tx.send(Action::AgentComplete { run_id });
@@ -867,6 +869,7 @@ impl App {
             );
 
             let _ = std::fs::remove_file(&prompt_file);
+            drop(handle.stderr);
             let mut child = handle.child;
             let _ = child.wait();
             let _ = tx.send(Action::AgentComplete { run_id });
@@ -979,6 +982,7 @@ impl App {
             );
 
             let _ = std::fs::remove_file(&prompt_file);
+            drop(handle.stderr);
             let mut child = handle.child;
             let _ = child.wait();
             let _ = tx.send(Action::AgentComplete { run_id: new_run_id });

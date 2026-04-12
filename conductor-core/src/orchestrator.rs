@@ -207,10 +207,9 @@ pub fn orchestrate_run(
                 |_| {},
             );
             let _ = std::fs::remove_file(&prompt_file);
-            let _ = {
-                let mut c = handle.child;
-                c.wait()
-            };
+            drop(handle.stderr);
+            let mut child = handle.child;
+            let _ = child.wait();
             let _ = tx.send(outcome);
         });
 

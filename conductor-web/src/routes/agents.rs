@@ -163,10 +163,9 @@ async fn wire_headless_drain(
         if let Some(ref pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
         }
-        let _ = {
-            let mut c = handle.child;
-            c.wait()
-        };
+        drop(handle.stderr);
+        let mut child = handle.child;
+        let _ = child.wait();
     });
 
     // Monitor drain thread for panics — a panicking drain leaves the run permanently
