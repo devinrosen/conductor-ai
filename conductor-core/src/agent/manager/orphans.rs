@@ -383,8 +383,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         {
             if let Some(proc_start) = crate::process_utils::process_started_at(live_pid) {
-                let started_at_str =
-                    chrono::DateTime::<chrono::Utc>::from(proc_start).to_rfc3339();
+                let started_at_str = chrono::DateTime::<chrono::Utc>::from(proc_start).to_rfc3339();
                 conn.execute(
                     "UPDATE agent_runs SET started_at = ?1 WHERE id = ?2",
                     params![started_at_str, run.id],
