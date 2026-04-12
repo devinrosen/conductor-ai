@@ -435,21 +435,7 @@ pub fn spawn_headless(
         .spawn()
         .map_err(|e| format!("Failed to spawn conductor headless: {e}"))?;
 
-    let pid = child.id();
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture stdout from headless subprocess".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to capture stderr from headless subprocess".to_string())?;
-    Ok(HeadlessHandle {
-        pid,
-        stdout,
-        stderr,
-        child,
-    })
+    HeadlessHandle::from_child(child)
 }
 
 /// Build headless args and spawn the conductor subprocess in one step.
