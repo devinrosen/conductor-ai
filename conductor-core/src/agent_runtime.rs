@@ -426,7 +426,7 @@ pub fn spawn_headless(
 ) -> std::result::Result<HeadlessHandle, String> {
     use std::process::Stdio;
     let conductor_bin = resolve_conductor_bin();
-    let mut child = Command::new(&conductor_bin)
+    let child = Command::new(&conductor_bin)
         .args(args.iter().map(|a| a.as_ref()))
         .current_dir(working_dir)
         .stdout(Stdio::piped())
