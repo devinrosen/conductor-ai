@@ -189,6 +189,7 @@ pub fn orchestrate_run(
         let log_path = crate::config::agent_log_path(&child_run.id);
         let (tx, rx) = std::sync::mpsc::channel::<agent_runtime::DrainOutcome>();
         std::thread::spawn(move || {
+            let (stdout, finish) = handle.into_drain_parts();
             let conn = match crate::db::open_database(&crate::config::db_path()) {
                 Ok(c) => c,
                 Err(e) => {
@@ -199,17 +200,10 @@ pub fn orchestrate_run(
                 }
             };
             let mgr = AgentManager::new(&conn);
-            let outcome = agent_runtime::drain_stream_json(
-                handle.stdout,
-                &run_id_clone,
-                &log_path,
-                &mgr,
-                |_| {},
-            );
+            let outcome =
+                agent_runtime::drain_stream_json(stdout, &run_id_clone, &log_path, &mgr, |_| {});
             let _ = std::fs::remove_file(&prompt_file);
-            drop(handle.stderr);
-            let mut child = handle.child;
-            let _ = child.wait();
+            finish();
             let _ = tx.send(outcome);
         });
 

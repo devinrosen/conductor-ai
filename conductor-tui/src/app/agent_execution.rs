@@ -396,8 +396,9 @@ impl App {
             let run_id = run.id.clone();
             let log_path = conductor_core::config::agent_log_path(&run_id);
             let tx2 = tx.clone();
+            let (stdout, finish) = handle.into_drain_parts();
             conductor_core::agent_runtime::drain_stream_json(
-                handle.stdout,
+                stdout,
                 &run_id,
                 &log_path,
                 &mgr,
@@ -409,9 +410,7 @@ impl App {
                 },
             );
 
-            drop(handle.stderr);
-            let mut child = handle.child;
-            let _ = child.wait();
+            finish();
             let _ = tx.send(Action::AgentComplete { run_id });
         });
     }
@@ -708,8 +707,9 @@ impl App {
             let run_id = run.id.clone();
             let log_path = conductor_core::config::agent_log_path(&run_id);
             let tx2 = tx.clone();
+            let (stdout, finish) = handle.into_drain_parts();
             conductor_core::agent_runtime::drain_stream_json(
-                handle.stdout,
+                stdout,
                 &run_id,
                 &log_path,
                 &mgr,
@@ -722,9 +722,7 @@ impl App {
             );
 
             let _ = std::fs::remove_file(&prompt_file);
-            drop(handle.stderr);
-            let mut child = handle.child;
-            let _ = child.wait();
+            finish();
             let _ = tx.send(Action::AgentComplete { run_id });
         });
     }
@@ -855,8 +853,9 @@ impl App {
             let run_id = run.id.clone();
             let log_path = conductor_core::config::agent_log_path(&run_id);
             let tx2 = tx.clone();
+            let (stdout, finish) = handle.into_drain_parts();
             conductor_core::agent_runtime::drain_stream_json(
-                handle.stdout,
+                stdout,
                 &run_id,
                 &log_path,
                 &mgr,
@@ -869,9 +868,7 @@ impl App {
             );
 
             let _ = std::fs::remove_file(&prompt_file);
-            drop(handle.stderr);
-            let mut child = handle.child;
-            let _ = child.wait();
+            finish();
             let _ = tx.send(Action::AgentComplete { run_id });
         });
     }
@@ -968,8 +965,9 @@ impl App {
             let new_run_id = new_run.id.clone();
             let log_path = conductor_core::config::agent_log_path(&new_run_id);
             let tx2 = tx.clone();
+            let (stdout, finish) = handle.into_drain_parts();
             conductor_core::agent_runtime::drain_stream_json(
-                handle.stdout,
+                stdout,
                 &new_run_id,
                 &log_path,
                 &mgr,
@@ -982,9 +980,7 @@ impl App {
             );
 
             let _ = std::fs::remove_file(&prompt_file);
-            drop(handle.stderr);
-            let mut child = handle.child;
-            let _ = child.wait();
+            finish();
             let _ = tx.send(Action::AgentComplete { run_id: new_run_id });
         });
     }

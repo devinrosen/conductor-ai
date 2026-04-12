@@ -146,8 +146,9 @@ async fn wire_headless_drain(
             }
         };
         let mgr = AgentManager::new(&conn);
+        let (stdout, finish) = handle.into_drain_parts();
         conductor_core::agent_runtime::drain_stream_json(
-            handle.stdout,
+            stdout,
             &run_id_owned,
             &log_path,
             &mgr,
@@ -163,9 +164,7 @@ async fn wire_headless_drain(
         if let Some(ref pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
         }
-        drop(handle.stderr);
-        let mut child = handle.child;
-        let _ = child.wait();
+        finish();
     });
 
     // Monitor drain thread for panics — a panicking drain leaves the run permanently
@@ -2044,5 +2043,92 @@ mod tests {
 
         let _ = tmp_real;
         let _ = tmp_bad;
+    }
+
+    /// Regression test: normal drain completion path must not deadlock.
+    ///
+    /// **Bug (pre-fix):** After `drain_stream_json` returned, the drain thread
+    /// called `handle.child.wait()` while `handle.stderr` was still open.  If the
+    /// child had written more than the 64 KiB pipe buffer to stderr it would be
+    /// blocked on a stderr write.  `wait()` would then block waiting for the child
+    /// to exit — deadlock.
+    ///
+    /// **Fix:** The normal completion path now calls `handle.finish()`, which drops
+    /// both `stdout` and `stderr` before calling `wait()`, so the child receives
+    /// EPIPE and exits; `wait()` returns immediately.
+    ///
+    /// The test gives `wire_headless_drain` 5 seconds to finish.  Without the fix
+    /// `wait()` would never return within that window.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn normal_drain_completion_no_pipe_deadlock() {
+        use std::process::{Command, Stdio};
+
+        // Spawn a process that writes 128 KiB to stderr — enough to fill the
+        // 64 KiB pipe buffer and leave the child blocked if the read end is not
+        // closed before wait().  stdout writes nothing so drain_stream_json exits
+        // immediately (EOF), exercising the post-drain handle.finish() call.
+        let child = Command::new("sh")
+            .args(["-c", "dd if=/dev/zero bs=131072 count=1 2>&1 1>/dev/null"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn dd writer");
+
+        let child_pid = child.id();
+        let handle = conductor_core::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child");
+
+        let tmp = tempfile::NamedTempFile::new().expect("temp db");
+        let conn = conductor_core::db::open_database(tmp.path()).expect("open db");
+        conductor_core::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        conductor_core::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let run = AgentManager::new(&conn)
+            .create_run(Some("w1"), "test prompt", None, None)
+            .expect("create run");
+        let run_id = run.id.clone();
+        let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(Config::default())),
+            events: EventBus::new(8),
+            db_path: tmp.path().to_path_buf(),
+            workflow_done_notify: None,
+        };
+
+        // wire_headless_drain returns Ok quickly (persists PID, spawns tasks).
+        super::wire_headless_drain(&state, &run_id, handle, None, None)
+            .await
+            .expect("wire_headless_drain should return Ok");
+
+        // Poll until the child process disappears from the process table.
+        // Without the fix the child fills its stderr pipe and handle.finish()
+        // (formerly the bare wait()) blocks — the child would still be alive
+        // when we poll.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let alive = Command::new("ps")
+                .args(["-p", &child_pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child PID {child_pid} still in process table after 5 s \
+                 — likely pipe-buffer deadlock in normal drain completion path \
+                 (stderr not dropped before wait())"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let _ = tmp;
     }
 }
