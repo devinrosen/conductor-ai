@@ -64,6 +64,10 @@ fn main() {
                 use conductor_core::workflow::WorkflowManager;
                 WorkflowManager::new(&conn).reap_orphaned_workflow_runs()
             });
+            log_reap("orphaned script step", {
+                use conductor_core::workflow::WorkflowManager;
+                WorkflowManager::new(&conn).reap_orphaned_script_steps()
+            });
 
             // Build the conductor-web AppState for the embedded HTTP server.
             let web_state = conductor_web::state::AppState::new(conn, config, db_path_val, 64);
@@ -139,6 +143,10 @@ fn main() {
                                     conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                                 if let Err(e) = wt_mgr.reap_stale_worktrees() {
                                     tracing::warn!("reap_stale_worktrees failed: {e}");
+                                }
+                                let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
+                                if let Err(e) = wf_mgr.reap_orphaned_script_steps() {
+                                    tracing::warn!("reap_orphaned_script_steps failed: {e}");
                                 }
                             })
                             .await

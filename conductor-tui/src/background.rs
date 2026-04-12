@@ -368,6 +368,11 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed: {e}"),
             }
+            match wf_mgr.reap_orphaned_script_steps() {
+                Ok(n) if n > 0 => tracing::debug!("Reaped {n} orphaned script step(s)"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_orphaned_script_steps failed: {e}"),
+            }
             match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
                 Ok(n) if n > 0 => {
                     tracing::info!("Reaper finalized {n} stuck workflow run(s)")

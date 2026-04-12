@@ -118,6 +118,19 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Persist or clear the subprocess PID for a script step.
+    ///
+    /// Pass `Some(pid)` after a successful `cmd.spawn()` to record the child PID.
+    /// Pass `None` after the step reaches any terminal state to clear the PID
+    /// and prevent OS PID reuse from tripping the orphan reaper.
+    pub fn set_step_subprocess_pid(&self, step_id: &str, pid: Option<u32>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_run_steps SET subprocess_pid = ?1 WHERE id = ?2",
+            params![pid.map(|p| p as i64), step_id],
+        )?;
+        Ok(())
+    }
+
     /// Persist the stdout capture file path for a script step.
     pub fn set_step_output_file(&self, step_id: &str, output_file: &str) -> Result<()> {
         self.conn.execute(

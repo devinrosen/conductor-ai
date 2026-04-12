@@ -59,8 +59,11 @@ pub enum ScriptPollResult {
 /// Poll a child process until it exits, times out, or the shutdown signal fires.
 ///
 /// Checks the shutdown flag and elapsed time every 200 ms using `try_wait`.
+/// `pid` is the child's PID, used to send a graceful SIGTERM via `cancel_subprocess`
+/// (Unix only) before falling back to SIGKILL on timeout or cancellation.
 pub fn poll_script_child(
     child: &mut std::process::Child,
+    pid: u32,
     timeout_secs: Option<u64>,
     shutdown: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> ScriptPollResult {
@@ -71,7 +74,12 @@ pub fn poll_script_child(
         // Check shutdown signal
         if let Some(flag) = shutdown {
             if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                let _ = child.kill();
+                #[cfg(unix)]
+                crate::agent_runtime::cancel_subprocess(pid);
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill();
+                }
                 let _ = child.wait();
                 return ScriptPollResult::Cancelled;
             }
@@ -80,7 +88,12 @@ pub fn poll_script_child(
         // Check per-step timeout
         if let Some(timeout) = timeout_secs {
             if start.elapsed().as_secs() >= timeout {
-                let _ = child.kill();
+                #[cfg(unix)]
+                crate::agent_runtime::cancel_subprocess(pid);
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill();
+                }
                 let _ = child.wait();
                 return ScriptPollResult::TimedOut;
             }
@@ -231,6 +244,13 @@ pub fn execute_script(
             }
             crate::github_app::TokenResolution::NotConfigured => {}
         }
+        // Put the script in its own process group so cancel_subprocess can send
+        // SIGTERM to the entire group (script + any subprocesses it spawns).
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         let spawn_result = cmd.spawn();
 
         let mut child = match spawn_result {
@@ -256,8 +276,17 @@ pub fn execute_script(
             }
         };
 
+        let pid = child.id();
+        if let Err(e) = state.wf_mgr.set_step_subprocess_pid(&step_id, Some(pid)) {
+            tracing::warn!(
+                "Script step '{}': failed to persist PID {pid}: {e}",
+                step_label
+            );
+        }
+
         match poll_script_child(
             &mut child,
+            pid,
             node.timeout,
             state.exec_config.shutdown.as_ref(),
         ) {
@@ -295,6 +324,8 @@ pub fn execute_script(
                     Some(&markers_json),
                     Some(attempt as i64),
                 )?;
+                // Clear PID so the orphan reaper cannot false-positive on PID reuse.
+                let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
                 state.wf_mgr.set_step_output_file(&step_id, &output_path)?;
 
                 record_step_success(
@@ -346,6 +377,8 @@ pub fn execute_script(
                     None,
                     Some(attempt as i64),
                 )?;
+                // Clear PID so the orphan reaper cannot false-positive on PID reuse.
+                let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
                 last_error = full_err;
                 // continue to next attempt
             }
@@ -366,6 +399,8 @@ pub fn execute_script(
                     None,
                     Some(attempt as i64),
                 )?;
+                // Clear PID so the orphan reaper cannot false-positive on PID reuse.
+                let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
                 state.all_succeeded = false;
                 if state.exec_config.fail_fast {
                     return Err(ConductorError::Workflow(msg));
@@ -384,6 +419,8 @@ pub fn execute_script(
                     None,
                     Some(attempt as i64),
                 )?;
+                // Clear PID so the orphan reaper cannot false-positive on PID reuse.
+                let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
                 return Err(ConductorError::Workflow(msg));
             }
         }

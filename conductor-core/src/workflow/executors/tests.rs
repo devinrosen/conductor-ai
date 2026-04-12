@@ -275,7 +275,8 @@ fn test_poll_script_child_timeout() {
         .arg("60")
         .spawn()
         .expect("failed to spawn sleep");
-    let result = poll_script_child(&mut child, Some(0), None);
+    let pid = child.id();
+    let result = poll_script_child(&mut child, pid, Some(0), None);
     assert!(
         matches!(result, ScriptPollResult::TimedOut),
         "expected TimedOut, got other variant"
@@ -293,7 +294,8 @@ fn test_poll_script_child_cancelled() {
         .arg("60")
         .spawn()
         .expect("failed to spawn sleep");
-    let result = poll_script_child(&mut child, None, Some(&flag));
+    let pid = child.id();
+    let result = poll_script_child(&mut child, pid, None, Some(&flag));
     assert!(
         matches!(result, ScriptPollResult::Cancelled),
         "expected Cancelled, got other variant"

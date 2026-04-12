@@ -1430,6 +1430,217 @@ fn test_reap_orphaned_workflow_runs_multiple_dead_parents() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// reap_orphaned_script_steps tests
+// ---------------------------------------------------------------------------
+
+/// Helper: insert a script-role step in 'running' status with a specific subprocess_pid.
+/// Returns the step_id.
+fn insert_running_script_step_with_pid(
+    conn: &Connection,
+    run_id: &str,
+    step_name: &str,
+    pid: Option<i64>,
+    started_at: Option<&str>,
+) -> String {
+    let step_id = crate::new_id();
+    let started = started_at.unwrap_or("2025-01-01T00:00:00Z");
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          subprocess_pid, started_at) \
+         VALUES (?1, ?2, ?3, 'script', 0, 'running', 0, ?4, ?5)",
+        params![step_id, run_id, step_name, pid, started],
+    )
+    .unwrap();
+    step_id
+}
+
+/// Helper: create a workflow_run and return its id.
+fn make_workflow_run_id(conn: &Connection) -> String {
+    let agent_mgr = AgentManager::new(conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let mgr = WorkflowManager::new(conn);
+    let run = mgr
+        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+    run.id
+}
+
+/// A step with a dead PID (subprocess has exited) must be reaped.
+#[cfg(unix)]
+#[test]
+fn test_reap_orphaned_script_steps_dead_pid() {
+    let conn = setup_db();
+
+    // Spawn a short-lived process and wait for it to exit.
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead_pid = child.id();
+    child.wait().unwrap();
+    // Brief pause so the OS fully reaps the child.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let run_id = make_workflow_run_id(&conn);
+    let step_id = insert_running_script_step_with_pid(
+        &conn,
+        &run_id,
+        "script-step",
+        Some(dead_pid as i64),
+        None,
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    assert_eq!(reaped, 1);
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "failed");
+
+    let result: String = conn
+        .query_row(
+            "SELECT result_text FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        result.contains("subprocess lost"),
+        "result_text should mention subprocess lost; got: {result}"
+    );
+}
+
+/// A step with NULL subprocess_pid must NOT be reaped.
+#[test]
+fn test_reap_orphaned_script_steps_no_pid() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+    insert_running_script_step_with_pid(&conn, &run_id, "script-step", None, None);
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    assert_eq!(reaped, 0);
+}
+
+/// A completed script step must NOT be reaped even if subprocess_pid is set.
+#[test]
+fn test_reap_orphaned_script_steps_skips_completed() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    // Insert a completed step with a bogus PID.
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'script-done', 'script', 0, 'completed', 0, 99999)",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    assert_eq!(reaped, 0);
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "completed");
+}
+
+/// A running step with child_run_id set (agent step) must NOT be reaped.
+#[test]
+fn test_reap_orphaned_script_steps_skips_agent_step() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    // Insert an actor step with child_run_id set — simulates an agent step.
+    let step_id = crate::new_id();
+    let agent_mgr = AgentManager::new(&conn);
+    let child_run = agent_mgr
+        .create_run(Some("w1"), "agent", None, None)
+        .unwrap();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          child_run_id, subprocess_pid) \
+         VALUES (?1, ?2, 'agent-step', 'actor', 0, 'running', 0, ?3, 99999)",
+        params![step_id, run_id, child_run.id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    assert_eq!(reaped, 0);
+}
+
+/// Multiple orphaned script steps with dead PIDs must all be reaped.
+#[cfg(unix)]
+#[test]
+fn test_reap_orphaned_script_steps_multiple() {
+    let conn = setup_db();
+
+    // Spawn and wait for two short-lived children.
+    let mut c1 = std::process::Command::new("true").spawn().unwrap();
+    let pid1 = c1.id();
+    c1.wait().unwrap();
+
+    let mut c2 = std::process::Command::new("true").spawn().unwrap();
+    let pid2 = c2.id();
+    c2.wait().unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let run_id = make_workflow_run_id(&conn);
+    let s1 = insert_running_script_step_with_pid(&conn, &run_id, "step-1", Some(pid1 as i64), None);
+    let s2 = insert_running_script_step_with_pid(&conn, &run_id, "step-2", Some(pid2 as i64), None);
+
+    // A live step (current process PID) — must NOT be reaped.
+    let live_pid = std::process::id();
+    let s3 = insert_running_script_step_with_pid(
+        &conn,
+        &run_id,
+        "step-3",
+        Some(live_pid as i64),
+        Some(&chrono::Utc::now().to_rfc3339()),
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    assert_eq!(reaped, 2, "only the 2 dead-PID steps should be reaped");
+
+    for dead_step in &[s1, s2] {
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_run_steps WHERE id = ?1",
+                params![dead_step],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "failed", "{dead_step} should be failed");
+    }
+
+    let live_status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_run_steps WHERE id = ?1",
+            params![s3],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(live_status, "running", "live step must remain running");
+}
+
 #[test]
 fn test_list_workflow_runs_paginated_limit_and_offset() {
     let conn = setup_db();
