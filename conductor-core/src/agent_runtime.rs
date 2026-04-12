@@ -188,8 +188,12 @@ fn push_optional_agent_flags(
         args.push(Cow::Owned(b.to_string()));
     }
     if let Some(mode) = permission_mode {
-        args.push(Cow::Owned(mode.cli_flag().to_string()));
+        // Only Plan and RepoSafe have a conductor-level passthrough flag
+        // (--permission-mode <value>).  SkipPermissions and AutoMode are
+        // the default behaviour; passing their claude-level flags here would
+        // cause `conductor agent run` to reject the unknown argument.
         if let Some(val) = mode.cli_flag_value() {
+            args.push(Cow::Borrowed("--permission-mode"));
             args.push(Cow::Owned(val.to_string()));
         }
     }
@@ -849,6 +853,11 @@ mod tests {
 
     #[test]
     fn build_agent_args_with_mode_skip_permissions() {
+        // SkipPermissions and AutoMode must NOT inject their claude-level flags
+        // (--dangerously-skip-permissions / --enable-auto-mode) into the
+        // `conductor agent run` arg list — those flags are unknown to conductor
+        // and would cause an "unexpected argument" clap error.  The flags are
+        // applied later inside run_agent() when the claude subprocess is spawned.
         use crate::config::AgentPermissionMode;
         let run_id = "run-mode-skip-perms";
         let args = super::build_agent_args_with_mode(
@@ -863,8 +872,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            args.iter().any(|a| a == "--dangerously-skip-permissions"),
-            "expected --dangerously-skip-permissions flag"
+            !args.iter().any(|a| a == "--dangerously-skip-permissions"),
+            "conductor args must not contain --dangerously-skip-permissions (belongs on claude CLI)"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--permission-mode"),
+            "SkipPermissions should not emit --permission-mode"
         );
         let _ = std::fs::remove_file(
             std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
@@ -887,8 +900,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            args.iter().any(|a| a == "--enable-auto-mode"),
-            "expected --enable-auto-mode flag"
+            !args.iter().any(|a| a == "--enable-auto-mode"),
+            "conductor args must not contain --enable-auto-mode (belongs on claude CLI)"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--permission-mode"),
+            "AutoMode should not emit --permission-mode"
         );
         let _ = std::fs::remove_file(
             std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
