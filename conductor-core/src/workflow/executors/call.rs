@@ -237,7 +237,7 @@ fn execute_call_with_schema(
                             );
                             // Mark cancelled BEFORE sending SIGTERM (RFC 016 Q2)
                             let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
-                            crate::agent_runtime::cancel_subprocess(pid);
+                            crate::process_utils::cancel_subprocess(pid);
                             // Drain the channel for final outcome (best-effort)
                             let _ = rx.recv_timeout(std::time::Duration::from_secs(6));
                             let cancel_msg = "executor shutdown requested".to_string();
@@ -258,7 +258,7 @@ fn execute_call_with_schema(
                         tracing::warn!("Step '{}': timeout reached, cancelling", agent_label);
                         // Mark cancelled BEFORE sending SIGTERM (RFC 016 Q2)
                         let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
-                        crate::agent_runtime::cancel_subprocess(pid);
+                        crate::process_utils::cancel_subprocess(pid);
                         let _ = rx.recv_timeout(std::time::Duration::from_secs(6));
                         break crate::agent_runtime::DrainOutcome::NoResult;
                     }

@@ -32,6 +32,9 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
         if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
             eprintln!("Warning: reap_orphaned_workflow_runs failed: {e}");
         }
+        if let Err(e) = wf_mgr.reap_orphaned_script_steps() {
+            eprintln!("Warning: reap_orphaned_script_steps failed: {e}");
+        }
     }
 
     match command {

@@ -14,6 +14,103 @@ use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{StepKey, WorkflowRun};
 
 impl<'a> WorkflowManager<'a> {
+    /// Reap workflow_run_steps stuck in `running` status whose script subprocess
+    /// has died while conductor was not running.
+    ///
+    /// Only script steps are checked: agent steps always have `child_run_id` set and
+    /// are handled by `recover_stuck_steps()`. Script steps have `child_run_id = NULL`
+    /// and `subprocess_pid` set after the child is spawned.
+    ///
+    /// For each candidate the reaper:
+    /// 1. Checks `pid_is_alive(pid)` — if false, marks the step `failed`.
+    /// 2. If the PID is alive, calls `pid_was_recycled` to detect OS PID reuse. If
+    ///    the PID was recycled, the original process is gone and the step is marked
+    ///    `failed`.
+    ///
+    /// Returns the count of steps that were reaped.
+    pub fn reap_orphaned_script_steps(&self) -> Result<usize> {
+        // Query script steps that are stuck in 'running' and have a subprocess_pid.
+        // child_run_id IS NULL discriminates script steps from agent steps.
+        let candidates: Vec<(String, i64, Option<String>)> = query_collect(
+            self.conn,
+            "SELECT id, subprocess_pid, started_at \
+             FROM workflow_run_steps \
+             WHERE status = 'running' \
+               AND child_run_id IS NULL \
+               AND subprocess_pid IS NOT NULL",
+            params![],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut reaped = 0usize;
+
+        for (step_id, raw_pid, started_at) in candidates {
+            let pid = raw_pid as u32;
+
+            #[cfg(unix)]
+            {
+                if crate::process_utils::pid_is_alive(pid) {
+                    // PID is alive — check for OS PID reuse using the process start
+                    // time recorded at spawn vs. the OS-reported start time now.
+                    let recycled = started_at
+                        .as_deref()
+                        .is_some_and(|at| crate::process_utils::pid_was_recycled(pid, at));
+                    if !recycled {
+                        // Process is genuinely still running — leave it alone.
+                        continue;
+                    }
+                    tracing::warn!(
+                        step_id = %step_id,
+                        pid,
+                        "reap_orphaned_script_steps: PID recycled — original script process is gone"
+                    );
+                    self.update_step_status(
+                        &step_id,
+                        WorkflowStepStatus::Failed,
+                        None,
+                        Some("subprocess PID recycled — original script process is gone"),
+                        None,
+                        None,
+                        None,
+                    )?;
+                    reaped += 1;
+                    continue;
+                }
+
+                tracing::warn!(
+                    step_id = %step_id,
+                    pid,
+                    "reap_orphaned_script_steps: subprocess lost — script process exited while conductor was not running"
+                );
+                self.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some("subprocess lost — script process exited while conductor was not running"),
+                    None,
+                    None,
+                    None,
+                )?;
+                reaped += 1;
+            }
+
+            // On non-Unix platforms (Windows) we cannot check liveness via kill(0).
+            // Skip the step to avoid false-positive reaping.
+            #[cfg(not(unix))]
+            let _ = (step_id, pid, started_at);
+        }
+
+        if reaped > 0 {
+            tracing::info!("reap_orphaned_script_steps: reaped {reaped} orphaned script step(s)");
+        }
+
+        Ok(reaped)
+    }
+
     /// Recover steps stuck in `running` status whose child agent run has
     /// already reached a terminal state (completed, failed, or cancelled).
     ///
