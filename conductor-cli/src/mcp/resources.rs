@@ -36,7 +36,7 @@ pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource
     let all_tickets = syncer.list(None)?;
 
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    let all_worktrees = wt_mgr.list(None, false, None, None)?;
+    let all_worktrees = wt_mgr.list(None, false)?;
 
     let wf_mgr = WorkflowManager::new(&conn);
 
@@ -193,7 +193,7 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
         let repo_mgr = RepoManager::new(&conn, &config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
         let wt_mgr = WorktreeManager::new(&conn, &config);
-        let worktrees = wt_mgr.list(Some(&repo.slug), false, None, None)?;
+        let worktrees = wt_mgr.list(Some(&repo.slug), false)?;
         if worktrees.is_empty() {
             return Ok(format!("No worktrees for {repo_slug}."));
         }
