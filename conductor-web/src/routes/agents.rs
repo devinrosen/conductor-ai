@@ -1763,5 +1763,4 @@ mod tests {
             "completed run must not be clobbered by drain panic handler"
         );
     }
-
 }
