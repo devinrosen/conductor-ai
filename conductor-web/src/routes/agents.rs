@@ -2064,12 +2064,19 @@ mod tests {
     async fn normal_drain_completion_no_pipe_deadlock() {
         use std::process::{Command, Stdio};
 
-        // Spawn a process that writes 128 KiB to stderr — enough to fill the
-        // 64 KiB pipe buffer and leave the child blocked if the read end is not
-        // closed before wait().  stdout writes nothing so drain_stream_json exits
-        // immediately (EOF), exercising the post-drain handle.finish() call.
+        // Spawn a process that writes 128 KiB to piped-stderr — enough to fill
+        // the 64 KiB pipe buffer and leave the child blocked if the read end is
+        // not closed before wait().  `exec 1>&2` redirects the shell's own
+        // stdout to piped-stderr (closing the piped-stdout write end so the
+        // parent sees EOF immediately); `exec 2>/dev/null` discards the shell's
+        // stderr stats; dd then writes 128 KiB to its fd 1 (= piped-stderr).
+        // drain_stream_json sees EOF on piped-stdout and returns immediately,
+        // exercising the post-drain handle.finish() call.
         let child = Command::new("sh")
-            .args(["-c", "dd if=/dev/zero bs=131072 count=1 2>&1 1>/dev/null"])
+            .args([
+                "-c",
+                "exec 1>&2; exec 2>/dev/null; dd if=/dev/zero bs=131072 count=1",
+            ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
