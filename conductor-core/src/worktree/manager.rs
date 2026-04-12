@@ -535,35 +535,61 @@ impl<'a> WorktreeManager<'a> {
         query_collect(self.conn, &query, params![repo_id], map_worktree_row)
     }
 
-    pub fn list(&self, repo_slug: Option<&str>, active_only: bool) -> Result<Vec<Worktree>> {
+    /// Shared query builder for [`list`] and [`list_paginated`].
+    ///
+    /// `pagination` is `Some((limit, offset))` to add `LIMIT ?N OFFSET ?M`; `None` for unbounded.
+    fn list_inner(
+        &self,
+        repo_slug: Option<&str>,
+        active_only: bool,
+        pagination: Option<(usize, usize)>,
+    ) -> Result<Vec<Worktree>> {
         let status_filter = if active_only {
             " AND status = 'active'"
         } else {
             ""
         };
 
-        let query = match repo_slug {
-            Some(_) => {
-                format!(
-                    "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
-                    &*WORKTREE_COLUMNS_W,
-                    status_filter,
-                )
-            }
-            None => {
-                format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE 1=1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
-                    status_filter,
-                )
-            }
+        let base_query = match repo_slug {
+            Some(_) => format!(
+                "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+                &*WORKTREE_COLUMNS_W,
+                status_filter,
+            ),
+            None => format!(
+                "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE 1=1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
+                status_filter,
+            ),
         };
 
-        let worktrees = if let Some(slug) = repo_slug {
-            query_collect(self.conn, &query, params![slug], map_worktree_row)?
-        } else {
-            query_collect(self.conn, &query, [], map_worktree_row)?
-        };
-        Ok(worktrees)
+        match (repo_slug, pagination) {
+            (Some(slug), Some((limit, offset))) => {
+                let query = format!("{base_query} LIMIT ?2 OFFSET ?3");
+                query_collect(
+                    self.conn,
+                    &query,
+                    params![slug, limit as i64, offset as i64],
+                    map_worktree_row,
+                )
+            }
+            (Some(slug), None) => {
+                query_collect(self.conn, &base_query, params![slug], map_worktree_row)
+            }
+            (None, Some((limit, offset))) => {
+                let query = format!("{base_query} LIMIT ?1 OFFSET ?2");
+                query_collect(
+                    self.conn,
+                    &query,
+                    params![limit as i64, offset as i64],
+                    map_worktree_row,
+                )
+            }
+            (None, None) => query_collect(self.conn, &base_query, [], map_worktree_row),
+        }
+    }
+
+    pub fn list(&self, repo_slug: Option<&str>, active_only: bool) -> Result<Vec<Worktree>> {
+        self.list_inner(repo_slug, active_only, None)
     }
 
     pub fn list_paginated(
@@ -573,40 +599,7 @@ impl<'a> WorktreeManager<'a> {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Worktree>> {
-        let status_filter = if active_only {
-            " AND status = 'active'"
-        } else {
-            ""
-        };
-
-        let worktrees = match repo_slug {
-            Some(slug) => {
-                let query = format!(
-                    "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at LIMIT ?2 OFFSET ?3",
-                    &*WORKTREE_COLUMNS_W,
-                    status_filter,
-                );
-                query_collect(
-                    self.conn,
-                    &query,
-                    params![slug, limit as i64, offset as i64],
-                    map_worktree_row,
-                )?
-            }
-            None => {
-                let query = format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE 1=1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at LIMIT ?1 OFFSET ?2",
-                    status_filter,
-                );
-                query_collect(
-                    self.conn,
-                    &query,
-                    params![limit as i64, offset as i64],
-                    map_worktree_row,
-                )?
-            }
-        };
-        Ok(worktrees)
+        self.list_inner(repo_slug, active_only, Some((limit, offset)))
     }
 
     /// List all worktrees joined with the status of each worktree's latest agent run.
