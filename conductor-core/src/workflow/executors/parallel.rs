@@ -206,6 +206,19 @@ pub fn execute_parallel(
             tracing::warn!("parallel: failed to persist subprocess pid for '{agent_label}': {e}");
         }
 
+        // Drain subprocess stderr to prevent the pipe buffer from filling.
+        // See call.rs for a detailed explanation.
+        let stderr_pipe = handle.stderr;
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let reader = BufReader::new(stderr_pipe);
+            let stderr_out = std::io::stderr();
+            for line in reader.lines().map_while(|l| l.ok()) {
+                let mut out = stderr_out.lock();
+                let _ = writeln!(out, "{line}");
+            }
+        });
+
         // Spawn one drain thread per agent (each opens its own DB connection,
         // since rusqlite::Connection is not Send)
         let run_id_clone = child_run.id.clone();

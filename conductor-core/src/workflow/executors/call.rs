@@ -196,6 +196,28 @@ fn execute_call_with_schema(
         let run_id_clone = child_run.id.clone();
         let log_path = crate::config::agent_log_path(&child_run.id);
         let (tx, rx) = std::sync::mpsc::channel::<crate::agent_runtime::DrainOutcome>();
+
+        // Drain subprocess stderr on a dedicated thread.
+        //
+        // The subprocess (`conductor agent run`) is spawned with stderr piped
+        // (spawn_headless uses Stdio::piped for both stdout and stderr).  Inside
+        // the subprocess, `claude --verbose` inherits that pipe and writes many KB
+        // of human-readable output to it.  If nobody reads the pipe the kernel
+        // buffer fills (~64 KB on macOS) and the write blocks — freezing the
+        // claude subprocess and stalling stdout too.  Drain here to keep the pipe
+        // flowing; output is forwarded to our own stderr so it still appears in
+        // any parent terminal / log collector.
+        let stderr_pipe = handle.stderr;
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let reader = BufReader::new(stderr_pipe);
+            let stderr_out = std::io::stderr();
+            for line in reader.lines().map_while(|l| l.ok()) {
+                let mut out = stderr_out.lock();
+                let _ = writeln!(out, "{line}");
+            }
+        });
+
         std::thread::spawn(move || {
             let conn = match crate::db::open_database(&crate::config::db_path()) {
                 Ok(c) => c,

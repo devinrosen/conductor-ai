@@ -428,6 +428,16 @@ pub(crate) fn run_agent(
                     let _ = writeln!(f, "{line}");
                 }
 
+                // Relay every line to our own stdout so the parent workflow
+                // executor (call.rs drain_stream_json) can process events in
+                // real-time without polling the log file.
+                {
+                    use std::io::Write;
+                    let stdout_handle = std::io::stdout();
+                    let mut out = stdout_handle.lock();
+                    let _ = writeln!(out, "{line}");
+                }
+
                 let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
