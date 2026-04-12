@@ -417,7 +417,10 @@ mod tests {
 
         // Neither the parent nor the child should be reaped.
         let reaped = mgr.reap_orphaned_runs().unwrap();
-        assert_eq!(reaped, 0, "active workflow child run (no PID yet) must not be reaped");
+        assert_eq!(
+            reaped, 0,
+            "active workflow child run (no PID yet) must not be reaped"
+        );
 
         let child_after = mgr.get_run(&child_run.id).unwrap().unwrap();
         assert_eq!(
