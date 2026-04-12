@@ -373,6 +373,11 @@ impl HeadlessHandle {
         drop(self.stdout);
         drop(self.stderr);
         let mut child = self.child;
+        // Explicitly kill the process so it terminates immediately rather than
+        // relying on EPIPE, which only fires when the child next attempts a write.
+        // A compute-heavy child that rarely writes could otherwise run indefinitely.
+        // kill() returns an error if the process already exited — safe to ignore.
+        let _ = child.kill();
         let _ = child.wait();
     }
 }
