@@ -98,6 +98,17 @@ fn test_execute_script_success() {
         state.contexts.iter().any(|c| c.output_file.is_some()),
         "output_file should be set in context"
     );
+    // subprocess_pid must be cleared after the step completes (Succeeded path).
+    let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id).unwrap();
+    let step_id = &steps[0].id;
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(pid.is_none(), "subprocess_pid should be NULL after Succeeded");
 }
 
 #[test]
@@ -142,6 +153,17 @@ fn test_execute_script_failure_captures_stdout() {
         result_text.contains("something before failure"),
         "stdout should be captured in failure result, got: {result_text}"
     );
+    // subprocess_pid must be cleared after the step completes (Failed path).
+    let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id).unwrap();
+    let step_id = &steps[0].id;
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(pid.is_none(), "subprocess_pid should be NULL after Failed");
 }
 
 // -----------------------------------------------------------------------
@@ -438,6 +460,16 @@ fn test_execute_script_timeout() {
         .unwrap();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].status, WorkflowStepStatus::TimedOut);
+    // subprocess_pid must be cleared after the step completes (TimedOut path).
+    let step_id = &steps[0].id;
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(pid.is_none(), "subprocess_pid should be NULL after TimedOut");
 }
 
 // -----------------------------------------------------------------------
@@ -485,6 +517,20 @@ fn test_execute_script_cancelled() {
         err_msg.contains("cancel"), // step name included
         "error message should include step name 'cancel': {err_msg}"
     );
+    // subprocess_pid must be cleared after the step completes (Cancelled path).
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap();
+    let step_id = &steps[0].id;
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(pid.is_none(), "subprocess_pid should be NULL after Cancelled");
 }
 
 // -----------------------------------------------------------------------

@@ -292,7 +292,7 @@ pub fn execute_parallel(
                     if !completed.contains(&i) {
                         // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
                         let _ = state.agent_mgr.update_run_cancelled(&child.child_run_id);
-                        crate::agent_runtime::cancel_subprocess(child.pid);
+                        crate::process_utils::cancel_subprocess(child.pid);
                         if let Err(e) = state.wf_mgr.update_step_status(
                             &child.step_id,
                             WorkflowStepStatus::Failed,
@@ -327,7 +327,7 @@ pub fn execute_parallel(
                         );
                     }
                     // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
-                    crate::agent_runtime::cancel_subprocess(child.pid);
+                    crate::process_utils::cancel_subprocess(child.pid);
                     if let Err(e) = state.wf_mgr.update_step_status(
                         &child.step_id,
                         WorkflowStepStatus::Failed,
@@ -470,7 +470,7 @@ pub fn execute_parallel(
                                         );
                                     }
                                     // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
-                                    crate::agent_runtime::cancel_subprocess(other.pid);
+                                    crate::process_utils::cancel_subprocess(other.pid);
                                     if let Err(e) = state.wf_mgr.update_step_status(
                                         &other.step_id,
                                         WorkflowStepStatus::Failed,

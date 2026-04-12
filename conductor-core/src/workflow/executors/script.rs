@@ -56,11 +56,26 @@ pub enum ScriptPollResult {
     Cancelled,
 }
 
+/// Gracefully terminate a child process and wait for it to exit.
+///
+/// On Unix: sends SIGTERM to the process group (via [`crate::process_utils::cancel_subprocess`]),
+/// which also handles escalation to SIGKILL after a grace period.
+/// On non-Unix: falls back to [`std::process::Child::kill`].
+fn kill_child(child: &mut std::process::Child, pid: u32) {
+    #[cfg(unix)]
+    crate::process_utils::cancel_subprocess(pid);
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
 /// Poll a child process until it exits, times out, or the shutdown signal fires.
 ///
 /// Checks the shutdown flag and elapsed time every 200 ms using `try_wait`.
-/// `pid` is the child's PID, used to send a graceful SIGTERM via `cancel_subprocess`
-/// (Unix only) before falling back to SIGKILL on timeout or cancellation.
+/// `pid` is the child's PID, passed to [`kill_child`] (Unix: SIGTERM → SIGKILL
+/// via process group; non-Unix: `kill()`) on timeout or cancellation.
 pub fn poll_script_child(
     child: &mut std::process::Child,
     pid: u32,
@@ -74,13 +89,7 @@ pub fn poll_script_child(
         // Check shutdown signal
         if let Some(flag) = shutdown {
             if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                #[cfg(unix)]
-                crate::agent_runtime::cancel_subprocess(pid);
-                #[cfg(not(unix))]
-                {
-                    let _ = child.kill();
-                }
-                let _ = child.wait();
+                kill_child(child, pid);
                 return ScriptPollResult::Cancelled;
             }
         }
@@ -88,13 +97,7 @@ pub fn poll_script_child(
         // Check per-step timeout
         if let Some(timeout) = timeout_secs {
             if start.elapsed().as_secs() >= timeout {
-                #[cfg(unix)]
-                crate::agent_runtime::cancel_subprocess(pid);
-                #[cfg(not(unix))]
-                {
-                    let _ = child.kill();
-                }
-                let _ = child.wait();
+                kill_child(child, pid);
                 return ScriptPollResult::TimedOut;
             }
         }
@@ -284,12 +287,18 @@ pub fn execute_script(
             );
         }
 
-        match poll_script_child(
+        let poll_result = poll_script_child(
             &mut child,
             pid,
             node.timeout,
             state.exec_config.shutdown.as_ref(),
-        ) {
+        );
+        // Clear PID exactly once — covers all result variants, including any
+        // future additions to ScriptPollResult, providing a mechanical guarantee
+        // that no terminal path can accidentally leave a stale PID in the DB.
+        let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
+
+        match poll_result {
             ScriptPollResult::Succeeded => {
                 let stdout = read_stdout_bounded(&output_path).map_err(|e| {
                     ConductorError::Workflow(format!(
@@ -324,8 +333,6 @@ pub fn execute_script(
                     Some(&markers_json),
                     Some(attempt as i64),
                 )?;
-                // Clear PID so the orphan reaper cannot false-positive on PID reuse.
-                let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
                 state.wf_mgr.set_step_output_file(&step_id, &output_path)?;
 
                 record_step_success(
@@ -377,8 +384,6 @@ pub fn execute_script(
                     None,
                     Some(attempt as i64),
                 )?;
-                // Clear PID so the orphan reaper cannot false-positive on PID reuse.
-                let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
                 last_error = full_err;
                 // continue to next attempt
             }
@@ -399,8 +404,6 @@ pub fn execute_script(
                     None,
                     Some(attempt as i64),
                 )?;
-                // Clear PID so the orphan reaper cannot false-positive on PID reuse.
-                let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
                 state.all_succeeded = false;
                 if state.exec_config.fail_fast {
                     return Err(ConductorError::Workflow(msg));
@@ -419,8 +422,6 @@ pub fn execute_script(
                     None,
                     Some(attempt as i64),
                 )?;
-                // Clear PID so the orphan reaper cannot false-positive on PID reuse.
-                let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
                 return Err(ConductorError::Workflow(msg));
             }
         }
