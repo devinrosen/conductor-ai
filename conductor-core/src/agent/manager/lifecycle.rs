@@ -1156,4 +1156,31 @@ mod tests {
         assert_eq!(fetched.status, AgentRunStatus::Cancelled);
         assert!(fetched.ended_at.is_some());
     }
+
+    #[test]
+    fn test_pid_persist_failure_path_marks_run_failed() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+
+        let pid_err = "disk I/O error";
+        let msg = format!("failed to persist subprocess pid: {pid_err}");
+        mgr.update_run_failed(&run.id, &msg)
+            .expect("update_run_failed must succeed");
+
+        let fetched = mgr.get_run(&run.id).unwrap().expect("run must exist");
+        assert_eq!(fetched.status, AgentRunStatus::Failed, "run should be failed");
+        assert!(
+            fetched
+                .result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("persist subprocess pid"),
+            "result_text should reference 'persist subprocess pid', got: {:?}",
+            fetched.result_text
+        );
+    }
 }
