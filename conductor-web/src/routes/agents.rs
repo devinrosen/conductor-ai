@@ -44,7 +44,6 @@ async fn cancel_run_blocking(
     Ok(())
 }
 
-
 /// Wire up PID persistence, drain thread, and panic monitor for a headless subprocess.
 ///
 /// Shared lifecycle logic used by both [`spawn_headless_agent`] and
