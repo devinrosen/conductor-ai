@@ -141,16 +141,17 @@ pub fn orchestrate_run(
         );
 
         // Spawn the child agent as a headless subprocess
-        let (handle, prompt_file) = match agent_runtime::try_spawn_headless_run(
-            &child_run.id,
-            worktree_path,
-            &child_prompt,
-            None,
+        let params = agent_runtime::SpawnHeadlessParams {
+            run_id: &child_run.id,
+            working_dir: worktree_path,
+            prompt: &child_prompt,
+            resume_session_id: None,
             model,
-            None,
-            Some(&config.general.agent_permission_mode),
-            &[],
-        ) {
+            bot_name: None,
+            permission_mode: Some(&config.general.agent_permission_mode),
+            plugin_dirs: &[],
+        };
+        let (handle, prompt_file) = match agent_runtime::try_spawn_headless_run(&params) {
             Ok(pair) => pair,
             Err(e) => {
                 eprintln!("[orchestrator] Failed to spawn child: {e}");
