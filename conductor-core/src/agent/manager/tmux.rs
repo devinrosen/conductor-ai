@@ -89,7 +89,6 @@ impl<'a> AgentManager<'a> {
             }
         }
     }
-
 }
 
 #[cfg(test)]

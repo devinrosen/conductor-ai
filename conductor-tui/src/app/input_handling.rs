@@ -625,7 +625,13 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
-                self.start_repo_agent_headless(value, repo_id, repo_path, repo_slug, resume_session_id);
+                self.start_repo_agent_headless(
+                    value,
+                    repo_id,
+                    repo_path,
+                    repo_slug,
+                    resume_session_id,
+                );
             }
             InputAction::OrchestratePrompt {
                 worktree_id,

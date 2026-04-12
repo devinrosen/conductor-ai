@@ -1078,7 +1078,10 @@ impl App {
                     let cur = self.state.agent_list_state.borrow().selected();
                     let at_bottom = cur.is_none_or(|idx| idx + 1 >= len);
                     if at_bottom && len > 0 {
-                        self.state.agent_list_state.borrow_mut().select(Some(len - 1));
+                        self.state
+                            .agent_list_state
+                            .borrow_mut()
+                            .select(Some(len - 1));
                     }
                 } else {
                     // Check repo-scoped runs
