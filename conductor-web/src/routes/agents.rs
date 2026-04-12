@@ -44,6 +44,26 @@ async fn cancel_run_blocking(
     Ok(())
 }
 
+/// Open the database and mark the run failed if it is still in `running` status.
+///
+/// Best-effort: logs a warning if the DB cannot be opened or the update fails, but
+/// never panics. Used to clean up on drain-thread DB-open errors and drain-thread
+/// panics so the run does not stay stuck in `running` until the orphan reaper fires.
+fn try_mark_run_failed_in_db(db_path: &std::path::Path, run_id: &str, msg: &str, log_prefix: &str) {
+    match conductor_core::db::open_database(db_path) {
+        Err(open_err) => {
+            tracing::warn!("[{log_prefix}] could not open DB for failure recovery: {open_err}");
+        }
+        Ok(conn) => {
+            if let Err(update_err) =
+                AgentManager::new(&conn).update_run_failed_if_running(run_id, msg)
+            {
+                tracing::warn!("[{log_prefix}] failed to mark run failed: {update_err}");
+            }
+        }
+    }
+}
+
 /// Wire up PID persistence, drain thread, and panic monitor for a headless subprocess.
 ///
 /// Shared lifecycle logic used by both [`spawn_headless_agent`] and
@@ -112,22 +132,12 @@ async fn wire_headless_drain(
                 // path — the first failure may have been transient. If this
                 // retry also fails, the orphan reaper remains the backstop.
                 let msg = format!("drain thread failed to open DB: {e}");
-                match conductor_core::db::open_database(&db_path) {
-                    Ok(conn2) => {
-                        if let Err(update_err) = AgentManager::new(&conn2)
-                            .update_run_failed_if_running(&run_id_owned, &msg)
-                        {
-                            tracing::warn!(
-                                "[wire_headless_drain] drain: failed to mark run failed after DB open error: {update_err}"
-                            );
-                        }
-                    }
-                    Err(open_err) => {
-                        tracing::warn!(
-                            "[wire_headless_drain] drain: could not open DB for failure recovery: {open_err}"
-                        );
-                    }
-                }
+                try_mark_run_failed_in_db(
+                    &db_path,
+                    &run_id_owned,
+                    &msg,
+                    "wire_headless_drain drain",
+                );
                 return;
             }
         };
@@ -163,29 +173,16 @@ async fn wire_headless_drain(
                 run_id = %run_id_for_panic,
                 "drain thread panicked: {panic_err}; marking run as failed"
             );
-            match conductor_core::db::open_database(&db_path_for_panic) {
-                Err(db_open_err) => {
-                    tracing::error!(
-                        run_id = %run_id_for_panic,
-                        "drain panic handler: failed to open DB for recovery: {db_open_err}"
-                    );
-                }
-                Ok(conn) => {
-                    let mgr = AgentManager::new(&conn);
-                    // Use update_run_failed_if_running to avoid clobbering a `completed`
-                    // status written by drain_stream_json before the panic occurred (e.g.
-                    // during the trailing remove_file / child.wait cleanup).
-                    let msg = format!("drain thread panicked: {panic_err}");
-                    if let Err(update_err) =
-                        mgr.update_run_failed_if_running(&run_id_for_panic, &msg)
-                    {
-                        tracing::error!(
-                            run_id = %run_id_for_panic,
-                            "drain panic handler: failed to mark run as failed: {update_err}"
-                        );
-                    }
-                }
-            }
+            // Use update_run_failed_if_running to avoid clobbering a `completed`
+            // status written by drain_stream_json before the panic occurred (e.g.
+            // during the trailing remove_file / child.wait cleanup).
+            let msg = format!("drain thread panicked: {panic_err}");
+            try_mark_run_failed_in_db(
+                &db_path_for_panic,
+                &run_id_for_panic,
+                &msg,
+                "wire_headless_drain panic",
+            );
         }
     });
 
