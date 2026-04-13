@@ -393,6 +393,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             {
                 return Action::ToggleDefStepTree;
             }
+            KeyCode::Enter => return Action::Select,
             _ => {}
         }
     }
