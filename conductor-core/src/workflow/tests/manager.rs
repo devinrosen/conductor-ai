@@ -1553,13 +1553,19 @@ fn test_reap_orphaned_script_steps_multiple() {
     let s2 = insert_running_script_step_with_pid(&conn, &run_id, "step-2", Some(pid2 as i64), None);
 
     // A live step (current process PID) — must NOT be reaped.
+    // Use the OS-reported process start time so pid_was_recycled returns false.
     let live_pid = std::process::id();
+    #[cfg(target_os = "macos")]
+    let live_started_at = crate::process_utils::process_started_at(live_pid)
+        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+    #[cfg(not(target_os = "macos"))]
+    let live_started_at: Option<String> = Some(chrono::Utc::now().to_rfc3339());
     let s3 = insert_running_script_step_with_pid(
         &conn,
         &run_id,
         "step-3",
         Some(live_pid as i64),
-        Some(&chrono::Utc::now().to_rfc3339()),
+        live_started_at.as_deref(),
     );
 
     let mgr = WorkflowManager::new(&conn);

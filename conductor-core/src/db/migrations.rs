@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 66;
+pub const LATEST_SCHEMA_VERSION: u32 = 67;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1091,6 +1091,20 @@ pub fn run(conn: &Connection) -> Result<()> {
             ))?;
         }
         bump_version(conn, 66)?;
+    }
+
+    // Migration 067: add workflow_run_step_fan_out_items table and fan-out counter
+    // columns on workflow_run_steps for foreach step type (RFC 010).
+    if version < 67 {
+        let has_table: bool = conn
+            .prepare("SELECT id FROM workflow_run_step_fan_out_items LIMIT 0")
+            .is_ok();
+        if !has_table {
+            conn.execute_batch(include_str!(
+                "migrations/067_workflow_run_step_fan_out_items.sql"
+            ))?;
+        }
+        bump_version(conn, 67)?;
     }
 
     Ok(())

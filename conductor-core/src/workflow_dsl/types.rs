@@ -215,6 +215,76 @@ pub enum WorkflowNode {
     Gate(GateNode),
     Always(AlwaysNode),
     Script(ScriptNode),
+    ForEach(ForEachNode),
+}
+
+/// A foreach step node — fans out a child workflow over a collection of items.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForEachNode {
+    /// Step name used as the key in step_results and resume skip sets.
+    pub name: String,
+    /// The collection type to fan out over.
+    pub over: ForeachOver,
+    /// Scope filter for ticket fan-outs.
+    pub scope: Option<TicketScope>,
+    /// Generic filter map (required for workflow_run fan-outs, reserved for repos).
+    #[serde(default)]
+    pub filter: HashMap<String, String>,
+    /// Whether to use dependency-ordered dispatch (tickets only).
+    pub ordered: bool,
+    /// What to do when a ticket cycle is detected (tickets + ordered only).
+    pub on_cycle: OnCycle,
+    /// Maximum number of child workflows to run concurrently.
+    pub max_parallel: u32,
+    /// Name of the child workflow to invoke for each item.
+    pub workflow: String,
+    /// Input map passed to each child workflow invocation.
+    /// Values may contain `{{item.*}}` template references.
+    #[serde(default)]
+    pub inputs: HashMap<String, String>,
+    /// How to handle a child workflow failure.
+    pub on_child_fail: OnChildFail,
+}
+
+/// The collection type for a foreach step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForeachOver {
+    Tickets,
+    Repos,
+    WorkflowRuns,
+}
+
+/// Scope selector for ticket fan-outs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum TicketScope {
+    /// All direct children (parent_of edges) of the given ticket.
+    TicketId(String),
+    /// All open tickets with the given label in the repo.
+    Label(String),
+}
+
+/// What to do when a child workflow fails.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnChildFail {
+    /// Cancel in-flight runs and fail the step immediately.
+    Halt,
+    /// Log the failure and keep dispatching remaining items.
+    Continue,
+    /// Mark the failed item's transitive dependents as skipped (ordered tickets only).
+    SkipDependents,
+}
+
+/// What to do when a ticket dependency cycle is detected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnCycle {
+    /// Abort with an error naming the cycle.
+    Fail,
+    /// Log a warning, break the back-edge, and continue.
+    Warn,
 }
 
 /// A script step node — runs a shell script directly (no agent/LLM).
@@ -549,6 +619,7 @@ pub(crate) fn count_nodes(nodes: &[WorkflowNode]) -> usize {
             WorkflowNode::Parallel(n) => count += n.calls.len(),
             WorkflowNode::Gate(_) => {}
             WorkflowNode::Always(n) => count += count_nodes(&n.body),
+            WorkflowNode::ForEach(_) => {}
         }
     }
     count
@@ -585,6 +656,7 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
             WorkflowNode::Parallel(n) => refs.extend(n.calls.iter().cloned()),
             WorkflowNode::Gate(_) => {}
             WorkflowNode::Always(n) => refs.extend(collect_agent_names(&n.body)),
+            WorkflowNode::ForEach(_) => {}
         }
     }
     refs
@@ -612,6 +684,7 @@ pub(crate) fn collect_snippet_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             }
             WorkflowNode::Always(n) => refs.extend(collect_snippet_refs(&n.body)),
             WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) | WorkflowNode::Script(_) => {}
+            WorkflowNode::ForEach(_) => {}
         }
     }
     refs
@@ -631,6 +704,8 @@ pub fn collect_workflow_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::Do(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::Parallel(_) => {} // parallel only contains agent calls
             WorkflowNode::Always(n) => refs.extend(collect_workflow_refs(&n.body)),
+            // ForEach references a child workflow — include it for cycle detection
+            WorkflowNode::ForEach(n) => refs.push(n.workflow.clone()),
         }
     }
     refs
@@ -664,6 +739,7 @@ pub(crate) fn collect_schema_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::DoWhile(n) => refs.extend(collect_schema_refs(&n.body)),
             WorkflowNode::Always(n) => refs.extend(collect_schema_refs(&n.body)),
             WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) | WorkflowNode::Script(_) => {}
+            WorkflowNode::ForEach(_) => {}
         }
     }
     refs
@@ -701,6 +777,7 @@ pub(crate) fn collect_bot_names(nodes: &[WorkflowNode]) -> Vec<String> {
                 }
             }
             WorkflowNode::Always(n) => names.extend(collect_bot_names(&n.body)),
+            WorkflowNode::ForEach(_) => {}
         }
     }
     names
@@ -721,7 +798,8 @@ pub(crate) fn collect_plugin_dirs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::CallWorkflow(_)
             | WorkflowNode::Gate(_)
             | WorkflowNode::Parallel(_)
-            | WorkflowNode::Script(_) => {}
+            | WorkflowNode::Script(_)
+            | WorkflowNode::ForEach(_) => {}
         }
     }
     dirs

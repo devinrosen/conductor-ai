@@ -1098,39 +1098,12 @@ mod tests {
         use conductor_core::workflow::{GateType, WorkflowRunStep, WorkflowStepStatus};
         let mut state = AppState::new();
         state.view = View::WorkflowRunDetail;
+        let base = crate::state::tests::make_wf_step("step-1", "run-1", "review", 0);
         state.data.workflow_steps = vec![WorkflowRunStep {
-            id: "step-1".into(),
-            workflow_run_id: "run-1".into(),
-            step_name: "review".into(),
             role: "reviewer".into(),
-            can_commit: false,
-            condition_expr: None,
             status: WorkflowStepStatus::Waiting,
-            child_run_id: None,
-            position: 0,
-            started_at: None,
-            ended_at: None,
-            result_text: None,
-            condition_met: None,
-            iteration: 0,
-            parallel_group_id: None,
-            context_out: None,
-            markers_out: None,
-            retry_count: 0,
             gate_type: Some(GateType::HumanApproval),
-            gate_prompt: None,
-            gate_timeout: None,
-            gate_approved_by: None,
-            gate_approved_at: None,
-            gate_feedback: None,
-            structured_output: None,
-            output_file: None,
-            gate_options: None,
-            gate_selections: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+            ..base
         }];
         state
     }
