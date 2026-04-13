@@ -96,6 +96,25 @@ fn resolve_feature_id_for_bg(
         .map_err(|e| format!("Feature resolution failed: {e}"))
 }
 
+/// Parameters bundle for the `spawn_*_workflow_in_background` family of methods.
+/// Using a struct avoids `too_many_arguments` violations and keeps call sites readable.
+pub(super) struct SpawnWorkflowParams {
+    pub def: conductor_core::workflow::WorkflowDef,
+    pub repo_path: String,
+    pub inputs: std::collections::HashMap<String, String>,
+    pub model: Option<String>,
+    /// Worktree context (`spawn_workflow_in_background`)
+    pub worktree_id: Option<String>,
+    pub worktree_path: Option<String>,
+    pub ticket_id: Option<String>,
+    pub target_label: Option<String>,
+    pub repo_slug: Option<String>,
+    pub wt_slug: Option<String>,
+    /// Ticket / repo context (`spawn_ticket_workflow_in_background`, `spawn_repo_workflow_in_background`)
+    pub repo_id: Option<String>,
+    pub extra_plugin_dirs: Vec<String>,
+}
+
 impl App {
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
@@ -1000,18 +1019,20 @@ impl App {
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
-                self.spawn_workflow_in_background(
+                self.spawn_workflow_in_background(SpawnWorkflowParams {
                     def,
-                    worktree_id,
-                    worktree_path,
+                    worktree_id: Some(worktree_id),
+                    worktree_path: Some(worktree_path),
                     repo_path,
                     ticket_id,
                     inputs,
-                    wt_target_label,
+                    target_label: wt_target_label,
                     model,
                     repo_slug,
                     wt_slug,
-                );
+                    repo_id: None,
+                    extra_plugin_dirs: vec![],
+                });
             }
             WorkflowPickerTarget::Pr { pr_number, .. } => {
                 let remote_url = match self
@@ -1056,16 +1077,20 @@ impl App {
             } => {
                 // Feature resolution happens off-thread inside spawn_ticket_workflow_in_background.
                 let extra_dirs = self.worktree_conductor_dirs(&repo_id);
-                self.spawn_ticket_workflow_in_background(
+                self.spawn_ticket_workflow_in_background(SpawnWorkflowParams {
                     def,
-                    ticket_id,
-                    repo_id,
+                    ticket_id: Some(ticket_id),
+                    repo_id: Some(repo_id),
                     repo_path,
-                    ticket_title,
+                    target_label: Some(ticket_title),
                     inputs,
                     model,
-                    extra_dirs,
-                );
+                    extra_plugin_dirs: extra_dirs,
+                    worktree_id: None,
+                    worktree_path: None,
+                    repo_slug: None,
+                    wt_slug: None,
+                });
             }
             WorkflowPickerTarget::Repo {
                 repo_id,
@@ -1073,9 +1098,20 @@ impl App {
                 repo_name,
             } => {
                 let extra_dirs = self.worktree_conductor_dirs(&repo_id);
-                self.spawn_repo_workflow_in_background(
-                    def, repo_id, repo_path, repo_name, inputs, model, extra_dirs,
-                );
+                self.spawn_repo_workflow_in_background(SpawnWorkflowParams {
+                    def,
+                    repo_id: Some(repo_id),
+                    repo_path,
+                    target_label: Some(repo_name),
+                    inputs,
+                    model,
+                    extra_plugin_dirs: extra_dirs,
+                    worktree_id: None,
+                    worktree_path: None,
+                    ticket_id: None,
+                    repo_slug: None,
+                    wt_slug: None,
+                });
             }
             WorkflowPickerTarget::WorkflowRun {
                 workflow_run_id,
@@ -1104,18 +1140,20 @@ impl App {
                             )
                         })
                         .unwrap_or((None, None, None));
-                    self.spawn_workflow_in_background(
+                    self.spawn_workflow_in_background(SpawnWorkflowParams {
                         def,
-                        wt_id,
-                        working_dir,
+                        worktree_id: Some(wt_id),
+                        worktree_path: Some(working_dir),
                         repo_path,
                         ticket_id,
-                        run_inputs,
-                        Some(format!("workflow_run:{workflow_run_id}")),
+                        inputs: run_inputs,
+                        target_label: Some(format!("workflow_run:{workflow_run_id}")),
                         model,
                         repo_slug,
                         wt_slug,
-                    );
+                        repo_id: None,
+                        extra_plugin_dirs: vec![],
+                    });
                 } else {
                     self.spawn_workflow_run_target_in_background(
                         def,
@@ -1134,20 +1172,20 @@ impl App {
     /// Feature auto-detection is performed off-thread using `repo_slug`,
     /// `ticket_id`, and `wt_slug` to avoid blocking the TUI main thread with
     /// synchronous DB queries.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn spawn_workflow_in_background(
-        &mut self,
-        def: conductor_core::workflow::WorkflowDef,
-        worktree_id: String,
-        worktree_path: String,
-        repo_path: String,
-        ticket_id: Option<String>,
-        inputs: std::collections::HashMap<String, String>,
-        target_label: Option<String>,
-        model: Option<String>,
-        repo_slug: Option<String>,
-        wt_slug: Option<String>,
-    ) {
+    pub(super) fn spawn_workflow_in_background(&mut self, p: SpawnWorkflowParams) {
+        let SpawnWorkflowParams {
+            def,
+            worktree_id,
+            worktree_path,
+            repo_path,
+            ticket_id,
+            inputs,
+            target_label,
+            model,
+            repo_slug,
+            wt_slug,
+            ..
+        } = p;
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_display_name = def.display_name().to_string();
@@ -1177,8 +1215,8 @@ impl App {
             let params = WorkflowExecStandalone {
                 config,
                 workflow: def.clone(),
-                worktree_id: Some(worktree_id),
-                working_dir: worktree_path,
+                worktree_id,
+                working_dir: worktree_path.unwrap_or_default(),
                 repo_path,
                 ticket_id,
                 repo_id: None,
@@ -1208,18 +1246,18 @@ impl App {
         self.state.status_message = Some(format!("Starting workflow '{workflow_display_name}'…"));
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn spawn_ticket_workflow_in_background(
-        &mut self,
-        def: conductor_core::workflow::WorkflowDef,
-        ticket_id: String,
-        repo_id: String,
-        repo_path: String,
-        target_label: String,
-        inputs: std::collections::HashMap<String, String>,
-        model: Option<String>,
-        extra_plugin_dirs: Vec<String>,
-    ) {
+    pub(super) fn spawn_ticket_workflow_in_background(&mut self, p: SpawnWorkflowParams) {
+        let SpawnWorkflowParams {
+            def,
+            ticket_id,
+            repo_id,
+            repo_path,
+            target_label,
+            inputs,
+            model,
+            extra_plugin_dirs,
+            ..
+        } = p;
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_display_name = def.display_name().to_string();
@@ -1231,7 +1269,7 @@ impl App {
             };
 
             let feature_id =
-                match resolve_feature_id_for_bg(&config, None, None, Some(&ticket_id), None) {
+                match resolve_feature_id_for_bg(&config, None, None, ticket_id.as_deref(), None) {
                     Ok(id) => id,
                     Err(e) => {
                         if let Some(ref tx) = bg_tx {
@@ -1249,15 +1287,15 @@ impl App {
                 worktree_id: None,
                 working_dir,
                 repo_path,
-                ticket_id: Some(ticket_id),
-                repo_id: Some(repo_id),
+                ticket_id,
+                repo_id,
                 model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
-                target_label: Some(target_label),
+                target_label,
                 feature_id,
                 run_id_notify: None,
                 triggered_by_hook: false,
@@ -1279,17 +1317,17 @@ impl App {
         ));
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn spawn_repo_workflow_in_background(
-        &mut self,
-        def: conductor_core::workflow::WorkflowDef,
-        repo_id: String,
-        repo_path: String,
-        repo_name: String,
-        inputs: std::collections::HashMap<String, String>,
-        model: Option<String>,
-        extra_plugin_dirs: Vec<String>,
-    ) {
+    pub(super) fn spawn_repo_workflow_in_background(&mut self, p: SpawnWorkflowParams) {
+        let SpawnWorkflowParams {
+            def,
+            repo_id,
+            repo_path,
+            target_label,
+            inputs,
+            model,
+            extra_plugin_dirs,
+            ..
+        } = p;
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_display_name = def.display_name().to_string();
@@ -1307,14 +1345,14 @@ impl App {
                 working_dir: repo_path.clone(),
                 repo_path,
                 ticket_id: None,
-                repo_id: Some(repo_id),
+                repo_id,
                 model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
-                target_label: Some(repo_name),
+                target_label,
                 feature_id: None,
                 run_id_notify: None,
                 triggered_by_hook: false,
