@@ -1,11 +1,14 @@
 # RFC 010: `foreach` Workflow Step Type
 
-**Status:** Draft
+**Status:** Implemented
 **Date:** 2026-04-04
+**Closed:** 2026-04-13
 **Author:** Devin
 **Closes:** RFC 009 (remaining workflow engine primitives)
 **Supersedes:** initial `for_each_ticket` draft
 **Tracks:** [#1743](https://github.com/devinrosen/conductor-ai/issues/1743)
+
+**Implementation:** Fully shipped in #2073–#2088. Core engine and DB schema (#2078), TUI progress display (#2082), web progress (#2084), fan-out item row mapper (#2088), plus supporting refactors (#2081, #2087). `docs/workflow/engine.md` updated in #2076.
 
 ---
 

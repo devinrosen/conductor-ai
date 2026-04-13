@@ -11,9 +11,7 @@ use serde::Deserialize;
 
 use crate::agent_config::{default_role, AgentRole};
 use crate::error::{ConductorError, Result};
-use crate::text_util::{
-    parse_frontmatter, resolve_conductor_subdir, resolve_conductor_subdir_for_file,
-};
+use crate::text_util::{parse_frontmatter, resolve_conductor_subdir_for_file};
 use crate::workflow_dsl::WorkflowTrigger;
 
 /// YAML frontmatter for a workflow `.md` file.
@@ -213,30 +211,53 @@ fn parse_sections(body: &str) -> HashMap<String, String> {
 
 /// Load all workflow definitions from `.conductor/workflows/*.md`.
 ///
-/// Checks `worktree_path` first, then falls back to `repo_path`.
+/// Merges definitions from both `repo_path` and `worktree_path`. Worktree
+/// definitions override repo definitions when both define a workflow with
+/// the same name (keyed by `def.name`, not filename).
 pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
-    let Some(workflows_dir) = resolve_conductor_subdir(worktree_path, repo_path, "workflows")
-    else {
-        // No workflows directory — return empty list (not an error).
-        return Ok(Vec::new());
-    };
+    let mut map: HashMap<String, WorkflowDef> = HashMap::new();
 
-    let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
-        .map_err(|e| {
-            ConductorError::Workflow(format!("Failed to read {}: {e}", workflows_dir.display()))
-        })?
+    // Load repo defs first (lower priority).
+    if !repo_path.is_empty() {
+        let repo_dir = Path::new(repo_path).join(".conductor").join("workflows");
+        if repo_dir.is_dir() {
+            for def in scan_md_dir(&repo_dir)? {
+                map.insert(def.name.clone(), def);
+            }
+        }
+    }
+
+    // Load worktree defs second (higher priority — overwrite repo defs on name conflict).
+    // Guard: skip if worktree_path is empty or identical to repo_path (avoids double-counting).
+    if !worktree_path.is_empty() && worktree_path != repo_path {
+        let wt_dir = Path::new(worktree_path)
+            .join(".conductor")
+            .join("workflows");
+        if wt_dir.is_dir() {
+            for def in scan_md_dir(&wt_dir)? {
+                map.insert(def.name.clone(), def);
+            }
+        }
+    }
+
+    let mut defs: Vec<WorkflowDef> = map.into_values().collect();
+    defs.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(defs)
+}
+
+/// Scan a single `.md` workflow directory and return parsed defs.
+fn scan_md_dir(dir: &Path) -> Result<Vec<WorkflowDef>> {
+    let mut entries: Vec<_> = fs::read_dir(dir)
+        .map_err(|e| ConductorError::Workflow(format!("Failed to read {}: {e}", dir.display())))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .collect();
-
     entries.sort_by_key(|e| e.file_name());
-
-    let mut defs = Vec::new();
-    for entry in entries {
-        defs.push(parse_workflow_file(&entry.path())?);
-    }
-
-    Ok(defs)
+    entries
+        .iter()
+        .map(|entry| parse_workflow_file(&entry.path()))
+        .collect()
 }
 
 /// Load a single workflow definition by name, targeting the file directly.
@@ -510,6 +531,18 @@ and commit them to the branch.
     }
 
     #[test]
+    fn test_load_workflow_defs_same_path_no_double_count() {
+        // When worktree_path == repo_path the guard must skip the second pass,
+        // so each workflow is counted exactly once.
+        let dir = TempDir::new().unwrap();
+        write_workflow_file(dir.path(), "test-coverage.md", TEST_WORKFLOW);
+        let path = dir.path().to_str().unwrap();
+
+        let defs = load_workflow_defs(path, path).unwrap();
+        assert_eq!(defs.len(), 1, "same path must not double-count workflows");
+    }
+
+    #[test]
     fn test_workflow_role_display_and_parse() {
         assert_eq!(WorkflowRole::Reviewer.to_string(), "reviewer");
         assert_eq!(WorkflowRole::Actor.to_string(), "actor");
@@ -564,5 +597,121 @@ and commit them to the branch.
 
         let def = parse_workflow_file(&file_path).unwrap();
         assert_eq!(def.trigger, WorkflowTrigger::Pr);
+    }
+
+    // A workflow with a different name from TEST_WORKFLOW, for merge tests.
+    const ALT_WORKFLOW: &str = "\
+---
+name: lint-fix
+description: Fix lint issues automatically
+trigger: manual
+steps:
+  - name: fix
+    role: actor
+    can_commit: true
+---
+
+## fix
+
+Fix all lint errors and commit.
+";
+
+    // TEST_WORKFLOW overridden with a distinct description to identify it in merge tests.
+    const REPO_WORKFLOW: &str = "\
+---
+name: test-coverage
+description: Repo version
+trigger: manual
+steps:
+  - name: analyze
+    role: reviewer
+---
+
+## analyze
+
+Repo analyze prompt.
+";
+
+    const WORKTREE_WORKFLOW: &str = "\
+---
+name: test-coverage
+description: Worktree version
+trigger: manual
+steps:
+  - name: analyze
+    role: reviewer
+---
+
+## analyze
+
+Worktree analyze prompt.
+";
+
+    #[test]
+    fn test_load_workflow_defs_repo_only() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_workflow_file(repo.path(), "test-coverage.md", REPO_WORKFLOW);
+
+        let defs = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "test-coverage");
+        assert_eq!(defs[0].description, "Repo version");
+    }
+
+    #[test]
+    fn test_load_workflow_defs_worktree_only() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_workflow_file(worktree.path(), "test-coverage.md", WORKTREE_WORKFLOW);
+
+        let defs = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "test-coverage");
+        assert_eq!(defs[0].description, "Worktree version");
+    }
+
+    #[test]
+    fn test_load_workflow_defs_merge_no_conflict() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_workflow_file(repo.path(), "test-coverage.md", TEST_WORKFLOW);
+        write_workflow_file(worktree.path(), "lint-fix.md", ALT_WORKFLOW);
+
+        let defs = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(defs.len(), 2);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"test-coverage"));
+        assert!(names.contains(&"lint-fix"));
+    }
+
+    #[test]
+    fn test_load_workflow_defs_merge_worktree_wins() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_workflow_file(repo.path(), "test-coverage.md", REPO_WORKFLOW);
+        write_workflow_file(worktree.path(), "test-coverage.md", WORKTREE_WORKFLOW);
+
+        let defs = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        // Only one "test-coverage" should survive — the worktree version.
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "test-coverage");
+        assert_eq!(defs[0].description, "Worktree version");
     }
 }

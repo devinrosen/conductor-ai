@@ -96,6 +96,25 @@ fn resolve_feature_id_for_bg(
         .map_err(|e| format!("Feature resolution failed: {e}"))
 }
 
+/// Parameters bundle for the `spawn_*_workflow_in_background` family of methods.
+/// Using a struct avoids `too_many_arguments` violations and keeps call sites readable.
+pub(super) struct SpawnWorkflowParams {
+    pub def: conductor_core::workflow::WorkflowDef,
+    pub repo_path: String,
+    pub inputs: std::collections::HashMap<String, String>,
+    pub model: Option<String>,
+    /// Worktree context (`spawn_workflow_in_background`)
+    pub worktree_id: Option<String>,
+    pub worktree_path: Option<String>,
+    pub ticket_id: Option<String>,
+    pub target_label: Option<String>,
+    pub repo_slug: Option<String>,
+    pub wt_slug: Option<String>,
+    /// Ticket / repo context (`spawn_ticket_workflow_in_background`, `spawn_repo_workflow_in_background`)
+    pub repo_id: Option<String>,
+    pub extra_plugin_dirs: Vec<String>,
+}
+
 impl App {
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
@@ -233,8 +252,12 @@ impl App {
         if event_len > 0 && self.state.step_agent_event_index >= event_len {
             self.state.step_agent_event_index = event_len - 1;
         }
-        // Auto-reset focus to Steps if current step has no agent activity
-        if !self.state.selected_step_has_agent() {
+        // Auto-reset to Steps only when focus is on the hidden AgentActivity pane
+        // (i.e. the user navigated to a step that no longer has an agent).
+        // Do NOT reset when focus is on Info or Error — that breaks intentional navigation.
+        if self.state.workflow_run_detail_focus == WorkflowRunDetailFocus::AgentActivity
+            && !self.state.selected_step_has_agent()
+        {
             self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
         }
     }
@@ -413,11 +436,33 @@ impl App {
 
         // Targets that require background disk I/O: spawn and return early.
         match &target {
-            WorkflowPickerTarget::Ticket { repo_path, .. }
-            | WorkflowPickerTarget::Repo { repo_path, .. }
-            | WorkflowPickerTarget::WorkflowRun { repo_path, .. } => {
+            WorkflowPickerTarget::Ticket {
+                repo_path, repo_id, ..
+            }
+            | WorkflowPickerTarget::Repo {
+                repo_path, repo_id, ..
+            } => {
                 let rp = repo_path.clone();
-                self.spawn_load_picker_defs(target, rp);
+                let rid = repo_id.clone();
+                let wt_paths: Vec<String> = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .filter(|w| w.repo_id == rid)
+                    .map(|w| w.path.clone())
+                    .collect();
+                self.spawn_load_picker_defs(target, rp, wt_paths);
+                return;
+            }
+            WorkflowPickerTarget::WorkflowRun {
+                repo_path,
+                worktree_path,
+                ..
+            } => {
+                let rp = repo_path.clone();
+                let wt_paths: Vec<String> = worktree_path.iter().cloned().collect();
+                self.spawn_load_picker_defs(target, rp, wt_paths);
                 return;
             }
             _ => {}
@@ -454,10 +499,18 @@ impl App {
     }
 
     /// Spawn a background thread to load workflow defs from disk for the picker.
+    ///
+    /// `worktree_paths` lists the filesystem paths of all relevant worktrees for
+    /// the target repo. When non-empty the loader applies the same multi-worktree
+    /// scan used by the background poller: iterate worktrees in order, call
+    /// `list_defs(wt_path, repo_path)` per worktree (which merges repo + worktree,
+    /// with worktree winning on conflicts), and deduplicate by name (first-seen
+    /// wins across worktrees). Falls back to a repo-only load when the list is empty.
     fn spawn_load_picker_defs(
         &mut self,
         target: crate::state::WorkflowPickerTarget,
         repo_path: String,
+        worktree_paths: Vec<String>,
     ) {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
@@ -467,8 +520,36 @@ impl App {
         self.state.loading_workflow_picker_defs = true;
         std::thread::spawn(move || {
             let filter = target.target_filter();
-            match conductor_core::workflow::WorkflowManager::list_defs("", &repo_path) {
-                Ok((all_defs, _warnings)) => {
+
+            let load_result: conductor_core::error::Result<
+                Vec<conductor_core::workflow::WorkflowDef>,
+            > = (|| {
+                use std::collections::HashSet;
+                let mut seen: HashSet<String> = HashSet::new();
+                let mut all_defs = Vec::new();
+
+                for wt_path in &worktree_paths {
+                    let (defs, _warnings) =
+                        conductor_core::workflow::WorkflowManager::list_defs(wt_path, &repo_path)?;
+                    for def in defs {
+                        if seen.insert(def.name.clone()) {
+                            all_defs.push(def);
+                        }
+                    }
+                }
+
+                // Fallback: no worktrees provided (or none had defs) → repo-only load.
+                if all_defs.is_empty() {
+                    let (defs, _warnings) =
+                        conductor_core::workflow::WorkflowManager::list_defs("", &repo_path)?;
+                    all_defs = defs;
+                }
+
+                Ok(all_defs)
+            })();
+
+            match load_result {
+                Ok(all_defs) => {
                     let defs = all_defs
                         .into_iter()
                         .filter(|d| d.targets.iter().any(|t| t == filter))
@@ -623,6 +704,9 @@ impl App {
                     } => {
                         prefill.insert("workflow_run_id".to_string(), workflow_run_id.clone());
                     }
+                    WorkflowPickerTarget::Ticket { ref ticket_id, .. } => {
+                        prefill.insert("ticket_id".to_string(), ticket_id.clone());
+                    }
                     _ => {}
                 }
                 self.show_workflow_inputs_or_run(target, def, prefill);
@@ -748,6 +832,8 @@ impl App {
         } = target
         {
             prefill.insert("workflow_run_id".to_string(), workflow_run_id.clone());
+        } else if let WorkflowPickerTarget::Ticket { ref ticket_id, .. } = target {
+            prefill.insert("ticket_id".to_string(), ticket_id.clone());
         }
 
         self.show_workflow_inputs_or_run(target, def, prefill);
@@ -933,18 +1019,20 @@ impl App {
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
-                self.spawn_workflow_in_background(
+                self.spawn_workflow_in_background(SpawnWorkflowParams {
                     def,
-                    worktree_id,
-                    worktree_path,
+                    worktree_id: Some(worktree_id),
+                    worktree_path: Some(worktree_path),
                     repo_path,
                     ticket_id,
                     inputs,
-                    wt_target_label,
+                    target_label: wt_target_label,
                     model,
                     repo_slug,
                     wt_slug,
-                );
+                    repo_id: None,
+                    extra_plugin_dirs: vec![],
+                });
             }
             WorkflowPickerTarget::Pr { pr_number, .. } => {
                 let remote_url = match self
@@ -988,24 +1076,42 @@ impl App {
                 ..
             } => {
                 // Feature resolution happens off-thread inside spawn_ticket_workflow_in_background.
-                self.spawn_ticket_workflow_in_background(
+                let extra_dirs = self.worktree_conductor_dirs(&repo_id);
+                self.spawn_ticket_workflow_in_background(SpawnWorkflowParams {
                     def,
-                    ticket_id,
-                    repo_id,
+                    ticket_id: Some(ticket_id),
+                    repo_id: Some(repo_id),
                     repo_path,
-                    ticket_title,
+                    target_label: Some(ticket_title),
                     inputs,
                     model,
-                );
+                    extra_plugin_dirs: extra_dirs,
+                    worktree_id: None,
+                    worktree_path: None,
+                    repo_slug: None,
+                    wt_slug: None,
+                });
             }
             WorkflowPickerTarget::Repo {
                 repo_id,
                 repo_path,
                 repo_name,
             } => {
-                self.spawn_repo_workflow_in_background(
-                    def, repo_id, repo_path, repo_name, inputs, model,
-                );
+                let extra_dirs = self.worktree_conductor_dirs(&repo_id);
+                self.spawn_repo_workflow_in_background(SpawnWorkflowParams {
+                    def,
+                    repo_id: Some(repo_id),
+                    repo_path,
+                    target_label: Some(repo_name),
+                    inputs,
+                    model,
+                    extra_plugin_dirs: extra_dirs,
+                    worktree_id: None,
+                    worktree_path: None,
+                    ticket_id: None,
+                    repo_slug: None,
+                    wt_slug: None,
+                });
             }
             WorkflowPickerTarget::WorkflowRun {
                 workflow_run_id,
@@ -1034,18 +1140,20 @@ impl App {
                             )
                         })
                         .unwrap_or((None, None, None));
-                    self.spawn_workflow_in_background(
+                    self.spawn_workflow_in_background(SpawnWorkflowParams {
                         def,
-                        wt_id,
-                        working_dir,
+                        worktree_id: Some(wt_id),
+                        worktree_path: Some(working_dir),
                         repo_path,
                         ticket_id,
-                        run_inputs,
-                        Some(format!("workflow_run:{workflow_run_id}")),
+                        inputs: run_inputs,
+                        target_label: Some(format!("workflow_run:{workflow_run_id}")),
                         model,
                         repo_slug,
                         wt_slug,
-                    );
+                        repo_id: None,
+                        extra_plugin_dirs: vec![],
+                    });
                 } else {
                     self.spawn_workflow_run_target_in_background(
                         def,
@@ -1064,20 +1172,20 @@ impl App {
     /// Feature auto-detection is performed off-thread using `repo_slug`,
     /// `ticket_id`, and `wt_slug` to avoid blocking the TUI main thread with
     /// synchronous DB queries.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn spawn_workflow_in_background(
-        &mut self,
-        def: conductor_core::workflow::WorkflowDef,
-        worktree_id: String,
-        worktree_path: String,
-        repo_path: String,
-        ticket_id: Option<String>,
-        inputs: std::collections::HashMap<String, String>,
-        target_label: Option<String>,
-        model: Option<String>,
-        repo_slug: Option<String>,
-        wt_slug: Option<String>,
-    ) {
+    pub(super) fn spawn_workflow_in_background(&mut self, p: SpawnWorkflowParams) {
+        let SpawnWorkflowParams {
+            def,
+            worktree_id,
+            worktree_path,
+            repo_path,
+            ticket_id,
+            inputs,
+            target_label,
+            model,
+            repo_slug,
+            wt_slug,
+            ..
+        } = p;
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_display_name = def.display_name().to_string();
@@ -1086,6 +1194,18 @@ impl App {
         let handle = std::thread::spawn(move || {
             use conductor_core::workflow::{
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
+            };
+
+            let working_dir = match worktree_path {
+                Some(p) => p,
+                None => {
+                    if let Some(ref tx) = bg_tx {
+                        tx.send(crate::action::Action::BackgroundError {
+                            message: "Cannot run workflow: worktree path is not set".to_string(),
+                        });
+                    }
+                    return;
+                }
             };
 
             let feature_id = match resolve_feature_id_for_bg(
@@ -1107,8 +1227,8 @@ impl App {
             let params = WorkflowExecStandalone {
                 config,
                 workflow: def.clone(),
-                worktree_id: Some(worktree_id),
-                working_dir: worktree_path,
+                worktree_id,
+                working_dir,
                 repo_path,
                 ticket_id,
                 repo_id: None,
@@ -1126,6 +1246,7 @@ impl App {
                 force: false,
                 extra_plugin_dirs: vec![],
                 db_path: None,
+                parent_workflow_run_id: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1137,17 +1258,18 @@ impl App {
         self.state.status_message = Some(format!("Starting workflow '{workflow_display_name}'…"));
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn spawn_ticket_workflow_in_background(
-        &mut self,
-        def: conductor_core::workflow::WorkflowDef,
-        ticket_id: String,
-        repo_id: String,
-        repo_path: String,
-        target_label: String,
-        inputs: std::collections::HashMap<String, String>,
-        model: Option<String>,
-    ) {
+    pub(super) fn spawn_ticket_workflow_in_background(&mut self, p: SpawnWorkflowParams) {
+        let SpawnWorkflowParams {
+            def,
+            ticket_id,
+            repo_id,
+            repo_path,
+            target_label,
+            inputs,
+            model,
+            extra_plugin_dirs,
+            ..
+        } = p;
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_display_name = def.display_name().to_string();
@@ -1159,7 +1281,7 @@ impl App {
             };
 
             let feature_id =
-                match resolve_feature_id_for_bg(&config, None, None, Some(&ticket_id), None) {
+                match resolve_feature_id_for_bg(&config, None, None, ticket_id.as_deref(), None) {
                     Ok(id) => id,
                     Err(e) => {
                         if let Some(ref tx) = bg_tx {
@@ -1177,22 +1299,23 @@ impl App {
                 worktree_id: None,
                 working_dir,
                 repo_path,
-                ticket_id: Some(ticket_id),
-                repo_id: Some(repo_id),
+                ticket_id,
+                repo_id,
                 model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
-                target_label: Some(target_label),
+                target_label,
                 feature_id,
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
-                extra_plugin_dirs: vec![],
+                extra_plugin_dirs,
                 db_path: None,
+                parent_workflow_run_id: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1206,15 +1329,17 @@ impl App {
         ));
     }
 
-    pub(super) fn spawn_repo_workflow_in_background(
-        &mut self,
-        def: conductor_core::workflow::WorkflowDef,
-        repo_id: String,
-        repo_path: String,
-        repo_name: String,
-        inputs: std::collections::HashMap<String, String>,
-        model: Option<String>,
-    ) {
+    pub(super) fn spawn_repo_workflow_in_background(&mut self, p: SpawnWorkflowParams) {
+        let SpawnWorkflowParams {
+            def,
+            repo_id,
+            repo_path,
+            target_label,
+            inputs,
+            model,
+            extra_plugin_dirs,
+            ..
+        } = p;
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_display_name = def.display_name().to_string();
@@ -1232,21 +1357,22 @@ impl App {
                 working_dir: repo_path.clone(),
                 repo_path,
                 ticket_id: None,
-                repo_id: Some(repo_id),
+                repo_id,
                 model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
-                target_label: Some(repo_name),
+                target_label,
                 feature_id: None,
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
-                extra_plugin_dirs: vec![],
+                extra_plugin_dirs,
                 db_path: None,
+                parent_workflow_run_id: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1300,6 +1426,7 @@ impl App {
                 force: false,
                 extra_plugin_dirs: vec![],
                 db_path: None,
+                parent_workflow_run_id: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1337,7 +1464,21 @@ impl App {
                 pr_number: pr.number,
                 pr_title: pr.title.clone(),
             };
-            self.spawn_load_picker_defs(target, rp);
+            let wt_paths: Vec<String> = self
+                .state
+                .selected_repo_id
+                .as_ref()
+                .map(|rid| {
+                    self.state
+                        .data
+                        .worktrees
+                        .iter()
+                        .filter(|w| &w.repo_id == rid)
+                        .map(|w| w.path.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.spawn_load_picker_defs(target, rp, wt_paths);
         } else {
             let pr_defs: Vec<conductor_core::workflow::WorkflowDef> = self
                 .state
@@ -1736,6 +1877,27 @@ impl App {
             repo_path: repo.local_path.clone(),
             repo_name: repo.slug.clone(),
         }
+    }
+
+    /// Return the `.conductor` sub-path of every worktree belonging to `repo_id`.
+    ///
+    /// These are passed as `extra_plugin_dirs` when spawning repo/ticket-level workflows so
+    /// that agents defined only in a feature-branch worktree (not yet on the primary checkout)
+    /// are still discoverable.  The engine searches `<dir>/agents/<name>.md` for each entry,
+    /// which matches `<worktree>/.conductor/agents/<name>.md`.
+    pub(super) fn worktree_conductor_dirs(&self, repo_id: &str) -> Vec<String> {
+        self.state
+            .data
+            .worktrees
+            .iter()
+            .filter(|w| w.repo_id == repo_id)
+            .map(|w| {
+                std::path::Path::new(&w.path)
+                    .join(".conductor")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
     }
 
     /// Build a `WorkflowPickerTarget::WorkflowRun` from a `WorkflowRun`, resolving repo_path.
@@ -2219,5 +2381,128 @@ mod tests {
         assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "aaa"));
         assert!(matches!(&items[2], WorkflowPickerItem::Workflow(d) if d.name == "mmm"));
         assert!(matches!(&items[3], WorkflowPickerItem::Workflow(d) if d.name == "zzz"));
+    }
+
+    // ── clamp_workflow_indices — WorkflowRunDetailFocus regression ────────────
+
+    fn make_step_without_agent(id: &str) -> conductor_core::workflow::WorkflowRunStep {
+        conductor_core::workflow::WorkflowRunStep {
+            id: id.to_string(),
+            status: conductor_core::workflow::WorkflowStepStatus::Completed,
+            ..Default::default()
+        }
+    }
+
+    /// Regression test: Info focus must NOT be reset to Steps on a tick where the
+    /// selected step has no agent activity (this was the bug fixed in
+    /// "fix: clamp_indices resets Info/Error focus to Steps on every tick").
+    #[test]
+    fn clamp_workflow_indices_preserves_info_focus_when_no_agent() {
+        let mut app = make_app();
+        app.state.data.workflow_steps = vec![make_step_without_agent("s1")];
+        app.state.workflow_step_index = 0;
+        app.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Info;
+        app.clamp_workflow_indices();
+        assert_eq!(
+            app.state.workflow_run_detail_focus,
+            WorkflowRunDetailFocus::Info,
+            "Info focus should not be reset to Steps when there is no agent"
+        );
+    }
+
+    /// Regression test: Error focus must NOT be reset to Steps on a tick where the
+    /// selected step has no agent activity.
+    #[test]
+    fn clamp_workflow_indices_preserves_error_focus_when_no_agent() {
+        let mut app = make_app();
+        app.state.data.workflow_steps = vec![make_step_without_agent("s1")];
+        app.state.workflow_step_index = 0;
+        app.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Error;
+        app.clamp_workflow_indices();
+        assert_eq!(
+            app.state.workflow_run_detail_focus,
+            WorkflowRunDetailFocus::Error,
+            "Error focus should not be reset to Steps when there is no agent"
+        );
+    }
+
+    /// AgentActivity focus SHOULD be reset to Steps when the selected step has no agent.
+    #[test]
+    fn clamp_workflow_indices_resets_agent_activity_focus_when_no_agent() {
+        let mut app = make_app();
+        app.state.data.workflow_steps = vec![make_step_without_agent("s1")];
+        app.state.workflow_step_index = 0;
+        app.state.workflow_run_detail_focus = WorkflowRunDetailFocus::AgentActivity;
+        app.clamp_workflow_indices();
+        assert_eq!(
+            app.state.workflow_run_detail_focus,
+            WorkflowRunDetailFocus::Steps,
+            "AgentActivity focus should be reset to Steps when there is no agent"
+        );
+    }
+
+    // ── spawn_workflow_in_background: None worktree_path ─────────────────────
+
+    /// Regression test: when `worktree_path` is `None`,
+    /// `spawn_workflow_in_background` must send a `BackgroundError` and return
+    /// early — it must NOT pass an empty string to `execute_workflow_standalone`.
+    ///
+    /// Prior to fix this used `worktree_path.unwrap_or_default()` which silently
+    /// provided `""` as the working directory.
+    #[test]
+    fn spawn_workflow_in_background_none_worktree_path_sends_background_error() {
+        use conductor_core::workflow::{WorkflowDef, WorkflowTrigger};
+
+        let mut app = make_app();
+
+        // Wire up a test channel so we can observe what the background thread sends.
+        let (bg_tx, bg_rx) = crate::event::BackgroundSender::channel_for_test();
+        app.bg_tx = Some(bg_tx);
+
+        let def = WorkflowDef {
+            name: "test-wf".into(),
+            title: None,
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec!["worktree".to_string()],
+            group: None,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: ".conductor/workflows/test-wf.wf".into(),
+        };
+
+        app.spawn_workflow_in_background(SpawnWorkflowParams {
+            def,
+            worktree_id: Some("w1".into()),
+            worktree_path: None, // the problematic case
+            repo_path: "/tmp/repo".into(),
+            ticket_id: None,
+            inputs: std::collections::HashMap::new(),
+            target_label: None,
+            model: None,
+            repo_slug: None,
+            wt_slug: None,
+            repo_id: None,
+            extra_plugin_dirs: vec![],
+        });
+
+        // Join all background threads — must complete quickly because the None
+        // worktree_path path returns early without executing any workflow.
+        for handle in app.workflow_threads.drain(..) {
+            handle.join().expect("background thread panicked");
+        }
+
+        // The background thread must have sent exactly one BackgroundError.
+        let actions: Vec<crate::action::Action> =
+            std::iter::from_fn(|| bg_rx.try_recv().ok()).collect();
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                crate::action::Action::BackgroundError { message }
+                    if message.contains("worktree path is not set")
+            )),
+            "expected a BackgroundError about missing worktree path; got: {actions:?}"
+        );
     }
 }

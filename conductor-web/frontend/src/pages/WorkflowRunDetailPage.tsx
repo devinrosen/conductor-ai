@@ -8,6 +8,7 @@ import { TrainProgress } from "../components/shared/TrainProgress";
 import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
 import { formatDuration, liveElapsedMs } from "../utils/agentStats";
 import { StepDetailPanel } from "../components/workflows/StepDetailPanel";
+import { ForeachProgressPanel } from "../components/workflows/ForeachProgressPanel";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { getWorkflowDisplayName } from "../utils/workflow";
 
@@ -425,6 +426,17 @@ export function WorkflowRunDetailPage() {
                     <div className="ml-6 mt-2 px-3 py-2 text-xs bg-amber-50 border border-amber-200 rounded-md text-amber-700">
                       <span className="font-medium">Gate feedback:</span> {step.gate_feedback}
                     </div>
+                  )}
+
+                  {/* foreach progress panel */}
+                  {step.fan_out_total != null && (
+                    <ForeachProgressPanel
+                      step={step}
+                      runId={runId!}
+                      repoId={repoId!}
+                      worktreeId={worktreeId!}
+                      isRunActive={isActive}
+                    />
                   )}
 
                   {/* Child workflow steps — expandable */}

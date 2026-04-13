@@ -747,6 +747,21 @@ pub(crate) fn build_def_step_lines<'a>(
                     seen,
                 ));
             }
+            WorkflowNode::ForEach(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[foreach]", Style::default().fg(theme.label_info)),
+                    Span::raw("  "),
+                    Span::styled(
+                        n.name.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  → {}", n.workflow),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+            }
         }
     }
 
@@ -934,6 +949,12 @@ pub(crate) fn get_def_step_node_at(
                 ) {
                     return Some(r);
                 }
+            }
+            WorkflowNode::ForEach(_) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
             }
         }
     }
@@ -1572,9 +1593,14 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         render_step_list(frame, body_chunks[0], state, focus);
         render_step_agent_activity(frame, body_chunks[1], state, focus);
     } else {
-        // Full-width step list when no agent activity to show —
-        // force Steps focus since agent pane is hidden.
-        render_step_list(frame, chunks[3], state, WorkflowRunDetailFocus::Steps);
+        // Full-width step list when no agent activity to show.
+        // If focus landed on the hidden AgentActivity pane, treat Steps as focused;
+        // otherwise pass through the real focus so Info/Error can show as active.
+        let effective_focus = match state.workflow_run_detail_focus {
+            WorkflowRunDetailFocus::AgentActivity => WorkflowRunDetailFocus::Steps,
+            f => f,
+        };
+        render_step_list(frame, chunks[3], state, effective_focus);
     }
 }
 
@@ -1652,111 +1678,124 @@ fn render_step_list(
         best.map(|(i, _)| i)
     };
 
-    items.extend(
-        state
-            .data
-            .workflow_steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                let (status_symbol, status_color) =
-                    status_display(&step.status.to_string(), &state.theme);
-                let duration = match (&step.started_at, &step.ended_at) {
-                    (Some(start), Some(end)) => format_duration(start, end),
-                    (Some(_), None) => "…".to_string(),
-                    _ => "—".to_string(),
-                };
+    for (i, step) in state.data.workflow_steps.iter().enumerate() {
+        let (status_symbol, status_color) = status_display(&step.status.to_string(), &state.theme);
+        let duration = match (&step.started_at, &step.ended_at) {
+            (Some(start), Some(end)) => format_duration(start, end),
+            (Some(_), None) => "…".to_string(),
+            _ => "—".to_string(),
+        };
 
-                let mut spans = vec![
-                    Span::styled(
-                        format!("  {:>2}. ", step.position),
-                        Style::default().fg(state.theme.label_secondary),
-                    ),
-                    Span::styled(status_symbol, Style::default().fg(status_color)),
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("{:<20}", step.step_name),
-                        if max_token_idx == Some(i) {
-                            Style::default()
-                                .add_modifier(Modifier::BOLD)
-                                .fg(state.theme.label_accent)
-                        } else {
-                            Style::default().add_modifier(Modifier::BOLD)
-                        },
-                    ),
-                    Span::styled(
-                        format!("  [{:<5}]", step.role),
-                        Style::default().fg(state.theme.status_waiting),
-                    ),
-                    Span::styled(
-                        format!("  {duration}"),
-                        Style::default().fg(state.theme.label_accent),
-                    ),
-                ];
+        let mut spans = vec![
+            Span::styled(
+                format!("  {:>2}. ", step.position),
+                Style::default().fg(state.theme.label_secondary),
+            ),
+            Span::styled(status_symbol, Style::default().fg(status_color)),
+            Span::raw("  "),
+            Span::styled(
+                format!("{:<20}", step.step_name),
+                if max_token_idx == Some(i) {
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(state.theme.label_accent)
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                },
+            ),
+            Span::styled(
+                format!("  [{:<5}]", step.role),
+                Style::default().fg(state.theme.status_waiting),
+            ),
+            Span::styled(
+                format!("  {duration}"),
+                Style::default().fg(state.theme.label_accent),
+            ),
+        ];
 
-                // Token columns: show compact ↑/↓ counts when present
-                if let (Some(inp), Some(out)) = (step.input_tokens, step.output_tokens) {
-                    let fmt_k = |n: i64| -> String {
-                        if n >= 1_000_000 {
-                            format!("{:.1}M", n as f64 / 1_000_000.0)
-                        } else if n >= 1_000 {
-                            format!("{:.1}k", n as f64 / 1_000.0)
-                        } else {
-                            format!("{n}")
-                        }
-                    };
-                    spans.push(Span::styled(
-                        format!("  ↑{} ↓{}", fmt_k(inp), fmt_k(out)),
-                        Style::default().fg(state.theme.label_secondary),
-                    ));
+        // Token columns: show compact ↑/↓ counts when present
+        if let (Some(inp), Some(out)) = (step.input_tokens, step.output_tokens) {
+            let fmt_k = |n: i64| -> String {
+                if n >= 1_000_000 {
+                    format!("{:.1}M", n as f64 / 1_000_000.0)
+                } else if n >= 1_000 {
+                    format!("{:.1}k", n as f64 / 1_000.0)
+                } else {
+                    format!("{n}")
                 }
+            };
+            spans.push(Span::styled(
+                format!("  ↑{} ↓{}", fmt_k(inp), fmt_k(out)),
+                Style::default().fg(state.theme.label_secondary),
+            ));
+        }
 
-                if step.iteration > 0 {
-                    spans.push(Span::styled(
-                        format!("  (iter {})", step.iteration + 1),
-                        Style::default().fg(state.theme.label_accent),
-                    ));
-                }
-                if step.retry_count > 0 {
-                    spans.push(Span::styled(
-                        format!("  retries:{}", step.retry_count),
-                        Style::default().fg(state.theme.label_error),
-                    ));
-                }
-                if let Some(ref gate_type) = step.gate_type {
-                    spans.push(Span::styled(
-                        format!("  gate:{gate_type}"),
-                        Style::default().fg(state.theme.label_warning),
-                    ));
-                }
+        if step.iteration > 0 {
+            spans.push(Span::styled(
+                format!("  (iter {})", step.iteration + 1),
+                Style::default().fg(state.theme.label_accent),
+            ));
+        }
+        if step.retry_count > 0 {
+            spans.push(Span::styled(
+                format!("  retries:{}", step.retry_count),
+                Style::default().fg(state.theme.label_error),
+            ));
+        }
+        if let Some(ref gate_type) = step.gate_type {
+            spans.push(Span::styled(
+                format!("  gate:{gate_type}"),
+                Style::default().fg(state.theme.label_warning),
+            ));
+        }
 
-                // Inline detail: show snippet of result/context/markers for non-selected steps
-                if i != state.workflow_step_index {
-                    if let Some(ref rt) = step.result_text {
-                        let snippet = truncate(rt.lines().next().unwrap_or(""), 40);
-                        spans.push(Span::styled(
-                            format!("  → {snippet}"),
-                            Style::default().fg(state.theme.label_secondary),
-                        ));
-                    } else if let Some(ref ctx) = step.context_out {
-                        let snippet = truncate(ctx.lines().next().unwrap_or(""), 40);
-                        spans.push(Span::styled(
-                            format!("  ctx:{snippet}"),
-                            Style::default().fg(state.theme.label_secondary),
-                        ));
-                    }
-                }
+        // Inline detail: show snippet of result/context/markers for non-selected steps
+        if i != state.workflow_step_index {
+            if let Some(ref rt) = step.result_text {
+                let snippet = truncate(rt.lines().next().unwrap_or(""), 40);
+                spans.push(Span::styled(
+                    format!("  → {snippet}"),
+                    Style::default().fg(state.theme.label_secondary),
+                ));
+            } else if let Some(ref ctx) = step.context_out {
+                let snippet = truncate(ctx.lines().next().unwrap_or(""), 40);
+                spans.push(Span::styled(
+                    format!("  ctx:{snippet}"),
+                    Style::default().fg(state.theme.label_secondary),
+                ));
+            }
+        }
 
-                if let Some(ref mk) = step.markers_out {
-                    spans.push(Span::styled(
-                        format!("  [{mk}]"),
-                        Style::default().fg(state.theme.label_accent),
-                    ));
-                }
+        if let Some(ref mk) = step.markers_out {
+            spans.push(Span::styled(
+                format!("  [{mk}]"),
+                Style::default().fg(state.theme.label_accent),
+            ));
+        }
 
-                ListItem::new(Line::from(spans))
-            }),
-    );
+        // Foreach: append inline progress bar and, if expanded, per-item sub-rows.
+        if step.role == conductor_core::workflow::STEP_ROLE_FOREACH {
+            let fo_items = state
+                .data
+                .fan_out_items
+                .get(&step.id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let expanded = state.expanded_foreach_step_ids.contains(&step.id);
+            spans.extend(foreach_progress_spans(
+                step,
+                fo_items,
+                expanded,
+                &state.theme,
+            ));
+            items.push(ListItem::new(Line::from(spans)));
+            if expanded {
+                items.extend(foreach_item_rows(fo_items, &state.theme));
+            }
+        } else {
+            items.push(ListItem::new(Line::from(spans)));
+        }
+    }
 
     let has_waiting_gate = state
         .data
@@ -1764,11 +1803,20 @@ fn render_step_list(
         .iter()
         .any(|s| s.status.to_string() == "waiting" && s.gate_type.is_some());
 
-    let title = match (focused, has_waiting_gate) {
-        (true, true) => " Steps (Enter=approve gate, Tab=switch) ",
-        (true, false) => " Steps (Enter=detail, Tab=switch) ",
-        (false, true) => " Steps (Enter=approve gate) ",
-        (false, false) => " Steps ",
+    let selected_is_foreach = state
+        .data
+        .workflow_steps
+        .get(state.workflow_step_index)
+        .map(|s| s.role == conductor_core::workflow::STEP_ROLE_FOREACH)
+        .unwrap_or(false);
+
+    let title = match (focused, has_waiting_gate, selected_is_foreach) {
+        (true, true, true) => " Steps (Enter=approve gate, Space=expand, Tab=switch) ",
+        (true, true, false) => " Steps (Enter=approve gate, Tab=switch) ",
+        (true, false, true) => " Steps (Enter=detail, Space=expand, Tab=switch) ",
+        (true, false, false) => " Steps (Enter=detail, Tab=switch) ",
+        (false, true, _) => " Steps (Enter=approve gate) ",
+        (false, false, _) => " Steps ",
     };
 
     let list = List::new(items)
@@ -1788,8 +1836,16 @@ fn render_step_list(
     let mut list_state = ListState::default();
     if !state.data.workflow_steps.is_empty() {
         // Offset by 1 if a root run row was prepended.
-        let offset = if has_root_row { 1 } else { 0 };
-        list_state.select(Some(state.workflow_step_index + offset));
+        let root_offset = if has_root_row { 1 } else { 0 };
+        // Extra visual rows inserted by expanded foreach steps above the cursor.
+        let visual_offset: usize = state.data.workflow_steps[..state.workflow_step_index]
+            .iter()
+            .filter(|s| state.expanded_foreach_step_ids.contains(&s.id))
+            .map(|s| state.data.fan_out_items.get(&s.id).map_or(0, |v| v.len()))
+            .sum();
+        list_state.select(Some(
+            state.workflow_step_index + root_offset + visual_offset,
+        ));
     }
     frame.render_stateful_widget(list, area, &mut list_state);
 }
@@ -1938,6 +1994,73 @@ fn role_color(role: &str, theme: &Theme) -> Color {
         "parallel" => theme.status_waiting,
         _ => theme.label_secondary,
     }
+}
+
+/// Builds the ►/▼ [████░░░] N/T (R running, P pending, F failed) spans for a foreach step.
+fn foreach_progress_spans(
+    step: &WorkflowRunStep,
+    items: &[conductor_core::workflow::FanOutItemRow],
+    expanded: bool,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let arrow = if expanded { "▼ " } else { "► " };
+    let total = step.fan_out_total.unwrap_or(0) as usize;
+    let completed = step.fan_out_completed as usize;
+    let failed = step.fan_out_failed as usize;
+    let skipped = step.fan_out_skipped as usize;
+    let running = items.iter().filter(|i| i.status == "running").count();
+    let pending = items.iter().filter(|i| i.status == "pending").count();
+
+    let bar = if total > 0 {
+        let filled = (completed * 15 / total).min(15);
+        let empty = 15 - filled;
+        format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+    } else {
+        "[               ]".to_string()
+    };
+
+    let summary = if total > 0 {
+        format!(
+            "  {}/{}  ({} running, {} pending, {} failed, {} skipped)",
+            completed, total, running, pending, failed, skipped
+        )
+    } else {
+        "  (no items)".to_string()
+    };
+
+    vec![
+        Span::styled(
+            format!("  {arrow}{bar}"),
+            Style::default().fg(theme.label_accent),
+        ),
+        Span::styled(summary, Style::default().fg(theme.label_secondary)),
+    ]
+}
+
+/// Returns per-item ListItems for an expanded foreach step.
+fn foreach_item_rows(
+    items: &[conductor_core::workflow::FanOutItemRow],
+    theme: &Theme,
+) -> Vec<ListItem<'static>> {
+    items
+        .iter()
+        .map(|item| {
+            let (icon, color) = status_display(&item.status, theme);
+            ListItem::new(Line::from(vec![
+                Span::raw("       "),
+                Span::styled(icon, Style::default().fg(color)),
+                Span::raw("  "),
+                Span::styled(
+                    item.item_ref.clone(),
+                    Style::default().fg(theme.label_primary),
+                ),
+                Span::styled(
+                    format!("  {}", item.status),
+                    Style::default().fg(theme.label_secondary),
+                ),
+            ]))
+        })
+        .collect()
 }
 
 fn status_display(status: &str, theme: &Theme) -> (&'static str, Color) {

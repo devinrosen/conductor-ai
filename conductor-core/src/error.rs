@@ -114,6 +114,12 @@ pub enum ConductorError {
     #[error("workflow run not found: {id}")]
     WorkflowRunNotFound { id: String },
 
+    #[error("workflow step not found: {id}")]
+    WorkflowStepNotFound { id: String },
+
+    #[error("workflow step {step_id} does not belong to run {run_id}")]
+    WorkflowStepNotInRun { step_id: String, run_id: String },
+
     #[error("agent config error: {0}")]
     AgentConfig(String),
 
@@ -193,6 +199,8 @@ impl ConductorError {
             Self::Workflow(_) => 60,
             Self::WorkflowRunAlreadyActive { .. } => 61,
             Self::WorkflowRunNotFound { .. } => 62,
+            Self::WorkflowStepNotFound { .. } => 63,
+            Self::WorkflowStepNotInRun { .. } => 64,
             Self::UnknownSourceType(_) => 43,
             Self::ConversationNotFound { .. } => 57,
             Self::ConversationHasActiveRun { .. } => 58,

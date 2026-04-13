@@ -203,34 +203,8 @@ mod tests {
 
     fn make_step(structured_output: Option<&str>) -> WorkflowRunStep {
         WorkflowRunStep {
-            id: String::new(),
-            workflow_run_id: String::new(),
-            step_name: String::new(),
-            role: String::new(),
-            can_commit: false,
-            condition_expr: None,
-            status: super::super::status::WorkflowStepStatus::Completed,
-            child_run_id: None,
-            position: 0,
-            started_at: None,
-            ended_at: None,
-            result_text: None,
-            condition_met: None,
-            iteration: 0,
-            parallel_group_id: None,
-            context_out: None,
-            markers_out: None,
-            retry_count: 0,
-            gate_type: None,
-            gate_prompt: None,
-            gate_timeout: None,
-            gate_approved_by: None,
-            gate_approved_at: None,
-            gate_feedback: None,
             structured_output: structured_output.map(String::from),
-            output_file: None,
-            gate_options: None,
-            gate_selections: None,
+            ..Default::default()
         }
     }
 }
