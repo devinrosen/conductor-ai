@@ -193,80 +193,20 @@ fn main() {
                                 if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
                                     tracing::warn!("reap_orphaned_workflow_runs failed: {e}");
                                 }
-                                match wf_mgr.detect_stuck_workflow_run_ids(60) {
-                                    Ok(ids) if !ids.is_empty() => {
-                                        let n = ids.len();
-                                        tracing::info!("Auto-resuming {n} stuck workflow run(s)");
-                                        conductor_core::notify::fire_orphan_resumed_notification(
-                                            &conn,
-                                            &cfg.notifications,
-                                            &ids,
-                                        );
-                                        let conductor_bin_dir =
-                                            conductor_core::workflow::resolve_conductor_bin_dir();
-                                        for run_id in ids {
-                                            let cfg_clone = (*cfg).clone();
-                                            let bin_dir = conductor_bin_dir.clone();
-                                            std::thread::spawn(move || {
-                                                let params = conductor_core::workflow::WorkflowResumeStandalone {
-                                                    config: cfg_clone,
-                                                    workflow_run_id: run_id.clone(),
-                                                    model: None,
-                                                    from_step: None,
-                                                    restart: false,
-                                                    db_path: None,
-                                                    conductor_bin_dir: bin_dir,
-                                                };
-                                                if let Err(e) = conductor_core::workflow::resume_workflow_standalone(&params) {
-                                                    tracing::warn!(run_id = %run_id, "Auto-resume of stuck workflow run failed: {e}");
-                                                }
-                                            });
-                                        }
-                                    }
-                                    Ok(_) => {}
-                                    Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
-                                }
-                                // Additional stale workflow watchdog using configurable threshold
+                                // Auto-resume stuck workflow runs using both fixed and configurable thresholds
+                                let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                                 let stale_mins = cfg.general.stale_workflow_minutes;
-                                if stale_mins > 0 {
-                                    // Convert minutes to seconds for the current API
-                                    let threshold_secs = stale_mins * 60;
-                                    // Only detect using the configurable threshold if it's different from the 60-second threshold above
-                                    if threshold_secs != 60 {
-                                        match wf_mgr.detect_stuck_workflow_run_ids(threshold_secs as i64) {
-                                            Ok(stuck_run_ids) if !stuck_run_ids.is_empty() => {
-                                                let n = stuck_run_ids.len();
-                                                tracing::info!("Auto-resuming {n} additional stuck workflow run(s) with configurable threshold");
-                                                conductor_core::notify::fire_orphan_resumed_notification(
-                                                    &conn,
-                                                    &cfg.notifications,
-                                                    &stuck_run_ids,
-                                                );
-                                                let conductor_bin_dir =
-                                                    conductor_core::workflow::resolve_conductor_bin_dir();
-                                                for run_id in stuck_run_ids {
-                                                    let cfg_clone = (*cfg).clone();
-                                                    let bin_dir = conductor_bin_dir.clone();
-                                                    std::thread::spawn(move || {
-                                                        let params = conductor_core::workflow::WorkflowResumeStandalone {
-                                                            config: cfg_clone,
-                                                            workflow_run_id: run_id.clone(),
-                                                            model: None,
-                                                            from_step: None,
-                                                            restart: false,
-                                                            db_path: None,
-                                                            conductor_bin_dir: bin_dir,
-                                                        };
-                                                        if let Err(e) = conductor_core::workflow::resume_workflow_standalone(&params) {
-                                                            tracing::warn!(run_id = %run_id, "Auto-resume of stuck workflow run failed: {e}");
-                                                        }
-                                                    });
-                                                }
-                                            }
-                                            Ok(_) => {}
-                                            Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
-                                        }
-                                    }
+                                let configurable_threshold = if stale_mins > 0 {
+                                    Some((stale_mins * 60) as i64)
+                                } else {
+                                    None
+                                };
+                                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
+                                    &cfg,
+                                    configurable_threshold,
+                                    conductor_bin_dir
+                                ) {
+                                    tracing::warn!("auto_resume_stuck_workflows failed: {e}");
                                 }
                             })
                             .await
