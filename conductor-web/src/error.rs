@@ -38,6 +38,8 @@ impl IntoResponse for ApiError {
                     | ConductorError::WorktreeNotFound { .. }
                     | ConductorError::TicketNotFound { .. }
                     | ConductorError::WorkflowRunNotFound { .. }
+                    | ConductorError::WorkflowStepNotFound { .. }
+                    | ConductorError::WorkflowStepNotInRun { .. }
                     | ConductorError::AgentRunNotFound { .. }
                     | ConductorError::FeedbackNotFound { .. }
                     | ConductorError::AgentRunNotInConversation { .. }

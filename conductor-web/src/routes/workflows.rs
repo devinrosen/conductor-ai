@@ -9,7 +9,7 @@ use conductor_core::error::ConductorError;
 use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions,
+    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, FanOutItemRow,
     GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
     StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity, WorkflowDef, WorkflowExecConfig,
     WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles,
@@ -1005,6 +1005,29 @@ pub async fn get_workflow_steps(
     let mgr = WorkflowManager::new(&db);
     let steps = mgr.get_workflow_steps(&id)?;
     Ok(Json(steps))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/runs/{id}/steps/{step_id}/fan_out_items",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+        ("step_id" = String, Path, description = "Workflow run step ID"),
+    ),
+    responses(
+        (status = 200, description = "Fan-out items for the step", body = Vec<FanOutItemRow>),
+    ),
+    tag = "workflows",
+)]
+/// GET /api/workflows/runs/{id}/steps/{step_id}/fan_out_items
+pub async fn get_fan_out_items(
+    State(state): State<AppState>,
+    Path((id, step_id)): Path<(String, String)>,
+) -> Result<Json<Vec<FanOutItemRow>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let items = mgr.get_fan_out_items_checked(&id, &step_id, None)?;
+    Ok(Json(items))
 }
 
 /// GET /api/workflows/analytics/aggregates?repo_id=
