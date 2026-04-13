@@ -108,8 +108,6 @@ pub struct AppState {
     pub expanded_step_run_ids: HashSet<String>,
     /// foreach step IDs currently expanded in the step list (session-only, not persisted).
     pub expanded_foreach_step_ids: HashSet<String>,
-    /// Cached fan-out items from last background poll (step_run_id → items).
-    pub fan_out_items: HashMap<String, Vec<conductor_core::workflow::FanOutItemRow>>,
 
     pub should_quit: bool,
 
@@ -242,7 +240,6 @@ impl AppState {
             collapse_initialized: HashSet::new(),
             expanded_step_run_ids: HashSet::new(),
             expanded_foreach_step_ids: HashSet::new(),
-            fan_out_items: HashMap::new(),
             should_quit: false,
             show_closed_tickets: false,
             show_completed_workflow_runs: false,

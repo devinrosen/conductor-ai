@@ -577,7 +577,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         if state.workflow_run_detail_focus == WorkflowRunDetailFocus::Steps {
             if let KeyCode::Char(' ') = key.code {
                 if let Some(step) = state.data.workflow_steps.get(state.workflow_step_index) {
-                    if step.role == "foreach" {
+                    if step.role == conductor_core::workflow::STEP_ROLE_FOREACH {
                         return Action::ToggleForeachStepExpand;
                     }
                 }
@@ -1148,6 +1148,46 @@ mod tests {
         assert!(!matches!(
             map_key(key(KeyCode::Char('Y')), &state),
             Action::ApproveGate
+        ));
+    }
+
+    // --- Space key: ToggleForeachStepExpand binding ---
+
+    fn workflow_run_detail_steps_state_with_foreach() -> AppState {
+        use conductor_core::workflow::{WorkflowRunStep, STEP_ROLE_FOREACH};
+        let mut state = AppState::new();
+        state.view = View::WorkflowRunDetail;
+        state.workflow_run_detail_focus = crate::state::WorkflowRunDetailFocus::Steps;
+        let base = crate::state::tests::make_wf_step("step-fe", "run-1", "items", 0);
+        state.data.workflow_steps = vec![WorkflowRunStep {
+            role: STEP_ROLE_FOREACH.into(),
+            ..base
+        }];
+        state.workflow_step_index = 0;
+        state
+    }
+
+    #[test]
+    fn space_on_foreach_step_fires_toggle_foreach_expand() {
+        let state = workflow_run_detail_steps_state_with_foreach();
+        assert!(matches!(
+            map_key(key(KeyCode::Char(' ')), &state),
+            Action::ToggleForeachStepExpand
+        ));
+    }
+
+    #[test]
+    fn space_on_non_foreach_step_does_not_fire_toggle() {
+        let mut state = AppState::new();
+        state.view = View::WorkflowRunDetail;
+        state.workflow_run_detail_focus = crate::state::WorkflowRunDetailFocus::Steps;
+        // Default role from make_wf_step is "actor", not "foreach".
+        let step = crate::state::tests::make_wf_step("step-actor", "run-1", "build", 0);
+        state.data.workflow_steps = vec![step];
+        state.workflow_step_index = 0;
+        assert!(!matches!(
+            map_key(key(KeyCode::Char(' ')), &state),
+            Action::ToggleForeachStepExpand
         ));
     }
 

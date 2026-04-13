@@ -1,3 +1,6 @@
+/// Step role value for `foreach` steps, as stored in `workflow_run_steps.role`.
+pub const STEP_ROLE_FOREACH: &str = "foreach";
+
 /// Minimum number of recent runs required to emit a regression signal.
 pub const REGRESSION_MIN_RECENT_RUNS: i64 = 5;
 /// Flag duration regression if P75 increased by more than this percentage.

@@ -997,20 +997,19 @@ fn poll_workflow_data(
         }
     }
 
-    // Load fan-out items for all foreach steps in the selected run
-    let fan_out_items: std::collections::HashMap<
-        String,
-        Vec<conductor_core::workflow::FanOutItemRow>,
-    > = steps
+    // Load fan-out items for all foreach steps in the selected run (single batch query).
+    let foreach_step_ids: Vec<&str> = steps
         .iter()
-        .filter(|s| s.role == "foreach")
-        .filter_map(|s| {
-            wf_mgr
-                .get_fan_out_items(&s.id, None)
-                .ok()
-                .map(|items| (s.id.clone(), items))
-        })
+        .filter(|s| s.role == conductor_core::workflow::STEP_ROLE_FOREACH)
+        .map(|s| s.id.as_str())
         .collect();
+    let fan_out_items = match wf_mgr.get_fan_out_items_for_steps(&foreach_step_ids) {
+        Ok(items) => items,
+        Err(e) => {
+            tracing::warn!("get_fan_out_items_for_steps failed: {e}");
+            std::collections::HashMap::new()
+        }
+    };
 
     // Load agent events for the selected step's child run
     let agent_mgr = AgentManager::new(&conn);

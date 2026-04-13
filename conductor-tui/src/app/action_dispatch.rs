@@ -835,7 +835,7 @@ impl App {
                 self.state.data.step_agent_events = payload.step_agent_events;
                 self.state.data.step_agent_run = payload.step_agent_run;
                 self.state.data.workflow_run_steps = payload.all_run_steps;
-                self.state.fan_out_items = payload.fan_out_items;
+                self.state.data.fan_out_items = payload.fan_out_items;
                 self.state.init_collapse_state();
                 if let Some(msg) = workflow_parse_warning_message(&payload.workflow_parse_warnings)
                 {
@@ -930,7 +930,7 @@ impl App {
                     .workflow_steps
                     .get(self.state.workflow_step_index)
                 {
-                    if step.role == "foreach" {
+                    if step.role == conductor_core::workflow::STEP_ROLE_FOREACH {
                         let id = step.id.clone();
                         if !self.state.expanded_foreach_step_ids.remove(&id) {
                             self.state.expanded_foreach_step_ids.insert(id);

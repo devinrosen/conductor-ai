@@ -1769,8 +1769,9 @@ fn render_step_list(
         }
 
         // Foreach: append inline progress bar and, if expanded, per-item sub-rows.
-        if step.role == "foreach" {
+        if step.role == conductor_core::workflow::STEP_ROLE_FOREACH {
             let fo_items = state
+                .data
                 .fan_out_items
                 .get(&step.id)
                 .map(|v| v.as_slice())
@@ -1801,7 +1802,7 @@ fn render_step_list(
         .data
         .workflow_steps
         .get(state.workflow_step_index)
-        .map(|s| s.role == "foreach")
+        .map(|s| s.role == conductor_core::workflow::STEP_ROLE_FOREACH)
         .unwrap_or(false);
 
     let title = match (focused, has_waiting_gate, selected_is_foreach) {
@@ -1835,7 +1836,7 @@ fn render_step_list(
         let visual_offset: usize = state.data.workflow_steps[..state.workflow_step_index]
             .iter()
             .filter(|s| state.expanded_foreach_step_ids.contains(&s.id))
-            .map(|s| state.fan_out_items.get(&s.id).map_or(0, |v| v.len()))
+            .map(|s| state.data.fan_out_items.get(&s.id).map_or(0, |v| v.len()))
             .sum();
         list_state.select(Some(
             state.workflow_step_index + root_offset + visual_offset,
