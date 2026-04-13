@@ -1,5 +1,4 @@
 #![allow(unused_imports)]
-#![allow(deprecated)] // Tests use deprecated detect_stuck_workflow_run_ids stub
 
 use super::*;
 use crate::agent::AgentManager;
@@ -2335,7 +2334,6 @@ fn test_get_active_steps_for_runs_empty_ids() {
 // ---------------------------------------------------------------------------
 // detect_stuck_workflow_run_ids — detection logic tests
 // ---------------------------------------------------------------------------
-#[allow(deprecated)] // Tests use deprecated detect_stuck_workflow_run_ids stub
 /// Insert a workflow run in 'running' status with no parent_workflow_run_id.
 fn insert_running_root_run(conn: &Connection, run_id: &str) {
     let agent_mgr = AgentManager::new(conn);
@@ -2382,11 +2380,17 @@ fn test_reap_stuck_workflow_runs_detects_stale_run() {
     assert_eq!(ids.len(), 1, "stale run should be detected");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_fresh_run() {
     let conn = setup_db();
     insert_running_root_run(&conn, "fresh-run");
+    // Update heartbeat to now so the run appears fresh.
+    conn.execute(
+        "UPDATE workflow_runs SET last_heartbeat = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \
+         WHERE id = 'fresh-run'",
+        [],
+    )
+    .unwrap();
     // Step completed just now — store ended_at as the current UTC time.
     conn.execute(
         "INSERT INTO workflow_run_steps \
@@ -2398,12 +2402,11 @@ fn test_reap_stuck_workflow_runs_skips_fresh_run() {
     .unwrap();
 
     let mgr = WorkflowManager::new(&conn);
-    // Very large threshold — a just-completed step should not be detected.
+    // Very large threshold — a run with recent heartbeat should not be detected.
     let ids = mgr.detect_stuck_workflow_run_ids(999_999).unwrap();
     assert_eq!(ids.len(), 0, "fresh run must not be detected");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_pending_step() {
     let conn = setup_db();
@@ -2415,7 +2418,6 @@ fn test_reap_stuck_workflow_runs_skips_pending_step() {
     assert_eq!(ids.len(), 0, "run with pending step must not be detected");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_running_step() {
     let conn = setup_db();
@@ -2427,7 +2429,6 @@ fn test_reap_stuck_workflow_runs_skips_running_step() {
     assert_eq!(ids.len(), 0, "run with running step must not be detected");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_waiting_step() {
     let conn = setup_db();
@@ -2439,7 +2440,6 @@ fn test_reap_stuck_workflow_runs_skips_waiting_step() {
     assert_eq!(ids.len(), 0, "run with waiting step must not be detected");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     let conn = setup_db();
@@ -2460,12 +2460,12 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     insert_terminal_step_with_id(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
+    // Sub-workflows (parent_workflow_run_id IS NOT NULL) are excluded from
+    // stuck detection — only root runs are checked.
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
-    assert_eq!(ids.len(), 1, "sub-workflow must also be detected as stuck");
-    assert_eq!(ids[0], "sub-run");
+    assert_eq!(ids.len(), 0, "sub-workflow must not be detected as stuck");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_non_running_status() {
     let conn = setup_db();
@@ -2499,7 +2499,6 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
     assert_eq!(ids.len(), 0, "non-running status runs must not be detected");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_no_steps() {
     let conn = setup_db();
@@ -2511,7 +2510,6 @@ fn test_reap_stuck_workflow_runs_skips_no_steps() {
     assert_eq!(ids.len(), 0, "run with no steps must not be detected");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
     let conn = setup_db();
@@ -2790,7 +2788,6 @@ fn test_detect_stuck_finds_run_with_only_terminal_steps() {
     assert_eq!(ids[0], "stuck-run");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_detect_stuck_skips_run_with_active_steps() {
     let conn = setup_db();

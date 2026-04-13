@@ -341,12 +341,33 @@ impl<'a> WorkflowManager<'a> {
         Ok(reaped)
     }
 
-    /// DEPRECATED: Stub for removed dead API to maintain test compatibility.
-    /// This function was removed as dead code but tests still reference it.
-    /// TODO: Remove this stub and fix/remove the associated tests.
-    #[deprecated(note = "This API was removed as dead code")]
-    pub fn detect_stuck_workflow_run_ids(&self, _threshold_secs: i64) -> Result<Vec<String>> {
-        Ok(Vec::new())
+    /// Detect workflow run IDs that are stuck in `running` status because the
+    /// executor process died between steps (all steps terminal, no active work).
+    ///
+    /// This is the detection-only counterpart of [`reap_heartbeat_stuck_runs`],
+    /// useful for diagnostics and tests. Uses the same heartbeat-based query.
+    pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
+        query_collect(
+            self.conn,
+            "SELECT id FROM workflow_runs \
+             WHERE status = 'running' \
+               AND parent_workflow_run_id IS NULL \
+               AND EXISTS ( \
+                 SELECT 1 FROM workflow_run_steps wrs \
+                 WHERE wrs.workflow_run_id = workflow_runs.id \
+               ) \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM workflow_run_steps wrs \
+                 WHERE wrs.workflow_run_id = workflow_runs.id \
+                   AND wrs.status IN ('running', 'pending', 'waiting') \
+               ) \
+               AND ( \
+                 CAST(strftime('%s', 'now') AS INTEGER) - \
+                 CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
+               ) > ?1",
+            params![threshold_secs],
+            |row| row.get(0),
+        )
     }
 
     /// Detect workflow runs with an active step that has been running longer
