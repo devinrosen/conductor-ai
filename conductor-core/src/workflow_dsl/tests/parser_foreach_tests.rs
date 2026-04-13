@@ -255,6 +255,49 @@ fn test_foreach_invalid_on_child_fail() {
 }
 
 #[test]
+fn test_foreach_scope_unlabeled_true() {
+    let input = r#"
+        workflow test {
+            foreach unlabeled-work {
+                over         = tickets
+                scope        = { unlabeled = true }
+                max_parallel = 5
+                workflow     = "label-ticket"
+            }
+        }
+    "#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    match &def.body[0] {
+        WorkflowNode::ForEach(n) => {
+            assert_eq!(n.over, ForeachOver::Tickets);
+            match &n.scope {
+                Some(TicketScope::Unlabeled) => {}
+                other => panic!("Expected Unlabeled scope, got {other:?}"),
+            }
+        }
+        other => panic!("Expected ForEach node, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_foreach_scope_unlabeled_false_is_error() {
+    let input = r#"
+        workflow test {
+            foreach unlabeled-work {
+                over         = tickets
+                scope        = { unlabeled = false }
+                max_parallel = 5
+                workflow     = "label-ticket"
+            }
+        }
+    "#;
+    let result = parse_workflow_str(input, "test.wf");
+    assert!(result.is_err());
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("scope.unlabeled must be true"), "got: {err}");
+}
+
+#[test]
 fn test_foreach_scope_missing_key() {
     let input = r#"
         workflow test {
@@ -270,7 +313,7 @@ fn test_foreach_scope_missing_key() {
     assert!(result.is_err());
     let err = format!("{}", result.unwrap_err());
     assert!(
-        err.contains("scope must contain ticket_id or label"),
+        err.contains("scope must contain ticket_id, label, or unlabeled"),
         "got: {err}"
     );
 }

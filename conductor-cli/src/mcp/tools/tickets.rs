@@ -33,6 +33,7 @@ pub(super) fn tool_list_tickets(
         labels,
         search,
         include_closed,
+        unlabeled_only: false,
     };
 
     let (conn, config) = match open_db_and_config(db_path) {

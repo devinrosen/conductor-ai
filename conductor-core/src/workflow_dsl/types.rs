@@ -263,6 +263,8 @@ pub enum TicketScope {
     TicketId(String),
     /// All open tickets with the given label in the repo.
     Label(String),
+    /// All open tickets with no entries in ticket_labels.
+    Unlabeled,
 }
 
 /// What to do when a child workflow fails.
