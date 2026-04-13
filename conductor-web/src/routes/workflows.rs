@@ -1026,15 +1026,7 @@ pub async fn get_fan_out_items(
 ) -> Result<Json<Vec<FanOutItemRow>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let step = mgr
-        .get_step_by_id(&step_id)?
-        .ok_or_else(|| ApiError::NotFound(format!("step {step_id} not found")))?;
-    if step.workflow_run_id != id {
-        return Err(ApiError::NotFound(format!(
-            "step {step_id} does not belong to run {id}"
-        )));
-    }
-    let items = mgr.get_fan_out_items(&step_id, None)?;
+    let items = mgr.get_fan_out_items_checked(&id, &step_id, None)?;
     Ok(Json(items))
 }
 

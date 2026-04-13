@@ -3,7 +3,7 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::query_collect;
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
 
 use super::WorkflowManager;
 
@@ -40,6 +40,27 @@ impl<'a> WorkflowManager<'a> {
             params![id, step_run_id, item_type, item_id, item_ref],
         )?;
         Ok(id)
+    }
+
+    /// Fetch fan-out items for a step, validating that the step belongs to the specified run.
+    /// Returns `WorkflowStepNotFound` if the step doesn't exist, or `WorkflowStepNotInRun`
+    /// if it exists but belongs to a different run. Protects all callers (web, CLI, MCP).
+    pub fn get_fan_out_items_checked(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<FanOutItemRow>> {
+        let step = self
+            .get_step_by_id(step_id)?
+            .ok_or_else(|| ConductorError::WorkflowStepNotFound { id: step_id.to_string() })?;
+        if step.workflow_run_id != run_id {
+            return Err(ConductorError::WorkflowStepNotInRun {
+                step_id: step_id.to_string(),
+                run_id: run_id.to_string(),
+            });
+        }
+        self.get_fan_out_items(step_id, status_filter)
     }
 
     /// Fetch all fan-out items for a step, optionally filtered by status.
