@@ -438,6 +438,7 @@ pub async fn run_workflow(
             force: false,
             extra_plugin_dirs: vec![],
             db_path: Some(db_path.clone()),
+            parent_workflow_run_id: None,
         };
 
         let result = conductor_core::workflow::execute_workflow_standalone(&params);

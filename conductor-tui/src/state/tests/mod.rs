@@ -169,6 +169,10 @@ pub(crate) fn make_wf_step(
         output_tokens: None,
         cache_read_input_tokens: None,
         cache_creation_input_tokens: None,
+        fan_out_total: None,
+        fan_out_completed: 0,
+        fan_out_failed: 0,
+        fan_out_skipped: 0,
     }
 }
 
@@ -223,40 +227,11 @@ pub(crate) fn make_iter_step(
     iteration: i64,
     position: i64,
 ) -> conductor_core::workflow::WorkflowRunStep {
-    conductor_core::workflow::WorkflowRunStep {
-        id: format!("{run_id}-{step_name}-{iteration}"),
-        workflow_run_id: run_id.to_string(),
-        step_name: step_name.to_string(),
-        role: "agent".to_string(),
-        can_commit: false,
-        condition_expr: None,
-        status: conductor_core::workflow::WorkflowStepStatus::Completed,
-        child_run_id: None,
-        position,
-        started_at: None,
-        ended_at: None,
-        result_text: None,
-        condition_met: None,
-        iteration,
-        parallel_group_id: None,
-        context_out: None,
-        markers_out: None,
-        retry_count: 0,
-        gate_type: None,
-        gate_prompt: None,
-        gate_timeout: None,
-        gate_approved_by: None,
-        gate_approved_at: None,
-        gate_feedback: None,
-        structured_output: None,
-        output_file: None,
-        gate_options: None,
-        gate_selections: None,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_input_tokens: None,
-        cache_creation_input_tokens: None,
-    }
+    let id = format!("{run_id}-{step_name}-{iteration}");
+    let mut step = make_wf_step(&id, run_id, step_name, position);
+    step.role = "agent".to_string();
+    step.iteration = iteration;
+    step
 }
 
 /// Helper: put state into single-worktree (non-global) mode.

@@ -368,6 +368,32 @@ fn ensure_base_up_to_date_with_fetch_control(
     Ok(warnings)
 }
 
+/// Fast-forward pull in a worktree directory using `git pull --ff-only`.
+///
+/// Returns `Ok(())` on success, `Err(message)` on failure (non-zero exit or spawn
+/// error). The `branch` parameter is used only for the error message.
+pub(super) fn pull_ff_only(worktree_path: &str, branch: &str) -> std::result::Result<(), String> {
+    match Command::new("git")
+        .args(["pull", "--ff-only"])
+        .current_dir(worktree_path)
+        .output()
+    {
+        Err(e) => Err(format!(
+            "failed to spawn git pull for branch '{}': {}",
+            branch, e
+        )),
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            Err(format!(
+                "git pull --ff-only failed for branch '{}': {}",
+                branch,
+                stderr.trim()
+            ))
+        }
+    }
+}
+
 /// Remove the git worktree directory and delete the associated branch.
 /// Both operations are best-effort: failures are logged but not propagated because the
 /// worktree or branch may already be gone (e.g. manually removed).

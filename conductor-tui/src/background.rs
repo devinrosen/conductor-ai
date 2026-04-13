@@ -997,6 +997,20 @@ fn poll_workflow_data(
         }
     }
 
+    // Load fan-out items for all foreach steps in the selected run (single batch query).
+    let foreach_step_ids: Vec<&str> = steps
+        .iter()
+        .filter(|s| s.role == conductor_core::workflow::STEP_ROLE_FOREACH)
+        .map(|s| s.id.as_str())
+        .collect();
+    let fan_out_items = match wf_mgr.get_fan_out_items_for_steps(&foreach_step_ids) {
+        Ok(items) => items,
+        Err(e) => {
+            tracing::warn!("get_fan_out_items_for_steps failed: {e}");
+            std::collections::HashMap::new()
+        }
+    };
+
     // Load agent events for the selected step's child run
     let agent_mgr = AgentManager::new(&conn);
     let (step_agent_events, step_agent_run) = if let Some(child_run_id) = selected_step_child_run_id
@@ -1020,6 +1034,7 @@ fn poll_workflow_data(
             step_agent_run,
             workflow_parse_warnings: parse_warnings,
             all_run_steps,
+            fan_out_items,
         },
     )))
 }

@@ -803,7 +803,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         exec_config: &params.exec_config,
         inputs: params.inputs.clone(),
         depth: 0,
-        parent_workflow_run_id: None,
+        parent_workflow_run_id: params.parent_workflow_run_id.as_deref(),
         target_label: params.target_label.as_deref(),
         default_bot_name: None,
         feature_id: params.feature_id.as_deref(),
@@ -1115,6 +1115,7 @@ pub(super) fn execute_single_node(
         WorkflowNode::Parallel(n) => super::executors::execute_parallel(state, n, iteration)?,
         WorkflowNode::Gate(n) => super::executors::execute_gate(state, n, iteration)?,
         WorkflowNode::Script(n) => super::executors::execute_script(state, n, iteration)?,
+        WorkflowNode::ForEach(n) => super::executors::execute_foreach(state, n, iteration)?,
         WorkflowNode::Always(n) => {
             // Nested always — just execute body
             execute_nodes(state, &n.body, false)?;

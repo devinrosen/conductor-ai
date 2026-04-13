@@ -1,6 +1,7 @@
 mod call;
 mod call_workflow;
 mod control_flow;
+mod foreach;
 mod gate;
 mod parallel;
 mod script;
@@ -14,6 +15,7 @@ pub(super) use call_workflow::execute_call_workflow;
 pub(super) use control_flow::{
     execute_do, execute_do_while, execute_if, execute_unless, execute_while,
 };
+pub(super) use foreach::execute_foreach;
 pub(super) use gate::execute_gate;
 #[cfg(test)]
 pub(super) use gate::handle_gate_timeout;

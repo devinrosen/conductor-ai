@@ -573,6 +573,16 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => {}
             }
         }
+        // Space toggles expand/collapse for foreach steps (Steps focus only)
+        if state.workflow_run_detail_focus == WorkflowRunDetailFocus::Steps {
+            if let KeyCode::Char(' ') = key.code {
+                if let Some(step) = state.data.workflow_steps.get(state.workflow_step_index) {
+                    if step.role == conductor_core::workflow::STEP_ROLE_FOREACH {
+                        return Action::ToggleForeachStepExpand;
+                    }
+                }
+            }
+        }
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,
@@ -1098,39 +1108,12 @@ mod tests {
         use conductor_core::workflow::{GateType, WorkflowRunStep, WorkflowStepStatus};
         let mut state = AppState::new();
         state.view = View::WorkflowRunDetail;
+        let base = crate::state::tests::make_wf_step("step-1", "run-1", "review", 0);
         state.data.workflow_steps = vec![WorkflowRunStep {
-            id: "step-1".into(),
-            workflow_run_id: "run-1".into(),
-            step_name: "review".into(),
             role: "reviewer".into(),
-            can_commit: false,
-            condition_expr: None,
             status: WorkflowStepStatus::Waiting,
-            child_run_id: None,
-            position: 0,
-            started_at: None,
-            ended_at: None,
-            result_text: None,
-            condition_met: None,
-            iteration: 0,
-            parallel_group_id: None,
-            context_out: None,
-            markers_out: None,
-            retry_count: 0,
             gate_type: Some(GateType::HumanApproval),
-            gate_prompt: None,
-            gate_timeout: None,
-            gate_approved_by: None,
-            gate_approved_at: None,
-            gate_feedback: None,
-            structured_output: None,
-            output_file: None,
-            gate_options: None,
-            gate_selections: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+            ..base
         }];
         state
     }
@@ -1165,6 +1148,46 @@ mod tests {
         assert!(!matches!(
             map_key(key(KeyCode::Char('Y')), &state),
             Action::ApproveGate
+        ));
+    }
+
+    // --- Space key: ToggleForeachStepExpand binding ---
+
+    fn workflow_run_detail_steps_state_with_foreach() -> AppState {
+        use conductor_core::workflow::{WorkflowRunStep, STEP_ROLE_FOREACH};
+        let mut state = AppState::new();
+        state.view = View::WorkflowRunDetail;
+        state.workflow_run_detail_focus = crate::state::WorkflowRunDetailFocus::Steps;
+        let base = crate::state::tests::make_wf_step("step-fe", "run-1", "items", 0);
+        state.data.workflow_steps = vec![WorkflowRunStep {
+            role: STEP_ROLE_FOREACH.into(),
+            ..base
+        }];
+        state.workflow_step_index = 0;
+        state
+    }
+
+    #[test]
+    fn space_on_foreach_step_fires_toggle_foreach_expand() {
+        let state = workflow_run_detail_steps_state_with_foreach();
+        assert!(matches!(
+            map_key(key(KeyCode::Char(' ')), &state),
+            Action::ToggleForeachStepExpand
+        ));
+    }
+
+    #[test]
+    fn space_on_non_foreach_step_does_not_fire_toggle() {
+        let mut state = AppState::new();
+        state.view = View::WorkflowRunDetail;
+        state.workflow_run_detail_focus = crate::state::WorkflowRunDetailFocus::Steps;
+        // Default role from make_wf_step is "actor", not "foreach".
+        let step = crate::state::tests::make_wf_step("step-actor", "run-1", "build", 0);
+        state.data.workflow_steps = vec![step];
+        state.workflow_step_index = 0;
+        assert!(!matches!(
+            map_key(key(KeyCode::Char(' ')), &state),
+            Action::ToggleForeachStepExpand
         ));
     }
 
