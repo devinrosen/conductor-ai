@@ -1,5 +1,6 @@
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 use crate::db::query_collect;
 use crate::error::Result;
@@ -7,7 +8,8 @@ use crate::error::Result;
 use super::WorkflowManager;
 
 /// A single row in the `workflow_run_step_fan_out_items` table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FanOutItemRow {
     pub id: String,
     pub step_run_id: String,
