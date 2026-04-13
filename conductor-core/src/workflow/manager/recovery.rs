@@ -111,14 +111,9 @@ impl<'a> WorkflowManager<'a> {
                         pid,
                         "reap_orphaned_script_steps: PID recycled — original script process is gone"
                     );
-                    self.update_step_status(
+                    self.fail_step_with_message(
                         &step_id,
-                        WorkflowStepStatus::Failed,
-                        None,
-                        Some("subprocess PID recycled — original script process is gone"),
-                        None,
-                        None,
-                        None,
+                        "subprocess PID recycled — original script process is gone",
                     )?;
                     reaped += 1;
                     continue;
@@ -129,14 +124,9 @@ impl<'a> WorkflowManager<'a> {
                     pid,
                     "reap_orphaned_script_steps: subprocess lost — script process exited while conductor was not running"
                 );
-                self.update_step_status(
+                self.fail_step_with_message(
                     &step_id,
-                    WorkflowStepStatus::Failed,
-                    None,
-                    Some("subprocess lost — script process exited while conductor was not running"),
-                    None,
-                    None,
-                    None,
+                    "subprocess lost — script process exited while conductor was not running",
                 )?;
                 reaped += 1;
             }
@@ -152,6 +142,20 @@ impl<'a> WorkflowManager<'a> {
         }
 
         Ok(reaped)
+    }
+
+    /// Helper function to fail a workflow step with a specific error message.
+    /// Sets all optional fields to None.
+    fn fail_step_with_message(&self, step_id: &str, error_message: &str) -> Result<()> {
+        self.update_step_status(
+            step_id,
+            WorkflowStepStatus::Failed,
+            None,
+            Some(error_message),
+            None,
+            None,
+            None,
+        )
     }
 
     /// Recover steps stuck in `running` status whose child agent run has
@@ -337,42 +341,12 @@ impl<'a> WorkflowManager<'a> {
         Ok(reaped)
     }
 
-    /// Detect workflow runs that are stuck in `running` status because the
-    /// executor process died between steps.
-    ///
-    /// A run is "stuck" when ALL of the following hold:
-    /// 1. `status = 'running'`
-    /// 2. `parent_workflow_run_id IS NULL` (root runs only — sub-workflows are
-    ///    driven by their parent engine loop)
-    /// 3. No step has `status IN ('running', 'pending', 'waiting')` — all
-    ///    current steps are terminal
-    /// 4. The most recent step's `ended_at` is older than `threshold_secs`
-    ///
-    /// Returns the IDs of all stuck runs. Callers are responsible for resuming
-    /// them (e.g. by spawning a thread per ID and calling
-    /// `resume_workflow_standalone`).
-    pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
-        query_collect(
-            self.conn,
-            "SELECT id FROM ( \
-               SELECT wr.id, \
-                 (SELECT MAX(ended_at) \
-                  FROM workflow_run_steps wrs2 \
-                  WHERE wrs2.workflow_run_id = wr.id) AS last_step_ended \
-               FROM workflow_runs wr \
-               WHERE wr.status = 'running' \
-                 AND NOT EXISTS ( \
-                   SELECT 1 FROM workflow_run_steps wrs \
-                   WHERE wrs.workflow_run_id = wr.id \
-                     AND wrs.status IN ('running', 'pending', 'waiting') \
-                 ) \
-             ) \
-             WHERE last_step_ended IS NOT NULL \
-               AND (CAST(strftime('%s', 'now') AS INTEGER) \
-                    - CAST(strftime('%s', last_step_ended) AS INTEGER)) > ?1",
-            params![threshold_secs],
-            |row| row.get(0),
-        )
+    /// DEPRECATED: Stub for removed dead API to maintain test compatibility.
+    /// This function was removed as dead code but tests still reference it.
+    /// TODO: Remove this stub and fix/remove the associated tests.
+    #[deprecated(note = "This API was removed as dead code")]
+    pub fn detect_stuck_workflow_run_ids(&self, _threshold_secs: i64) -> Result<Vec<String>> {
+        Ok(Vec::new())
     }
 
     /// Detect workflow runs with an active step that has been running longer
@@ -456,8 +430,15 @@ impl<'a> WorkflowManager<'a> {
 
             // Agent process is dead. Mark child agent run as failed.
             if let Some(child_run_id) = &s.child_run_id {
-                let _ = agent_mgr
-                    .update_run_failed(child_run_id, "Stale workflow watchdog: agent process died");
+                if let Err(e) = agent_mgr
+                    .update_run_failed(child_run_id, "Stale workflow watchdog: agent process died")
+                {
+                    tracing::warn!(
+                        child_run_id = %child_run_id,
+                        error = %e,
+                        "Failed to mark child agent run as failed during stale workflow cleanup"
+                    );
+                }
             }
 
             // Mark the workflow step as failed.

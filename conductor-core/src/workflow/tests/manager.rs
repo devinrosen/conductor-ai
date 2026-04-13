@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+#![allow(deprecated)] // Tests use deprecated detect_stuck_workflow_run_ids stub
 
 use super::*;
 use crate::agent::AgentManager;
@@ -2334,7 +2335,7 @@ fn test_get_active_steps_for_runs_empty_ids() {
 // ---------------------------------------------------------------------------
 // detect_stuck_workflow_run_ids — detection logic tests
 // ---------------------------------------------------------------------------
-
+#[allow(deprecated)] // Tests use deprecated detect_stuck_workflow_run_ids stub
 /// Insert a workflow run in 'running' status with no parent_workflow_run_id.
 fn insert_running_root_run(conn: &Connection, run_id: &str) {
     let agent_mgr = AgentManager::new(conn);
@@ -2362,6 +2363,7 @@ fn insert_non_terminal_step(conn: &Connection, step_id: &str, run_id: &str, stat
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_reap_stuck_workflow_runs_detects_stale_run() {
     let conn = setup_db();
     insert_running_root_run(&conn, "stuck-run");
@@ -2380,6 +2382,7 @@ fn test_reap_stuck_workflow_runs_detects_stale_run() {
     assert_eq!(ids.len(), 1, "stale run should be detected");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_fresh_run() {
     let conn = setup_db();
@@ -2400,6 +2403,7 @@ fn test_reap_stuck_workflow_runs_skips_fresh_run() {
     assert_eq!(ids.len(), 0, "fresh run must not be detected");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_pending_step() {
     let conn = setup_db();
@@ -2411,6 +2415,7 @@ fn test_reap_stuck_workflow_runs_skips_pending_step() {
     assert_eq!(ids.len(), 0, "run with pending step must not be detected");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_running_step() {
     let conn = setup_db();
@@ -2422,6 +2427,7 @@ fn test_reap_stuck_workflow_runs_skips_running_step() {
     assert_eq!(ids.len(), 0, "run with running step must not be detected");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_waiting_step() {
     let conn = setup_db();
@@ -2433,6 +2439,7 @@ fn test_reap_stuck_workflow_runs_skips_waiting_step() {
     assert_eq!(ids.len(), 0, "run with waiting step must not be detected");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     let conn = setup_db();
@@ -2458,6 +2465,7 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     assert_eq!(ids[0], "sub-run");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_non_running_status() {
     let conn = setup_db();
@@ -2491,6 +2499,7 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
     assert_eq!(ids.len(), 0, "non-running status runs must not be detected");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_skips_no_steps() {
     let conn = setup_db();
@@ -2502,6 +2511,7 @@ fn test_reap_stuck_workflow_runs_skips_no_steps() {
     assert_eq!(ids.len(), 0, "run with no steps must not be detected");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
     let conn = setup_db();
@@ -2780,6 +2790,7 @@ fn test_detect_stuck_finds_run_with_only_terminal_steps() {
     assert_eq!(ids[0], "stuck-run");
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_detect_stuck_skips_run_with_active_steps() {
     let conn = setup_db();

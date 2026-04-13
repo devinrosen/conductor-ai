@@ -296,7 +296,13 @@ pub fn execute_script(
         // Clear PID exactly once — covers all result variants, including any
         // future additions to ScriptPollResult, providing a mechanical guarantee
         // that no terminal path can accidentally leave a stale PID in the DB.
-        let _ = state.wf_mgr.set_step_subprocess_pid(&step_id, None);
+        if let Err(e) = state.wf_mgr.set_step_subprocess_pid(&step_id, None) {
+            tracing::warn!(
+                step_id = %step_id,
+                error = %e,
+                "Failed to clear subprocess PID during script step cleanup"
+            );
+        }
 
         match poll_result {
             ScriptPollResult::Succeeded => {
