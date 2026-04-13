@@ -1,8 +1,11 @@
 # RFC 016: Headless Agent Execution
 
-**Status:** Draft
+**Status:** Implemented
 **Date:** 2026-04-10
+**Closed:** 2026-04-12
 **Author:** Devin
+
+**Implementation:** Shipped in v0.3.0 (#1993). All tmux-based agent spawning replaced with headless subprocess infrastructure. `HeadlessHandle`, `spawn_headless()`, `drain_stream_json()`, PID-based orphan detection, SIGTERM cancellation, and SSE streaming to the web UI all landed as designed. The orphan reaper was subsequently simplified in v0.3.1 (#1992) once direct subprocess lifecycle ownership made tmux window checks redundant.
 
 ---
 
