@@ -1,5 +1,143 @@
-%% Updated 2026-04-10 — Entity-relationship diagram for conductor.db (63 migrations)
+%% Updated 2026-04-13 — Entity-relationship diagram for conductor.db (64 migrations)
 erDiagram
+
+    _conductor_meta {
+        text key PK
+        text value
+    }
+
+    agent_created_issues {
+        text id PK
+        text agent_run_id FK
+        text repo_id FK
+        text source_type
+        text source_id
+        text title
+        text url
+        text created_at
+    }
+
+    agent_run_events {
+        text id PK
+        text run_id FK
+        text kind
+        text summary
+        text started_at
+        text ended_at
+        text metadata
+    }
+
+    agent_run_steps {
+        text id PK
+        text run_id FK
+        int position
+        text description
+        text status
+        text started_at
+        text completed_at
+    }
+
+    agent_runs {
+        text id PK
+        text worktree_id FK
+        text claude_session_id
+        text prompt
+        text status
+        text result_text
+        real cost_usd
+        int num_turns
+        int duration_ms
+        text started_at
+        text ended_at
+        text tmux_window
+        text log_file
+        text model
+        text plan
+        text parent_run_id FK
+        int input_tokens
+        int output_tokens
+        int cache_read_input_tokens
+        int cache_creation_input_tokens
+        text bot_name
+        text repo_id FK
+        text conversation_id FK
+        int subprocess_pid
+    }
+
+    conversations {
+        text id PK
+        text scope
+        text scope_id
+        text title
+        text created_at
+        text last_active_at
+    }
+
+    feature_tickets {
+        text feature_id FK
+        text ticket_id FK
+    }
+
+    features {
+        text id PK
+        text repo_id FK
+        text name
+        text branch
+        text base_branch
+        text status
+        text created_at
+        text merged_at
+        text last_commit_at
+    }
+
+    feedback_requests {
+        text id PK
+        text run_id FK
+        text prompt
+        text response
+        text status
+        text created_at
+        text responded_at
+        text feedback_type
+        text options_json
+        int timeout_secs
+    }
+
+    notification_log {
+        text entity_id PK
+        text event_type PK
+        text fired_at
+    }
+
+    notifications {
+        text id PK
+        text kind
+        text title
+        text body
+        text severity
+        text entity_id
+        text entity_type
+        bool read
+        text created_at
+        text read_at
+    }
+
+    push_subscriptions {
+        text id PK
+        text endpoint
+        text p256dh
+        text auth
+        text created_at
+        text updated_at
+    }
+
+    repo_issue_sources {
+        text id PK
+        text repo_id FK
+        text source_type
+        text config_json
+    }
+
     repos {
         text id PK
         text slug
@@ -10,25 +148,16 @@ erDiagram
         bool allow_agent_issue_creation
     }
 
-    repo_issue_sources {
-        text id PK
-        text repo_id FK
-        text source_type
-        text config_json
+    ticket_dependencies {
+        text from_ticket_id FK
+        text to_ticket_id FK
+        text dep_type PK
     }
 
-    worktrees {
-        text id PK
-        text repo_id FK
-        text slug
-        text branch
-        text path
+    ticket_labels {
         text ticket_id FK
-        text status
-        text created_at
-        text completed_at
-        text base_branch
-        text model
+        text label PK
+        text color
     }
 
     tickets {
@@ -49,143 +178,16 @@ erDiagram
         text agent_map
     }
 
-    ticket_labels {
-        text ticket_id FK
-        text label
-        text color
-    }
-
-    ticket_dependencies {
-        text from_ticket_id FK
-        text to_ticket_id FK
-        text dep_type
-    }
-
-    features {
+    workflow_run_step_fan_out_items {
         text id PK
-        text repo_id FK
-        text name
-        text branch
-        text base_branch
+        text step_run_id FK
+        text item_type
+        text item_id
+        text item_ref
+        text child_run_id
         text status
-        text created_at
-        text merged_at
-    }
-
-    feature_tickets {
-        text feature_id FK
-        text ticket_id FK
-    }
-
-    agent_runs {
-        text id PK
-        text worktree_id FK
-        text repo_id FK
-        text conversation_id FK
-        text claude_session_id
-        text prompt
-        text status
-        text result_text
-        real cost_usd
-        int num_turns
-        int duration_ms
-        text started_at
-        text ended_at
-        text tmux_window
-        text log_file
-        text model
-        text plan
-        text parent_run_id FK
-        int input_tokens
-        int output_tokens
-        int cache_read_input_tokens
-        int cache_creation_input_tokens
-        text bot_name
-    }
-
-    agent_run_steps {
-        text id PK
-        text run_id FK
-        int position
-        text description
-        text status
-        text started_at
+        text dispatched_at
         text completed_at
-    }
-
-    agent_run_events {
-        text id PK
-        text run_id FK
-        text kind
-        text summary
-        text started_at
-        text ended_at
-        text metadata
-    }
-
-    agent_created_issues {
-        text id PK
-        text agent_run_id FK
-        text repo_id FK
-        text source_type
-        text source_id
-        text title
-        text url
-        text created_at
-    }
-
-    feedback_requests {
-        text id PK
-        text run_id FK
-        text prompt
-        text response
-        text status
-        text created_at
-        text responded_at
-        text feedback_type
-        text options_json
-        int timeout_secs
-    }
-
-    conversations {
-        text id PK
-        text scope
-        text scope_id
-        text title
-        text created_at
-        text last_active_at
-    }
-
-    workflow_runs {
-        text id PK
-        text workflow_name
-        text worktree_id FK
-        text parent_run_id FK
-        text feature_id FK
-        text status
-        bool dry_run
-        text trigger
-        text started_at
-        text ended_at
-        text result_summary
-        text definition_snapshot
-        text inputs
-        text ticket_id FK
-        text repo_id FK
-        text parent_workflow_run_id FK
-        text target_label
-        text default_bot_name
-        int iteration
-        text blocked_on
-        text error
-        text model
-        int total_input_tokens
-        int total_output_tokens
-        int total_cache_read_input_tokens
-        int total_cache_creation_input_tokens
-        int total_turns
-        real total_cost_usd
-        int total_duration_ms
     }
 
     workflow_run_steps {
@@ -196,7 +198,7 @@ erDiagram
         bool can_commit
         text condition_expr
         text status
-        text child_run_id FK
+        text child_run_id
         int position
         text started_at
         text ended_at
@@ -213,45 +215,63 @@ erDiagram
         text gate_approved_by
         text gate_approved_at
         text gate_feedback
-        text gate_options
-        text gate_selections
         text structured_output
         text output_file
+        text gate_options
+        text gate_selections
+        int subprocess_pid
+        int fan_out_total
+        int fan_out_completed
+        int fan_out_failed
+        int fan_out_skipped
     }
 
-    notifications {
+    workflow_runs {
         text id PK
-        text kind
-        text title
-        text body
-        text severity
-        text entity_id
-        text entity_type
-        bool read
-        text created_at
-        text read_at
+        text workflow_name
+        text worktree_id FK
+        text parent_run_id FK
+        text status
+        bool dry_run
+        text trigger
+        text started_at
+        text ended_at
+        text result_summary
+        text definition_snapshot
+        text inputs
+        text ticket_id FK
+        text repo_id FK
+        text parent_workflow_run_id FK
+        text target_label
+        text default_bot_name
+        int iteration
+        text blocked_on
+        text feature_id FK
+        int total_input_tokens
+        int total_output_tokens
+        int total_cache_read_input_tokens
+        int total_cache_creation_input_tokens
+        int total_turns
+        real total_cost_usd
+        int total_duration_ms
+        text model
+        text error
+        text last_heartbeat
     }
 
-    notification_log {
-        text entity_id PK
-        text event_type PK
-        text fired_at
-    }
-
-    push_subscriptions {
+    worktrees {
         text id PK
-        text endpoint
-        text p256dh
-        text auth
+        text repo_id FK
+        text slug
+        text branch
+        text path
+        text ticket_id FK
+        text status
         text created_at
-        text updated_at
+        text completed_at
+        text model
+        text base_branch
     }
-
-    _conductor_meta {
-        text key PK
-        text value
-    }
-
     repos ||--o{ repo_issue_sources : "has"
     repos ||--o{ worktrees : "has"
     repos ||--o{ tickets : "has"

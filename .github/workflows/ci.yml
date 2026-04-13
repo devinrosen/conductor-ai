@@ -100,5 +100,34 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: cargo run --bin conductor -- workflow validate --all --path .
 
+  schema-diagram-count:
+    name: Schema Diagram Count
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check migration count matches diagram header
+        run: |
+          MIGRATION_COUNT=$(ls conductor-core/src/db/migrations/*.sql | wc -l | tr -d ' ')
+          DIAGRAM_COUNT=$(grep -o '[0-9]* migrations' docs/diagrams/database-schema.mmd | grep -o '[0-9]*')
+          if [ "$MIGRATION_COUNT" != "$DIAGRAM_COUNT" ]; then
+            echo "database-schema.mmd says $DIAGRAM_COUNT migrations but $MIGRATION_COUNT exist."
+            echo "Run: cargo run --bin gen-schema-diagram"
+            exit 1
+          fi
+
+  schema-diagram-sync:
+    name: Schema Diagram Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --bin gen-schema-diagram
+      - name: Fail if diagram is out of date
+        run: |
+          git diff --exit-code docs/diagrams/database-schema.mmd || {
+            echo "database-schema.mmd is out of date. Run: cargo run --bin gen-schema-diagram"
+            exit 1
+          }
+
   # Playwright E2E tests run locally via the pre-push git hook (.githooks/pre-push).
   # See CLAUDE.md for setup: git config core.hooksPath .githooks
