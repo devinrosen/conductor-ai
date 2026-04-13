@@ -621,16 +621,16 @@ fn resolve_child_context_ids(
     }
 }
 
-/// Dispatch one fan-out item: resolve inputs, execute child workflow in a thread,
-/// and update fan_out_items to 'running'.
-fn dispatch_child_workflow(
+/// Build the `WorkflowExecStandalone` params for a single fan-out item dispatch.
+///
+/// Extracted from `dispatch_child_workflow` so the param-construction logic can be
+/// unit-tested without spawning threads or running actual workflows.
+fn build_child_dispatch_params(
     state: &mut ExecutionState<'_>,
     node: &ForEachNode,
-    step_id: &str,
     item: &crate::workflow::manager::FanOutItemRow,
     child_def: &crate::workflow_dsl::WorkflowDef,
-    _iteration: u32,
-) -> Result<()> {
+) -> Result<WorkflowExecStandalone> {
     // Build item-specific variable map for {{item.*}} substitution.
     let item_vars = build_item_vars(state, node, item)?;
 
@@ -683,7 +683,7 @@ fn dispatch_child_workflow(
         &state.worktree_id,
     );
 
-    let params = WorkflowExecStandalone {
+    Ok(WorkflowExecStandalone {
         config: state.config.clone(),
         workflow: child_def.clone(),
         worktree_id: item_worktree_id,
@@ -709,7 +709,20 @@ fn dispatch_child_workflow(
         extra_plugin_dirs: state.extra_plugin_dirs.clone(),
         db_path: None,
         parent_workflow_run_id: Some(state.workflow_run_id.clone()),
-    };
+    })
+}
+
+/// Dispatch one fan-out item: resolve inputs, execute child workflow in a thread,
+/// and update fan_out_items to 'running'.
+fn dispatch_child_workflow(
+    state: &mut ExecutionState<'_>,
+    node: &ForEachNode,
+    step_id: &str,
+    item: &crate::workflow::manager::FanOutItemRow,
+    child_def: &crate::workflow_dsl::WorkflowDef,
+    _iteration: u32,
+) -> Result<()> {
+    let params = build_child_dispatch_params(state, node, item, child_def)?;
 
     // Capture values needed to update DB after thread completes.
     let item_id = item.id.clone();
@@ -1197,5 +1210,215 @@ mod tests {
         let (_, _, worktree_id) =
             resolve_child_context_ids(ForeachOver::WorkflowRuns, "run-000", &None, &None, &None);
         assert!(worktree_id.is_none());
+    }
+
+    // Regression tests for #2097: verify that build_child_dispatch_params wires
+    // worktree_id correctly — the clearing logic in resolve_child_context_ids must
+    // actually reach the WorkflowExecStandalone struct.
+
+    fn make_minimal_item(
+        item_id: &str,
+        item_ref: &str,
+        item_type: &str,
+    ) -> crate::workflow::manager::FanOutItemRow {
+        crate::workflow::manager::FanOutItemRow {
+            id: "item-id".to_string(),
+            step_run_id: "step-run-id".to_string(),
+            item_type: item_type.to_string(),
+            item_id: item_id.to_string(),
+            item_ref: item_ref.to_string(),
+            child_run_id: None,
+            status: "pending".to_string(),
+            dispatched_at: None,
+            completed_at: None,
+        }
+    }
+
+    fn make_minimal_child_def() -> crate::workflow_dsl::WorkflowDef {
+        crate::workflow_dsl::WorkflowDef {
+            name: "child-workflow".to_string(),
+            title: None,
+            description: String::new(),
+            trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
+            targets: vec![],
+            group: None,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        }
+    }
+
+    fn make_foreach_node_for(over: ForeachOver) -> ForEachNode {
+        ForEachNode {
+            name: "test-foreach".to_string(),
+            over,
+            scope: None,
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: crate::workflow_dsl::OnCycle::Fail,
+            max_parallel: 3,
+            workflow: "child-workflow".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: crate::workflow_dsl::OnChildFail::Continue,
+        }
+    }
+
+    fn make_execution_state_with_worktree<'a>(
+        conn: &'a rusqlite::Connection,
+        config: &'static crate::config::Config,
+        workflow_run_id: String,
+        parent_run_id: String,
+        worktree_id: Option<String>,
+        repo_id: Option<String>,
+        ticket_id: Option<String>,
+    ) -> ExecutionState<'a> {
+        ExecutionState {
+            conn,
+            config,
+            workflow_run_id,
+            workflow_name: "test".to_string(),
+            worktree_id,
+            working_dir: "/tmp/test".to_string(),
+            worktree_slug: "test".to_string(),
+            repo_path: "/tmp/repo".to_string(),
+            ticket_id,
+            repo_id,
+            model: None,
+            exec_config: crate::workflow::types::WorkflowExecConfig::default(),
+            inputs: std::collections::HashMap::new(),
+            agent_mgr: crate::agent::AgentManager::new(conn),
+            wf_mgr: crate::workflow::manager::WorkflowManager::new(conn),
+            parent_run_id,
+            depth: 0,
+            target_label: None,
+            step_results: std::collections::HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: Vec::new(),
+            resume_ctx: None,
+            default_bot_name: None,
+            feature_id: None,
+            triggered_by_hook: false,
+            conductor_bin_dir: None,
+            extra_plugin_dirs: vec![],
+            last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_params_tickets_clears_worktree_id() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Tickets);
+        let item = make_minimal_item("ticket-abc", "42", "ticket");
+        let child_def = make_minimal_child_def();
+
+        let params = build_child_dispatch_params(&mut state, &node, &item, &child_def).unwrap();
+        assert!(
+            params.worktree_id.is_none(),
+            "Tickets fan-out must clear worktree_id in dispatch params"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_params_repos_clears_worktree_id() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            None,
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Repos);
+        let item = make_minimal_item("repo-xyz", "my-repo", "repo");
+        let child_def = make_minimal_child_def();
+
+        let params = build_child_dispatch_params(&mut state, &node, &item, &child_def).unwrap();
+        assert!(
+            params.worktree_id.is_none(),
+            "Repos fan-out must clear worktree_id in dispatch params"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_params_workflow_runs_passes_worktree_id_through() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::WorkflowRuns);
+        let item = make_minimal_item("run-999", "some-workflow", "workflow_run");
+        let child_def = make_minimal_child_def();
+
+        let params = build_child_dispatch_params(&mut state, &node, &item, &child_def).unwrap();
+        assert_eq!(
+            params.worktree_id,
+            Some("w1".to_string()),
+            "WorkflowRuns fan-out must pass worktree_id through in dispatch params"
+        );
     }
 }
