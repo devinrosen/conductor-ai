@@ -1091,6 +1091,9 @@ impl<'a> WorktreeManager<'a> {
         let now = Utc::now().to_rfc3339();
         let mut cleaned = 0usize;
         let mut pruned_repos: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // Track (repo_id, base_branch) pairs already pulled to avoid redundant subprocesses
+        let mut pulled_bases: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
 
         for row in &rows {
             let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch] = row;
@@ -1130,7 +1133,8 @@ impl<'a> WorktreeManager<'a> {
             }
 
             // Auto-pull base branch worktree if tracked and active
-            if !base_branch.is_empty() {
+            let pull_key = (repo_id.clone(), base_branch.clone());
+            if !base_branch.is_empty() && !pulled_bases.contains(&pull_key) {
                 match self.get_by_branch(repo_id, base_branch) {
                     Ok(base_wt) if base_wt.status == WorktreeStatus::Active => {
                         if !base_wt.path.is_empty() {
@@ -1142,11 +1146,16 @@ impl<'a> WorktreeManager<'a> {
                                 );
                             }
                         }
+                        pulled_bases.insert(pull_key);
                     }
-                    Ok(_) => {} // base worktree exists but is not active — skip
+                    Ok(_) => {
+                        // base worktree exists but is not active — skip, but record to avoid
+                        // repeated DB lookups if other sub-PRs target the same base
+                        pulled_bases.insert(pull_key);
+                    }
                     Err(ConductorError::WorktreeNotFound { .. }) => {} // not tracked — skip
                     Err(e) => {
-                        tracing::warn!(error = %e, "failed to look up base branch worktree");
+                        tracing::warn!(error = %e, base_branch = %base_branch, "failed to look up base branch worktree");
                     }
                 }
             }
@@ -1354,12 +1363,14 @@ mod tests {
 
     // ── cleanup_merged_worktrees pull_fn tests ──────────────────────────────
 
-    fn insert_repo_for_cleanup(conn: &Connection) {
-        conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-             VALUES ('r1','test-repo','/tmp/repo','https://github.com/x/y.git','/tmp/ws','2024-01-01T00:00:00Z')",
-            [],
-        ).unwrap();
+    /// Returns a merge_check closure that marks only "feat/sub-task" as merged.
+    fn merged_sub_task_check(
+    ) -> impl Fn(&str, &[String]) -> std::collections::HashSet<String> {
+        |_remote_url: &str, _branches: &[String]| {
+            let mut set = std::collections::HashSet::new();
+            set.insert("feat/sub-task".to_string());
+            set
+        }
     }
 
     fn insert_worktree_with_base(
@@ -1379,12 +1390,11 @@ mod tests {
 
     #[test]
     fn test_cleanup_pulls_base_branch_worktree() {
-        use std::collections::HashSet;
         use std::sync::{Arc, Mutex};
 
         let conn = create_test_conn();
         let config = crate::config::Config::default();
-        insert_repo_for_cleanup(&conn);
+        insert_repo(&conn);
 
         // Sub-PR worktree (will be detected as merged)
         insert_worktree_with_base(
@@ -1405,11 +1415,7 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let result = mgr.cleanup_merged_worktrees_with_merge_check(
             Some("test-repo"),
-            |_remote_url, _branches| {
-                let mut set = HashSet::new();
-                set.insert("feat/sub-task".to_string());
-                set
-            },
+            merged_sub_task_check(),
             move |path, branch| {
                 pulled_clone
                     .lock()
@@ -1430,12 +1436,11 @@ mod tests {
 
     #[test]
     fn test_cleanup_skips_pull_when_base_not_tracked() {
-        use std::collections::HashSet;
         use std::sync::{Arc, Mutex};
 
         let conn = create_test_conn();
         let config = crate::config::Config::default();
-        insert_repo_for_cleanup(&conn);
+        insert_repo(&conn);
 
         // Sub-PR worktree with a base_branch that has no worktree entry in DB
         insert_worktree_with_base(
@@ -1453,11 +1458,7 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let result = mgr.cleanup_merged_worktrees_with_merge_check(
             Some("test-repo"),
-            |_remote_url, _branches| {
-                let mut set = HashSet::new();
-                set.insert("feat/sub-task".to_string());
-                set
-            },
+            merged_sub_task_check(),
             move |path, branch| {
                 pulled_clone
                     .lock()
@@ -1476,11 +1477,9 @@ mod tests {
 
     #[test]
     fn test_cleanup_pull_failure_does_not_block() {
-        use std::collections::HashSet;
-
         let conn = create_test_conn();
         let config = crate::config::Config::default();
-        insert_repo_for_cleanup(&conn);
+        insert_repo(&conn);
 
         // Sub-PR worktree
         insert_worktree_with_base(
@@ -1498,11 +1497,7 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let result = mgr.cleanup_merged_worktrees_with_merge_check(
             Some("test-repo"),
-            |_remote_url, _branches| {
-                let mut set = HashSet::new();
-                set.insert("feat/sub-task".to_string());
-                set
-            },
+            merged_sub_task_check(),
             |_path, _branch| Err("simulated pull failure".to_string()),
         );
 
@@ -1519,5 +1514,50 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, "merged");
+    }
+
+    #[test]
+    fn test_cleanup_skips_pull_when_base_worktree_not_active() {
+        // Verifies the Ok(_) arm: base worktree is in DB but not active → pull_fn must not fire.
+        use std::sync::{Arc, Mutex};
+
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+
+        // Sub-PR worktree targeting a base that exists but is already merged
+        insert_worktree_with_base(
+            &conn,
+            "wt-sub",
+            "feat/sub-task",
+            "/tmp/sub",
+            "active",
+            "feat/epic",
+        );
+
+        // Base worktree present in DB but status = merged (not active)
+        insert_worktree_with_base(&conn, "wt-base", "feat/epic", "/tmp/epic", "merged", "");
+
+        let pulled: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let pulled_clone = pulled.clone();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let result = mgr.cleanup_merged_worktrees_with_merge_check(
+            Some("test-repo"),
+            merged_sub_task_check(),
+            move |path, branch| {
+                pulled_clone
+                    .lock()
+                    .unwrap()
+                    .push((path.to_string(), branch.to_string()));
+                Ok(())
+            },
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+
+        // pull_fn must never have been called — base worktree is not active
+        assert!(pulled.lock().unwrap().is_empty());
     }
 }
