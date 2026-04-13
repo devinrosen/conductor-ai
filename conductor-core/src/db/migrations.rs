@@ -1137,17 +1137,17 @@ pub fn run(conn: &Connection) -> Result<()> {
             }
             if !has_completed {
                 conn.execute_batch(
-                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER DEFAULT 0;",
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER NOT NULL DEFAULT 0;",
                 )?;
             }
             if !has_failed {
                 conn.execute_batch(
-                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed INTEGER DEFAULT 0;",
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed INTEGER NOT NULL DEFAULT 0;",
                 )?;
             }
             if !has_skipped {
                 conn.execute_batch(
-                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped INTEGER DEFAULT 0;",
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped INTEGER NOT NULL DEFAULT 0;",
                 )?;
             }
         }
@@ -1158,10 +1158,15 @@ pub fn run(conn: &Connection) -> Result<()> {
     // foreach.rs inserts rows with role='foreach' but the constraint only allowed
     // ('actor','reviewer','gate','workflow','script'). Uses table-recreation pattern
     // (same as 058) to include all columns from 058, 065, and 067.
+    // workflow_run_step_fan_out_items (added in 067) holds an FK to workflow_run_steps,
+    // so the DROP+RENAME sequence requires FK enforcement to be disabled first.
     if version < 68 {
-        conn.execute_batch(include_str!(
-            "migrations/068_workflow_step_foreach_role.sql"
-        ))?;
+        with_foreign_keys_off(conn, || {
+            conn.execute_batch(include_str!(
+                "migrations/068_workflow_step_foreach_role.sql"
+            ))?;
+            Ok(())
+        })?;
         bump_version(conn, 68)?;
     }
 
@@ -2141,10 +2146,17 @@ mod tests {
     /// Verifies that migration 068 adds 'foreach' to the role CHECK constraint
     /// so that foreach.rs can insert rows with role='foreach', and invalid roles
     /// are still rejected.
+    ///
+    /// FK enforcement is left ON (the default for in-memory connections after
+    /// `run()` enables it) so that `with_foreign_keys_off` in the production
+    /// migration path is exercised end-to-end.
     #[test]
     fn test_migration_068_foreach_role_accepted() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        // Enable FK enforcement so the with_foreign_keys_off wrapper in migration
+        // 068 is exercised on the production code path (FK must be disabled to
+        // DROP workflow_run_steps while workflow_run_step_fan_out_items references it).
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
 
         // Minimal pre-068 schema: workflow_run_steps with the old constraint
         // (no 'foreach'), plus the fan_out_* and subprocess_pid columns from 065/067.
@@ -2249,6 +2261,140 @@ mod tests {
             err.is_err(),
             "invalid role must still be rejected after migration 068"
         );
+    }
+
+    /// Verifies that the COALESCE guards in migration 068's INSERT…SELECT
+    /// normalise existing NULL values in fan_out_completed/failed/skipped to 0.
+    ///
+    /// Before 068 those columns were nullable (INTEGER DEFAULT 0); an existing
+    /// row could legally have NULL if it was written by an older code path or
+    /// via direct SQL.  Migration 068 declares them NOT NULL DEFAULT 0, so the
+    /// COALESCE guards must convert any NULLs before the rename, otherwise the
+    /// NOT NULL constraint fires and the migration fails.
+    #[test]
+    fn test_migration_068_coalesce_guards_normalize_nulls() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        // Pre-068 schema: fan_out_completed/failed/skipped are nullable (no NOT NULL).
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY,
+                 workflow_name TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'pending',
+                 started_at TEXT NOT NULL
+             );
+             CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate','workflow','script')),
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending'
+                                   CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
+                 child_run_id      TEXT,
+                 position          INTEGER NOT NULL,
+                 started_at        TEXT,
+                 ended_at          TEXT,
+                 result_text       TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT,
+                 markers_out       TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type         TEXT,
+                 gate_prompt       TEXT,
+                 gate_timeout      TEXT,
+                 gate_approved_by  TEXT,
+                 gate_approved_at  TEXT,
+                 gate_feedback     TEXT,
+                 structured_output TEXT,
+                 output_file       TEXT,
+                 gate_options      TEXT,
+                 gate_selections   TEXT,
+                 subprocess_pid    INTEGER,
+                 fan_out_total     INTEGER,
+                 fan_out_completed INTEGER,
+                 fan_out_failed    INTEGER,
+                 fan_out_skipped   INTEGER
+             );
+             CREATE TABLE workflow_run_step_fan_out_items (
+                 id           TEXT PRIMARY KEY,
+                 step_run_id  TEXT NOT NULL REFERENCES workflow_run_steps(id) ON DELETE CASCADE,
+                 item_type    TEXT NOT NULL CHECK (item_type IN ('ticket', 'repo', 'workflow_run')),
+                 item_id      TEXT NOT NULL,
+                 item_ref     TEXT NOT NULL,
+                 child_run_id TEXT,
+                 status       TEXT NOT NULL DEFAULT 'pending'
+                              CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+                 dispatched_at TEXT,
+                 completed_at  TEXT,
+                 UNIQUE (step_run_id, item_type, item_id)
+             );
+             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run
+               ON workflow_run_steps(workflow_run_id);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '67');
+             INSERT INTO workflow_runs (id, workflow_name, started_at)
+                 VALUES ('wfr1', 'foreach-flow', '2024-01-01T00:00:00Z');",
+        )
+        .unwrap();
+
+        // Insert a row where fan_out_completed/failed/skipped are explicitly NULL —
+        // the scenario the COALESCE guards exist to handle.
+        conn.execute(
+            "INSERT INTO workflow_run_steps
+             (id, workflow_run_id, step_name, role, position,
+              fan_out_total, fan_out_completed, fan_out_failed, fan_out_skipped)
+             VALUES ('s1', 'wfr1', 'label-ticket', 'actor', 0, 5, NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+
+        // Confirm the NULLs are really there before migration.
+        let (completed, failed, skipped): (Option<i64>, Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT fan_out_completed, fan_out_failed, fan_out_skipped
+                 FROM workflow_run_steps WHERE id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert!(
+            completed.is_none() && failed.is_none() && skipped.is_none(),
+            "pre-condition: fan_out columns must be NULL before migration 068"
+        );
+
+        // Apply migration 068 — must succeed despite the NULLs.
+        run(&conn).unwrap();
+
+        // After migration the NULLs must have been coalesced to 0.
+        let (completed, failed, skipped): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT fan_out_completed, fan_out_failed, fan_out_skipped
+                 FROM workflow_run_steps WHERE id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            completed, 0,
+            "fan_out_completed NULL must be coalesced to 0"
+        );
+        assert_eq!(failed, 0, "fan_out_failed NULL must be coalesced to 0");
+        assert_eq!(skipped, 0, "fan_out_skipped NULL must be coalesced to 0");
+
+        // fan_out_total (nullable by design) must pass through unchanged.
+        let total: Option<i64> = conn
+            .query_row(
+                "SELECT fan_out_total FROM workflow_run_steps WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(total, Some(5), "fan_out_total must be preserved as-is");
     }
 
     /// Regression: partial-failure recovery for migration 067 must add ALL four

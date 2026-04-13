@@ -19,6 +19,6 @@ CREATE TABLE workflow_run_step_fan_out_items (
 CREATE INDEX idx_fan_out_items_step ON workflow_run_step_fan_out_items(step_run_id, status);
 
 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_total     INTEGER;
-ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER DEFAULT 0;
-ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed    INTEGER DEFAULT 0;
-ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped   INTEGER DEFAULT 0;
+ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped   INTEGER NOT NULL DEFAULT 0;

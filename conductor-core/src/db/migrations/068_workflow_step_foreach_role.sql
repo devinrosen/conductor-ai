@@ -35,9 +35,9 @@ CREATE TABLE workflow_run_steps_new (
     gate_selections   TEXT,
     subprocess_pid    INTEGER,
     fan_out_total     INTEGER,
-    fan_out_completed INTEGER DEFAULT 0,
-    fan_out_failed    INTEGER DEFAULT 0,
-    fan_out_skipped   INTEGER DEFAULT 0
+    fan_out_completed INTEGER NOT NULL DEFAULT 0,
+    fan_out_failed    INTEGER NOT NULL DEFAULT 0,
+    fan_out_skipped   INTEGER NOT NULL DEFAULT 0
 );
 INSERT INTO workflow_run_steps_new SELECT
     id, workflow_run_id, step_name, role, can_commit, condition_expr,
@@ -46,7 +46,10 @@ INSERT INTO workflow_run_steps_new SELECT
     retry_count, gate_type, gate_prompt, gate_timeout, gate_approved_by,
     gate_approved_at, gate_feedback, structured_output, output_file,
     gate_options, gate_selections, subprocess_pid,
-    fan_out_total, fan_out_completed, fan_out_failed, fan_out_skipped
+    fan_out_total,
+    COALESCE(fan_out_completed, 0),
+    COALESCE(fan_out_failed, 0),
+    COALESCE(fan_out_skipped, 0)
     FROM workflow_run_steps;
 DROP TABLE workflow_run_steps;
 ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
