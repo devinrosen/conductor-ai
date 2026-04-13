@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::db::query_collect;
+use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
 
 use super::WorkflowManager;
@@ -119,14 +119,13 @@ impl<'a> WorkflowManager<'a> {
         if step_run_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let placeholders: Vec<String> = (1..=step_run_ids.len()).map(|i| format!("?{i}")).collect();
         let sql = format!(
             "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
              status, dispatched_at, completed_at \
              FROM workflow_run_step_fan_out_items \
              WHERE step_run_id IN ({}) \
              ORDER BY step_run_id, id ASC",
-            placeholders.join(", ")
+            sql_placeholders(step_run_ids.len())
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(step_run_ids.iter()), |row| {
@@ -209,23 +208,17 @@ impl<'a> WorkflowManager<'a> {
             return Ok(());
         }
         let now = Utc::now().to_rfc3339();
-        // Build ?3..?N placeholders for item_ids; ?1 = now, ?2 = step_run_id.
+        // ?1 = now, ?2 = step_run_id; item_ids are bound starting at ?3.
         // SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999, which is not a
         // practical concern here (skip_dependents list is bounded by fan-out size).
-        let placeholders: Vec<String> = (3..=2 + item_ids.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
+        with_in_clause(
             "UPDATE workflow_run_step_fan_out_items \
              SET status = 'skipped', completed_at = ?1 \
-             WHERE step_run_id = ?2 \
-               AND item_id IN ({}) \
-               AND status = 'pending'",
-            placeholders.join(", ")
-        );
-        let params: Vec<&dyn rusqlite::ToSql> = std::iter::once(&now as &dyn rusqlite::ToSql)
-            .chain(std::iter::once(&step_run_id as &dyn rusqlite::ToSql))
-            .chain(item_ids.iter().map(|id| id as &dyn rusqlite::ToSql))
-            .collect();
-        self.conn.execute(&sql, params.as_slice())?;
+             WHERE step_run_id = ?2 AND status = 'pending' AND item_id IN",
+            &[&now as &dyn rusqlite::ToSql, &step_run_id as &dyn rusqlite::ToSql],
+            item_ids,
+            |sql, params| self.conn.execute(sql, params),
+        )?;
         Ok(())
     }
 

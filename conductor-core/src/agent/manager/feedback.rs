@@ -1,7 +1,7 @@
 use chrono::Utc;
 use rusqlite::params;
 
-use crate::db::query_collect;
+use crate::db::{query_collect, sql_placeholders};
 use crate::error::{ConductorError, Result};
 
 use super::super::db::{optional_row, row_to_feedback_request, FEEDBACK_SELECT};
@@ -239,11 +239,10 @@ impl<'a> AgentManager<'a> {
         if run_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let placeholders: Vec<String> = (1..=run_ids.len()).map(|i| format!("?{i}")).collect();
         let sql = format!(
             "{FEEDBACK_SELECT} WHERE run_id IN ({}) AND status = 'pending' \
              ORDER BY created_at DESC",
-            placeholders.join(", ")
+            sql_placeholders(run_ids.len())
         );
         let params: Vec<&dyn rusqlite::types::ToSql> = run_ids
             .iter()

@@ -3704,3 +3704,87 @@ fn test_get_fan_out_items_checked_rejects_nonexistent_step() {
         "expected WorkflowStepNotFound, got: {err:?}"
     );
 }
+
+// ── skip_fan_out_items_by_item_ids tests ─────────────────────────────────────
+
+#[test]
+fn test_skip_fan_out_items_by_item_ids_marks_subset_skipped() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "fan-step", "actor", false, 0, 0)
+        .unwrap();
+
+    // Insert three pending items.
+    mgr.insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
+        .unwrap();
+    mgr.insert_fan_out_item(&step_id, "ticket", "t2", "TICKET-2")
+        .unwrap();
+    mgr.insert_fan_out_item(&step_id, "ticket", "t3", "TICKET-3")
+        .unwrap();
+
+    // Skip only t1 and t3.
+    mgr.skip_fan_out_items_by_item_ids(
+        &step_id,
+        &["t1".to_string(), "t3".to_string()],
+    )
+    .unwrap();
+
+    let items = mgr.get_fan_out_items(&step_id, None).unwrap();
+    let status_map: std::collections::HashMap<_, _> =
+        items.iter().map(|it| (it.item_id.as_str(), it.status.as_str())).collect();
+
+    assert_eq!(status_map["t1"], "skipped");
+    assert_eq!(status_map["t2"], "pending");
+    assert_eq!(status_map["t3"], "skipped");
+
+    // skipped items must have completed_at set.
+    let t1 = items.iter().find(|it| it.item_id == "t1").unwrap();
+    assert!(t1.completed_at.is_some(), "completed_at should be set for skipped item");
+}
+
+#[test]
+fn test_skip_fan_out_items_by_item_ids_ignores_non_pending() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "fan-step", "actor", false, 0, 0)
+        .unwrap();
+
+    // Insert one item then mark it running (simulates an in-flight dispatch).
+    let fan_item_db_id = mgr
+        .insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
+        .unwrap();
+    mgr.update_fan_out_item_running(&fan_item_db_id, "child-run-1")
+        .unwrap();
+
+    // Attempting to skip t1 by item_id should not change a running item.
+    mgr.skip_fan_out_items_by_item_ids(&step_id, &["t1".to_string()])
+        .unwrap();
+
+    let items = mgr.get_fan_out_items(&step_id, None).unwrap();
+    assert_eq!(items[0].status, "running", "running item must not be overwritten by skip");
+}
+
+#[test]
+fn test_skip_fan_out_items_by_item_ids_empty_list_is_noop() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "fan-step", "actor", false, 0, 0)
+        .unwrap();
+    mgr.insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
+        .unwrap();
+
+    // Empty slice must be a no-op (not a panic or SQL error).
+    mgr.skip_fan_out_items_by_item_ids(&step_id, &[]).unwrap();
+
+    let items = mgr.get_fan_out_items(&step_id, None).unwrap();
+    assert_eq!(items[0].status, "pending");
+}
