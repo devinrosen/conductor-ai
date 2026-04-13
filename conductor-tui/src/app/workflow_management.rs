@@ -1212,11 +1212,23 @@ impl App {
                 }
             };
 
+            let working_dir = match worktree_path {
+                Some(p) => p,
+                None => {
+                    if let Some(ref tx) = bg_tx {
+                        tx.send(crate::action::Action::BackgroundError {
+                            message: "Cannot run workflow: worktree path is not set".to_string(),
+                        });
+                    }
+                    return;
+                }
+            };
+
             let params = WorkflowExecStandalone {
                 config,
                 workflow: def.clone(),
                 worktree_id,
-                working_dir: worktree_path.unwrap_or_default(),
+                working_dir,
                 repo_path,
                 ticket_id,
                 repo_id: None,
