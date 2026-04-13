@@ -681,6 +681,9 @@ impl App {
                     } => {
                         prefill.insert("workflow_run_id".to_string(), workflow_run_id.clone());
                     }
+                    WorkflowPickerTarget::Ticket { ref ticket_id, .. } => {
+                        prefill.insert("ticket_id".to_string(), ticket_id.clone());
+                    }
                     _ => {}
                 }
                 self.show_workflow_inputs_or_run(target, def, prefill);
@@ -806,6 +809,8 @@ impl App {
         } = target
         {
             prefill.insert("workflow_run_id".to_string(), workflow_run_id.clone());
+        } else if let WorkflowPickerTarget::Ticket { ref ticket_id, .. } = target {
+            prefill.insert("ticket_id".to_string(), ticket_id.clone());
         }
 
         self.show_workflow_inputs_or_run(target, def, prefill);

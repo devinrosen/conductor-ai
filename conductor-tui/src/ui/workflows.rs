@@ -1593,9 +1593,14 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         render_step_list(frame, body_chunks[0], state, focus);
         render_step_agent_activity(frame, body_chunks[1], state, focus);
     } else {
-        // Full-width step list when no agent activity to show —
-        // force Steps focus since agent pane is hidden.
-        render_step_list(frame, chunks[3], state, WorkflowRunDetailFocus::Steps);
+        // Full-width step list when no agent activity to show.
+        // If focus landed on the hidden AgentActivity pane, treat Steps as focused;
+        // otherwise pass through the real focus so Info/Error can show as active.
+        let effective_focus = match state.workflow_run_detail_focus {
+            WorkflowRunDetailFocus::AgentActivity => WorkflowRunDetailFocus::Steps,
+            f => f,
+        };
+        render_step_list(frame, chunks[3], state, effective_focus);
     }
 }
 
