@@ -249,9 +249,7 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
 /// Scan a single `.md` workflow directory and return parsed defs.
 fn scan_md_dir(dir: &Path) -> Result<Vec<WorkflowDef>> {
     let mut entries: Vec<_> = fs::read_dir(dir)
-        .map_err(|e| {
-            ConductorError::Workflow(format!("Failed to read {}: {e}", dir.display()))
-        })?
+        .map_err(|e| ConductorError::Workflow(format!("Failed to read {}: {e}", dir.display())))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .collect();
