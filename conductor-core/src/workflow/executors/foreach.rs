@@ -295,6 +295,21 @@ fn collect_ticket_items(
                 labels: vec![label.clone()],
                 search: None,
                 include_closed: false,
+                unlabeled_only: false,
+            };
+            let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
+            for t in tickets {
+                if !existing_set.contains(&t.id) {
+                    items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
+                }
+            }
+        }
+        Some(crate::workflow_dsl::TicketScope::Unlabeled) => {
+            let filter = TicketFilter {
+                labels: vec![],
+                search: None,
+                include_closed: false,
+                unlabeled_only: true,
             };
             let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
             for t in tickets {
@@ -309,6 +324,7 @@ fn collect_ticket_items(
                 labels: vec![],
                 search: None,
                 include_closed: false,
+                unlabeled_only: false,
             };
             let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
             for t in tickets {
@@ -962,4 +978,135 @@ fn find_transitive_dependents(
 
 fn is_terminal_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tickets::{TicketInput, TicketLabelInput, TicketSyncer};
+    use crate::workflow_dsl::{ForeachOver, OnChildFail, OnCycle, TicketScope};
+
+    fn setup_db() -> rusqlite::Connection {
+        crate::test_helpers::setup_db()
+    }
+
+    fn make_ticket(source_id: &str, title: &str) -> TicketInput {
+        TicketInput {
+            source_type: "github".to_string(),
+            source_id: source_id.to_string(),
+            title: title.to_string(),
+            body: String::new(),
+            state: "open".to_string(),
+            labels: vec![],
+            assignee: None,
+            priority: None,
+            url: String::new(),
+            raw_json: None,
+            label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
+        }
+    }
+
+    fn make_foreach_node_unlabeled() -> ForEachNode {
+        ForEachNode {
+            name: "test-foreach".to_string(),
+            over: ForeachOver::Tickets,
+            scope: Some(TicketScope::Unlabeled),
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 3,
+            workflow: "label-ticket".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        }
+    }
+
+    #[test]
+    fn test_collect_ticket_items_unlabeled_scope() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // setup_db() inserts repo "r1" / worktree "w1" — reuse them.
+        let syncer = TicketSyncer::new(&conn);
+
+        // t1 is labeled, t2 and t3 are unlabeled.
+        let mut t1 = make_ticket("1", "Labeled issue");
+        t1.label_details = vec![TicketLabelInput {
+            name: "bug".to_string(),
+            color: None,
+        }];
+        let t2 = make_ticket("2", "Unlabeled A");
+        let t3 = make_ticket("3", "Unlabeled B");
+        syncer.upsert_tickets("r1", &[t1, t2, t3]).unwrap();
+
+        // Build a minimal ExecutionState.
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = ExecutionState {
+            conn: &conn,
+            config,
+            workflow_run_id: run.id,
+            workflow_name: "test".to_string(),
+            worktree_id: Some("w1".to_string()),
+            working_dir: "/tmp/test".to_string(),
+            worktree_slug: "test".to_string(),
+            repo_path: "/tmp/repo".to_string(),
+            ticket_id: None,
+            repo_id: Some("r1".to_string()),
+            model: None,
+            exec_config: crate::workflow::types::WorkflowExecConfig::default(),
+            inputs: std::collections::HashMap::new(),
+            agent_mgr: crate::agent::AgentManager::new(&conn),
+            wf_mgr: crate::workflow::manager::WorkflowManager::new(&conn),
+            parent_run_id: parent.id,
+            depth: 0,
+            target_label: None,
+            step_results: std::collections::HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: Vec::new(),
+            resume_ctx: None,
+            default_bot_name: None,
+            feature_id: None,
+            triggered_by_hook: false,
+            conductor_bin_dir: None,
+            extra_plugin_dirs: vec![],
+            last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        };
+
+        let node = make_foreach_node_unlabeled();
+        let existing_set = HashSet::new();
+        let items = collect_ticket_items(&mut state, &node, &existing_set).unwrap();
+
+        // Should only return t2 and t3 (unlabeled).
+        assert_eq!(items.len(), 2);
+        let source_refs: Vec<&str> = items.iter().map(|(_, _, r)| r.as_str()).collect();
+        assert!(source_refs.contains(&"2"), "source_id 2 should be included");
+        assert!(source_refs.contains(&"3"), "source_id 3 should be included");
+        // item_type should be "ticket"
+        for (item_type, _, _) in &items {
+            assert_eq!(item_type, "ticket");
+        }
+    }
 }

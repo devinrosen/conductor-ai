@@ -992,15 +992,23 @@ impl Parser {
                         Some(TicketScope::TicketId(ticket_id.clone()))
                     } else if let Some(label) = m.get("label") {
                         Some(TicketScope::Label(label.clone()))
+                    } else if let Some(v) = m.get("unlabeled") {
+                        if v == "true" {
+                            Some(TicketScope::Unlabeled)
+                        } else {
+                            return Err(format!(
+                                "foreach '{name}': scope.unlabeled must be true"
+                            ));
+                        }
                     } else {
                         return Err(format!(
-                            "foreach '{name}': scope must contain ticket_id or label"
+                            "foreach '{name}': scope must contain ticket_id, label, or unlabeled"
                         ));
                     }
                 }
                 _ => {
                     return Err(format!(
-                        "foreach '{name}': scope must be a map {{ ticket_id = \"...\" }} or {{ label = \"...\" }}"
+                        "foreach '{name}': scope must be a map {{ ticket_id = \"...\" }}, {{ label = \"...\" }}, or {{ unlabeled = true }}"
                     ))
                 }
             }

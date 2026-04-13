@@ -286,7 +286,7 @@ fn validate_foreach_node<F>(
                 n.name
             ),
             hint: Some(
-                "Add `scope = { ticket_id = \"...\" }` or `scope = { label = \"...\" }`"
+                "Add `scope = { ticket_id = \"...\" }`, `scope = { label = \"...\" }`, or `scope = { unlabeled = true }`"
                     .to_string(),
             ),
         });

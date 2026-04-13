@@ -270,7 +270,7 @@ fn test_foreach_scope_missing_key() {
     assert!(result.is_err());
     let err = format!("{}", result.unwrap_err());
     assert!(
-        err.contains("scope must contain ticket_id or label"),
+        err.contains("scope must contain ticket_id, label, or unlabeled"),
         "got: {err}"
     );
 }
