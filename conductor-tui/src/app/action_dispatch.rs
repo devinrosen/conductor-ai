@@ -1074,11 +1074,10 @@ impl App {
                     metadata: event.metadata,
                 };
                 // Find which worktree owns this run_id, then append to cache.
-                let wt_id = Self::find_run_owner_id(
-                    &self.state.data.latest_agent_runs,
-                    &run_id,
-                    |run| &run.id,
-                );
+                let wt_id =
+                    Self::find_run_owner_id(&self.state.data.latest_agent_runs, &run_id, |run| {
+                        &run.id
+                    });
                 if let Some(wt_id) = wt_id {
                     self.state
                         .data
