@@ -573,6 +573,16 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => {}
             }
         }
+        // Space toggles expand/collapse for foreach steps (Steps focus only)
+        if state.workflow_run_detail_focus == WorkflowRunDetailFocus::Steps {
+            if let KeyCode::Char(' ') = key.code {
+                if let Some(step) = state.data.workflow_steps.get(state.workflow_step_index) {
+                    if step.role == "foreach" {
+                        return Action::ToggleForeachStepExpand;
+                    }
+                }
+            }
+        }
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,

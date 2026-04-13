@@ -6,7 +6,7 @@ use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
-    WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary, WorkflowWarning,
+    FanOutItemRow, WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary, WorkflowWarning,
 };
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
@@ -38,6 +38,8 @@ pub struct WorkflowDataPayload {
     pub workflow_parse_warnings: Vec<WorkflowWarning>,
     /// Steps for every leaf run in the current scope (run_id → ordered steps).
     pub all_run_steps: HashMap<String, Vec<WorkflowRunStep>>,
+    /// Fan-out items for foreach steps (step_run_id → ordered items).
+    pub fan_out_items: HashMap<String, Vec<FanOutItemRow>>,
 }
 
 /// Payload for the DataRefreshed action (boxed to keep Action enum small).
@@ -381,6 +383,8 @@ pub enum Action {
     },
 
     // Workflow actions
+    /// Toggle expand/collapse for the selected foreach step in WorkflowRunDetail.
+    ToggleForeachStepExpand,
     /// Toggle collapse/expand for the selected parent ticket row.
     ToggleTicketCollapse,
     /// Toggle expand/collapse for the hovered parent run row.

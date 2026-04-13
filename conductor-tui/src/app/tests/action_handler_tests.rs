@@ -181,6 +181,7 @@ workflow my-wf {
             step_agent_run: None,
             workflow_parse_warnings: vec![],
             all_run_steps: std::collections::HashMap::new(),
+            fan_out_items: std::collections::HashMap::new(),
         },
     )));
 
