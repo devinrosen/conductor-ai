@@ -109,7 +109,9 @@ fn main() {
                         }
                     }
                     Ok(_) => {}
-                    Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed on startup: {e}"),
+                    Err(e) => {
+                        tracing::warn!("detect_stuck_workflow_run_ids failed on startup: {e}")
+                    }
                 }
             }
 
@@ -194,7 +196,8 @@ fn main() {
                                     tracing::warn!("reap_orphaned_workflow_runs failed: {e}");
                                 }
                                 // Auto-resume stuck workflow runs using both fixed and configurable thresholds
-                                let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+                                let conductor_bin_dir =
+                                    conductor_core::workflow::resolve_conductor_bin_dir();
                                 let stale_mins = cfg.general.stale_workflow_minutes;
                                 let configurable_threshold = if stale_mins > 0 {
                                     Some((stale_mins * 60) as i64)
@@ -204,7 +207,7 @@ fn main() {
                                 if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
                                     &cfg,
                                     configurable_threshold,
-                                    conductor_bin_dir
+                                    conductor_bin_dir,
                                 ) {
                                     tracing::warn!("auto_resume_stuck_workflows failed: {e}");
                                 }

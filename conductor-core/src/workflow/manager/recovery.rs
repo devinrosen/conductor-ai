@@ -554,7 +554,8 @@ impl<'a> WorkflowManager<'a> {
                             db_path: None,
                             conductor_bin_dir: bin_dir,
                         };
-                        if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
+                        if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params)
+                        {
                             tracing::warn!(run_id = %run_id, "Auto-resume of stuck workflow run failed: {e}");
                         }
                     });
@@ -591,7 +592,9 @@ impl<'a> WorkflowManager<'a> {
                                     db_path: None,
                                     conductor_bin_dir: bin_dir,
                                 };
-                                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
+                                if let Err(e) =
+                                    crate::workflow::engine::resume_workflow_standalone(&params)
+                                {
                                     tracing::warn!(run_id = %run_id, "Auto-resume of stuck workflow run failed: {e}");
                                 }
                             });
