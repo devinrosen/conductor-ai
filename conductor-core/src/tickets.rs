@@ -134,6 +134,7 @@ pub struct ReadyTicket {
 }
 
 /// Filter options for [`TicketSyncer::list_filtered`].
+#[derive(Default)]
 pub struct TicketFilter {
     /// Only include tickets that have ALL of these labels.
     /// NOTE: label filtering uses the `ticket_labels` join table, which is only
