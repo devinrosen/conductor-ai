@@ -1364,8 +1364,7 @@ mod tests {
     // ── cleanup_merged_worktrees pull_fn tests ──────────────────────────────
 
     /// Returns a merge_check closure that marks only "feat/sub-task" as merged.
-    fn merged_sub_task_check(
-    ) -> impl Fn(&str, &[String]) -> std::collections::HashSet<String> {
+    fn merged_sub_task_check() -> impl Fn(&str, &[String]) -> std::collections::HashSet<String> {
         |_remote_url: &str, _branches: &[String]| {
             let mut set = std::collections::HashSet::new();
             set.insert("feat/sub-task".to_string());
