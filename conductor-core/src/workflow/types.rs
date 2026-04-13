@@ -153,7 +153,7 @@ impl WorkflowRun {
 
 /// A workflow step execution record from the database.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WorkflowRunStep {
     pub id: String,
     pub workflow_run_id: String,
