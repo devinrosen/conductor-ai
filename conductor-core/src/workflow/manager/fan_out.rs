@@ -209,14 +209,23 @@ impl<'a> WorkflowManager<'a> {
             return Ok(());
         }
         let now = Utc::now().to_rfc3339();
-        for item_id in item_ids {
-            self.conn.execute(
-                "UPDATE workflow_run_step_fan_out_items \
-                 SET status = 'skipped', completed_at = ?1 \
-                 WHERE step_run_id = ?2 AND item_id = ?3 AND status = 'pending'",
-                params![now, step_run_id, item_id],
-            )?;
-        }
+        // Build ?3..?N placeholders for item_ids; ?1 = now, ?2 = step_run_id.
+        // SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999, which is not a
+        // practical concern here (skip_dependents list is bounded by fan-out size).
+        let placeholders: Vec<String> = (3..=2 + item_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "UPDATE workflow_run_step_fan_out_items \
+             SET status = 'skipped', completed_at = ?1 \
+             WHERE step_run_id = ?2 \
+               AND item_id IN ({}) \
+               AND status = 'pending'",
+            placeholders.join(", ")
+        );
+        let params: Vec<&dyn rusqlite::ToSql> = std::iter::once(&now as &dyn rusqlite::ToSql)
+            .chain(std::iter::once(&step_run_id as &dyn rusqlite::ToSql))
+            .chain(item_ids.iter().map(|id| id as &dyn rusqlite::ToSql))
+            .collect();
+        self.conn.execute(&sql, params.as_slice())?;
         Ok(())
     }
 
