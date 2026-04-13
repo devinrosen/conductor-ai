@@ -2227,6 +2227,10 @@ fn test_execute_workflow_injects_ticket_variables() {
         Some("github"),
         "ticket_source_type should be injected"
     );
+    assert!(
+        run.inputs.contains_key("ticket_raw_json"),
+        "ticket_raw_json should be injected"
+    );
     // Assert the ticket_id column is persisted on the WorkflowRun record itself.
     assert_eq!(run.ticket_id.as_deref(), Some("tkt-1"));
     assert_eq!(run.repo_id, None);
