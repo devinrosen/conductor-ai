@@ -413,11 +413,33 @@ impl App {
 
         // Targets that require background disk I/O: spawn and return early.
         match &target {
-            WorkflowPickerTarget::Ticket { repo_path, .. }
-            | WorkflowPickerTarget::Repo { repo_path, .. }
-            | WorkflowPickerTarget::WorkflowRun { repo_path, .. } => {
+            WorkflowPickerTarget::Ticket {
+                repo_path, repo_id, ..
+            }
+            | WorkflowPickerTarget::Repo {
+                repo_path, repo_id, ..
+            } => {
                 let rp = repo_path.clone();
-                self.spawn_load_picker_defs(target, rp);
+                let rid = repo_id.clone();
+                let wt_paths: Vec<String> = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .filter(|w| w.repo_id == rid)
+                    .map(|w| w.path.clone())
+                    .collect();
+                self.spawn_load_picker_defs(target, rp, wt_paths);
+                return;
+            }
+            WorkflowPickerTarget::WorkflowRun {
+                repo_path,
+                worktree_path,
+                ..
+            } => {
+                let rp = repo_path.clone();
+                let wt_paths: Vec<String> = worktree_path.iter().cloned().collect();
+                self.spawn_load_picker_defs(target, rp, wt_paths);
                 return;
             }
             _ => {}
@@ -454,10 +476,18 @@ impl App {
     }
 
     /// Spawn a background thread to load workflow defs from disk for the picker.
+    ///
+    /// `worktree_paths` lists the filesystem paths of all relevant worktrees for
+    /// the target repo. When non-empty the loader applies the same multi-worktree
+    /// scan used by the background poller: iterate worktrees in order, call
+    /// `list_defs(wt_path, repo_path)` per worktree (which merges repo + worktree,
+    /// with worktree winning on conflicts), and deduplicate by name (first-seen
+    /// wins across worktrees). Falls back to a repo-only load when the list is empty.
     fn spawn_load_picker_defs(
         &mut self,
         target: crate::state::WorkflowPickerTarget,
         repo_path: String,
+        worktree_paths: Vec<String>,
     ) {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
@@ -467,8 +497,36 @@ impl App {
         self.state.loading_workflow_picker_defs = true;
         std::thread::spawn(move || {
             let filter = target.target_filter();
-            match conductor_core::workflow::WorkflowManager::list_defs("", &repo_path) {
-                Ok((all_defs, _warnings)) => {
+
+            let load_result: conductor_core::error::Result<
+                Vec<conductor_core::workflow::WorkflowDef>,
+            > = (|| {
+                use std::collections::HashSet;
+                let mut seen: HashSet<String> = HashSet::new();
+                let mut all_defs = Vec::new();
+
+                for wt_path in &worktree_paths {
+                    let (defs, _warnings) =
+                        conductor_core::workflow::WorkflowManager::list_defs(wt_path, &repo_path)?;
+                    for def in defs {
+                        if seen.insert(def.name.clone()) {
+                            all_defs.push(def);
+                        }
+                    }
+                }
+
+                // Fallback: no worktrees provided (or none had defs) → repo-only load.
+                if all_defs.is_empty() {
+                    let (defs, _warnings) =
+                        conductor_core::workflow::WorkflowManager::list_defs("", &repo_path)?;
+                    all_defs = defs;
+                }
+
+                Ok(all_defs)
+            })();
+
+            match load_result {
+                Ok(all_defs) => {
                     let defs = all_defs
                         .into_iter()
                         .filter(|d| d.targets.iter().any(|t| t == filter))
@@ -1341,7 +1399,21 @@ impl App {
                 pr_number: pr.number,
                 pr_title: pr.title.clone(),
             };
-            self.spawn_load_picker_defs(target, rp);
+            let wt_paths: Vec<String> = self
+                .state
+                .selected_repo_id
+                .as_ref()
+                .map(|rid| {
+                    self.state
+                        .data
+                        .worktrees
+                        .iter()
+                        .filter(|w| &w.repo_id == rid)
+                        .map(|w| w.path.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.spawn_load_picker_defs(target, rp, wt_paths);
         } else {
             let pr_defs: Vec<conductor_core::workflow::WorkflowDef> = self
                 .state
