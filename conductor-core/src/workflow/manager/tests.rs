@@ -3726,15 +3726,14 @@ fn test_skip_fan_out_items_by_item_ids_marks_subset_skipped() {
         .unwrap();
 
     // Skip only t1 and t3.
-    mgr.skip_fan_out_items_by_item_ids(
-        &step_id,
-        &["t1".to_string(), "t3".to_string()],
-    )
-    .unwrap();
+    mgr.skip_fan_out_items_by_item_ids(&step_id, &["t1".to_string(), "t3".to_string()])
+        .unwrap();
 
     let items = mgr.get_fan_out_items(&step_id, None).unwrap();
-    let status_map: std::collections::HashMap<_, _> =
-        items.iter().map(|it| (it.item_id.as_str(), it.status.as_str())).collect();
+    let status_map: std::collections::HashMap<_, _> = items
+        .iter()
+        .map(|it| (it.item_id.as_str(), it.status.as_str()))
+        .collect();
 
     assert_eq!(status_map["t1"], "skipped");
     assert_eq!(status_map["t2"], "pending");
@@ -3742,7 +3741,10 @@ fn test_skip_fan_out_items_by_item_ids_marks_subset_skipped() {
 
     // skipped items must have completed_at set.
     let t1 = items.iter().find(|it| it.item_id == "t1").unwrap();
-    assert!(t1.completed_at.is_some(), "completed_at should be set for skipped item");
+    assert!(
+        t1.completed_at.is_some(),
+        "completed_at should be set for skipped item"
+    );
 }
 
 #[test]
@@ -3767,7 +3769,10 @@ fn test_skip_fan_out_items_by_item_ids_ignores_non_pending() {
         .unwrap();
 
     let items = mgr.get_fan_out_items(&step_id, None).unwrap();
-    assert_eq!(items[0].status, "running", "running item must not be overwritten by skip");
+    assert_eq!(
+        items[0].status, "running",
+        "running item must not be overwritten by skip"
+    );
 }
 
 #[test]

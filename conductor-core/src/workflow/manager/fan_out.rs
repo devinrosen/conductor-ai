@@ -215,7 +215,10 @@ impl<'a> WorkflowManager<'a> {
             "UPDATE workflow_run_step_fan_out_items \
              SET status = 'skipped', completed_at = ?1 \
              WHERE step_run_id = ?2 AND status = 'pending' AND item_id IN",
-            &[&now as &dyn rusqlite::ToSql, &step_run_id as &dyn rusqlite::ToSql],
+            &[
+                &now as &dyn rusqlite::ToSql,
+                &step_run_id as &dyn rusqlite::ToSql,
+            ],
             item_ids,
             |sql, params| self.conn.execute(sql, params),
         )?;
