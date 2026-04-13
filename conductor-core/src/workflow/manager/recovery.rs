@@ -347,15 +347,22 @@ impl<'a> WorkflowManager<'a> {
     /// This is the detection-only counterpart of [`reap_heartbeat_stuck_runs`],
     /// useful for diagnostics and tests. Uses the same heartbeat-based query.
     pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
+        self.query_stuck_workflow_run_ids(threshold_secs)
+    }
+
+    /// Shared SQL query for detecting stuck workflow runs based on heartbeat.
+    ///
+    /// A run is considered stuck when ALL of the following hold:
+    /// 1. `status = 'running'`
+    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
+    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
+    /// 4. `COALESCE(last_heartbeat, started_at)` is older than `threshold_secs`
+    fn query_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
         query_collect(
             self.conn,
             "SELECT id FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
-               AND EXISTS ( \
-                 SELECT 1 FROM workflow_run_steps wrs \
-                 WHERE wrs.workflow_run_id = workflow_runs.id \
-               ) \
                AND NOT EXISTS ( \
                  SELECT 1 FROM workflow_run_steps wrs \
                  WHERE wrs.workflow_run_id = workflow_runs.id \
@@ -525,23 +532,7 @@ impl<'a> WorkflowManager<'a> {
         conductor_bin_dir: Option<PathBuf>,
     ) -> Result<usize> {
         // Step 1: find orphaned root runs.
-        let orphaned_ids: Vec<String> = query_collect(
-            self.conn,
-            "SELECT id FROM workflow_runs \
-             WHERE status = 'running' \
-               AND parent_workflow_run_id IS NULL \
-               AND NOT EXISTS ( \
-                 SELECT 1 FROM workflow_run_steps wrs \
-                 WHERE wrs.workflow_run_id = workflow_runs.id \
-                   AND wrs.status IN ('running', 'pending', 'waiting') \
-               ) \
-               AND ( \
-                 CAST(strftime('%s', 'now') AS INTEGER) - \
-                 CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
-               ) > ?1",
-            params![threshold_secs],
-            |row| row.get(0),
-        )?;
+        let orphaned_ids = self.query_stuck_workflow_run_ids(threshold_secs)?;
 
         if orphaned_ids.is_empty() {
             return Ok(0);

@@ -2408,6 +2408,33 @@ fn test_reap_stuck_workflow_runs_skips_fresh_run() {
 }
 
 #[test]
+fn test_detect_stuck_workflow_run_ids_detects_stale_heartbeat() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "stale-heartbeat-run");
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "stale-heartbeat-run",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+    // Set heartbeat to 200 seconds ago — stale with threshold=60.
+    let stale_time = chrono::Utc::now() - chrono::Duration::seconds(200);
+    let stale_str = stale_time.to_rfc3339();
+    conn.execute(
+        "UPDATE workflow_runs SET last_heartbeat = ?1 WHERE id = 'stale-heartbeat-run'",
+        params![stale_str],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    // threshold_secs = 60: heartbeat 200s ago >> 60 → detected
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert_eq!(ids.len(), 1, "stale heartbeat run should be detected");
+    assert_eq!(ids[0], "stale-heartbeat-run");
+}
+
+#[test]
 fn test_reap_stuck_workflow_runs_skips_pending_step() {
     let conn = setup_db();
     insert_running_root_run(&conn, "pending-run");
