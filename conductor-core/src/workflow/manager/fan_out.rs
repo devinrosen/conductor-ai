@@ -24,15 +24,15 @@ pub struct FanOutItemRow {
 
 fn fan_out_item_from_row(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow> {
     Ok(FanOutItemRow {
-        id:            row.get(0)?,
-        step_run_id:   row.get(1)?,
-        item_type:     row.get(2)?,
-        item_id:       row.get(3)?,
-        item_ref:      row.get(4)?,
-        child_run_id:  row.get(5)?,
-        status:        row.get(6)?,
+        id: row.get(0)?,
+        step_run_id: row.get(1)?,
+        item_type: row.get(2)?,
+        item_id: row.get(3)?,
+        item_ref: row.get(4)?,
+        child_run_id: row.get(5)?,
+        status: row.get(6)?,
         dispatched_at: row.get(7)?,
-        completed_at:  row.get(8)?,
+        completed_at: row.get(8)?,
     })
 }
 
@@ -129,7 +129,10 @@ impl<'a> WorkflowManager<'a> {
             sql_placeholders(step_run_ids.len())
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(step_run_ids.iter()), fan_out_item_from_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(step_run_ids.iter()),
+            fan_out_item_from_row,
+        )?;
         let mut map: std::collections::HashMap<String, Vec<FanOutItemRow>> =
             std::collections::HashMap::new();
         for row in rows {
