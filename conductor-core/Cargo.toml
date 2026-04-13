@@ -29,6 +29,10 @@ utoipa = { version = "5", optional = true }
 test-helpers = []
 openapi = ["dep:utoipa"]
 
+[[bin]]
+name = "gen-schema-diagram"
+path = "src/bin/gen_schema_diagram.rs"
+
 [dev-dependencies]
 regex-lite = "0.1"
 tracing-test = "0.2"
