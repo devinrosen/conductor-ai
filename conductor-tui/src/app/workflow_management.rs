@@ -1279,6 +1279,7 @@ impl App {
         ));
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_repo_workflow_in_background(
         &mut self,
         def: conductor_core::workflow::WorkflowDef,
@@ -2330,5 +2331,96 @@ mod tests {
         assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "aaa"));
         assert!(matches!(&items[2], WorkflowPickerItem::Workflow(d) if d.name == "mmm"));
         assert!(matches!(&items[3], WorkflowPickerItem::Workflow(d) if d.name == "zzz"));
+    }
+
+    // ── clamp_workflow_indices — WorkflowRunDetailFocus regression ────────────
+
+    fn make_step_without_agent(id: &str) -> conductor_core::workflow::WorkflowRunStep {
+        conductor_core::workflow::WorkflowRunStep {
+            id: id.to_string(),
+            workflow_run_id: "run1".to_string(),
+            step_name: "some-step".to_string(),
+            role: "step".to_string(),
+            can_commit: false,
+            condition_expr: None,
+            status: conductor_core::workflow::WorkflowStepStatus::Completed,
+            child_run_id: None, // no agent
+            position: 0,
+            started_at: None,
+            ended_at: None,
+            result_text: None,
+            condition_met: None,
+            iteration: 0,
+            parallel_group_id: None,
+            context_out: None,
+            markers_out: None,
+            retry_count: 0,
+            gate_type: None,
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+            structured_output: None,
+            output_file: None,
+            gate_options: None,
+            gate_selections: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            fan_out_total: None,
+            fan_out_completed: 0,
+            fan_out_failed: 0,
+            fan_out_skipped: 0,
+        }
+    }
+
+    /// Regression test: Info focus must NOT be reset to Steps on a tick where the
+    /// selected step has no agent activity (this was the bug fixed in
+    /// "fix: clamp_indices resets Info/Error focus to Steps on every tick").
+    #[test]
+    fn clamp_workflow_indices_preserves_info_focus_when_no_agent() {
+        let mut app = make_app();
+        app.state.data.workflow_steps = vec![make_step_without_agent("s1")];
+        app.state.workflow_step_index = 0;
+        app.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Info;
+        app.clamp_workflow_indices();
+        assert_eq!(
+            app.state.workflow_run_detail_focus,
+            WorkflowRunDetailFocus::Info,
+            "Info focus should not be reset to Steps when there is no agent"
+        );
+    }
+
+    /// Regression test: Error focus must NOT be reset to Steps on a tick where the
+    /// selected step has no agent activity.
+    #[test]
+    fn clamp_workflow_indices_preserves_error_focus_when_no_agent() {
+        let mut app = make_app();
+        app.state.data.workflow_steps = vec![make_step_without_agent("s1")];
+        app.state.workflow_step_index = 0;
+        app.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Error;
+        app.clamp_workflow_indices();
+        assert_eq!(
+            app.state.workflow_run_detail_focus,
+            WorkflowRunDetailFocus::Error,
+            "Error focus should not be reset to Steps when there is no agent"
+        );
+    }
+
+    /// AgentActivity focus SHOULD be reset to Steps when the selected step has no agent.
+    #[test]
+    fn clamp_workflow_indices_resets_agent_activity_focus_when_no_agent() {
+        let mut app = make_app();
+        app.state.data.workflow_steps = vec![make_step_without_agent("s1")];
+        app.state.workflow_step_index = 0;
+        app.state.workflow_run_detail_focus = WorkflowRunDetailFocus::AgentActivity;
+        app.clamp_workflow_indices();
+        assert_eq!(
+            app.state.workflow_run_detail_focus,
+            WorkflowRunDetailFocus::Steps,
+            "AgentActivity focus should be reset to Steps when there is no agent"
+        );
     }
 }
