@@ -2379,7 +2379,10 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(completed, 0, "fan_out_completed NULL must be coalesced to 0");
+        assert_eq!(
+            completed, 0,
+            "fan_out_completed NULL must be coalesced to 0"
+        );
         assert_eq!(failed, 0, "fan_out_failed NULL must be coalesced to 0");
         assert_eq!(skipped, 0, "fan_out_skipped NULL must be coalesced to 0");
 
