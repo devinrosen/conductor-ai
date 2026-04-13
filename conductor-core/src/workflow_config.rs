@@ -221,16 +221,7 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
     if !repo_path.is_empty() {
         let repo_dir = Path::new(repo_path).join(".conductor").join("workflows");
         if repo_dir.is_dir() {
-            let mut entries: Vec<_> = fs::read_dir(&repo_dir)
-                .map_err(|e| {
-                    ConductorError::Workflow(format!("Failed to read {}: {e}", repo_dir.display()))
-                })?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-                .collect();
-            entries.sort_by_key(|e| e.file_name());
-            for entry in entries {
-                let def = parse_workflow_file(&entry.path())?;
+            for def in scan_md_dir(&repo_dir)? {
                 map.insert(def.name.clone(), def);
             }
         }
@@ -243,16 +234,7 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
             .join(".conductor")
             .join("workflows");
         if wt_dir.is_dir() {
-            let mut entries: Vec<_> = fs::read_dir(&wt_dir)
-                .map_err(|e| {
-                    ConductorError::Workflow(format!("Failed to read {}: {e}", wt_dir.display()))
-                })?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-                .collect();
-            entries.sort_by_key(|e| e.file_name());
-            for entry in entries {
-                let def = parse_workflow_file(&entry.path())?;
+            for def in scan_md_dir(&wt_dir)? {
                 map.insert(def.name.clone(), def);
             }
         }
@@ -262,6 +244,22 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
     defs.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(defs)
+}
+
+/// Scan a single `.md` workflow directory and return parsed defs.
+fn scan_md_dir(dir: &Path) -> Result<Vec<WorkflowDef>> {
+    let mut entries: Vec<_> = fs::read_dir(dir)
+        .map_err(|e| {
+            ConductorError::Workflow(format!("Failed to read {}: {e}", dir.display()))
+        })?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    entries
+        .iter()
+        .map(|entry| parse_workflow_file(&entry.path()))
+        .collect()
 }
 
 /// Load a single workflow definition by name, targeting the file directly.
@@ -532,6 +530,18 @@ and commit them to the branch.
         )
         .unwrap();
         assert!(defs.is_empty());
+    }
+
+    #[test]
+    fn test_load_workflow_defs_same_path_no_double_count() {
+        // When worktree_path == repo_path the guard must skip the second pass,
+        // so each workflow is counted exactly once.
+        let dir = TempDir::new().unwrap();
+        write_workflow_file(dir.path(), "test-coverage.md", TEST_WORKFLOW);
+        let path = dir.path().to_str().unwrap();
+
+        let defs = load_workflow_defs(path, path).unwrap();
+        assert_eq!(defs.len(), 1, "same path must not double-count workflows");
     }
 
     #[test]

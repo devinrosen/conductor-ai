@@ -305,6 +305,19 @@ mod tests {
     }
 
     #[test]
+    fn test_load_workflow_defs_same_path_no_double_count() {
+        // When worktree_path == repo_path the guard must skip the second pass,
+        // so each workflow is counted exactly once.
+        let dir = TempDir::new().unwrap();
+        write_wf_file(dir.path(), "shared.wf", WF_SHARED);
+        let path = dir.path().to_str().unwrap();
+
+        let (defs, warnings) = load_workflow_defs(path, path).unwrap();
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(defs.len(), 1, "same path must not double-count workflows");
+    }
+
+    #[test]
     fn test_validate_workflow_name_rejects_path_separators() {
         assert!(validate_workflow_name("../evil").is_err());
         assert!(validate_workflow_name("foo/bar").is_err());
