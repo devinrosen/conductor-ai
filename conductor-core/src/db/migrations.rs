@@ -1137,17 +1137,17 @@ pub fn run(conn: &Connection) -> Result<()> {
             }
             if !has_completed {
                 conn.execute_batch(
-                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER DEFAULT 0;",
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER NOT NULL DEFAULT 0;",
                 )?;
             }
             if !has_failed {
                 conn.execute_batch(
-                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed INTEGER DEFAULT 0;",
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed INTEGER NOT NULL DEFAULT 0;",
                 )?;
             }
             if !has_skipped {
                 conn.execute_batch(
-                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped INTEGER DEFAULT 0;",
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped INTEGER NOT NULL DEFAULT 0;",
                 )?;
             }
         }
@@ -1158,10 +1158,15 @@ pub fn run(conn: &Connection) -> Result<()> {
     // foreach.rs inserts rows with role='foreach' but the constraint only allowed
     // ('actor','reviewer','gate','workflow','script'). Uses table-recreation pattern
     // (same as 058) to include all columns from 058, 065, and 067.
+    // workflow_run_step_fan_out_items (added in 067) holds an FK to workflow_run_steps,
+    // so the DROP+RENAME sequence requires FK enforcement to be disabled first.
     if version < 68 {
-        conn.execute_batch(include_str!(
-            "migrations/068_workflow_step_foreach_role.sql"
-        ))?;
+        with_foreign_keys_off(conn, || {
+            conn.execute_batch(include_str!(
+                "migrations/068_workflow_step_foreach_role.sql"
+            ))?;
+            Ok(())
+        })?;
         bump_version(conn, 68)?;
     }
 
@@ -2141,10 +2146,17 @@ mod tests {
     /// Verifies that migration 068 adds 'foreach' to the role CHECK constraint
     /// so that foreach.rs can insert rows with role='foreach', and invalid roles
     /// are still rejected.
+    ///
+    /// FK enforcement is left ON (the default for in-memory connections after
+    /// `run()` enables it) so that `with_foreign_keys_off` in the production
+    /// migration path is exercised end-to-end.
     #[test]
     fn test_migration_068_foreach_role_accepted() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        // Enable FK enforcement so the with_foreign_keys_off wrapper in migration
+        // 068 is exercised on the production code path (FK must be disabled to
+        // DROP workflow_run_steps while workflow_run_step_fan_out_items references it).
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
 
         // Minimal pre-068 schema: workflow_run_steps with the old constraint
         // (no 'foreach'), plus the fan_out_* and subprocess_pid columns from 065/067.
