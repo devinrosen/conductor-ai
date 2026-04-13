@@ -1,0 +1,17 @@
+workflow qualify-ticket-comment {
+  meta {
+    title       = "Qualify Ticket (Comment)"
+    description = "Assess a single ticket for autonomous executability and post a GitHub comment with the verdict"
+    trigger     = "manual"
+    targets     = ["ticket"]
+    group       = "Analysis"
+  }
+
+  inputs {
+    ticket_id required
+  }
+
+  call fetch-ticket-context
+  call assess-ticket-readiness
+  call comment-ticket-assessment
+}
