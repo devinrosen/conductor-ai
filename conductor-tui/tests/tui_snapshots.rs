@@ -368,6 +368,10 @@ fn snap_workflow_run_detail_with_steps() {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            fan_out_total: None,
+            fan_out_completed: 0,
+            fan_out_failed: 0,
+            fan_out_skipped: 0,
         },
         WorkflowRunStep {
             id: "step2".into(),
@@ -402,6 +406,10 @@ fn snap_workflow_run_detail_with_steps() {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            fan_out_total: None,
+            fan_out_completed: 0,
+            fan_out_failed: 0,
+            fan_out_skipped: 0,
         },
     ];
 

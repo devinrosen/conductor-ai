@@ -1131,6 +1131,10 @@ mod tests {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            fan_out_total: None,
+            fan_out_completed: 0,
+            fan_out_failed: 0,
+            fan_out_skipped: 0,
         }];
         state
     }
