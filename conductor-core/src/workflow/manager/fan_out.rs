@@ -94,9 +94,7 @@ impl<'a> WorkflowManager<'a> {
         if step_run_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let placeholders: Vec<String> = (1..=step_run_ids.len())
-            .map(|i| format!("?{i}"))
-            .collect();
+        let placeholders: Vec<String> = (1..=step_run_ids.len()).map(|i| format!("?{i}")).collect();
         let sql = format!(
             "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
              status, dispatched_at, completed_at \
@@ -106,22 +104,19 @@ impl<'a> WorkflowManager<'a> {
             placeholders.join(", ")
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            rusqlite::params_from_iter(step_run_ids.iter()),
-            |row| {
-                Ok(FanOutItemRow {
-                    id: row.get(0)?,
-                    step_run_id: row.get(1)?,
-                    item_type: row.get(2)?,
-                    item_id: row.get(3)?,
-                    item_ref: row.get(4)?,
-                    child_run_id: row.get(5)?,
-                    status: row.get(6)?,
-                    dispatched_at: row.get(7)?,
-                    completed_at: row.get(8)?,
-                })
-            },
-        )?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(step_run_ids.iter()), |row| {
+            Ok(FanOutItemRow {
+                id: row.get(0)?,
+                step_run_id: row.get(1)?,
+                item_type: row.get(2)?,
+                item_id: row.get(3)?,
+                item_ref: row.get(4)?,
+                child_run_id: row.get(5)?,
+                status: row.get(6)?,
+                dispatched_at: row.get(7)?,
+                completed_at: row.get(8)?,
+            })
+        })?;
         let mut map: std::collections::HashMap<String, Vec<FanOutItemRow>> =
             std::collections::HashMap::new();
         for row in rows {
