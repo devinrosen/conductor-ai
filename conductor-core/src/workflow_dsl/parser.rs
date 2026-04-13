@@ -6,10 +6,10 @@ use crate::error::{ConductorError, Result};
 
 use super::lexer::{Lexer, Token};
 use super::types::{
-    AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode,
-    GateOptions, GateType, IfNode, InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout,
-    ParallelNode, QualityGateConfig, ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
-    WorkflowTrigger,
+    AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, ForEachNode,
+    ForeachOver, GateNode, GateOptions, GateType, IfNode, InputDecl, InputType, OnChildFail,
+    OnCycle, OnFailAction, OnMaxIter, OnTimeout, ParallelNode, QualityGateConfig, ScriptNode,
+    TicketScope, UnlessNode, WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger,
 };
 
 // ---------------------------------------------------------------------------
@@ -147,6 +147,9 @@ impl Parser {
             Token::Description => Ok("description".to_string()),
             Token::Boolean => Ok("boolean".to_string()),
             Token::If => Ok("if".to_string()),
+            // Allow `workflow` and `inputs` as KV keys (used inside `foreach` blocks)
+            Token::Workflow => Ok("workflow".to_string()),
+            Token::Inputs => Ok("inputs".to_string()),
             other => Err(format!("Expected identifier, got {other:?}")),
         }
     }
@@ -178,6 +181,7 @@ impl Parser {
             Token::Gate => Ok(KvValue::Bare("gate".to_string())),
             Token::Always => Ok(KvValue::Bare("always".to_string())),
             Token::Script => Ok(KvValue::Bare("script".to_string())),
+            Token::ForEach => Ok(KvValue::Bare("foreach".to_string())),
             // Map literal: { KEY = "value", KEY2 = "value2" }
             Token::LBrace => {
                 let kvs = self.parse_kvs()?;
@@ -244,6 +248,9 @@ impl Parser {
                         | Token::Default
                         | Token::Description
                         | Token::If
+                        // Allow `workflow` and `inputs` as KV keys inside foreach blocks
+                        | Token::Workflow
+                        | Token::Inputs
                 );
                 let next_is_eq = self.tokens.get(self.pos + 1) == Some(&Token::Equals);
                 if is_kv_key && next_is_eq {
@@ -403,8 +410,9 @@ impl Parser {
             Token::Gate => self.parse_gate().map(WorkflowNode::Gate),
             Token::Always => self.parse_always().map(WorkflowNode::Always),
             Token::Script => self.parse_script().map(WorkflowNode::Script),
+            Token::ForEach => self.parse_foreach().map(WorkflowNode::ForEach),
             other => Err(format!(
-                "Expected a workflow node (call, if, unless, while, do, parallel, gate, always, script), got {other:?}"
+                "Expected a workflow node (call, if, unless, while, do, parallel, gate, always, script, foreach), got {other:?}"
             )),
         }
     }
@@ -936,6 +944,145 @@ impl Parser {
             retries,
             on_fail,
             bot_name,
+        })
+    }
+
+    fn parse_foreach(&mut self) -> std::result::Result<ForEachNode, String> {
+        self.expect(&Token::ForEach)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+
+        let mut kvs = self.parse_kvs()?;
+        self.expect(&Token::RBrace)?;
+
+        // Required: over
+        let over = match kvs.get("over").map(|v| v.as_str()) {
+            Some("tickets") => ForeachOver::Tickets,
+            Some("repos") => ForeachOver::Repos,
+            Some("workflow_runs") => ForeachOver::WorkflowRuns,
+            Some(other) => {
+                return Err(format!(
+                    "foreach '{name}': invalid over value '{other}' \
+                     (expected: tickets, repos, workflow_runs)"
+                ))
+            }
+            None => return Err(format!("foreach '{name}': missing required key 'over'")),
+        };
+
+        // Required: max_parallel
+        let max_parallel = kvs
+            .get("max_parallel")
+            .ok_or_else(|| format!("foreach '{name}': missing required key 'max_parallel'"))?
+            .as_str()
+            .parse::<u32>()
+            .map_err(|e| format!("foreach '{name}': invalid max_parallel: {e}"))?;
+
+        // Required: workflow
+        let workflow = kvs
+            .get("workflow")
+            .ok_or_else(|| format!("foreach '{name}': missing required key 'workflow'"))?
+            .as_str()
+            .to_string();
+
+        // Optional: scope (required for tickets, validated at semantic layer)
+        let scope = if let Some(s) = kvs.remove("scope") {
+            match s {
+                KvValue::Map(m) => {
+                    if let Some(ticket_id) = m.get("ticket_id") {
+                        Some(TicketScope::TicketId(ticket_id.clone()))
+                    } else if let Some(label) = m.get("label") {
+                        Some(TicketScope::Label(label.clone()))
+                    } else {
+                        return Err(format!(
+                            "foreach '{name}': scope must contain ticket_id or label"
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "foreach '{name}': scope must be a map {{ ticket_id = \"...\" }} or {{ label = \"...\" }}"
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+
+        // Optional: filter (required for workflow_runs, validated at semantic layer)
+        let filter = if let Some(f) = kvs.remove("filter") {
+            match f {
+                KvValue::Map(m) => m,
+                _ => {
+                    return Err(format!(
+                        "foreach '{name}': filter must be a map {{ key = \"value\" }}"
+                    ))
+                }
+            }
+        } else {
+            HashMap::new()
+        };
+
+        // Optional: inputs map
+        let inputs = if let Some(inp) = kvs.remove("inputs") {
+            match inp {
+                KvValue::Map(m) => m,
+                _ => {
+                    return Err(format!(
+                        "foreach '{name}': inputs must be a map {{ key = \"value\" }}"
+                    ))
+                }
+            }
+        } else {
+            HashMap::new()
+        };
+
+        // Optional: ordered (default false)
+        let ordered = match kvs.get("ordered").map(|v| v.as_str()) {
+            Some("true") => true,
+            Some("false") | None => false,
+            Some(other) => {
+                return Err(format!(
+                    "foreach '{name}': invalid ordered value '{other}' (expected: true or false)"
+                ))
+            }
+        };
+
+        // Optional: on_cycle (default fail)
+        let on_cycle = match kvs.get("on_cycle").map(|v| v.as_str()) {
+            Some("warn") => OnCycle::Warn,
+            Some("fail") | None => OnCycle::Fail,
+            Some(other) => {
+                return Err(format!(
+                    "foreach '{name}': invalid on_cycle value '{other}' (expected: fail, warn)"
+                ))
+            }
+        };
+
+        // Optional: on_child_fail (default continue; executor overrides for ordered tickets)
+        let on_child_fail = match kvs.get("on_child_fail").map(|v| v.as_str()) {
+            Some("halt") => OnChildFail::Halt,
+            Some("continue") => OnChildFail::Continue,
+            Some("skip_dependents") => OnChildFail::SkipDependents,
+            None => OnChildFail::Continue,
+            Some(other) => {
+                return Err(format!(
+                    "foreach '{name}': invalid on_child_fail value '{other}' \
+                     (expected: halt, continue, skip_dependents)"
+                ))
+            }
+        };
+
+        Ok(ForEachNode {
+            name,
+            over,
+            scope,
+            filter,
+            ordered,
+            on_cycle,
+            max_parallel,
+            workflow,
+            inputs,
+            on_child_fail,
         })
     }
 }

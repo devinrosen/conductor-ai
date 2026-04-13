@@ -1126,6 +1126,7 @@ impl App {
                 force: false,
                 extra_plugin_dirs: vec![],
                 db_path: None,
+                parent_workflow_run_id: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1193,6 +1194,7 @@ impl App {
                 force: false,
                 extra_plugin_dirs: vec![],
                 db_path: None,
+                parent_workflow_run_id: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1247,6 +1249,7 @@ impl App {
                 force: false,
                 extra_plugin_dirs: vec![],
                 db_path: None,
+                parent_workflow_run_id: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1300,6 +1303,7 @@ impl App {
                 force: false,
                 extra_plugin_dirs: vec![],
                 db_path: None,
+                parent_workflow_run_id: None,
             };
 
             let result = execute_workflow_standalone(&params);

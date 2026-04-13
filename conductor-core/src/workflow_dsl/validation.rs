@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use super::types::{Condition, GateType, InputType, ScriptNode, WorkflowDef, WorkflowNode};
+use super::types::{
+    Condition, ForeachOver, GateType, InputType, OnChildFail, ScriptNode, WorkflowDef, WorkflowNode,
+};
 
 // ---------------------------------------------------------------------------
 // Semantic validation
@@ -227,7 +229,133 @@ fn validate_nodes<F>(
                 // An Always node nested inside a body block sees the current produced set.
                 validate_nodes(&n.body, produced, errors, loader, bool_inputs);
             }
+            WorkflowNode::ForEach(n) => {
+                validate_foreach_node(n, errors, loader);
+                // foreach produces a step key for downstream use
+                produced.insert(format!("foreach:{}", n.name));
+            }
         }
+    }
+}
+
+/// Validate a foreach node per RFC §10: 9 semantic checks.
+fn validate_foreach_node<F>(
+    n: &super::types::ForEachNode,
+    errors: &mut Vec<ValidationError>,
+    loader: &F,
+) where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
+    // Check 3: workflow resolves to a known workflow definition
+    match loader(&n.workflow) {
+        Ok(child_def) => {
+            // Check 4: input compatibility — warn if required inputs are not covered
+            // An input is "covered" if it is present in n.inputs (possibly via {{item.*}})
+            for input_decl in &child_def.inputs {
+                if input_decl.required && !n.inputs.contains_key(&input_decl.name) {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "foreach '{}': child workflow '{}' requires input '{}' \
+                             but it is not in the inputs map",
+                            n.name, n.workflow, input_decl.name
+                        ),
+                        hint: Some(format!(
+                            "Add `{} = \"{{{{item.*}}}}\"` or a literal value to the inputs block",
+                            input_decl.name
+                        )),
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            errors.push(ValidationError {
+                message: format!(
+                    "foreach '{}': child workflow '{}' could not be loaded: {}",
+                    n.name, n.workflow, e
+                ),
+                hint: None,
+            });
+        }
+    }
+
+    // Check 5: scope required for over = tickets
+    if n.over == ForeachOver::Tickets && n.scope.is_none() {
+        errors.push(ValidationError {
+            message: format!(
+                "foreach '{}': `scope` is required when over = tickets",
+                n.name
+            ),
+            hint: Some(
+                "Add `scope = { ticket_id = \"...\" }` or `scope = { label = \"...\" }`"
+                    .to_string(),
+            ),
+        });
+    }
+
+    // Check 6: ordered rejected for non-ticket over
+    if n.ordered && n.over != ForeachOver::Tickets {
+        errors.push(ValidationError {
+            message: format!(
+                "foreach '{}': ordered = true is only valid when over = tickets",
+                n.name
+            ),
+            hint: Some("Remove `ordered = true` or change `over` to `tickets`".to_string()),
+        });
+    }
+
+    // Check 7: skip_dependents without ordered = true — warn
+    if n.on_child_fail == OnChildFail::SkipDependents && !n.ordered {
+        errors.push(ValidationError {
+            message: format!(
+                "foreach '{}': on_child_fail = skip_dependents has no effect without ordered = true",
+                n.name
+            ),
+            hint: Some(
+                "Add `ordered = true` or change on_child_fail to `continue` or `halt`".to_string(),
+            ),
+        });
+    }
+
+    // Check 8: filter required for over = workflow_runs
+    if n.over == ForeachOver::WorkflowRuns && n.filter.is_empty() {
+        errors.push(ValidationError {
+            message: format!(
+                "foreach '{}': `filter` is required when over = workflow_runs",
+                n.name
+            ),
+            hint: Some(
+                "Add `filter = { status = \"failed\" }` (or another terminal status)".to_string(),
+            ),
+        });
+    }
+
+    // Check 9: filter.status must be terminal for workflow_runs
+    if n.over == ForeachOver::WorkflowRuns {
+        if let Some(status) = n.filter.get("status") {
+            if status == "running" || status == "paused" {
+                errors.push(ValidationError {
+                    message: format!(
+                        "foreach '{}': filter.status = '{}' is not a terminal status — \
+                         only completed, failed, or cancelled are allowed",
+                        n.name, status
+                    ),
+                    hint: Some(
+                        "Change to `status = \"failed\"` or `status = \"completed\"`".to_string(),
+                    ),
+                });
+            }
+        }
+    }
+
+    // Warn if filter provided for repos (not evaluated in v1)
+    if n.over == ForeachOver::Repos && !n.filter.is_empty() {
+        errors.push(ValidationError {
+            message: format!(
+                "foreach '{}': filter has no effect when over = repos (not implemented in v1)",
+                n.name
+            ),
+            hint: Some("Remove the `filter` block for repo fan-outs".to_string()),
+        });
     }
 }
 
@@ -242,6 +370,7 @@ fn node_step_keys(node: &WorkflowNode) -> Vec<String> {
         WorkflowNode::CallWorkflow(n) => vec![n.workflow.clone()],
         WorkflowNode::Script(n) => vec![n.name.clone()],
         WorkflowNode::Parallel(n) => n.calls.iter().map(|c| c.step_key()).collect(),
+        WorkflowNode::ForEach(n) => vec![format!("foreach:{}", n.name)],
         _ => vec![],
     }
 }
@@ -419,7 +548,8 @@ fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
             WorkflowNode::Call(_)
             | WorkflowNode::CallWorkflow(_)
             | WorkflowNode::Gate(_)
-            | WorkflowNode::Parallel(_) => {}
+            | WorkflowNode::Parallel(_)
+            | WorkflowNode::ForEach(_) => {}
         }
     }
     out

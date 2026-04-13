@@ -41,7 +41,7 @@ pub use engine::{
     apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
     resume_workflow_standalone, validate_resume_preconditions,
 };
-pub use manager::WorkflowManager;
+pub use manager::{FanOutItemRow, WorkflowManager};
 pub use output::{parse_conductor_output, ConductorOutput};
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::{

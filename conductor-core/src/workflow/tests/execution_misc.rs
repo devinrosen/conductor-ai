@@ -36,6 +36,10 @@ fn test_metadata_fields_basic() {
         output_tokens: None,
         cache_read_input_tokens: None,
         cache_creation_input_tokens: None,
+        fan_out_total: None,
+        fan_out_completed: 0,
+        fan_out_failed: 0,
+        fan_out_skipped: 0,
     };
     let entries = step.metadata_fields();
     assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
@@ -122,6 +126,10 @@ fn test_metadata_fields_optional_sections() {
         output_tokens: None,
         cache_read_input_tokens: None,
         cache_creation_input_tokens: None,
+        fan_out_total: None,
+        fan_out_completed: 0,
+        fan_out_failed: 0,
+        fan_out_skipped: 0,
     };
     let entries = step.metadata_fields();
     assert!(entries.contains(&MetadataEntry::Field {

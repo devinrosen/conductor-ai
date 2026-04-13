@@ -747,6 +747,21 @@ pub(crate) fn build_def_step_lines<'a>(
                     seen,
                 ));
             }
+            WorkflowNode::ForEach(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[foreach]", Style::default().fg(theme.label_info)),
+                    Span::raw("  "),
+                    Span::styled(
+                        n.name.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  → {}", n.workflow),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+            }
         }
     }
 
@@ -934,6 +949,12 @@ pub(crate) fn get_def_step_node_at(
                 ) {
                     return Some(r);
                 }
+            }
+            WorkflowNode::ForEach(_) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
             }
         }
     }
