@@ -1491,6 +1491,30 @@ mod tests {
         ));
     }
 
+    // Regression test for #2092: Enter in workflow column (Runs focus) must
+    // produce Action::Select (drill into run), not Action::LinkTicket.
+    #[test]
+    fn enter_in_workflow_column_runs_maps_to_select() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::Select
+        ));
+    }
+
+    #[test]
+    fn enter_in_workflow_column_defs_maps_to_select() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Defs;
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::Select
+        ));
+    }
+
     // --- WorkflowPicker tests (Repo target variant) ---
     // Key-mapping is target-agnostic (the WorkflowPicker arm in map_key does not
     // inspect the target), so these tests confirm the same bindings hold.
