@@ -22,6 +22,20 @@ pub struct FanOutItemRow {
     pub completed_at: Option<String>,
 }
 
+fn fan_out_item_from_row(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow> {
+    Ok(FanOutItemRow {
+        id:            row.get(0)?,
+        step_run_id:   row.get(1)?,
+        item_type:     row.get(2)?,
+        item_id:       row.get(3)?,
+        item_ref:      row.get(4)?,
+        child_run_id:  row.get(5)?,
+        status:        row.get(6)?,
+        dispatched_at: row.get(7)?,
+        completed_at:  row.get(8)?,
+    })
+}
+
 impl<'a> WorkflowManager<'a> {
     /// Insert a fan-out item row with status = 'pending'.
     /// Ignores duplicates (idempotent — safe to call on resume).
@@ -72,19 +86,6 @@ impl<'a> WorkflowManager<'a> {
         step_run_id: &str,
         status_filter: Option<&str>,
     ) -> Result<Vec<FanOutItemRow>> {
-        let row_mapper = |row: &rusqlite::Row| {
-            Ok(FanOutItemRow {
-                id: row.get(0)?,
-                step_run_id: row.get(1)?,
-                item_type: row.get(2)?,
-                item_id: row.get(3)?,
-                item_ref: row.get(4)?,
-                child_run_id: row.get(5)?,
-                status: row.get(6)?,
-                dispatched_at: row.get(7)?,
-                completed_at: row.get(8)?,
-            })
-        };
         if let Some(status) = status_filter {
             query_collect(
                 self.conn,
@@ -94,7 +95,7 @@ impl<'a> WorkflowManager<'a> {
                  WHERE step_run_id = ?1 AND status = ?2 \
                  ORDER BY id ASC",
                 params![step_run_id, status],
-                row_mapper,
+                fan_out_item_from_row,
             )
         } else {
             query_collect(
@@ -105,7 +106,7 @@ impl<'a> WorkflowManager<'a> {
                  WHERE step_run_id = ?1 \
                  ORDER BY id ASC",
                 params![step_run_id],
-                row_mapper,
+                fan_out_item_from_row,
             )
         }
     }
@@ -128,19 +129,7 @@ impl<'a> WorkflowManager<'a> {
             sql_placeholders(step_run_ids.len())
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(step_run_ids.iter()), |row| {
-            Ok(FanOutItemRow {
-                id: row.get(0)?,
-                step_run_id: row.get(1)?,
-                item_type: row.get(2)?,
-                item_id: row.get(3)?,
-                item_ref: row.get(4)?,
-                child_run_id: row.get(5)?,
-                status: row.get(6)?,
-                dispatched_at: row.get(7)?,
-                completed_at: row.get(8)?,
-            })
-        })?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(step_run_ids.iter()), fan_out_item_from_row)?;
         let mut map: std::collections::HashMap<String, Vec<FanOutItemRow>> =
             std::collections::HashMap::new();
         for row in rows {
