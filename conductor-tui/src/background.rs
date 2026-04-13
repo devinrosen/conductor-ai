@@ -375,6 +375,19 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
             }
+            if config.general.stale_workflow_minutes > 0 {
+                let live_windows = conductor_core::agent::list_live_tmux_windows();
+                match wf_mgr.reap_stale_workflow_runs(
+                    config.general.stale_workflow_minutes as i64,
+                    &live_windows,
+                ) {
+                    Ok(reaped) if !reaped.is_empty() => {
+                        tracing::info!("Reaped {} stale workflow run(s)", reaped.len());
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
+                }
+            }
             match wf_mgr.detect_stuck_workflow_run_ids(60) {
                 Ok(ids) if !ids.is_empty() => {
                     let n = ids.len();

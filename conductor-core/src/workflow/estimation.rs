@@ -177,6 +177,7 @@ pub fn live_remaining_estimate(
     let mut remaining_low: i64 = 0;
     let mut remaining_high: i64 = 0;
     let mut has_any = false;
+    let mut contributing_confidences: Vec<Confidence> = Vec::new();
 
     for step in steps {
         match step.status {
@@ -200,6 +201,7 @@ pub fn live_remaining_estimate(
                     remaining_point += (est.point_ms - elapsed).max(0);
                     remaining_low += (est.low_ms - elapsed).max(0);
                     remaining_high += (est.high_ms - elapsed).max(0);
+                    contributing_confidences.push(est.confidence);
                     has_any = true;
                 }
             }
@@ -209,6 +211,7 @@ pub fn live_remaining_estimate(
                     remaining_point += est.point_ms;
                     remaining_low += est.low_ms;
                     remaining_high += est.high_ms;
+                    contributing_confidences.push(est.confidence);
                     has_any = true;
                 }
             }
@@ -219,10 +222,10 @@ pub fn live_remaining_estimate(
         return None;
     }
 
-    // Aggregate confidence: worst across all contributing steps.
-    let worst = step_estimates
-        .values()
-        .map(|e| e.confidence)
+    // Aggregate confidence: worst across only the steps that contributed to remaining time.
+    let worst = contributing_confidences
+        .iter()
+        .copied()
         .min_by_key(|c| match c {
             Confidence::Low => 0,
             Confidence::Medium => 1,
@@ -520,6 +523,38 @@ mod tests {
         let live = live_remaining_estimate(&steps, &step_ests).unwrap();
         // 120s estimate - ~60s elapsed ≈ 60s remaining (allow 2s tolerance)
         assert!(live.remaining_ms > 58_000 && live.remaining_ms < 62_000);
+    }
+
+    #[test]
+    fn test_live_remaining_confidence_only_from_contributing_steps() {
+        // Build step_estimates manually so we can control confidence per step.
+        let mut step_ests: StepEstimates = HashMap::new();
+        step_ests.insert(
+            "completed_step".into(),
+            Estimate {
+                point_ms: 60_000,
+                low_ms: 50_000,
+                high_ms: 70_000,
+                confidence: Confidence::Low, // Low confidence, but step is completed
+            },
+        );
+        step_ests.insert(
+            "pending_step".into(),
+            Estimate {
+                point_ms: 120_000,
+                low_ms: 100_000,
+                high_ms: 140_000,
+                confidence: Confidence::High, // High confidence, and step is pending
+            },
+        );
+
+        let steps = vec![
+            make_named_step("completed_step", WorkflowStepStatus::Completed, None),
+            make_named_step("pending_step", WorkflowStepStatus::Pending, None),
+        ];
+        let live = live_remaining_estimate(&steps, &step_ests).unwrap();
+        // Only "pending_step" contributes — confidence should be High, not Low.
+        assert_eq!(live.confidence, Confidence::High);
     }
 
     #[test]
