@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 use crate::error::{ConductorError, Result};
-use crate::text_util::{resolve_conductor_subdir, resolve_conductor_subdir_for_file};
+use crate::text_util::resolve_conductor_subdir_for_file;
 
 use super::parser::parse_workflow_file;
 use super::types::{collect_workflow_refs, WorkflowDef, WorkflowWarning};
@@ -12,6 +14,10 @@ use super::types::{collect_workflow_refs, WorkflowDef, WorkflowWarning};
 
 /// Load all workflow definitions from `.conductor/workflows/*.wf`.
 ///
+/// Merges definitions from both `repo_path` and `worktree_path`. Worktree
+/// definitions override repo definitions when both define a workflow with
+/// the same name (keyed by `def.name`, not filename).
+///
 /// Returns `(defs, warnings)` where `warnings` contains one [`WorkflowWarning`]
 /// per file that failed to parse. Callers receive all successfully-parsed
 /// definitions even when some files are broken.
@@ -19,16 +25,49 @@ pub fn load_workflow_defs(
     worktree_path: &str,
     repo_path: &str,
 ) -> Result<(Vec<WorkflowDef>, Vec<WorkflowWarning>)> {
-    let workflows_dir = match resolve_conductor_subdir(worktree_path, repo_path, "workflows") {
-        Some(dir) => dir,
-        None => return Ok((Vec::new(), Vec::new())),
-    };
+    let mut map: HashMap<String, WorkflowDef> = HashMap::new();
+    let mut all_warnings: Vec<WorkflowWarning> = Vec::new();
 
-    let mut entries: Vec<_> = filter_wf_dir_entries(
-        fs::read_dir(&workflows_dir).map_err(|e| {
-            ConductorError::Workflow(format!("Failed to read {}: {e}", workflows_dir.display()))
+    // Load repo defs first (lower priority).
+    if !repo_path.is_empty() {
+        let repo_dir = Path::new(repo_path).join(".conductor").join("workflows");
+        if repo_dir.is_dir() {
+            let (defs, warnings) = scan_wf_dir(&repo_dir)?;
+            for def in defs {
+                map.insert(def.name.clone(), def);
+            }
+            all_warnings.extend(warnings);
+        }
+    }
+
+    // Load worktree defs second (higher priority — overwrite repo defs on name conflict).
+    // Guard: skip if worktree_path is empty or identical to repo_path (avoids double-counting).
+    if !worktree_path.is_empty() && worktree_path != repo_path {
+        let wt_dir = Path::new(worktree_path)
+            .join(".conductor")
+            .join("workflows");
+        if wt_dir.is_dir() {
+            let (defs, warnings) = scan_wf_dir(&wt_dir)?;
+            for def in defs {
+                map.insert(def.name.clone(), def);
+            }
+            all_warnings.extend(warnings);
+        }
+    }
+
+    let mut defs: Vec<WorkflowDef> = map.into_values().collect();
+    defs.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok((defs, all_warnings))
+}
+
+/// Scan a single `.wf` directory and return parsed defs + parse warnings.
+fn scan_wf_dir(dir: &Path) -> Result<(Vec<WorkflowDef>, Vec<WorkflowWarning>)> {
+    let mut entries = filter_wf_dir_entries(
+        fs::read_dir(dir).map_err(|e| {
+            ConductorError::Workflow(format!("Failed to read {}: {e}", dir.display()))
         })?,
-        &workflows_dir,
+        dir,
     );
 
     entries.sort_by_key(|e| e.file_name());
@@ -175,6 +214,95 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_wf_file(dir: &std::path::Path, filename: &str, content: &str) {
+        let workflows_dir = dir.join(".conductor").join("workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(workflows_dir.join(filename), content).unwrap();
+    }
+
+    // Minimal valid .wf files with distinct workflow names, using the simple
+    // single-line DSL format verified by existing parser tests.
+    const WF_SHARED: &str = "workflow shared { meta { targets = [\"worktree\"] } call build }";
+    const WF_LOCAL: &str = "workflow local { meta { targets = [\"worktree\"] } call build }";
+    const WF_DEPLOY_REPO: &str = "workflow deploy { meta { targets = [\"worktree\"] } call build }";
+    // Worktree version of "deploy" — identical name but different source_path in assertion.
+    const WF_DEPLOY_WT: &str = "workflow deploy { meta { targets = [\"worktree\"] } call release }";
+
+    #[test]
+    fn test_load_workflow_defs_repo_only() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_wf_file(repo.path(), "shared.wf", WF_SHARED);
+
+        let (defs, warnings) = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "shared");
+    }
+
+    #[test]
+    fn test_load_workflow_defs_worktree_only() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_wf_file(worktree.path(), "local.wf", WF_LOCAL);
+
+        let (defs, warnings) = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "local");
+    }
+
+    #[test]
+    fn test_load_workflow_defs_merge_no_conflict() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_wf_file(repo.path(), "shared.wf", WF_SHARED);
+        write_wf_file(worktree.path(), "local.wf", WF_LOCAL);
+
+        let (defs, warnings) = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(defs.len(), 2);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"shared"));
+        assert!(names.contains(&"local"));
+    }
+
+    #[test]
+    fn test_load_workflow_defs_merge_worktree_wins() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        // Both define a workflow named "deploy" — worktree version should win.
+        write_wf_file(repo.path(), "deploy.wf", WF_DEPLOY_REPO);
+        write_wf_file(worktree.path(), "deploy.wf", WF_DEPLOY_WT);
+
+        let (defs, warnings) = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        // Only one "deploy" workflow should survive — the worktree version.
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "deploy");
+        assert!(defs[0]
+            .source_path
+            .contains(worktree.path().to_str().unwrap()));
+    }
 
     #[test]
     fn test_validate_workflow_name_rejects_path_separators() {
