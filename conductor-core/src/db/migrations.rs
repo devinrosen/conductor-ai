@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 67;
+pub const LATEST_SCHEMA_VERSION: u32 = 68;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1127,6 +1127,17 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 67)?;
     }
 
+    // Migration 068: add 'foreach' to the role CHECK constraint on workflow_run_steps.
+    // foreach.rs inserts rows with role='foreach' but the constraint only allowed
+    // ('actor','reviewer','gate','workflow','script'). Uses table-recreation pattern
+    // (same as 058) to include all columns from 058, 065, and 067.
+    if version < 68 {
+        conn.execute_batch(include_str!(
+            "migrations/068_workflow_step_foreach_role.sql"
+        ))?;
+        bump_version(conn, 68)?;
+    }
+
     Ok(())
 }
 
@@ -2098,5 +2109,118 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2, "both 'blocks' and 'parent_of' rows must coexist");
+    }
+
+    /// Verifies that migration 068 adds 'foreach' to the role CHECK constraint
+    /// so that foreach.rs can insert rows with role='foreach', and invalid roles
+    /// are still rejected.
+    #[test]
+    fn test_migration_068_foreach_role_accepted() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Minimal pre-068 schema: workflow_run_steps with the old constraint
+        // (no 'foreach'), plus the fan_out_* and subprocess_pid columns from 065/067.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY,
+                 workflow_name TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'pending',
+                 started_at TEXT NOT NULL
+             );
+             CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate','workflow','script')),
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending'
+                                   CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
+                 child_run_id      TEXT,
+                 position          INTEGER NOT NULL,
+                 started_at        TEXT,
+                 ended_at          TEXT,
+                 result_text       TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT,
+                 markers_out       TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type         TEXT,
+                 gate_prompt       TEXT,
+                 gate_timeout      TEXT,
+                 gate_approved_by  TEXT,
+                 gate_approved_at  TEXT,
+                 gate_feedback     TEXT,
+                 structured_output TEXT,
+                 output_file       TEXT,
+                 gate_options      TEXT,
+                 gate_selections   TEXT,
+                 subprocess_pid    INTEGER,
+                 fan_out_total     INTEGER,
+                 fan_out_completed INTEGER DEFAULT 0,
+                 fan_out_failed    INTEGER DEFAULT 0,
+                 fan_out_skipped   INTEGER DEFAULT 0
+             );
+             CREATE TABLE workflow_run_step_fan_out_items (
+                 id           TEXT PRIMARY KEY,
+                 step_run_id  TEXT NOT NULL REFERENCES workflow_run_steps(id) ON DELETE CASCADE,
+                 item_type    TEXT NOT NULL CHECK (item_type IN ('ticket', 'repo', 'workflow_run')),
+                 item_id      TEXT NOT NULL,
+                 item_ref     TEXT NOT NULL,
+                 child_run_id TEXT,
+                 status       TEXT NOT NULL DEFAULT 'pending'
+                              CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+                 dispatched_at TEXT,
+                 completed_at  TEXT,
+                 UNIQUE (step_run_id, item_type, item_id)
+             );
+             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run
+               ON workflow_run_steps(workflow_run_id);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '67');
+             INSERT INTO workflow_runs (id, workflow_name, started_at)
+                 VALUES ('wfr1', 'foreach-flow', '2024-01-01T00:00:00Z');
+             INSERT INTO workflow_run_steps
+                 (id, workflow_run_id, step_name, role, position)
+                 VALUES ('s1', 'wfr1', 'label-ticket', 'actor', 0);",
+        )
+        .unwrap();
+
+        // Apply migration 068.
+        run(&conn).unwrap();
+
+        // role='foreach' must now be accepted.
+        conn.execute(
+            "INSERT INTO workflow_run_steps
+             (id, workflow_run_id, step_name, role, position)
+             VALUES ('s2', 'wfr1', 'foreach-step', 'foreach', 1)",
+            [],
+        )
+        .expect("role='foreach' must be accepted after migration 068");
+
+        // Existing row must have survived.
+        let role: String = conn
+            .query_row(
+                "SELECT role FROM workflow_run_steps WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("existing step row must survive migration 068");
+        assert_eq!(role, "actor");
+
+        // Invalid role must still be rejected.
+        let err = conn.execute(
+            "INSERT INTO workflow_run_steps
+             (id, workflow_run_id, step_name, role, position)
+             VALUES ('s3', 'wfr1', 'bad-step', 'invalid_role', 2)",
+            [],
+        );
+        assert!(
+            err.is_err(),
+            "invalid role must still be rejected after migration 068"
+        );
     }
 }
