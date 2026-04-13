@@ -9,6 +9,7 @@ workflow qualify-all-tickets {
 
   foreach qualify-tickets {
     over          = tickets
+    scope         = { unlabeled = true }
     max_parallel  = 3
     workflow      = "qualify-ticket-comment"
     inputs        = { ticket_id = "{{item.id}}" }

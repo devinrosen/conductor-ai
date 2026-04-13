@@ -1051,6 +1051,7 @@ impl App {
                 ..
             } => {
                 // Feature resolution happens off-thread inside spawn_ticket_workflow_in_background.
+                let extra_dirs = self.worktree_conductor_dirs(&repo_id);
                 self.spawn_ticket_workflow_in_background(
                     def,
                     ticket_id,
@@ -1059,6 +1060,7 @@ impl App {
                     ticket_title,
                     inputs,
                     model,
+                    extra_dirs,
                 );
             }
             WorkflowPickerTarget::Repo {
@@ -1066,8 +1068,9 @@ impl App {
                 repo_path,
                 repo_name,
             } => {
+                let extra_dirs = self.worktree_conductor_dirs(&repo_id);
                 self.spawn_repo_workflow_in_background(
-                    def, repo_id, repo_path, repo_name, inputs, model,
+                    def, repo_id, repo_path, repo_name, inputs, model, extra_dirs,
                 );
             }
             WorkflowPickerTarget::WorkflowRun {
@@ -1211,6 +1214,7 @@ impl App {
         target_label: String,
         inputs: std::collections::HashMap<String, String>,
         model: Option<String>,
+        extra_plugin_dirs: Vec<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -1255,7 +1259,7 @@ impl App {
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
-                extra_plugin_dirs: vec![],
+                extra_plugin_dirs,
                 db_path: None,
                 parent_workflow_run_id: None,
             };
@@ -1279,6 +1283,7 @@ impl App {
         repo_name: String,
         inputs: std::collections::HashMap<String, String>,
         model: Option<String>,
+        extra_plugin_dirs: Vec<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -1310,7 +1315,7 @@ impl App {
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 force: false,
-                extra_plugin_dirs: vec![],
+                extra_plugin_dirs,
                 db_path: None,
                 parent_workflow_run_id: None,
             };
@@ -1817,6 +1822,27 @@ impl App {
             repo_path: repo.local_path.clone(),
             repo_name: repo.slug.clone(),
         }
+    }
+
+    /// Return the `.conductor` sub-path of every worktree belonging to `repo_id`.
+    ///
+    /// These are passed as `extra_plugin_dirs` when spawning repo/ticket-level workflows so
+    /// that agents defined only in a feature-branch worktree (not yet on the primary checkout)
+    /// are still discoverable.  The engine searches `<dir>/agents/<name>.md` for each entry,
+    /// which matches `<worktree>/.conductor/agents/<name>.md`.
+    pub(super) fn worktree_conductor_dirs(&self, repo_id: &str) -> Vec<String> {
+        self.state
+            .data
+            .worktrees
+            .iter()
+            .filter(|w| w.repo_id == repo_id)
+            .map(|w| {
+                std::path::Path::new(&w.path)
+                    .join(".conductor")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
     }
 
     /// Build a `WorkflowPickerTarget::WorkflowRun` from a `WorkflowRun`, resolving repo_path.
