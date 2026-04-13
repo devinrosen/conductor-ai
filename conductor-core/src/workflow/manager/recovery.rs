@@ -363,6 +363,10 @@ impl<'a> WorkflowManager<'a> {
             "SELECT id FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
+               AND EXISTS ( \
+                 SELECT 1 FROM workflow_run_steps wrs \
+                 WHERE wrs.workflow_run_id = workflow_runs.id \
+               ) \
                AND NOT EXISTS ( \
                  SELECT 1 FROM workflow_run_steps wrs \
                  WHERE wrs.workflow_run_id = workflow_runs.id \
