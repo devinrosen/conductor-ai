@@ -233,8 +233,12 @@ impl App {
         if event_len > 0 && self.state.step_agent_event_index >= event_len {
             self.state.step_agent_event_index = event_len - 1;
         }
-        // Auto-reset focus to Steps if current step has no agent activity
-        if !self.state.selected_step_has_agent() {
+        // Auto-reset to Steps only when focus is on the hidden AgentActivity pane
+        // (i.e. the user navigated to a step that no longer has an agent).
+        // Do NOT reset when focus is on Info or Error — that breaks intentional navigation.
+        if self.state.workflow_run_detail_focus == WorkflowRunDetailFocus::AgentActivity
+            && !self.state.selected_step_has_agent()
+        {
             self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
         }
     }
