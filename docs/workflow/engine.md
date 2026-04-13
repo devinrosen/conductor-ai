@@ -115,7 +115,7 @@ inputs         := "inputs" "{" input_decl* "}"
 input_decl     := IDENT input_modifier*
 input_modifier := "required" | "boolean" | "default" "=" STRING | "description" "=" STRING
                   # boolean inputs are never required; absence = "false"
-node           := call | if | unless | while | do_while | do | parallel | gate | always | script
+node           := call | if | unless | while | do_while | do | parallel | gate | always | script | foreach
 call           := "call" IDENT ("{" kv* "}")?
 if             := "if" condition "{" kv* node* "}"
 unless         := "unless" condition "{" kv* node* "}"
@@ -128,6 +128,17 @@ always         := "always" "{" node* "}"
 script         := "script" IDENT "{" kv* "}"
                   # requires: run = STRING (script path)
                   # optional: env = { KEY = STRING }, timeout = NUMBER, retries = NUMBER, on_fail = IDENT
+foreach        := "foreach" IDENT "{" foreach_kv* "}"
+foreach_kv     := "over"          "=" ("tickets" | "repos" | "workflow_runs")
+               | "scope"         "=" scope_block
+               | "filter"        "=" map
+               | "ordered"       "=" ("true" | "false")
+               | "on_cycle"      "=" ("fail" | "warn")
+               | "max_parallel"  "=" NUMBER
+               | "workflow"      "=" STRING
+               | "inputs"        "=" map
+               | "on_child_fail" "=" ("halt" | "continue" | "skip_dependents")
+scope_block    := "{" ("ticket_id" | "label") "=" STRING "}"
 condition      := IDENT "." IDENT   # step.marker
                | IDENT              # bare boolean input name
 gate_name      := "human_approval" | "human_review" | "pr_approval" | "pr_checks"
@@ -360,6 +371,254 @@ conductor workflow gate-feedback <run-id> "<text>"
 Runs after the main body regardless of success or failure. Receives
 `{{workflow_status}}` (`"completed"` or `"failed"`). Failures in `always`
 steps are logged but do not change the workflow's terminal status.
+
+### `foreach`
+
+Fans out over a collection of items — tickets, repos, or workflow runs — and
+runs a child workflow for each one. Items are processed up to `max_parallel`
+concurrently.
+
+```
+foreach sprint-work {
+  over          = tickets
+  scope         = { ticket_id = "{{inputs.root_ticket_id}}" }
+  ordered       = true
+  max_parallel  = 3
+  workflow      = "ticket-to-pr"
+  inputs        = { ticket_id = "{{item.id}}" }
+  on_child_fail = skip_dependents
+}
+```
+
+#### Options
+
+| Option | Required | Default | Description |
+|---|---|---|---|
+| `over` | Yes | — | Item type: `tickets`, `repos`, or `workflow_runs` |
+| `max_parallel` | Yes | — | Maximum concurrent child workflow runs |
+| `workflow` | Yes | — | Name of the `.wf` file to run for each item |
+| `inputs` | No | `{}` | Input values passed to each child workflow; supports `{{item.*}}` substitution |
+| `scope` | tickets only | — | Limits the ticket set: `{ ticket_id = "..." }` (children of that ticket) or `{ label = "..." }` (tickets with that label) |
+| `filter` | workflow_runs only (required) | — | Narrows the run set by `status` (`completed`, `failed`, `cancelled`) or `workflow_name` |
+| `ordered` | tickets only | `false` | When `true`, enables dep-aware dispatch via `get_ready_tickets()` |
+| `on_cycle` | tickets + ordered | `fail` | What to do when a ticket dependency cycle is detected: `fail` or `warn` (breaks the cycle by dropping the back-edge) |
+| `on_child_fail` | No | `continue` (repos/workflow_runs), `skip_dependents` (ordered tickets) | `halt`, `continue`, or `skip_dependents` |
+
+#### `over` types and `{{item.*}}` fields
+
+**`over = tickets`**
+
+Fans out over tickets in the workflow's repo. `scope` is required. With
+`ordered = true`, the engine uses `get_ready_tickets()` to hold items whose
+blockers are not yet completed; without it, all in-scope tickets are dispatched
+immediately.
+
+| `{{item.*}}` field | Description |
+|---|---|
+| `{{item.id}}` | Ticket ULID |
+| `{{item.title}}` | Ticket title |
+| `{{item.url}}` | Ticket URL |
+| `{{item.source_id}}` | Source system ID (e.g., GitHub issue number) |
+| `{{item.state}}` | Ticket state (`open`, `closed`, etc.) |
+| `{{item.labels}}` | Comma-separated label list |
+
+**`over = repos`**
+
+Fans out over all repos registered in conductor. No `scope` or `ordered`
+options apply. A `filter` key is accepted by the parser but not evaluated
+in v1 (validator emits a warning).
+
+| `{{item.*}}` field | Description |
+|---|---|
+| `{{item.slug}}` | Repo slug identifier |
+| `{{item.local_path}}` | Absolute path to the local repo clone |
+| `{{item.remote_url}}` | Remote URL |
+
+**`over = workflow_runs`**
+
+Fans out over workflow runs. `filter` is required — without it the set is
+every terminal run in the DB, which is almost never the right intent. Only
+terminal runs (`completed`, `failed`, `cancelled`) are eligible.
+
+| `{{item.*}}` field | Description |
+|---|---|
+| `{{item.id}}` | Workflow run ULID |
+| `{{item.workflow_name}}` | Name of the workflow that produced the run |
+| `{{item.status}}` | Terminal status (`completed`, `failed`, `cancelled`) |
+| `{{item.started_at}}` | ISO 8601 start timestamp |
+| `{{item.ticket_id}}` | Ticket ULID the run was associated with, if any |
+
+> **`{{item.*}}` scope:** These template variables are substituted into the
+> child workflow's `inputs` map at dispatch time. They are not available inside
+> parent workflow agent prompts.
+
+#### `on_child_fail` semantics
+
+| Value | Semantics |
+|---|---|
+| `halt` | Cancel in-flight child runs and fail the step immediately |
+| `continue` | Log the failure and keep dispatching remaining items. Step succeeds if at least one child succeeded. |
+| `skip_dependents` | *(tickets + `ordered = true` only)* Mark the failed ticket's transitive dependents as `skipped`. Unrelated tickets continue normally. |
+
+#### Engine execution model
+
+**Phase 1 — item collection (at step start)**
+
+1. Resolve the full item set from the DB based on `over`, `scope`, and `filter`.
+2. For `over = tickets` with `ordered = true`: load `ticket_dependencies` edges
+   within the set; run DFS cycle detection; fail or warn based on `on_cycle`.
+3. Write one `workflow_run_step_fan_out_items` row per item with `status = 'pending'`.
+
+Cycle detection runs at step start, not at `workflow validate` time. The item
+set is runtime data — `{{inputs.root_ticket_id}}` cannot be resolved statically.
+
+**Phase 2 — dispatch loop (each DB poll tick)**
+
+1. Query `workflow_run_step_fan_out_items` for `pending` items in this step.
+2. For `ordered = true` tickets: filter to items whose blockers are all
+   `completed`. For all other types: all `pending` items are eligible.
+3. Compute `available_slots = max_parallel - in_flight_count`.
+4. Dispatch up to `available_slots` items by creating child `workflow_runs`
+   linked via `parent_workflow_run_id`; update row status to `running`.
+5. **Done condition:** queue empty and `in_flight_count == 0` → succeed or fail
+   based on child outcomes and `on_child_fail`.
+6. **Stall condition:** queue non-empty but no items are eligible and
+   `in_flight_count == 0` → all remaining items are permanently blocked; the
+   step ends with `status = completed` and a warning marker in `context_out`.
+   The parent workflow is not failed. A stall is a data condition, not an
+   executor error.
+
+**Phase 3 — completion handling**
+
+When a child run reaches a terminal state:
+
+1. Update the `workflow_run_step_fan_out_items` row and `fan_out_*` counters.
+2. Apply `on_child_fail` semantics if failed.
+3. For `skip_dependents`: walk the dep graph from the failed ticket and mark
+   all transitively blocked items as `skipped`.
+4. Re-evaluate the dispatch loop on the next tick.
+
+The `foreach` step's own output is a summary context:
+```json
+{
+  "markers": [],
+  "context": "foreach sprint-work: 12 completed, 1 failed, 2 skipped of 15 tickets"
+}
+```
+
+#### Resumability
+
+On restart, the engine reconstructs the in-memory queue from
+`workflow_run_step_fan_out_items`:
+
+- `pending` → add to dispatch queue (not yet dispatched)
+- `running` → child run exists; if orphaned, apply `on_child_fail` semantics
+- `completed` | `failed` | `skipped` → already terminal, skip
+
+No work is re-dispatched. Consistent with the engine's snapshot-based resume
+model.
+
+#### `workflow_runs` idempotency
+
+When collecting items for a `workflow_runs` fan-out, the engine excludes any
+run already present as an `item_id` in `workflow_run_step_fan_out_items`
+(regardless of child run outcome). This makes the failure watchdog pattern
+naturally idempotent across cron firings: each failed run is processed exactly
+once, even if the child `diagnose-and-issue` run itself fails.
+
+#### Global concurrency cap (v1)
+
+`max_parallel` is step-scoped. Multiple concurrent `foreach` steps across repos
+could still saturate the machine. In v1 there is no global cap — `max_parallel`
+is the workflow author's responsibility. A machine-wide `[defaults] max_agent_runs`
+in `config.toml` is planned for v2.
+
+#### Worked examples
+
+**Sprint automation (tickets, ordered)**
+
+```
+workflow process-sprint {
+  meta {
+    description = "Implement all tickets in a sprint deliverable"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  inputs {
+    root_ticket_id  required
+  }
+
+  foreach sprint-work {
+    over          = tickets
+    scope         = { ticket_id = "{{inputs.root_ticket_id}}" }
+    ordered       = true
+    max_parallel  = 3
+    workflow      = "ticket-to-pr"
+    inputs        = { ticket_id = "{{item.id}}" }
+    on_child_fail = skip_dependents
+  }
+}
+```
+
+**Cross-repo test coverage audit (repos)**
+
+```
+workflow coverage-audit {
+  meta {
+    description = "Assess test coverage and file issues across all repos"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  foreach coverage-check {
+    over          = repos
+    max_parallel  = 2
+    workflow      = "assess-coverage"
+    inputs        = { repo_slug = "{{item.slug}}" }
+    on_child_fail = continue
+  }
+}
+```
+
+**Workflow failure triage watchdog (workflow_runs)**
+
+```
+workflow triage-failures {
+  meta {
+    description = "Find failed workflow runs and file improvement issues"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  foreach failed-runs {
+    over          = workflow_runs
+    filter        = { status = "failed" }
+    max_parallel  = 4
+    workflow      = "diagnose-and-issue"
+    inputs        = { run_id = "{{item.id}}" }
+    on_child_fail = continue
+  }
+}
+```
+
+When run on a cron schedule, this pattern implements the AUTONOMOUS-SDLC stage
+7b supervisor without requiring a separate primitive.
+
+#### `foreach` validator checks
+
+| Check | Severity |
+|---|---|
+| `over` missing | error |
+| `max_parallel` missing | error |
+| `workflow` file not found | error |
+| `scope` missing for `over = tickets` | error |
+| `ordered = true` on non-ticket `over` | error |
+| `filter` missing for `over = workflow_runs` | error |
+| `filter.status` set to `running` or `paused` on `over = workflow_runs` | error |
+| `skip_dependents` without `ordered = true` | warning |
+| `filter` provided for `over = repos` (reserved, not evaluated in v1) | warning |
+| Required sub-workflow inputs not covered by `inputs` or `{{item.*}}` | warning |
 
 ---
 
@@ -755,6 +1014,7 @@ behavior, and design tradeoffs — see
 | `definition_snapshot` | TEXT | Serialized `WorkflowDef` JSON |
 | `dry_run` | BOOLEAN | Whether this is a dry run |
 | `parent_run_id` | TEXT | Parent workflow run (for composition) |
+| `parent_workflow_run_id` | TEXT | Enclosing workflow run for `foreach` child runs |
 
 ### `workflow_run_steps`
 
@@ -771,9 +1031,38 @@ behavior, and design tradeoffs — see
 | `gate_approved_by` | TEXT | Who approved the gate |
 | `gate_approved_at` | TEXT | ISO 8601 approval timestamp |
 | `gate_feedback` | TEXT | Human feedback text |
+| `fan_out_total` | INTEGER | Total items in the fan-out set (set at item collection) |
+| `fan_out_completed` | INTEGER | Count of child runs that completed successfully (default 0) |
+| `fan_out_failed` | INTEGER | Count of child runs that failed (default 0) |
+| `fan_out_skipped` | INTEGER | Count of items skipped (e.g., via `skip_dependents`) (default 0) |
 
 The `status` CHECK constraint on both tables includes `'waiting'` for
 gate-blocked runs.
+
+### `workflow_run_step_fan_out_items`
+
+Tracks one row per item dispatched by a `foreach` step. The `item_type` column
+identifies which collection the `item_id` belongs to; referential integrity is
+enforced at the application layer (SQLite does not support typed polymorphic FKs).
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | TEXT | ULID primary key |
+| `step_run_id` | TEXT | FK → `workflow_run_steps(id)` ON DELETE CASCADE |
+| `item_type` | TEXT | `ticket`, `repo`, or `workflow_run` |
+| `item_id` | TEXT | ULID into the relevant table (application-enforced FK) |
+| `item_ref` | TEXT | Human-readable label (ticket title, repo slug, run id) |
+| `child_run_id` | TEXT | FK-less reference to the spawned `workflow_runs` row |
+| `status` | TEXT | `pending`, `running`, `completed`, `failed`, or `skipped` |
+| `dispatched_at` | TEXT | ISO 8601 timestamp when the child run was created |
+| `completed_at` | TEXT | ISO 8601 timestamp when the child run reached a terminal state |
+
+`(step_run_id, item_type, item_id)` has a UNIQUE constraint. An index on
+`(step_run_id, status)` supports the dispatch loop query.
+
+`child_run_id` is FK-less — consistent with the pattern in
+`workflow_run_steps.child_run_id` — because SQLite cannot cleanly enforce
+cross-table polymorphic FKs.
 
 ---
 
@@ -826,6 +1115,7 @@ enum WorkflowNode {
     Gate(GateNode),          // human or automated gate
     Always(AlwaysNode),      // cleanup block
     Script(ScriptNode),      // shell script step (no LLM)
+    ForEach(ForEachNode),    // fan-out over tickets, repos, or workflow runs
 }
 
 // Conditions for if/unless
@@ -858,6 +1148,15 @@ struct GateNode        { name: String, gate_type: GateType, prompt: Option<Strin
 struct ScriptNode      { name: String, run: String, env: HashMap<String, String>,
                          timeout: Option<u64>, retries: u32, on_fail: Option<AgentRef>,
                          bot_name: Option<String> }
+struct ForEachNode     { name: String, over: ForeachOver, scope: Option<TicketScope>,
+                         filter: HashMap<String, String>, ordered: bool,
+                         on_cycle: OnCycle, max_parallel: u32, workflow: String,
+                         inputs: HashMap<String, String>, on_child_fail: OnChildFail }
+
+enum ForeachOver  { Tickets, Repos, WorkflowRuns }
+enum TicketScope  { TicketId(String), Label(String) }
+enum OnChildFail  { Halt, Continue, SkipDependents }
+enum OnCycle      { Fail, Warn }
 ```
 
 `AgentRef` is either a short name (bare identifier) or an explicit path
