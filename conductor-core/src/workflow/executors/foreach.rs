@@ -598,6 +598,29 @@ fn run_dispatch_loop(
     }
 }
 
+/// Resolve `(ticket_id, repo_id, worktree_id)` for a child dispatch based on fan-out type.
+///
+/// Tickets and Repos fan-outs clear `worktree_id` so each child workflow starts with
+/// an independent context instead of colliding with the parent's active-run guard.
+/// WorkflowRuns fan-outs pass the parent context through unchanged.
+fn resolve_child_context_ids(
+    over: ForeachOver,
+    item_id: &str,
+    parent_ticket_id: &Option<String>,
+    parent_repo_id: &Option<String>,
+    parent_worktree_id: &Option<String>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    match over {
+        ForeachOver::Tickets => (Some(item_id.to_string()), parent_repo_id.clone(), None),
+        ForeachOver::Repos => (None, Some(item_id.to_string()), None),
+        ForeachOver::WorkflowRuns => (
+            parent_ticket_id.clone(),
+            parent_repo_id.clone(),
+            parent_worktree_id.clone(),
+        ),
+    }
+}
+
 /// Dispatch one fan-out item: resolve inputs, execute child workflow in a thread,
 /// and update fan_out_items to 'running'.
 fn dispatch_child_workflow(
@@ -649,17 +672,21 @@ fn dispatch_child_workflow(
         ForeachOver::WorkflowRuns => Some(format!("run:{}", item.item_ref)),
     };
 
-    // ticket_id and repo_id: pass through if this item is a ticket/repo.
-    let (item_ticket_id, item_repo_id) = match node.over {
-        ForeachOver::Tickets => (Some(item.item_id.clone()), state.repo_id.clone()),
-        ForeachOver::Repos => (None, Some(item.item_id.clone())),
-        ForeachOver::WorkflowRuns => (state.ticket_id.clone(), state.repo_id.clone()),
-    };
+    // ticket_id, repo_id, and worktree_id: pass through based on item type.
+    // For ticket/repo fan-outs, clear worktree_id so each child gets its own
+    // independent context instead of colliding with the parent's active run.
+    let (item_ticket_id, item_repo_id, item_worktree_id) = resolve_child_context_ids(
+        node.over.clone(),
+        &item.item_id,
+        &state.ticket_id,
+        &state.repo_id,
+        &state.worktree_id,
+    );
 
     let params = WorkflowExecStandalone {
         config: state.config.clone(),
         workflow: child_def.clone(),
-        worktree_id: state.worktree_id.clone(),
+        worktree_id: item_worktree_id,
         working_dir: state.working_dir.clone(),
         repo_path: state.repo_path.clone(),
         ticket_id: item_ticket_id,
@@ -1108,5 +1135,67 @@ mod tests {
         for (item_type, _, _) in &items {
             assert_eq!(item_type, "ticket");
         }
+    }
+
+    // Regression tests for #2094: worktree_id must be cleared for Tickets/Repos fan-outs
+    // so that child dispatches do not inherit the parent's active-workflow guard.
+
+    #[test]
+    fn test_resolve_child_context_ids_tickets_clears_worktree_id() {
+        let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
+            ForeachOver::Tickets,
+            "ticket-abc",
+            &None,
+            &Some("repo-1".to_string()),
+            &Some("worktree-parent".to_string()),
+        );
+        assert_eq!(ticket_id, Some("ticket-abc".to_string()));
+        assert_eq!(repo_id, Some("repo-1".to_string()));
+        assert!(
+            worktree_id.is_none(),
+            "Tickets fan-out must clear worktree_id"
+        );
+    }
+
+    #[test]
+    fn test_resolve_child_context_ids_repos_clears_worktree_id() {
+        let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
+            ForeachOver::Repos,
+            "repo-xyz",
+            &Some("ticket-parent".to_string()),
+            &None,
+            &Some("worktree-parent".to_string()),
+        );
+        assert!(ticket_id.is_none(), "Repos fan-out must clear ticket_id");
+        assert_eq!(repo_id, Some("repo-xyz".to_string()));
+        assert!(
+            worktree_id.is_none(),
+            "Repos fan-out must clear worktree_id"
+        );
+    }
+
+    #[test]
+    fn test_resolve_child_context_ids_workflow_runs_passes_through_worktree_id() {
+        let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
+            ForeachOver::WorkflowRuns,
+            "run-999",
+            &Some("ticket-parent".to_string()),
+            &Some("repo-parent".to_string()),
+            &Some("worktree-parent".to_string()),
+        );
+        assert_eq!(ticket_id, Some("ticket-parent".to_string()));
+        assert_eq!(repo_id, Some("repo-parent".to_string()));
+        assert_eq!(
+            worktree_id,
+            Some("worktree-parent".to_string()),
+            "WorkflowRuns fan-out must pass worktree_id through"
+        );
+    }
+
+    #[test]
+    fn test_resolve_child_context_ids_workflow_runs_none_worktree_passthrough() {
+        let (_, _, worktree_id) =
+            resolve_child_context_ids(ForeachOver::WorkflowRuns, "run-000", &None, &None, &None);
+        assert!(worktree_id.is_none());
     }
 }
