@@ -17,7 +17,7 @@ use crate::attachments::{parse_multipart_body, write_attachments_and_augment_pro
 use crate::error::ApiError;
 use crate::state::AppState;
 
-use super::agents::spawn_tmux_blocking;
+use super::agents::spawn_headless_agent;
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
@@ -203,7 +203,7 @@ pub async fn send_message(
     };
 
     // Phase 1: all DB work under the async lock.
-    let (run, resume_session_id, working_dir, permission_mode, model, window_name) = {
+    let (run, resume_session_id, working_dir, permission_mode, model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
 
@@ -243,60 +243,31 @@ pub async fn send_message(
             }
         };
 
-        // Derive a tmux window name from the conversation ID prefix.
-        let conv_prefix = &conversation_id[..8.min(conversation_id.len())];
-        let window_name = format!("conv-{conv_prefix}");
-
         // Delegate run creation, concurrency guard, session lookup, and
         // metadata updates to ConversationManager::send_message.
         // The original prompt (without attachment paths) is stored in the DB.
-        let (run, resume_session_id) = conv_mgr.send_message(
-            &conversation_id,
-            &prompt,
-            Some(&window_name),
-            model.as_deref(),
-        )?;
+        let (run, resume_session_id) =
+            conv_mgr.send_message(&conversation_id, &prompt, None, model.as_deref())?;
 
-        (
-            run,
-            resume_session_id,
-            working_dir,
-            permission_mode,
-            model,
-            window_name,
-        )
+        (run, resume_session_id, working_dir, permission_mode, model)
     };
     // DB and config locks are now dropped.
 
-    // Phase 2: write attachment files to disk, build augmented prompt, spawn tmux.
+    // Phase 2: write attachment files to disk, build augmented prompt, spawn headless.
     let final_prompt =
         write_attachments_and_augment_prompt(&run.id, &working_dir, &prompt, &raw_attachments)?;
 
-    let args = match permission_mode {
-        Some(ref mode) => conductor_core::agent_runtime::build_agent_args_with_mode(
-            &run.id,
-            &working_dir,
-            &final_prompt,
-            resume_session_id.as_deref(),
-            model.as_deref(),
-            None,
-            Some(mode),
-            &[],
-        )
-        .map_err(ConductorError::Agent)?,
-        None => conductor_core::agent_runtime::build_agent_args(
-            &run.id,
-            &working_dir,
-            &final_prompt,
-            resume_session_id.as_deref(),
-            model.as_deref(),
-            None,
-            &[],
-        )
-        .map_err(ConductorError::Agent)?,
+    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+        run_id: &run.id,
+        working_dir: &working_dir,
+        prompt: &final_prompt,
+        resume_session_id: resume_session_id.as_deref(),
+        model: model.as_deref(),
+        bot_name: None,
+        permission_mode: permission_mode.as_ref(),
+        plugin_dirs: &[],
     };
-
-    spawn_tmux_blocking(&state, &run.id, args, window_name).await?;
+    spawn_headless_agent(&state, &spawn_params, None).await?;
 
     Ok((StatusCode::CREATED, Json(run)))
 }

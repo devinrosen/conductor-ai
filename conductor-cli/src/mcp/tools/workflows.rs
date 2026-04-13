@@ -7,6 +7,29 @@ use serde_json::Value;
 use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
 use crate::mcp::resources::format_workflow_def;
 
+/// Resolve the working directory path for a tool call.
+///
+/// Returns the worktree's path if `worktree_slug` is `Some`, otherwise falls
+/// back to the repo's own `local_path`. Returns `Err(CallToolResult)` on
+/// lookup failure so callers can propagate with `return`.
+fn resolve_wt_path(
+    conn: &rusqlite::Connection,
+    config: &conductor_core::config::Config,
+    repo: &conductor_core::repo::Repo,
+    worktree_slug: Option<&str>,
+) -> Result<String, CallToolResult> {
+    if let Some(wt_slug) = worktree_slug {
+        use conductor_core::worktree::WorktreeManager;
+        let wt_mgr = WorktreeManager::new(conn, config);
+        match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
+            Ok(wt) => Ok(wt.path),
+            Err(e) => Err(tool_err(e)),
+        }
+    } else {
+        Ok(repo.local_path.clone())
+    }
+}
+
 pub(super) fn tool_list_workflows(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
@@ -24,7 +47,11 @@ pub(super) fn tool_list_workflows(
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
-    let (defs, warnings) = match WorkflowManager::list_defs(&repo.local_path, &repo.local_path) {
+    let wt_path = match resolve_wt_path(&conn, &config, &repo, get_arg(args, "worktree")) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let (defs, warnings) = match WorkflowManager::list_defs(&wt_path, &repo.local_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
@@ -64,10 +91,13 @@ pub(super) fn tool_validate_workflow(
         Err(e) => return tool_err(e),
     };
 
-    let wt_path = &repo.local_path;
-    let repo_path = &repo.local_path;
+    let wt_path = match resolve_wt_path(&conn, &config, &repo, get_arg(args, "worktree")) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let repo_path = repo.local_path.clone();
 
-    let workflow = match WorkflowManager::load_def_by_name(wt_path, repo_path, workflow_name) {
+    let workflow = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, workflow_name) {
         Ok(w) => w,
         Err(e) => return tool_err(e),
     };
@@ -75,7 +105,7 @@ pub(super) fn tool_validate_workflow(
     let known_bots: std::collections::HashSet<String> =
         config.github.apps.keys().cloned().collect();
 
-    let entry = WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots);
+    let entry = WorkflowManager::validate_single(&wt_path, &repo_path, &workflow, &known_bots);
 
     format_validation_result(workflow_name, &entry)
 }
@@ -983,6 +1013,227 @@ workflow review {
         a.insert("workflow".into(), Value::String("deploy".into()));
         let result = tool_validate_workflow(&db, &a);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    // -----------------------------------------------------------------------
+    // Worktree path resolution tests (regression for #1966)
+    // -----------------------------------------------------------------------
+
+    /// Helper: insert a worktree row directly, bypassing WorktreeManager so we
+    /// can control the path without needing a real git repository.
+    fn insert_wt(conn: &rusqlite::Connection, id: &str, repo_id: &str, slug: &str, path: &str) {
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, ?2, ?3, ?3, ?4, 'active', '2024-01-01T00:00:00Z')",
+            rusqlite::params![id, repo_id, slug, path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_list_workflows_unknown_worktree_slug_returns_error() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let repo_dir = tempfile::TempDir::new().expect("tempdir");
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .register(
+                    "wt-list-repo",
+                    repo_dir.path().to_str().unwrap(),
+                    "https://github.com/x/y",
+                    None,
+                )
+                .expect("register repo");
+        }
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("wt-list-repo".into()));
+        args.insert(
+            "worktree".into(),
+            Value::String("nonexistent-worktree".into()),
+        );
+        let result = tool_list_workflows(&db, &args);
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "expected error for unknown worktree"
+        );
+        drop(repo_dir);
+    }
+
+    #[test]
+    fn test_validate_workflow_unknown_worktree_slug_returns_error() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let repo_dir = tempfile::TempDir::new().expect("tempdir");
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .register(
+                    "wt-validate-repo",
+                    repo_dir.path().to_str().unwrap(),
+                    "https://github.com/x/y",
+                    None,
+                )
+                .expect("register repo");
+        }
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("wt-validate-repo".into()));
+        args.insert("workflow".into(), Value::String("deploy".into()));
+        args.insert(
+            "worktree".into(),
+            Value::String("nonexistent-worktree".into()),
+        );
+        let result = tool_validate_workflow(&db, &args);
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "expected error for unknown worktree"
+        );
+        drop(repo_dir);
+    }
+
+    #[test]
+    fn test_list_workflows_with_worktree_slug_finds_worktree_workflow() {
+        // Regression test for #1966: workflows that only exist in a worktree
+        // branch (not in the main repo) must be found when a worktree slug is
+        // passed.
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        // Repo dir has no workflows.
+        let repo_dir = tempfile::TempDir::new().expect("tempdir");
+        // Worktree dir has the workflow.
+        let wt_dir = make_wf_dir_with_workflow(
+            "feature-wf",
+            r#"
+workflow feature-wf {
+    meta { description = "Only in worktree" trigger = "manual" }
+    call agent
+}
+"#,
+        );
+
+        let (_f, db) = make_test_db();
+        let repo_id: String;
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            let repo = RepoManager::new(&conn, &config)
+                .register(
+                    "wt-list-repo2",
+                    repo_dir.path().to_str().unwrap(),
+                    "https://github.com/x/y",
+                    None,
+                )
+                .expect("register repo");
+            repo_id = repo.id.clone();
+            insert_wt(
+                &conn,
+                "wt-list-id",
+                &repo_id,
+                "feat-123-feature",
+                wt_dir.path().to_str().unwrap(),
+            );
+        }
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("wt-list-repo2".into()));
+        args.insert("worktree".into(), Value::String("feat-123-feature".into()));
+        let result = tool_list_workflows(&db, &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("feature-wf"),
+            "workflow from worktree should be listed; got: {text}"
+        );
+        drop(repo_dir);
+        drop(wt_dir);
+    }
+
+    #[test]
+    fn test_validate_workflow_with_worktree_slug_finds_worktree_workflow() {
+        // Regression test for #1966: validate_workflow must succeed when the
+        // workflow only exists in the worktree branch, not in the main repo.
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        // Repo dir has no workflows.
+        let repo_dir = tempfile::TempDir::new().expect("tempdir");
+        // Worktree dir has the workflow.
+        let wt_dir = make_wf_dir_with_workflow(
+            "wt-only-wf",
+            r#"
+workflow wt-only-wf {
+    meta { description = "Only in worktree" trigger = "manual" }
+    call agent
+}
+"#,
+        );
+
+        let (_f, db) = make_test_db();
+        let repo_id: String;
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            let repo = RepoManager::new(&conn, &config)
+                .register(
+                    "wt-validate-repo2",
+                    repo_dir.path().to_str().unwrap(),
+                    "https://github.com/x/y",
+                    None,
+                )
+                .expect("register repo");
+            repo_id = repo.id.clone();
+            insert_wt(
+                &conn,
+                "wt-validate-id",
+                &repo_id,
+                "feat-456-wt-only",
+                wt_dir.path().to_str().unwrap(),
+            );
+        }
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("wt-validate-repo2".into()));
+        args.insert("workflow".into(), Value::String("wt-only-wf".into()));
+        args.insert("worktree".into(), Value::String("feat-456-wt-only".into()));
+        let result = tool_validate_workflow(&db, &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // The workflow exists so validate should return PASS or FAIL (not a tool error).
+        assert!(
+            text.contains("status: PASS") || text.contains("status: FAIL"),
+            "expected a validation result, got: {text}"
+        );
+        drop(repo_dir);
+        drop(wt_dir);
     }
 
     // -----------------------------------------------------------------------

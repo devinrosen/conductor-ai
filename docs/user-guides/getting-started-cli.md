@@ -6,7 +6,6 @@ This guide is for teams that want to use `conductor` as a standalone command-lin
 
 - **macOS or Linux**
 - **[`gh` CLI](https://cli.github.com/)** — authenticated (`gh auth login`)
-- **[`tmux`](https://github.com/tmux/tmux)** — agents run in tmux windows
 - **[Claude Code CLI (`claude`)](https://docs.anthropic.com/en/docs/claude-code)** — installed and authenticated
 - **Git**
 
@@ -37,10 +36,10 @@ conductor --help
 
 ```bash
 # If you already have a local checkout:
-conductor repo add https://github.com/your-org/your-repo --local-path ~/path/to/repo
+conductor repo register https://github.com/your-org/your-repo --local-path ~/path/to/repo
 
 # If you want conductor to clone it:
-conductor repo add https://github.com/your-org/your-repo
+conductor repo register https://github.com/your-org/your-repo
 ```
 
 Conductor stores all state in `~/.conductor/conductor.db`. Nothing is written into your repo except the `.conductor/` directory (workflows, agents, prompts) which you manage yourself.
@@ -127,7 +126,7 @@ conductor workflow resume <run-id>
 conductor workflow resume <run-id> --restart
 
 # Resume from a specific step:
-conductor workflow resume <run-id> --from implement
+conductor workflow resume <run-id> --from-step implement
 ```
 
 ## Embedding conductor in a project
@@ -146,7 +145,7 @@ If your team wants to run conductor workflows directly from a project repo witho
 
 2. **Register the repo once** per developer machine:
    ```bash
-   conductor repo add https://github.com/your-org/your-repo --local-path .
+   conductor repo register https://github.com/your-org/your-repo --local-path .
    ```
 
 3. **Run workflows** from anywhere:
@@ -176,4 +175,4 @@ After installing, restart Claude Code. The conductor MCP server will be availabl
 - **Step timeout:** Default is 12 hours per step. Override with `--step-timeout-secs 3600`.
 - **Continue on failure:** Use `--no-fail-fast` to run remaining steps even if one fails.
 - **Multiple inputs:** `--input` can be repeated: `--input ticket_id=123 --input skip_tests=true`
-- **Agent logs:** Agent output streams live to the tmux window. Attach with `tmux attach` to watch in real time.
+- **Agent logs:** Agent output is written to `~/.conductor/agent-logs/<run-id>.log` in real time.

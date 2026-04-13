@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useId } from "react";
+import { BaseModal } from "../shared/BaseModal";
 import type { KnownModel } from "../../api/types";
 import { api } from "../../api/client";
 
@@ -10,6 +11,16 @@ const HAIKU_KEYWORDS = [
 const OPUS_KEYWORDS = [
   "plan", "architect", "design", "refactor", "analyze", "review",
   "implement", "rewrite", "migrate", "complex",
+];
+
+/**
+ * Fallback used when /config/known-models is unavailable.
+ * Mirrors conductor-core/src/models.rs KNOWN_MODELS — update both if models change.
+ */
+const FALLBACK_MODELS: KnownModel[] = [
+  { id: "claude-opus-4-6",           alias: "opus",   tier: 3, tier_label: "Powerful", description: "Planning, architecture, complex analysis" },
+  { id: "claude-sonnet-4-6",         alias: "sonnet", tier: 2, tier_label: "Balanced", description: "General implementation (default)" },
+  { id: "claude-haiku-4-5-20251001", alias: "haiku",  tier: 1, tier_label: "Fast",     description: "Commit messages, formatting, quick edits" },
 ];
 
 function suggestModel(prompt: string): string {
@@ -43,6 +54,7 @@ export function AgentPromptModal({
   const [prompt, setPrompt] = useState(initialPrompt);
   const [useResume, setUseResume] = useState(!!resumeSessionId);
   const [models, setModels] = useState<KnownModel[]>([]);
+  const titleId = useId();
 
   useEffect(() => {
     setPrompt(initialPrompt);
@@ -50,24 +62,18 @@ export function AgentPromptModal({
   }, [initialPrompt, resumeSessionId]);
 
   useEffect(() => {
-    if (!open) return;
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, onCancel]);
-
-  useEffect(() => {
     if (open && models.length === 0) {
-      api.listKnownModels().then(setModels).catch(() => {});
+      api.listKnownModels()
+        .then(setModels)
+        .catch((err) => {
+          console.error("[AgentPromptModal] Failed to load known models, using fallback:", err);
+          setModels(FALLBACK_MODELS);
+        });
     }
   }, [open, models.length]);
 
   // Live model suggestion based on prompt text
   const suggested = useMemo(() => suggestModel(prompt), [prompt]);
-
-  if (!open) return null;
 
   function handleSubmit() {
     const trimmed = prompt.trim();
@@ -76,9 +82,14 @@ export function AgentPromptModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full mx-4">
-        <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+    <BaseModal
+      open={open}
+      onClose={onCancel}
+      titleId={titleId}
+      className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full mx-4 outline-none modal-panel"
+    >
+      <div>
+        <h3 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h3>
 
         {resumeSessionId && (
           <label className="mt-3 flex items-center gap-2 text-sm text-gray-700">
@@ -98,6 +109,12 @@ export function AgentPromptModal({
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
           rows={10}
           placeholder="Type your prompt here..."
           className="mt-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-y"
@@ -132,19 +149,20 @@ export function AgentPromptModal({
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 active:scale-95 transition-transform"
           >
             Cancel
           </button>
           <button
             onClick={handleSubmit}
             disabled={!prompt.trim()}
-            className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 hover:brightness-110 active:scale-95 transition-transform disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
           >
             {useResume && resumeSessionId ? "Resume Agent" : "Launch Agent"}
+            <kbd className="text-[10px] opacity-70 font-sans">&#8984;&#9166;</kbd>
           </button>
         </div>
       </div>
-    </div>
+    </BaseModal>
   );
 }

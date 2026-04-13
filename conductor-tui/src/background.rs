@@ -335,10 +335,10 @@ pub fn poll_data() -> Option<PollResult> {
     let ticket_syncer = TicketSyncer::new(&conn);
     let agent_mgr = AgentManager::new(&conn);
 
-    // Reap orphaned runs whose tmux windows have disappeared and clean up
+    // Reap orphaned runs whose subprocess PID is no longer live and clean up
     // stale worktrees whose artifacts persist on disk after merge/abandon.
-    // Throttle to at most once every 30 seconds to avoid spawning tmux
-    // subprocesses on every poll tick.
+    // Throttle to at most once every 30 seconds to avoid subprocess liveness
+    // checks on every poll tick.
     {
         static LAST_REAP: AtomicI64 = AtomicI64::new(0);
         let now = std::time::SystemTime::now()
@@ -368,6 +368,11 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed: {e}"),
             }
+            match wf_mgr.reap_orphaned_script_steps() {
+                Ok(n) if n > 0 => tracing::debug!("Reaped {n} orphaned script step(s)"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_orphaned_script_steps failed: {e}"),
+            }
             match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
                 Ok(n) if n > 0 => {
                     tracing::info!("Reaper finalized {n} stuck workflow run(s)")
@@ -376,11 +381,8 @@ pub fn poll_data() -> Option<PollResult> {
                 Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
             }
             if config.general.stale_workflow_minutes > 0 {
-                let live_windows = conductor_core::agent::list_live_tmux_windows();
-                match wf_mgr.reap_stale_workflow_runs(
-                    config.general.stale_workflow_minutes as i64,
-                    &live_windows,
-                ) {
+                match wf_mgr.reap_stale_workflow_runs(config.general.stale_workflow_minutes as i64)
+                {
                     Ok(reaped) if !reaped.is_empty() => {
                         tracing::info!("Reaped {} stale workflow run(s)", reaped.len());
                     }
@@ -388,37 +390,15 @@ pub fn poll_data() -> Option<PollResult> {
                     Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
                 }
             }
-            match wf_mgr.detect_stuck_workflow_run_ids(60) {
-                Ok(ids) if !ids.is_empty() => {
-                    let n = ids.len();
-                    tracing::info!("Auto-resuming {n} stuck workflow run(s)");
-                    let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                    for run_id in ids {
-                        let config_clone = config.clone();
-                        let bin_dir = conductor_bin_dir.clone();
-                        std::thread::spawn(move || {
-                            let params = conductor_core::workflow::WorkflowResumeStandalone {
-                                config: config_clone,
-                                workflow_run_id: run_id.clone(),
-                                model: None,
-                                from_step: None,
-                                restart: false,
-                                db_path: None,
-                                conductor_bin_dir: bin_dir,
-                            };
-                            if let Err(e) =
-                                conductor_core::workflow::resume_workflow_standalone(&params)
-                            {
-                                tracing::warn!(
-                                    run_id = %run_id,
-                                    "Auto-resume of stuck workflow run failed: {e}"
-                                );
-                            }
-                        });
+            {
+                let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+                match wf_mgr.reap_heartbeat_stuck_runs(&config, 60, conductor_bin_dir) {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("Auto-resuming {n} stuck workflow run(s)")
                     }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reap_heartbeat_stuck_runs failed: {e}"),
                 }
-                Ok(_) => {}
-                Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
             }
         }
     }

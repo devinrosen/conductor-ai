@@ -4,7 +4,7 @@ use rusqlite::params;
 use crate::error::Result;
 
 use super::super::status::AgentRunStatus;
-use super::super::types::AgentRun;
+use super::super::types::{AgentRun, LogResult};
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
@@ -155,6 +155,7 @@ impl<'a> AgentManager<'a> {
             cache_creation_input_tokens: None,
             bot_name: bot_name.map(String::from),
             conversation_id: conversation_id.map(String::from),
+            subprocess_pid: None,
         };
 
         self.conn.execute(
@@ -240,14 +241,14 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Mark a run as failed only if it is currently `running`.
-    /// Used by background reapers to avoid overwriting a run that has already
-    /// been finalized by another path.
+    /// Mark a run as failed only if it is currently `running` or `waiting_for_feedback`.
+    /// Used by background reapers and panic monitors to avoid overwriting a run that has
+    /// already been finalized (e.g. `completed`, `failed`, `cancelled`) by another path.
     pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE agent_runs SET status = 'failed', result_text = ?1, ended_at = ?2 \
-             WHERE id = ?3 AND status = 'running'",
+             WHERE id = ?3 AND status IN ('running', 'waiting_for_feedback')",
             params![error, now, run_id],
         )?;
         Ok(())
@@ -266,12 +267,75 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Mark a run as completed with all result-event fields, only if it is currently `running`.
+    ///
+    /// This is the authoritative write for the headless drain path. It persists
+    /// `cost_usd`, `num_turns`, `duration_ms`, all token counts, and optionally
+    /// `claude_session_id` (via COALESCE so an eagerly-stored session_id is not
+    /// clobbered). The `AND status = 'running'` guard prevents double-writes if
+    /// the subprocess has already finalized the row.
+    pub fn update_run_completed_if_running_full(
+        &self,
+        run_id: &str,
+        log_result: &LogResult,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let result_text = log_result.result_text.as_deref().unwrap_or("");
+        self.conn.execute(
+            "UPDATE agent_runs \
+             SET status = 'completed', result_text = ?1, ended_at = ?2, \
+                 claude_session_id = COALESCE(?3, claude_session_id), \
+                 cost_usd = COALESCE(?4, cost_usd), \
+                 num_turns = COALESCE(?5, num_turns), \
+                 duration_ms = COALESCE(?6, duration_ms), \
+                 input_tokens = COALESCE(?7, input_tokens), \
+                 output_tokens = COALESCE(?8, output_tokens), \
+                 cache_read_input_tokens = COALESCE(?9, cache_read_input_tokens), \
+                 cache_creation_input_tokens = COALESCE(?10, cache_creation_input_tokens) \
+             WHERE id = ?11 AND status = 'running'",
+            params![
+                result_text,
+                now,
+                log_result.session_id.as_deref(),
+                log_result.cost_usd,
+                log_result.num_turns,
+                log_result.duration_ms,
+                log_result.input_tokens,
+                log_result.output_tokens,
+                log_result.cache_read_input_tokens,
+                log_result.cache_creation_input_tokens,
+                run_id,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn update_run_cancelled(&self, run_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE agent_runs SET status = 'cancelled', ended_at = ?1 WHERE id = ?2",
             params![now, run_id],
         )?;
+        Ok(())
+    }
+
+    /// Cancel a run: mark DB as cancelled first, then best-effort kill the subprocess.
+    ///
+    /// The DB update precedes the process kill so that a concurrent drain cannot
+    /// overwrite the `cancelled` status after the process exits.
+    ///
+    /// Returns `Err` only if the DB update fails; subprocess kill is best-effort.
+    pub fn cancel_run(&self, run_id: &str, subprocess_pid: Option<i64>) -> Result<()> {
+        // Step 1: persist cancellation in DB before touching the process.
+        self.update_run_cancelled(run_id)?;
+
+        // Step 2: best-effort terminate the subprocess (if any).
+        if let Some(pid) = subprocess_pid {
+            // subprocess_pid is i64 in DB (SQLite integer); cast to u32 is safe for
+            // realistic PID values.
+            crate::process_utils::cancel_subprocess(pid as u32);
+        }
+
         Ok(())
     }
 
@@ -312,6 +376,35 @@ impl<'a> AgentManager<'a> {
                 cache_creation_input_tokens,
                 run_id,
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Store the OS PID for a headless agent run immediately after spawn.
+    pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
+            params![pid as i64, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Eagerly save model and session_id from the stream-json system/init event.
+    ///
+    /// Uses COALESCE so the write is idempotent and cannot clobber a value already
+    /// written by the subprocess itself — only sets the column if the incoming value
+    /// is not NULL.
+    pub fn update_run_model_and_session(
+        &self,
+        run_id: &str,
+        model: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs \
+             SET model = COALESCE(?1, model), claude_session_id = COALESCE(?2, claude_session_id) \
+             WHERE id = ?3",
+            params![model, session_id, run_id],
         )?;
         Ok(())
     }
@@ -366,6 +459,31 @@ impl<'a> AgentManager<'a> {
             None,
         )
     }
+
+    /// Open the database and mark the run failed if it is still in `running` status.
+    ///
+    /// Best-effort: logs a warning if the DB cannot be opened or the update fails, but
+    /// never panics. Used to clean up on drain-thread DB-open errors and drain-thread
+    /// panics so the run does not stay stuck in `running` until the orphan reaper fires.
+    pub fn try_mark_run_failed_in_db(
+        db_path: &std::path::Path,
+        run_id: &str,
+        msg: &str,
+        log_prefix: &str,
+    ) {
+        match crate::db::open_database(db_path) {
+            Err(open_err) => {
+                tracing::warn!("[{log_prefix}] could not open DB for failure recovery: {open_err}");
+            }
+            Ok(conn) => {
+                if let Err(update_err) =
+                    AgentManager::new(&conn).update_run_failed_if_running(run_id, msg)
+                {
+                    tracing::warn!("[{log_prefix}] failed to mark run failed: {update_err}");
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -373,6 +491,7 @@ mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
     use crate::agent::status::AgentRunStatus;
+    use crate::agent::types::LogResult;
 
     #[test]
     fn test_create_and_list() {
@@ -803,6 +922,35 @@ mod tests {
     }
 
     #[test]
+    fn test_update_run_failed_if_running_noop_when_already_completed() {
+        // The `AND status IN ('running', 'waiting_for_feedback')` guard must also
+        // preserve a run already in `completed` state (drain-panic-monitor scenario:
+        // drain_stream_json succeeds, then the panic monitor fires after the fact).
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_completed_if_running(&run.id, "done")
+            .unwrap();
+
+        // Panic-monitor path must be a no-op on an already-completed run.
+        mgr.update_run_failed_if_running(&run.id, "drain thread panicked")
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.status,
+            AgentRunStatus::Completed,
+            "completed run must not be clobbered by drain panic handler"
+        );
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("done"),
+            "result_text must not be overwritten when run is already completed"
+        );
+    }
+
+    #[test]
     fn test_update_run_completed_if_running_noop_when_already_failed() {
         // The `AND status = 'running'` guard must prevent overwriting a run that
         // has already been finalized (e.g. by another reaper path).
@@ -823,5 +971,329 @@ mod tests {
             Some("original error"),
             "result_text must not be overwritten when run is not running"
         );
+    }
+
+    #[test]
+    fn test_update_run_completed_if_running_full_persists_all_fields() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+
+        mgr.update_run_completed_if_running_full(
+            &run.id,
+            &LogResult {
+                result_text: Some("All done".into()),
+                session_id: Some("sess-result".into()),
+                cost_usd: Some(0.05),
+                num_turns: Some(3),
+                duration_ms: Some(5000),
+                is_error: false,
+                input_tokens: Some(200),
+                output_tokens: Some(100),
+                cache_read_input_tokens: Some(50),
+                cache_creation_input_tokens: Some(25),
+            },
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Completed);
+        assert_eq!(fetched.result_text.as_deref(), Some("All done"));
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-result"));
+        assert_eq!(fetched.cost_usd, Some(0.05));
+        assert_eq!(fetched.num_turns, Some(3));
+        assert_eq!(fetched.duration_ms, Some(5000));
+        assert_eq!(fetched.input_tokens, Some(200));
+        assert_eq!(fetched.output_tokens, Some(100));
+        assert_eq!(fetched.cache_read_input_tokens, Some(50));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(25));
+        assert!(fetched.ended_at.is_some());
+    }
+
+    #[test]
+    fn test_update_run_completed_if_running_full_coalesce_preserves_eager_session_when_none() {
+        // When the result event does not carry a session_id (None), the COALESCE
+        // guard must preserve the session_id written eagerly from the system/init event.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_session_id(&run.id, "sess-early").unwrap();
+
+        mgr.update_run_completed_if_running_full(
+            &run.id,
+            &LogResult {
+                result_text: Some("All done".into()),
+                session_id: None, // no session_id in result event
+                cost_usd: Some(0.01),
+                num_turns: Some(1),
+                duration_ms: Some(1000),
+                is_error: false,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            },
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Completed);
+        // COALESCE(NULL, "sess-early") → preserves eagerly stored session_id
+        assert_eq!(
+            fetched.claude_session_id.as_deref(),
+            Some("sess-early"),
+            "eagerly stored session_id must be preserved when result event has none"
+        );
+    }
+
+    #[test]
+    fn test_update_run_completed_if_running_full_noop_when_not_running() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.update_run_failed(&run.id, "original error").unwrap();
+
+        // Guard must prevent overwriting a finalized run
+        mgr.update_run_completed_if_running_full(
+            &run.id,
+            &LogResult {
+                result_text: Some("overwritten result".into()),
+                session_id: None,
+                cost_usd: Some(0.99),
+                num_turns: Some(99),
+                duration_ms: Some(99999),
+                is_error: false,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            },
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Failed);
+        assert_eq!(
+            fetched.result_text.as_deref(),
+            Some("original error"),
+            "result_text must not be overwritten when run is not running"
+        );
+        assert!(
+            fetched.cost_usd.is_none(),
+            "cost_usd must not be written when run is not running"
+        );
+    }
+
+    #[test]
+    fn test_update_run_model_and_session_coalesce_idempotency() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a run with a known model
+        let run = mgr
+            .create_run(Some("w1"), "test", None, Some("original-model"))
+            .unwrap();
+        assert_eq!(run.model.as_deref(), Some("original-model"));
+
+        // Update with model=None — COALESCE should preserve original
+        mgr.update_run_model_and_session(&run.id, None, Some("sess-abc"))
+            .unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.model.as_deref(),
+            Some("original-model"),
+            "model should not be clobbered by NULL"
+        );
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-abc"));
+
+        // Update again with session_id=None — COALESCE should preserve original session
+        mgr.update_run_model_and_session(&run.id, Some("new-model"), None)
+            .unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.model.as_deref(),
+            Some("new-model"),
+            "model should be updated when not NULL"
+        );
+        assert_eq!(
+            fetched.claude_session_id.as_deref(),
+            Some("sess-abc"),
+            "session should not be clobbered by NULL"
+        );
+    }
+
+    #[test]
+    fn test_update_run_failed_if_running_transitions_waiting_for_feedback() {
+        // `update_run_failed_if_running` guards on `status IN ('running',
+        // 'waiting_for_feedback')`.  A run stuck in `waiting_for_feedback`
+        // (e.g. the drain thread panicked before the agent could answer a
+        // feedback request) must be moved to `failed` so it does not stay
+        // stuck indefinitely.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.request_feedback(&run.id, "what should I do?", None)
+            .expect("request_feedback must succeed");
+
+        // Confirm transition to WaitingForFeedback.
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::WaitingForFeedback);
+
+        // Simulate drain-panic monitor: must succeed and flip to Failed.
+        mgr.update_run_failed_if_running(&run.id, "drain thread panicked")
+            .expect("update_run_failed_if_running must not return an error");
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.status,
+            AgentRunStatus::Failed,
+            "waiting_for_feedback run must be transitioned to failed"
+        );
+        assert!(
+            fetched
+                .result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("drain thread panicked"),
+            "result_text should record the panic reason"
+        );
+    }
+
+    #[test]
+    fn test_cancel_run_no_subprocess_pid() {
+        // cancel_run with subprocess_pid=None should only update the DB.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.cancel_run(&run.id, None).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Cancelled);
+        assert!(fetched.ended_at.is_some());
+    }
+
+    #[test]
+    fn test_cancel_run_idempotent() {
+        // Calling cancel_run twice on an already-cancelled run must not return an error.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        mgr.cancel_run(&run.id, None).unwrap();
+        // Second cancel should succeed — the UPDATE is a no-op but still OK.
+        mgr.cancel_run(&run.id, None).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Cancelled);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_cancel_run_with_subprocess_pid() {
+        // cancel_run with Some(pid) must update the DB and attempt a best-effort
+        // subprocess kill. Using a nonexistent PID (i64::MAX) exercises the
+        // Some(pid) branch without killing any real process; cancel_subprocess
+        // handles ESRCH gracefully via a warn! log.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        // i64::MAX is guaranteed not to be a real PID on any platform.
+        mgr.cancel_run(&run.id, Some(i64::MAX)).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Cancelled);
+        assert!(fetched.ended_at.is_some());
+    }
+
+    #[test]
+    fn test_pid_persist_failure_path_marks_run_failed() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+
+        let pid_err = "disk I/O error";
+        let msg = format!("failed to persist subprocess pid: {pid_err}");
+        mgr.update_run_failed(&run.id, &msg)
+            .expect("update_run_failed must succeed");
+
+        let fetched = mgr.get_run(&run.id).unwrap().expect("run must exist");
+        assert_eq!(
+            fetched.status,
+            AgentRunStatus::Failed,
+            "run should be failed"
+        );
+        assert!(
+            fetched
+                .result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("persist subprocess pid"),
+            "result_text should reference 'persist subprocess pid', got: {:?}",
+            fetched.result_text
+        );
+    }
+
+    /// Verify that `AgentManager::try_mark_run_failed_in_db` transitions the run to `Failed`
+    /// when the retry DB open succeeds.
+    ///
+    /// The `drain_db_open_failure_no_pipe_deadlock` test uses a permanently bad
+    /// `db_path` so the retry also fails silently.  This test uses a real temp
+    /// DB to confirm the status transition when the retry succeeds.
+    #[test]
+    fn drain_db_open_failure_marks_run_failed() {
+        let tmp = tempfile::NamedTempFile::new().expect("temp db");
+        let conn = crate::db::open_database(tmp.path()).expect("open db");
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        crate::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let run = AgentManager::new(&conn)
+            .create_run(Some("w1"), "test prompt", None, None)
+            .expect("create run");
+        let run_id = run.id.clone();
+
+        // Drop conn so the DB file is fully flushed before try_mark_run_failed_in_db
+        // opens its own connection.
+        drop(conn);
+
+        let err_msg = "drain thread failed to open DB: io error";
+        AgentManager::try_mark_run_failed_in_db(tmp.path(), &run_id, err_msg, "test");
+
+        // Re-open to read back the final state.
+        let conn2 = crate::db::open_database(tmp.path()).expect("re-open db");
+        let run_after = AgentManager::new(&conn2)
+            .get_run(&run_id)
+            .unwrap()
+            .expect("run must exist");
+
+        assert_eq!(
+            run_after.status,
+            AgentRunStatus::Failed,
+            "run should be marked failed after drain DB-open error"
+        );
+        assert!(
+            run_after
+                .result_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("drain thread failed to open DB"),
+            "result_text should contain the error message, got: {:?}",
+            run_after.result_text
+        );
+
+        let _ = tmp;
     }
 }

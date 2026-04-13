@@ -1,9 +1,11 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use crate::agent::status::AgentRunStatus;
+use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::Result;
 
@@ -11,7 +13,20 @@ use super::helpers::{purge_where_clause, row_to_workflow_run};
 use super::WorkflowManager;
 use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{StepKey, WorkflowRun};
+use crate::workflow::types::{StepKey, WorkflowResumeStandalone, WorkflowRun};
+
+macro_rules! reset_sql {
+    ($where:literal) => {
+        concat!(
+            "UPDATE workflow_run_steps \
+             SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
+             context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
+             subprocess_pid = NULL \
+             ",
+            $where
+        )
+    };
+}
 
 /// A workflow run whose active step has been running longer than the
 /// configured threshold without progress.
@@ -27,8 +42,8 @@ pub struct StaleWorkflowRun {
     pub step_id: String,
     /// The child agent_run ID for this step (if any).
     pub child_run_id: Option<String>,
-    /// The tmux window name for the child agent run (if any).
-    pub tmux_window: Option<String>,
+    /// The subprocess PID for the child agent run (if any).
+    pub subprocess_pid: Option<i64>,
 }
 
 /// Result of reaping a stale workflow run whose agent process is confirmed dead.
@@ -42,6 +57,103 @@ pub struct ReapedStaleRun {
 }
 
 impl<'a> WorkflowManager<'a> {
+    /// Reap workflow_run_steps stuck in `running` status whose script subprocess
+    /// has died while conductor was not running.
+    ///
+    /// Only script steps are checked: agent steps always have `child_run_id` set and
+    /// are handled by `recover_stuck_steps()`. Script steps have `child_run_id = NULL`
+    /// and `subprocess_pid` set after the child is spawned.
+    ///
+    /// For each candidate the reaper:
+    /// 1. Checks `pid_is_alive(pid)` — if false, marks the step `failed`.
+    /// 2. If the PID is alive, calls `pid_was_recycled` to detect OS PID reuse. If
+    ///    the PID was recycled, the original process is gone and the step is marked
+    ///    `failed`.
+    ///
+    /// Returns the count of steps that were reaped.
+    pub fn reap_orphaned_script_steps(&self) -> Result<usize> {
+        // Query script steps that are stuck in 'running' and have a subprocess_pid.
+        // child_run_id IS NULL discriminates script steps from agent steps.
+        let candidates: Vec<(String, i64, Option<String>)> = query_collect(
+            self.conn,
+            "SELECT id, subprocess_pid, started_at \
+             FROM workflow_run_steps \
+             WHERE status = 'running' \
+               AND child_run_id IS NULL \
+               AND subprocess_pid IS NOT NULL",
+            params![],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut reaped = 0usize;
+
+        for (step_id, raw_pid, started_at) in candidates {
+            let pid = raw_pid as u32;
+
+            #[cfg(unix)]
+            {
+                if crate::process_utils::pid_is_alive(pid) {
+                    // PID is alive — check for OS PID reuse using the process start
+                    // time recorded at spawn vs. the OS-reported start time now.
+                    let recycled = started_at
+                        .as_deref()
+                        .is_some_and(|at| crate::process_utils::pid_was_recycled(pid, at));
+                    if !recycled {
+                        // Process is genuinely still running — leave it alone.
+                        continue;
+                    }
+                    tracing::warn!(
+                        step_id = %step_id,
+                        pid,
+                        "reap_orphaned_script_steps: PID recycled — original script process is gone"
+                    );
+                    self.update_step_status(
+                        &step_id,
+                        WorkflowStepStatus::Failed,
+                        None,
+                        Some("subprocess PID recycled — original script process is gone"),
+                        None,
+                        None,
+                        None,
+                    )?;
+                    reaped += 1;
+                    continue;
+                }
+
+                tracing::warn!(
+                    step_id = %step_id,
+                    pid,
+                    "reap_orphaned_script_steps: subprocess lost — script process exited while conductor was not running"
+                );
+                self.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some("subprocess lost — script process exited while conductor was not running"),
+                    None,
+                    None,
+                    None,
+                )?;
+                reaped += 1;
+            }
+
+            // On non-Unix platforms (Windows) we cannot check liveness via kill(0).
+            // Skip the step to avoid false-positive reaping.
+            #[cfg(not(unix))]
+            let _ = (step_id, pid, started_at);
+        }
+
+        if reaped > 0 {
+            tracing::info!("reap_orphaned_script_steps: reaped {reaped} orphaned script step(s)");
+        }
+
+        Ok(reaped)
+    }
+
     /// Recover steps stuck in `running` status whose child agent run has
     /// already reached a terminal state (completed, failed, or cancelled).
     ///
@@ -266,12 +378,12 @@ impl<'a> WorkflowManager<'a> {
     /// Detect workflow runs with an active step that has been running longer
     /// than `threshold_minutes` without completing.
     ///
-    /// Unlike [`detect_stuck_workflow_run_ids`] (all steps terminal, executor
+    /// Unlike [`reap_heartbeat_stuck_runs`] (all steps terminal, executor
     /// crashed between steps), this catches the case where a step's child
     /// process is alive but hung — no crash, just no progress.
     ///
     /// Returns metadata for each stale run including the child agent run's
-    /// tmux window name, so callers can verify whether the process is still
+    /// subprocess PID, so callers can verify whether the process is still
     /// alive before taking action.
     pub fn detect_stale_workflow_runs(
         &self,
@@ -286,7 +398,8 @@ impl<'a> WorkflowManager<'a> {
                     wrs.step_name, \
                     (CAST(strftime('%s', 'now') AS INTEGER) \
                      - CAST(strftime('%s', wrs.started_at) AS INTEGER)) / 60, \
-                    wrs.id, wrs.child_run_id, ar.tmux_window \
+                    wrs.id, wrs.child_run_id, \
+                    COALESCE(wrs.subprocess_pid, ar.subprocess_pid) \
              FROM workflow_runs wr \
              JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
              LEFT JOIN agent_runs ar ON ar.id = wrs.child_run_id \
@@ -306,7 +419,7 @@ impl<'a> WorkflowManager<'a> {
                     running_minutes: row.get(4)?,
                     step_id: row.get(5)?,
                     child_run_id: row.get(6)?,
-                    tmux_window: row.get(7)?,
+                    subprocess_pid: row.get(7)?,
                 })
             },
         )
@@ -315,18 +428,14 @@ impl<'a> WorkflowManager<'a> {
     /// Reap stale workflow runs whose agent process is confirmed dead.
     ///
     /// For each stale run returned by [`detect_stale_workflow_runs`]:
-    /// 1. Check if the child agent's tmux window still exists.
-    /// 2. If the window is gone, mark the child agent run as failed, mark the
+    /// 1. Check if the child agent's subprocess PID is still alive.
+    /// 2. If the process is gone, mark the child agent run as failed, mark the
     ///    workflow step as failed, and mark the workflow run as failed.
-    /// 3. If the window is still alive, the agent is running (just slow) — skip.
+    /// 3. If the process is still alive, the agent is running (just slow) — skip.
     ///
     /// Returns the list of reaped runs so callers can fire notifications and
     /// optionally auto-restart them.
-    pub fn reap_stale_workflow_runs(
-        &self,
-        threshold_minutes: i64,
-        live_tmux_windows: &std::collections::HashSet<String>,
-    ) -> Result<Vec<ReapedStaleRun>> {
+    pub fn reap_stale_workflow_runs(&self, threshold_minutes: i64) -> Result<Vec<ReapedStaleRun>> {
         let stale = self.detect_stale_workflow_runs(threshold_minutes)?;
         if stale.is_empty() {
             return Ok(vec![]);
@@ -337,19 +446,18 @@ impl<'a> WorkflowManager<'a> {
         let mut reaped = Vec::new();
 
         for s in stale {
-            // If the tmux window is still alive, the agent is running — just slow.
-            if let Some(ref window) = s.tmux_window {
-                if live_tmux_windows.contains(window) {
+            // If the subprocess is still alive, the agent is running — just slow.
+            #[cfg(unix)]
+            if let Some(pid) = s.subprocess_pid {
+                if crate::process_utils::pid_is_alive(pid as u32) {
                     continue;
                 }
             }
 
             // Agent process is dead. Mark child agent run as failed.
             if let Some(child_run_id) = &s.child_run_id {
-                let _ = agent_mgr.update_run_failed(
-                    child_run_id,
-                    "Stale workflow watchdog: agent process died (tmux session lost)",
-                );
+                let _ = agent_mgr
+                    .update_run_failed(child_run_id, "Stale workflow watchdog: agent process died");
             }
 
             // Mark the workflow step as failed.
@@ -385,6 +493,110 @@ impl<'a> WorkflowManager<'a> {
         }
 
         Ok(reaped)
+    }
+
+    /// Detect and auto-resume workflow runs that are stuck in `running` status
+    /// because the executor process died between steps.
+    ///
+    /// **Detection** — a root run is considered orphaned when ALL of the following hold:
+    /// 1. `status = 'running'`
+    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
+    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
+    /// 4. `COALESCE(last_heartbeat, started_at)` is older than `threshold_secs`
+    ///    (the `COALESCE` handles pre-migration rows that have `NULL` heartbeat)
+    ///
+    /// **CAS flip** — before calling `resume_workflow_standalone` the run is
+    /// atomically flipped to `failed` via:
+    /// `UPDATE ... WHERE id=? AND status='running'`
+    /// `changes() == 1` is required to proceed; a concurrent watchdog call that
+    /// already won the race sees `changes() == 0` and skips the run.
+    ///
+    /// This fixes the previously-broken `detect_stuck_workflow_run_ids` + resume
+    /// pattern: `validate_resume_preconditions` rejects resuming a `running`-status
+    /// run; the CAS flip to `failed` is the required precondition.
+    ///
+    /// Returns the count of runs successfully resumed.
+    pub fn reap_heartbeat_stuck_runs(
+        &self,
+        config: &Config,
+        threshold_secs: i64,
+        conductor_bin_dir: Option<PathBuf>,
+    ) -> Result<usize> {
+        // Step 1: find orphaned root runs.
+        let orphaned_ids: Vec<String> = query_collect(
+            self.conn,
+            "SELECT id FROM workflow_runs \
+             WHERE status = 'running' \
+               AND parent_workflow_run_id IS NULL \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM workflow_run_steps wrs \
+                 WHERE wrs.workflow_run_id = workflow_runs.id \
+                   AND wrs.status IN ('running', 'pending', 'waiting') \
+               ) \
+               AND ( \
+                 CAST(strftime('%s', 'now') AS INTEGER) - \
+                 CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
+               ) > ?1",
+            params![threshold_secs],
+            |row| row.get(0),
+        )?;
+
+        if orphaned_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut resumed = 0usize;
+
+        for run_id in orphaned_ids {
+            // Step 2: CAS flip running → failed.
+            // If another watchdog already won the race, changes() == 0 and we skip.
+            let changed = self.conn.execute(
+                "UPDATE workflow_runs \
+                 SET status = 'failed', \
+                     error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
+                 WHERE id = ?1 AND status = 'running'",
+                params![run_id],
+            )?;
+
+            if changed != 1 {
+                tracing::debug!(
+                    run_id = %run_id,
+                    "reap_heartbeat_stuck_runs: CAS lost race for run (already reaped)"
+                );
+                continue;
+            }
+
+            tracing::info!(
+                run_id = %run_id,
+                "reap_heartbeat_stuck_runs: reaped orphaned run, resuming"
+            );
+
+            // Step 3: resume — status is now `failed`, which validate_resume_preconditions accepts.
+            let config_clone = config.clone();
+            let bin_dir = conductor_bin_dir.clone();
+            let run_id_clone = run_id.clone();
+            std::thread::spawn(move || {
+                let params = WorkflowResumeStandalone {
+                    config: config_clone,
+                    workflow_run_id: run_id_clone.clone(),
+                    model: None,
+                    from_step: None,
+                    restart: false,
+                    db_path: None,
+                    conductor_bin_dir: bin_dir,
+                };
+                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
+                    tracing::warn!(
+                        run_id = %run_id_clone,
+                        "reap_heartbeat_stuck_runs: auto-resume failed: {e}"
+                    );
+                }
+            });
+
+            resumed += 1;
+        }
+
+        Ok(resumed)
     }
 
     /// Directly finalize workflow runs that are stuck in `running` status because
@@ -512,20 +724,14 @@ impl<'a> WorkflowManager<'a> {
             .optional()?)
     }
 
-    const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \
-         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
-         WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')";
+    const SQL_RESET_FAILED: &'static str =
+        reset_sql!("WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')");
 
-    const SQL_RESET_COMPLETED: &'static str = "UPDATE workflow_run_steps \
-         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
-         WHERE workflow_run_id = ?1 AND status = 'completed'";
+    const SQL_RESET_COMPLETED: &'static str =
+        reset_sql!("WHERE workflow_run_id = ?1 AND status = 'completed'");
 
-    const SQL_RESET_FROM_POS: &'static str = "UPDATE workflow_run_steps \
-         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
-         WHERE workflow_run_id = ?1 AND position >= ?2";
+    const SQL_RESET_FROM_POS: &'static str =
+        reset_sql!("WHERE workflow_run_id = ?1 AND position >= ?2");
 
     /// Reset all non-completed steps for a workflow run back to `pending`.
     ///

@@ -27,7 +27,7 @@ const kindConfig: Record<
   system: {
     label: "SYS",
     badge: "bg-gray-700 text-gray-400",
-    text: "text-gray-500",
+    text: "text-gray-400",
     border: "border-l-gray-600",
   },
   error: {
@@ -85,7 +85,7 @@ function extractStepLabel(prompt: string): string | null {
 
 const defaultConfig = {
   label: "???",
-  badge: "bg-gray-700 text-gray-400",
+  badge: "bg-gray-700 text-gray-300",
   text: "text-gray-400",
   border: "border-l-gray-600",
 };
@@ -118,6 +118,13 @@ export function AgentActivityLog({ events, runs, isRunning }: AgentActivityLogPr
   }, [runs]);
 
   const hasMultipleRuns = runs.length > 1;
+
+  // Only show kind badges when there are mixed event types
+  const uniqueKinds = useMemo(() => {
+    const kinds = new Set(events.map((e) => e.kind));
+    return kinds.size;
+  }, [events]);
+  const showBadges = uniqueKinds > 1;
 
   if (events.length === 0) {
     return (
@@ -164,9 +171,9 @@ export function AgentActivityLog({ events, runs, isRunning }: AgentActivityLogPr
     const displayLabel = stepLabel ? "STEP" : isFeedback ? "WAIT" : cfg.label;
     const displayText = stepLabel ?? event.summary;
     const effectiveCfg = stepLabel
-      ? { badge: "bg-fuchsia-900 text-fuchsia-300", text: "text-fuchsia-300", border: "border-l-fuchsia-500" }
+      ? { badge: "bg-indigo-900 text-indigo-300", text: "text-indigo-300", border: "border-l-indigo-500" }
       : isFeedback
-        ? { badge: "bg-purple-900 text-purple-300", text: "text-purple-300", border: "border-l-purple-500" }
+        ? { badge: "bg-amber-900 text-amber-300", text: "text-amber-300", border: "border-l-amber-400" }
         : cfg;
 
     elements.push(
@@ -174,11 +181,13 @@ export function AgentActivityLog({ events, runs, isRunning }: AgentActivityLogPr
         key={i}
         className={`flex items-start gap-2 px-2 py-1 border-l-2 ${effectiveCfg.border} ${showGap ? "mt-2" : ""}`}
       >
-        <span
-          className={`shrink-0 inline-block w-12 text-center text-[10px] font-semibold rounded px-1 py-0.5 leading-tight ${effectiveCfg.badge}`}
-        >
-          {displayLabel}
-        </span>
+        {showBadges && (
+          <span
+            className={`shrink-0 inline-block w-12 text-center text-[10px] font-semibold rounded px-1 py-0.5 leading-tight ${effectiveCfg.badge}`}
+          >
+            {displayLabel}
+          </span>
+        )}
         <span className={`${effectiveCfg.text} leading-snug break-words min-w-0 flex-1`}>
           {displayText}
         </span>
@@ -196,11 +205,11 @@ export function AgentActivityLog({ events, runs, isRunning }: AgentActivityLogPr
   return (
     <div
       ref={scrollRef}
-      className="rounded-lg border border-gray-200 bg-gray-950 p-2 max-h-[28rem] overflow-y-auto font-mono text-sm"
+      className="rounded-lg border border-gray-200 bg-gray-50 p-2 overflow-y-auto font-mono text-sm flex-1 min-h-0"
     >
       {elements}
       {isRunning && (
-        <div className="text-yellow-400 animate-pulse mt-2 px-2 py-1 text-xs">
+        <div className="text-yellow-400 motion-safe:animate-pulse mt-2 px-2 py-1 text-xs">
           Agent is working...
         </div>
       )}

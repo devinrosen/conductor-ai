@@ -27,7 +27,6 @@ Conductor handles that overhead. It gives you one place to see all your repos, w
 - [Rust](https://rustup.rs/) (stable toolchain)
 - [Node.js](https://nodejs.org/) (for the web UI frontend)
 - [GitHub CLI (`gh`)](https://cli.github.com/) — installed and authenticated (for GitHub issue sync)
-- [tmux](https://github.com/tmux/tmux) (for AI agent sessions)
 - [Claude Code CLI (`claude`)](https://docs.anthropic.com/en/docs/claude-code) — installed and authenticated
 
 ## Build
@@ -79,7 +78,7 @@ cargo run --bin conductor -- repo list
 
 ### TUI
 
-Interactive terminal UI for browsing repos, worktrees, and tickets. Supports launching Claude agent sessions in tmux.
+Interactive terminal UI for browsing repos, worktrees, and tickets. Supports launching Claude agent sessions.
 
 ```bash
 conductor-tui                        # After install
@@ -137,9 +136,19 @@ Workflow files live in `.conductor/workflows/<name>.wf`. Agent prompts live in `
 
 For full details on the DSL grammar, constructs, structured output, and design tradeoffs, see [docs/workflow/engine.md](docs/workflow/engine.md).
 
+## Getting Started
+
+- **CLI** — manage repos, worktrees, and run workflows from the terminal. See [docs/user-guides/getting-started-cli.md](docs/user-guides/getting-started-cli.md).
+- **Web UI** — browser-based interface with Tailscale remote access support. See [docs/user-guides/getting-started-web.md](docs/user-guides/getting-started-web.md).
+
+## Configuration
+
+- **Themes** — TUI color customization via built-in themes (`nord`, `gruvbox`, `catppuccin_mocha`) or custom base16 files dropped into `~/.conductor/themes/`. See [docs/user-guides/themes.md](docs/user-guides/themes.md).
+- **Notification hooks** — fire shell commands or HTTP webhooks on workflow events. See [docs/examples/hooks/](docs/examples/hooks/).
+
 ## Architecture
 
-Four crates in a Cargo workspace:
+Five crates in a Cargo workspace:
 
 | Crate | Role |
 |---|---|
@@ -147,6 +156,7 @@ Four crates in a Cargo workspace:
 | **conductor-cli** | Thin CLI binary using clap |
 | **conductor-tui** | Terminal UI using ratatui + crossterm |
 | **conductor-web** | Web UI using axum + React (Vite + Tailwind, embedded via `rust_embed`) |
+| **conductor-desktop** | Native macOS desktop app using Tauri v2 |
 
 Data lives in `~/.conductor/` — a single SQLite database and per-repo worktree directories. No daemon or background process; the CLI and TUI link directly against `conductor-core`.
 

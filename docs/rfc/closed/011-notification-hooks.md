@@ -1,6 +1,6 @@
 # RFC 011: Notification Hooks
 
-**Status:** Draft
+**Status:** Implemented
 **Date:** 2026-04-07
 **Author:** Devin
 

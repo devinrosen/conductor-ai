@@ -165,15 +165,13 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let run_id = run.id.clone();
-        let tmux_window = run.tmux_window.clone();
+        let subprocess_pid = run.subprocess_pid;
 
         self.state.modal = crate::state::Modal::Progress {
             message: "Stopping agent…".into(),
         };
 
         std::thread::spawn(move || {
-            use std::process::Command;
-
             let db = conductor_core::config::db_path();
             let conn = match conductor_core::db::open_database(&db) {
                 Ok(c) => c,
@@ -186,15 +184,8 @@ impl App {
             };
             let mgr = AgentManager::new(&conn);
 
-            if let Some(ref window) = tmux_window {
-                mgr.capture_agent_log(&run_id, window);
-                let _ = Command::new("tmux")
-                    .args(["kill-window", "-t", &format!(":{window}")])
-                    .output();
-            }
-
             let result = mgr
-                .update_run_cancelled(&run_id)
+                .cancel_run(&run_id, subprocess_pid)
                 .map(|()| "Agent cancelled".to_string())
                 .map_err(|e| format!("Failed to cancel agent: {e}"));
 
@@ -329,7 +320,7 @@ impl App {
         };
     }
 
-    pub(super) fn start_orchestrate_tmux(
+    pub(super) fn start_orchestrate_headless(
         &mut self,
         prompt: String,
         worktree_id: String,
@@ -347,39 +338,80 @@ impl App {
         };
 
         std::thread::spawn(move || {
-            let result = (|| -> std::result::Result<String, String> {
-                let db = conductor_core::config::db_path();
-                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
-                let mgr = AgentManager::new(&conn);
+            let db = conductor_core::config::db_path();
+            let conn = match conductor_core::db::open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Action::OrchestrateLaunchComplete {
+                        result: Err(e.to_string()),
+                    });
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
 
-                let run = mgr
-                    .create_run(
-                        Some(&worktree_id),
-                        &prompt,
-                        Some(&worktree_slug),
-                        model.as_deref(),
-                    )
-                    .map_err(|e| format!("Failed to create agent run: {e}"))?;
+            let run = match mgr.create_run(
+                Some(&worktree_id),
+                &prompt,
+                Some(&worktree_slug),
+                model.as_deref(),
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Action::OrchestrateLaunchComplete {
+                        result: Err(format!("Failed to create agent run: {e}")),
+                    });
+                    return;
+                }
+            };
 
-                let args = conductor_core::agent_runtime::build_orchestrate_args(
-                    &run.id,
-                    &worktree_path,
-                    model.as_deref(),
-                    false,
-                    None,
-                );
+            let args = conductor_core::agent_runtime::build_orchestrate_args(
+                &run.id,
+                &worktree_path,
+                model.as_deref(),
+                false,
+                None,
+            );
 
-                conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug)
-                    .inspect_err(|e| {
-                        let _ = mgr.update_run_failed(&run.id, e);
-                    })?;
+            let handle = match conductor_core::agent_runtime::spawn_headless(
+                &args,
+                std::path::Path::new(&worktree_path),
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = mgr.update_run_failed(&run.id, &e);
+                    let _ = tx.send(Action::OrchestrateLaunchComplete { result: Err(e) });
+                    return;
+                }
+            };
 
-                Ok(format!(
-                    "Orchestrator launched in tmux window: {worktree_slug}"
-                ))
-            })();
+            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
+                tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
+            }
 
-            let _ = tx.send(Action::OrchestrateLaunchComplete { result });
+            let _ = tx.send(Action::OrchestrateLaunchComplete {
+                result: Ok("Orchestrator launched (headless)".to_string()),
+            });
+
+            let run_id = run.id.clone();
+            let log_path = conductor_core::config::agent_log_path(&run_id);
+            let tx2 = tx.clone();
+            let (stdout, finish) = handle.into_drain_parts();
+            conductor_core::agent_runtime::drain_stream_json(
+                stdout,
+                &run_id,
+                &log_path,
+                &mgr,
+                |event| {
+                    let _ = tx2.send(Action::AgentEvent {
+                        run_id: run_id.clone(),
+                        event: event.clone(),
+                    });
+                },
+            );
+
+            finish();
+            let _ = tx.send(Action::AgentComplete { run_id });
         });
     }
 
@@ -589,7 +621,7 @@ impl App {
         };
     }
 
-    pub(super) fn start_agent_tmux(
+    pub(super) fn start_agent_headless(
         &mut self,
         prompt: String,
         worktree_id: String,
@@ -606,42 +638,94 @@ impl App {
         };
 
         std::thread::spawn(move || {
-            let result = (|| -> std::result::Result<String, String> {
-                let db = conductor_core::config::db_path();
-                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
-                let mgr = AgentManager::new(&conn);
+            let db = conductor_core::config::db_path();
+            let conn = match conductor_core::db::open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Action::AgentLaunchComplete {
+                        result: Err(e.to_string()),
+                    });
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
 
-                let run = mgr
-                    .create_run(
-                        Some(&worktree_id),
-                        &prompt,
-                        Some(&worktree_slug),
-                        model.as_deref(),
-                    )
-                    .map_err(|e| format!("Failed to create agent run: {e}"))?;
+            let run = match mgr.create_run(
+                Some(&worktree_id),
+                &prompt,
+                Some(&worktree_slug),
+                model.as_deref(),
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Action::AgentLaunchComplete {
+                        result: Err(format!("Failed to create agent run: {e}")),
+                    });
+                    return;
+                }
+            };
 
-                let args = conductor_core::agent_runtime::build_agent_args(
-                    &run.id,
-                    &worktree_path,
-                    &prompt,
-                    resume_session_id.as_deref(),
-                    model.as_deref(),
-                    None,
-                    &[],
-                )
-                .inspect_err(|e| {
-                    let _ = mgr.update_run_failed(&run.id, e);
-                })?;
+            let build_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+                run_id: &run.id,
+                working_dir: &worktree_path,
+                prompt: &prompt,
+                resume_session_id: resume_session_id.as_deref(),
+                model: model.as_deref(),
+                bot_name: None,
+                permission_mode: None,
+                plugin_dirs: &[],
+            };
+            let (args, prompt_file) =
+                match conductor_core::agent_runtime::build_headless_agent_args(&build_params) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        let _ = mgr.update_run_failed(&run.id, &e);
+                        let _ = tx.send(Action::AgentLaunchComplete { result: Err(e) });
+                        return;
+                    }
+                };
 
-                conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug)
-                    .inspect_err(|e| {
-                        let _ = mgr.update_run_failed(&run.id, e);
-                    })?;
+            let handle = match conductor_core::agent_runtime::spawn_headless(
+                &args,
+                std::path::Path::new(&worktree_path),
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = mgr.update_run_failed(&run.id, &e);
+                    let _ = std::fs::remove_file(&prompt_file);
+                    let _ = tx.send(Action::AgentLaunchComplete { result: Err(e) });
+                    return;
+                }
+            };
 
-                Ok(format!("Agent launched in tmux window: {worktree_slug}"))
-            })();
+            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
+                tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
+            }
 
-            let _ = tx.send(Action::AgentLaunchComplete { result });
+            let _ = tx.send(Action::AgentLaunchComplete {
+                result: Ok("Agent launched (headless)".to_string()),
+            });
+
+            let run_id = run.id.clone();
+            let log_path = conductor_core::config::agent_log_path(&run_id);
+            let tx2 = tx.clone();
+            let (stdout, finish) = handle.into_drain_parts();
+            conductor_core::agent_runtime::drain_stream_json(
+                stdout,
+                &run_id,
+                &log_path,
+                &mgr,
+                |event| {
+                    let _ = tx2.send(Action::AgentEvent {
+                        run_id: run_id.clone(),
+                        event: event.clone(),
+                    });
+                },
+            );
+
+            let _ = std::fs::remove_file(&prompt_file);
+            finish();
+            let _ = tx.send(Action::AgentComplete { run_id });
         });
     }
 
@@ -690,12 +774,12 @@ impl App {
         };
     }
 
-    pub(super) fn start_repo_agent_tmux(
+    pub(super) fn start_repo_agent_headless(
         &mut self,
         prompt: String,
         repo_id: String,
         repo_path: String,
-        repo_slug: String,
+        _repo_slug: String,
         resume_session_id: Option<String>,
     ) {
         let Some(ref tx) = self.bg_tx else { return };
@@ -706,51 +790,95 @@ impl App {
         };
 
         std::thread::spawn(move || {
-            let result = (|| -> std::result::Result<String, String> {
-                let db = conductor_core::config::db_path();
-                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
-                let mgr = AgentManager::new(&conn);
+            let db = conductor_core::config::db_path();
+            let conn = match conductor_core::db::open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Action::RepoAgentLaunched {
+                        result: Err(e.to_string()),
+                    });
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
 
-                let run_id_preview = conductor_core::new_id();
-                let window_name = conductor_core::agent_runtime::repo_agent_window_name(
-                    &repo_slug,
-                    &run_id_preview,
-                );
+            let run = match mgr.create_repo_run(&repo_id, &prompt, None, None) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Action::RepoAgentLaunched {
+                        result: Err(format!("Failed to create repo agent run: {e}")),
+                    });
+                    return;
+                }
+            };
 
-                let run = mgr
-                    .create_repo_run(&repo_id, &prompt, Some(&window_name), None)
-                    .map_err(|e| format!("Failed to create repo agent run: {e}"))?;
+            let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
+            let build_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+                run_id: &run.id,
+                working_dir: &repo_path,
+                prompt: &prompt,
+                resume_session_id: resume_session_id.as_deref(),
+                model: None,
+                bot_name: None,
+                permission_mode: Some(&plan_mode),
+                plugin_dirs: &[],
+            };
+            let (args, prompt_file) =
+                match conductor_core::agent_runtime::build_headless_agent_args(&build_params) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        let _ = mgr.update_run_failed(&run.id, &e);
+                        let _ = tx.send(Action::RepoAgentLaunched { result: Err(e) });
+                        return;
+                    }
+                };
 
-                let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
-                let args = conductor_core::agent_runtime::build_agent_args_with_mode(
-                    &run.id,
-                    &repo_path,
-                    &prompt,
-                    resume_session_id.as_deref(),
-                    None,
-                    None,
-                    Some(&plan_mode),
-                    &[],
-                )
-                .inspect_err(|e| {
-                    let _ = mgr.update_run_failed(&run.id, e);
-                })?;
+            let handle = match conductor_core::agent_runtime::spawn_headless(
+                &args,
+                std::path::Path::new(&repo_path),
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = mgr.update_run_failed(&run.id, &e);
+                    let _ = std::fs::remove_file(&prompt_file);
+                    let _ = tx.send(Action::RepoAgentLaunched { result: Err(e) });
+                    return;
+                }
+            };
 
-                conductor_core::agent_runtime::spawn_tmux_window(&args, &window_name).inspect_err(
-                    |e| {
-                        let _ = mgr.update_run_failed(&run.id, e);
-                    },
-                )?;
+            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
+                tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
+            }
 
-                Ok(format!("Repo agent launched in tmux window: {window_name}"))
-            })();
+            let _ = tx.send(Action::RepoAgentLaunched {
+                result: Ok("Repo agent launched (headless)".to_string()),
+            });
 
-            let _ = tx.send(Action::RepoAgentLaunched { result });
+            let run_id = run.id.clone();
+            let log_path = conductor_core::config::agent_log_path(&run_id);
+            let tx2 = tx.clone();
+            let (stdout, finish) = handle.into_drain_parts();
+            conductor_core::agent_runtime::drain_stream_json(
+                stdout,
+                &run_id,
+                &log_path,
+                &mgr,
+                |event| {
+                    let _ = tx2.send(Action::AgentEvent {
+                        run_id: run_id.clone(),
+                        event: event.clone(),
+                    });
+                },
+            );
+
+            let _ = std::fs::remove_file(&prompt_file);
+            finish();
+            let _ = tx.send(Action::AgentComplete { run_id });
         });
     }
 
     /// Restart a failed/cancelled agent run by creating a new run with the same
-    /// config and re-spawning a tmux window.
+    /// config and re-spawning a headless subprocess.
     /// Runs on a background thread per the TUI threading rule.
     pub(super) fn handle_restart_agent(&mut self) {
         let run = self.selected_worktree_run().cloned();
@@ -784,47 +912,82 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let run_id = run.id.clone();
-        let worktree_slug = run.tmux_window.clone().unwrap_or_default();
 
         self.state.modal = crate::state::Modal::Progress {
             message: "Restarting agent…".into(),
         };
 
         std::thread::spawn(move || {
-            let result = (|| -> std::result::Result<String, String> {
-                let db = conductor_core::config::db_path();
-                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
-                let mgr = AgentManager::new(&conn);
+            let db = conductor_core::config::db_path();
+            let conn = match conductor_core::db::open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Action::AgentRestartComplete {
+                        result: Err(e.to_string()),
+                    });
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
 
-                let new_run = mgr
-                    .restart_run(&run_id)
-                    .map_err(|e| format!("Failed to restart agent run: {e}"))?;
+            let new_run = match mgr.restart_run(&run_id) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Action::AgentRestartComplete {
+                        result: Err(format!("Failed to restart agent run: {e}")),
+                    });
+                    return;
+                }
+            };
 
-                let window_name = new_run.tmux_window.as_deref().unwrap_or(&worktree_slug);
+            let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+                run_id: &new_run.id,
+                working_dir: &worktree_path,
+                prompt: &new_run.prompt,
+                resume_session_id: None,
+                model: new_run.model.as_deref(),
+                bot_name: new_run.bot_name.as_deref(),
+                permission_mode: None,
+                plugin_dirs: &[],
+            };
+            let (handle, prompt_file) =
+                match conductor_core::agent_runtime::try_spawn_headless_run(&spawn_params) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        let _ = mgr.update_run_failed(&new_run.id, &e);
+                        let _ = tx.send(Action::AgentRestartComplete { result: Err(e) });
+                        return;
+                    }
+                };
 
-                let args = conductor_core::agent_runtime::build_agent_args(
-                    &new_run.id,
-                    &worktree_path,
-                    &new_run.prompt,
-                    None,
-                    new_run.model.as_deref(),
-                    new_run.bot_name.as_deref(),
-                    &[],
-                )
-                .inspect_err(|e| {
-                    let _ = mgr.update_run_failed(&new_run.id, e);
-                })?;
+            if let Err(e) = mgr.update_run_subprocess_pid(&new_run.id, handle.pid()) {
+                tracing::warn!("failed to store subprocess PID for run {}: {e}", new_run.id);
+            }
 
-                conductor_core::agent_runtime::spawn_tmux_window(&args, window_name).inspect_err(
-                    |e| {
-                        let _ = mgr.update_run_failed(&new_run.id, e);
-                    },
-                )?;
+            let _ = tx.send(Action::AgentRestartComplete {
+                result: Ok("Agent restarted (headless)".to_string()),
+            });
 
-                Ok(format!("Agent restarted in tmux window: {window_name}"))
-            })();
+            let new_run_id = new_run.id.clone();
+            let log_path = conductor_core::config::agent_log_path(&new_run_id);
+            let tx2 = tx.clone();
+            let (stdout, finish) = handle.into_drain_parts();
+            conductor_core::agent_runtime::drain_stream_json(
+                stdout,
+                &new_run_id,
+                &log_path,
+                &mgr,
+                |event| {
+                    let _ = tx2.send(Action::AgentEvent {
+                        run_id: new_run_id.clone(),
+                        event: event.clone(),
+                    });
+                },
+            );
 
-            let _ = tx.send(Action::AgentRestartComplete { result });
+            let _ = std::fs::remove_file(&prompt_file);
+            finish();
+            let _ = tx.send(Action::AgentComplete { run_id: new_run_id });
         });
     }
 
@@ -852,15 +1015,13 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let run_id = run.id.clone();
-        let tmux_window = run.tmux_window.clone();
+        let subprocess_pid = run.subprocess_pid;
 
         self.state.modal = crate::state::Modal::Progress {
             message: "Stopping repo agent…".into(),
         };
 
         std::thread::spawn(move || {
-            use std::process::Command;
-
             let db = conductor_core::config::db_path();
             let conn = match conductor_core::db::open_database(&db) {
                 Ok(c) => c,
@@ -873,15 +1034,8 @@ impl App {
             };
             let mgr = AgentManager::new(&conn);
 
-            if let Some(ref window) = tmux_window {
-                mgr.capture_agent_log(&run_id, window);
-                let _ = Command::new("tmux")
-                    .args(["kill-window", "-t", &format!(":{window}")])
-                    .output();
-            }
-
             let result = mgr
-                .update_run_cancelled(&run_id)
+                .cancel_run(&run_id, subprocess_pid)
                 .map(|()| "Repo agent cancelled".to_string())
                 .map_err(|e| format!("Failed to cancel repo agent: {e}"));
 

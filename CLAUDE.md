@@ -36,12 +36,13 @@ git config core.hooksPath .githooks
 
 ### Workspace Layout
 
-Four crates in a Cargo workspace:
+Five crates in a Cargo workspace:
 
 - **conductor-core** — Library crate with all domain logic. Everything lives here.
 - **conductor-cli** — Thin binary wrapping core with clap subcommands.
 - **conductor-tui** — TUI binary using ratatui + crossterm.
 - **conductor-web** — Web UI binary using axum + React (Vite + Tailwind frontend embedded via `rust_embed`).
+- **conductor-desktop** — Native macOS desktop app using Tauri v2 (wraps conductor-web).
 
 ### Library-First (v1)
 
@@ -92,7 +93,8 @@ Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Cl
 ## Project Context
 
 - **Vision & motivation:** [docs/VISION.md](docs/VISION.md)
-- **Current priorities:** [docs/ROADMAP.md](docs/ROADMAP.md)
+- **Autonomous SDLC vision:** [docs/AUTONOMOUS-SDLC.md](docs/AUTONOMOUS-SDLC.md)
+- **Current priorities:** https://github.com/devinrosen/conductor-ai/issues?q=is%3Aopen+label%3Aroadmap
 - **Workflow engine design:** [docs/workflow/engine.md](docs/workflow/engine.md)
 
 ## TUI Threading Rule

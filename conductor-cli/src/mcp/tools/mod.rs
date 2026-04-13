@@ -40,10 +40,17 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_list_worktrees",
             "List worktrees for a repo. Defaults to active worktrees only; pass status=all to include merged/abandoned. \
-             Individual worktrees available in detail via the `conductor://worktree/{repo}/{slug}` resource.",
+             Individual worktrees available in detail via the `conductor://worktree/{repo}/{slug}` resource. \
+             Supports pagination via limit (default 50) and offset (default 0).",
             schema(&[
                 ("repo", "Repo slug", true),
                 ("status", "Filter by status: 'active' (default) or 'all'", false),
+                ("limit", "Max worktrees to return (default 50)", false),
+                (
+                    "offset",
+                    "Number of worktrees to skip for pagination (default 0)",
+                    false,
+                ),
             ]),
         ),
         Tool::new(
@@ -258,7 +265,14 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "conductor_list_workflows",
             "List available workflow definitions for a repo. Returns workflow names, descriptions, trigger types, targets, group, and input schemas (name, required, default, description for each input). \
              Full workflow definitions also available at `conductor://workflows/{repo}`.",
-            schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
+            schema(&[
+                ("repo", "Repo slug (e.g. my-repo)", true),
+                (
+                    "worktree",
+                    "Worktree slug or branch name (optional). When provided, lists workflows available in the worktree branch.",
+                    false,
+                ),
+            ]),
         ),
         Tool::new(
             "conductor_list_repos",
@@ -332,6 +346,11 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             schema(&[
                 ("repo", "Repo slug (e.g. my-repo)", true),
                 ("workflow", "Workflow name (without .wf extension)", true),
+                (
+                    "worktree",
+                    "Worktree slug or branch name. Required when the workflow only exists on a feature branch, not on main.",
+                    false,
+                ),
             ]),
         ),
         Tool::new(

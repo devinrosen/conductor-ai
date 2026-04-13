@@ -468,6 +468,7 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             cache_creation_input_tokens: None,
             bot_name: None,
             conversation_id: None,
+            subprocess_pid: None,
         },
     );
     app.show_confirm_quit();

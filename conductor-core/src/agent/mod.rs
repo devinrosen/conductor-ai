@@ -3,7 +3,6 @@ pub(crate) mod db;
 pub(crate) mod log_parsing;
 pub(crate) mod manager;
 pub(crate) mod status;
-pub(crate) mod tmux;
 pub(crate) mod types;
 
 // Re-export everything that was public in the old agent.rs
@@ -16,7 +15,6 @@ pub use log_parsing::{
 };
 
 pub use manager::feedback::normalize_feedback_response;
-pub use manager::tmux::{capture_and_kill_tmux_window, capture_tmux_scrollback, kill_tmux_window};
 pub use manager::AgentManager;
 
 pub use status::{
@@ -24,8 +22,6 @@ pub use status::{
     FeedbackType, ParsedFeedbackMarker, StepStatus, DEFAULT_AGENT_ERROR_MSG, FEEDBACK_MARKER,
     FEEDBACK_MAX_LEN,
 };
-
-pub use tmux::list_live_tmux_windows;
 
 pub use types::{
     ActiveAgentCounts, AgentCreatedIssue, AgentEvent, AgentRun, AgentRunEvent, ClaudeJsonResult,

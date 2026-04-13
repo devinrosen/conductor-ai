@@ -1,10 +1,9 @@
 //! Orchestrator: automatically spawn and manage child agent runs from a parent run's plan steps.
 //!
 //! The orchestrator takes a parent run with plan steps and, for each step, spawns
-//! a child agent run in a tmux window. It polls the database for child completion,
-//! updates plan step status, and aggregates results back to the parent.
+//! a headless child agent subprocess. It drains the subprocess stdout stream for
+//! completion, updates plan step status, and aggregates results back to the parent.
 
-use std::process::Command;
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -13,13 +12,10 @@ use crate::agent::{AgentManager, AgentRun, AgentRunStatus, StepStatus};
 use crate::agent_runtime;
 use crate::config::Config;
 use crate::error::Result;
-use crate::worktree::WorktreeManager;
 
 /// Configuration for the orchestrator.
 #[derive(Debug, Clone)]
 pub struct OrchestratorConfig {
-    /// How often to poll the DB for child run completion (default: 5s).
-    pub poll_interval: Duration,
     /// Maximum time to wait for a single child run before marking it as timed out (default: 30min).
     pub child_timeout: Duration,
     /// Whether to stop orchestration on the first child failure (default: false).
@@ -29,7 +25,6 @@ pub struct OrchestratorConfig {
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(5),
             child_timeout: Duration::from_secs(30 * 60),
             fail_fast: false,
         }
@@ -64,8 +59,8 @@ pub struct OrchestrationResult {
 ///
 /// This function:
 /// 1. Reads the parent run's plan steps from the database
-/// 2. For each pending step, spawns a child agent run in a tmux window
-/// 3. Polls the DB for child completion
+/// 2. For each pending step, spawns a headless child agent subprocess
+/// 3. Drains the subprocess stdout stream for completion
 /// 4. Updates the plan step status based on the child's result
 /// 5. Aggregates all results and updates the parent run
 ///
@@ -84,7 +79,7 @@ pub fn orchestrate_run(
         crate::error::ConductorError::Agent(format!("Parent run not found: {parent_run_id}"))
     })?;
 
-    // Orchestration requires a registered worktree for tmux window naming.
+    // Orchestration requires a registered worktree.
     // Ephemeral PR runs (worktree_id == None) are not supported by the orchestrator.
     let worktree_id = parent_run.worktree_id.as_deref().ok_or_else(|| {
         crate::error::ConductorError::Agent(
@@ -92,8 +87,6 @@ pub fn orchestrate_run(
                 .to_string(),
         )
     })?;
-    let wt_mgr = WorktreeManager::new(conn, config);
-    let worktree = wt_mgr.get_by_id(worktree_id)?;
 
     let steps = mgr.get_run_steps(parent_run_id)?;
     if steps.is_empty() {
@@ -132,71 +125,152 @@ pub fn orchestrate_run(
         // Build prompt for the child agent from the step description and parent context
         let child_prompt = build_child_prompt(&parent_run, &step.description, i, steps.len());
 
-        // Create child run record
-        let child_window = format!("{}-step-{}", worktree.slug, i + 1);
+        // Create child run record (no tmux window — headless subprocess)
         let child_run = mgr.create_child_run(
             Some(worktree_id),
             &child_prompt,
-            Some(&child_window),
+            None,
             model,
             parent_run_id,
             None,
         )?;
 
         eprintln!(
-            "[orchestrator] Spawning child run {} in tmux window '{}'",
-            child_run.id, child_window
+            "[orchestrator] Spawning headless child run {}",
+            child_run.id
         );
 
-        // Spawn the child agent in a tmux window
-        let spawn_result = agent_runtime::spawn_child_tmux(
-            &child_run.id,
-            worktree_path,
-            &child_prompt,
+        // Spawn the child agent as a headless subprocess
+        let params = agent_runtime::SpawnHeadlessParams {
+            run_id: &child_run.id,
+            working_dir: worktree_path,
+            prompt: &child_prompt,
+            resume_session_id: None,
             model,
-            &child_window,
-            None,
-            &[],
-        );
+            bot_name: None,
+            permission_mode: Some(&config.general.agent_permission_mode),
+            plugin_dirs: &[],
+        };
+        let (handle, prompt_file) = match agent_runtime::try_spawn_headless_run(&params) {
+            Ok(pair) => pair,
+            Err(e) => {
+                eprintln!("[orchestrator] Failed to spawn child: {e}");
+                let _ = mgr.update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
+                if let Some(ref step_id) = step.id {
+                    let _ = mgr.update_step_status(step_id, StepStatus::Failed);
+                }
+                all_succeeded = false;
 
-        if let Err(e) = spawn_result {
-            eprintln!("[orchestrator] Failed to spawn child: {e}");
-            let _ = mgr.update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
-            if let Some(ref step_id) = step.id {
-                let _ = mgr.update_step_status(step_id, StepStatus::Failed);
+                child_results.push(ChildRunResult {
+                    step_index: i,
+                    step_description: step.description.clone(),
+                    run_id: child_run.id,
+                    status: AgentRunStatus::Failed,
+                    result_text: Some(format!("spawn failed: {e}")),
+                    cost_usd: None,
+                    num_turns: None,
+                    duration_ms: None,
+                });
+
+                if orch_config.fail_fast {
+                    eprintln!("[orchestrator] fail_fast enabled — stopping orchestration");
+                    break;
+                }
+                continue;
             }
-            all_succeeded = false;
+        };
 
-            child_results.push(ChildRunResult {
-                step_index: i,
-                step_description: step.description.clone(),
-                run_id: child_run.id,
-                status: AgentRunStatus::Failed,
-                result_text: Some(format!("spawn failed: {e}")),
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-            });
-
-            if orch_config.fail_fast {
-                eprintln!("[orchestrator] fail_fast enabled — stopping orchestration");
-                break;
-            }
-            continue;
+        let pid = handle.pid();
+        if let Err(e) = mgr.update_run_subprocess_pid(&child_run.id, pid) {
+            tracing::warn!("Failed to persist subprocess pid: {e}");
         }
 
-        // Poll for child completion
-        let result = agent_runtime::poll_child_completion(
-            conn,
-            &child_run.id,
-            orch_config.poll_interval,
-            orch_config.child_timeout,
-            None,
-            None,
-        );
+        // Spawn drain thread — opens its own DB connection (Connection is not Send)
+        let run_id_clone = child_run.id.clone();
+        let log_path = crate::config::agent_log_path(&child_run.id);
+        let (tx, rx) = std::sync::mpsc::channel::<agent_runtime::DrainOutcome>();
+        std::thread::spawn(move || {
+            let (stdout, finish) = handle.into_drain_parts();
+            let conn = match crate::db::open_database(&crate::config::db_path()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("drain thread: failed to open DB: {e}");
+                    let _ = std::fs::remove_file(&prompt_file);
+                    let _ = tx.send(agent_runtime::DrainOutcome::NoResult);
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
+            let outcome =
+                agent_runtime::drain_stream_json(stdout, &run_id_clone, &log_path, &mgr, |_| {});
+            let _ = std::fs::remove_file(&prompt_file);
+            finish();
+            let _ = tx.send(outcome);
+        });
 
-        match result {
-            Ok(completed_run) => {
+        // Wait for drain thread with periodic timeout checks
+        let start = std::time::Instant::now();
+        let drain_outcome = loop {
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(outcome) => break outcome,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if start.elapsed() > orch_config.child_timeout {
+                        eprintln!(
+                            "[orchestrator] Step {}/{} timed out, cancelling",
+                            i + 1,
+                            steps.len()
+                        );
+                        // Mark cancelled BEFORE sending SIGTERM (RFC 016 Q2)
+                        let _ = mgr.update_run_cancelled(&child_run.id);
+                        crate::process_utils::cancel_subprocess(pid);
+                        let _ = rx.recv_timeout(Duration::from_secs(6));
+                        break agent_runtime::DrainOutcome::NoResult;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    tracing::warn!(
+                        "[orchestrator] Step {}/{}: drain thread disconnected unexpectedly",
+                        i + 1,
+                        steps.len()
+                    );
+                    break agent_runtime::DrainOutcome::NoResult;
+                }
+            }
+        };
+
+        match drain_outcome {
+            agent_runtime::DrainOutcome::Completed => {
+                // Re-read run from DB for final status and metrics
+                let completed_run = match mgr.get_run(&child_run.id) {
+                    Ok(Some(r)) => r,
+                    Ok(None) | Err(_) => {
+                        eprintln!(
+                            "[orchestrator] Step {}/{} DB read error after drain",
+                            i + 1,
+                            steps.len()
+                        );
+                        if let Some(ref step_id) = step.id {
+                            let _ = mgr.update_step_status(step_id, StepStatus::Failed);
+                        }
+                        all_succeeded = false;
+                        child_results.push(ChildRunResult {
+                            step_index: i,
+                            step_description: step.description.clone(),
+                            run_id: child_run.id,
+                            status: AgentRunStatus::Failed,
+                            result_text: Some("DB read error after drain".to_string()),
+                            cost_usd: None,
+                            num_turns: None,
+                            duration_ms: None,
+                        });
+                        if orch_config.fail_fast {
+                            eprintln!("[orchestrator] fail_fast enabled — stopping orchestration");
+                            break;
+                        }
+                        continue;
+                    }
+                };
+
                 let succeeded = completed_run.status == AgentRunStatus::Completed;
                 if succeeded {
                     eprintln!(
@@ -241,23 +315,18 @@ pub fn orchestrate_run(
                     break;
                 }
             }
-            Err(e) => {
-                eprintln!("[orchestrator] Step {}/{} error: {e}", i + 1, steps.len());
+            agent_runtime::DrainOutcome::NoResult => {
+                eprintln!(
+                    "[orchestrator] Step {}/{}: no result from headless process",
+                    i + 1,
+                    steps.len()
+                );
+                // Ensure the run is marked failed if not already cancelled by timeout path
+                let _ = mgr
+                    .update_run_failed_if_running(&child_run.id, "no result from headless process");
                 if let Some(ref step_id) = step.id {
                     let _ = mgr.update_step_status(step_id, StepStatus::Failed);
                 }
-                // Cancel the child run if it timed out
-                if let Err(cancel_err) = mgr.update_run_cancelled(&child_run.id) {
-                    tracing::warn!(
-                        run_id = %child_run.id,
-                        "Failed to mark cancelled agent run: {cancel_err}"
-                    );
-                }
-                // Try to kill the tmux window
-                let _ = Command::new("tmux")
-                    .args(["kill-window", "-t", &format!(":{child_window}")])
-                    .output();
-
                 all_succeeded = false;
 
                 child_results.push(ChildRunResult {
@@ -265,7 +334,7 @@ pub fn orchestrate_run(
                     step_description: step.description.clone(),
                     run_id: child_run.id,
                     status: AgentRunStatus::Failed,
-                    result_text: Some(e.to_string()),
+                    result_text: Some("no result from headless process".to_string()),
                     cost_usd: None,
                     num_turns: None,
                     duration_ms: None,
@@ -423,6 +492,7 @@ mod tests {
             cache_creation_input_tokens: None,
             bot_name: None,
             conversation_id: None,
+            subprocess_pid: None,
         }
     }
 
@@ -554,7 +624,6 @@ mod tests {
     #[test]
     fn test_orchestrator_config_defaults() {
         let config = OrchestratorConfig::default();
-        assert_eq!(config.poll_interval, Duration::from_secs(5));
         assert_eq!(config.child_timeout, Duration::from_secs(30 * 60));
         assert!(!config.fail_fast);
     }
@@ -562,11 +631,9 @@ mod tests {
     #[test]
     fn test_orchestrator_config_custom() {
         let config = OrchestratorConfig {
-            poll_interval: Duration::from_secs(1),
             child_timeout: Duration::from_secs(60),
             fail_fast: true,
         };
-        assert_eq!(config.poll_interval, Duration::from_secs(1));
         assert_eq!(config.child_timeout, Duration::from_secs(60));
         assert!(config.fail_fast);
     }

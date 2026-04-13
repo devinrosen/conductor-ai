@@ -70,6 +70,9 @@ pub struct AgentRun {
     pub bot_name: Option<String>,
     /// Conversation this run belongs to (if created via the conversation API).
     pub conversation_id: Option<String>,
+    /// PID of the headless subprocess running this agent (RFC 016).
+    /// None for pre-migration rows or when the subprocess PID has not yet been stored by the workflow executor.
+    pub subprocess_pid: Option<i64>,
 }
 
 impl AgentRun {
@@ -296,6 +299,7 @@ pub struct ActiveAgentCounts {
 /// Parsed result event from an agent log file or streaming JSON.
 pub struct LogResult {
     pub result_text: Option<String>,
+    pub session_id: Option<String>,
     pub cost_usd: Option<f64>,
     pub num_turns: Option<i64>,
     pub duration_ms: Option<i64>,

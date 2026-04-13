@@ -467,6 +467,32 @@ child workflow run.
 8. **No shared context between parent and child workflows** — consistent with the
    shallow composition model from RFC 008.
 
+9. **`over = workflow_runs` deduplicates via `fan_out_items`** — when collecting
+   items for a `workflow_runs` fan-out, the engine excludes any run already present
+   as an `item_id` in `workflow_run_step_fan_out_items` (regardless of child run
+   outcome). This makes the failure watchdog naturally idempotent across cron
+   firings: each failed run is processed exactly once. If a child `diagnose-and-issue`
+   run itself fails, the original run is still considered processed and will not
+   re-enter the queue. A legitimately mis-diagnosed run requires manual re-queuing.
+   No `since` filter or `requeue_on_child_fail` escape hatch in v1 — the permanent
+   exclusion tradeoff is acceptable to avoid processing loops.
+
+10. **Stall condition ends the step as `completed`** — when the queue is non-empty
+    but no items are eligible and `in_flight_count == 0` (permanent dep-cycle
+    blockage), the step ends with status `completed` and a warning marker in
+    `context_out`. The parent workflow is not failed; it can inspect the marker
+    and branch if needed. A stall is a data condition, not an executor error.
+
+11. **`child_run_id` in `fan_out_items` is FK-less** — consistent with
+    migration 058 which dropped the FK on `workflow_run_steps.child_run_id`.
+    SQLite cannot enforce cross-table polymorphic FKs cleanly; referential
+    integrity is enforced at the application layer.
+
+12. **Child runs linked via `parent_workflow_run_id`** — the column for
+    workflow-to-workflow parent linking is `parent_workflow_run_id` (migration 031),
+    not `parent_run_id` (which is an FK to `agent_runs`). `foreach` child runs
+    set `parent_workflow_run_id` to the enclosing workflow run's id.
+
 ---
 
 ## Open Questions

@@ -174,7 +174,7 @@ pub enum Action {
     // Toggle visibility of completed/cancelled workflow runs in the workflow column
     ToggleCompletedRuns,
 
-    // Agent triggers (tmux-based)
+    // Agent triggers
     LaunchAgent,
     PromptRepoAgent,
     OrchestrateAgent,
@@ -309,6 +309,16 @@ pub enum Action {
     // Background result for agent restart
     AgentRestartComplete {
         result: Result<String, String>,
+    },
+    /// Live event streamed from a headless agent subprocess via drain_stream_json.
+    AgentEvent {
+        run_id: String,
+        event: conductor_core::agent::AgentEvent,
+    },
+    /// Fired when drain_stream_json returns (agent process has exited).
+    #[allow(dead_code)]
+    AgentComplete {
+        run_id: String,
     },
 
     // Background result for worktree delete readiness check

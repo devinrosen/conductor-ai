@@ -20,6 +20,7 @@ ureq = { version = "2", features = ["json"] }
 serde_yml = "0.0"
 notify = "6"
 tracing = "0.1"
+libc = "0.2"
 tempfile = "3"
 rust-embed = { version = "8", features = ["include-exclude"] }
 utoipa = { version = "5", optional = true }

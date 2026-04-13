@@ -38,7 +38,7 @@ export function StationClock({ size = 28 }: { size?: number }) {
       aria-label="Station clock"
     >
       {/* Face */}
-      <circle cx={cx} cy={cy} r={r - 1} fill="#0F1D32" stroke="#232D42" strokeWidth={1.5} />
+      <circle cx={cx} cy={cy} r={r - 1} style={{ fill: "var(--color-gray-50, #0F1D32)", stroke: "var(--color-gray-200, #232D42)" }} strokeWidth={1.5} />
 
       {/* Hour markers */}
       {Array.from({ length: 12 }, (_, i) => {
@@ -54,7 +54,7 @@ export function StationClock({ size = 28 }: { size?: number }) {
             y1={cy + Math.sin(rad) * inner}
             x2={cx + Math.cos(rad) * outer}
             y2={cy + Math.sin(rad) * outer}
-            stroke="#7B8494"
+            style={{ stroke: "var(--color-gray-500, #7B8494)" }}
             strokeWidth={w}
             strokeLinecap="round"
           />
@@ -67,7 +67,7 @@ export function StationClock({ size = 28 }: { size?: number }) {
         y1={cy}
         x2={cx + Math.sin((hourAngle * Math.PI) / 180) * (r * 0.45)}
         y2={cy - Math.cos((hourAngle * Math.PI) / 180) * (r * 0.45)}
-        stroke="#C8CDD5"
+        style={{ stroke: "var(--color-gray-800, #C8CDD5)" }}
         strokeWidth={1.8}
         strokeLinecap="round"
       />
@@ -78,7 +78,7 @@ export function StationClock({ size = 28 }: { size?: number }) {
         y1={cy}
         x2={cx + Math.sin((minuteAngle * Math.PI) / 180) * (r * 0.65)}
         y2={cy - Math.cos((minuteAngle * Math.PI) / 180) * (r * 0.65)}
-        stroke="#C8CDD5"
+        style={{ stroke: "var(--color-gray-800, #C8CDD5)" }}
         strokeWidth={1.4}
         strokeLinecap="round"
       />
@@ -89,7 +89,7 @@ export function StationClock({ size = 28 }: { size?: number }) {
         y1={cy}
         x2={cx + Math.sin((secondAngle * Math.PI) / 180) * (r * 0.6)}
         y2={cy - Math.cos((secondAngle * Math.PI) / 180) * (r * 0.6)}
-        stroke="#D73020"
+        style={{ stroke: "var(--color-red-500, #D73020)" }}
         strokeWidth={0.8}
         strokeLinecap="round"
       />
@@ -97,11 +97,11 @@ export function StationClock({ size = 28 }: { size?: number }) {
         cx={cx + Math.sin((secondAngle * Math.PI) / 180) * (r * 0.52)}
         cy={cy - Math.cos((secondAngle * Math.PI) / 180) * (r * 0.52)}
         r={1.5}
-        fill="#D73020"
+        style={{ fill: "var(--color-red-500, #D73020)" }}
       />
 
       {/* Center dot */}
-      <circle cx={cx} cy={cy} r={1.2} fill="#C8CDD5" />
+      <circle cx={cx} cy={cy} r={1.2} style={{ fill: "var(--color-gray-800, #C8CDD5)" }} />
     </svg>
   );
 }

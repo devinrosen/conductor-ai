@@ -1,4 +1,4 @@
-//! Shared runtime helpers for spawning and polling agent runs in tmux.
+//! Shared runtime helpers for spawning and polling agent runs.
 //!
 //! Used by both `orchestrator.rs` (plan-step orchestration) and
 //! `workflow.rs` (workflow engine execution).
@@ -9,16 +9,10 @@ use std::thread;
 use std::time::Duration;
 
 use rusqlite::Connection;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
-use crate::agent::{list_live_tmux_windows, AgentManager, AgentRun, AgentRunStatus};
-
-/// Build a tmux window name for a repo-scoped agent run.
-///
-/// Format: `repo-{slug}-{short_id}` where `short_id` is the first 8 chars of `run_id`.
-pub fn repo_agent_window_name(slug: &str, run_id: &str) -> String {
-    let short_id = &run_id[..8.min(run_id.len())];
-    format!("repo-{slug}-{short_id}")
-}
+use crate::agent::{AgentManager, AgentRun, AgentRunStatus};
 
 /// Resolve the path to the `conductor` binary.
 ///
@@ -36,186 +30,6 @@ fn resolve_conductor_bin() -> String {
         .unwrap_or_else(|| "conductor".to_string());
     tracing::debug!("[conductor] resolved binary: {resolved}");
     resolved
-}
-
-/// Build the path for the stderr capture file for a given tmux window name.
-///
-/// The window name is sanitized to replace path separators and other
-/// potentially dangerous characters, ensuring the file always lands in `/tmp`.
-fn stderr_file_path(window_name: &str) -> String {
-    let sanitized: String = window_name
-        .chars()
-        .map(|c| {
-            if c == '/' || c == '\\' || c == '\0' {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    format!("/tmp/conductor-agent-{sanitized}.err")
-}
-
-/// Spawn a new tmux window running `conductor <args>`, then verify it is alive.
-///
-/// `args` are the arguments passed to the `conductor` binary (e.g.
-/// `["agent", "run", "--run-id", …]`).  `window_name` is used as the tmux
-/// window name (`-n`) and for post-spawn verification.
-///
-/// If no tmux server is running, a detached session named `conductor` is
-/// created automatically so agents can run without a pre-existing tmux session.
-///
-/// The spawned process's stderr is redirected to a temp file so that crash
-/// output is available if the process exits immediately. The file is cleaned
-/// up on success; on failure its contents are included in the error message.
-pub fn spawn_tmux_window(
-    args: &[Cow<'static, str>],
-    window_name: &str,
-) -> std::result::Result<(), String> {
-    let conductor_bin = resolve_conductor_bin();
-    let err_file = stderr_file_path(window_name);
-
-    // Build the shell command: conductor <args> 2>/tmp/conductor-agent-<name>.err
-    let shell_cmd = build_shell_command(&conductor_bin, args, &err_file);
-
-    let tmux_args: Vec<Cow<'static, str>> = vec![
-        Cow::Borrowed("new-window"),
-        Cow::Borrowed("-d"),
-        Cow::Borrowed("-n"),
-        Cow::Owned(window_name.to_string()),
-        Cow::Borrowed("--"),
-        Cow::Borrowed("bash"),
-        Cow::Borrowed("-c"),
-        Cow::Owned(shell_cmd.clone()),
-    ];
-
-    let result = Command::new("tmux")
-        .args(tmux_args.iter().map(|a| a.as_ref()))
-        .output()
-        .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
-
-    if result.status.success() {
-        return verify_tmux_window(window_name, &err_file);
-    }
-
-    // No tmux server running — create a detached session and retry.
-    // tmux error messages for a missing server vary across versions and platforms
-    // ("no server running on …", "error connecting to …", "No such file or directory"),
-    // so we attempt the session fallback on any new-window failure.
-    let session_args: Vec<Cow<'static, str>> = vec![
-        Cow::Borrowed("new-session"),
-        Cow::Borrowed("-d"),
-        Cow::Borrowed("-s"),
-        Cow::Borrowed("conductor"),
-        Cow::Borrowed("-n"),
-        Cow::Owned(window_name.to_string()),
-        Cow::Borrowed("--"),
-        Cow::Borrowed("bash"),
-        Cow::Borrowed("-c"),
-        Cow::Owned(shell_cmd),
-    ];
-
-    let retry = Command::new("tmux")
-        .args(session_args.iter().map(|a| a.as_ref()))
-        .output()
-        .map_err(|e| format!("Failed to start tmux session: {e}"))?;
-
-    if retry.status.success() {
-        return verify_tmux_window(window_name, &err_file);
-    }
-    let retry_stderr = String::from_utf8_lossy(&retry.stderr);
-    Err(format!("Failed to start tmux session: {retry_stderr}"))
-}
-
-/// Build a shell command string that runs conductor with stderr redirected.
-///
-/// Each argument is single-quoted with internal single quotes escaped as `'\''`.
-fn build_shell_command(conductor_bin: &str, args: &[Cow<'static, str>], err_file: &str) -> String {
-    let mut parts = Vec::with_capacity(args.len() + 3);
-    parts.push(shell_escape(conductor_bin));
-    for arg in args {
-        parts.push(shell_escape(arg.as_ref()));
-    }
-    format!("{} 2>{}", parts.join(" "), shell_escape(err_file))
-}
-
-/// Shell-escape a string by wrapping it in single quotes.
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// Parse conductor-specific failure patterns from stderr output and format a
-/// clean, actionable error message.
-///
-/// Looks for:
-/// - `[conductor] Agent failed: {reason}` — the real failure reason
-/// - `[conductor] Agent log saved to {path}` — the agent log path
-///
-/// Returns `Some(formatted_message)` if the conductor failure pattern is found,
-/// or `None` if no conductor-specific patterns are present (caller should fall
-/// through to existing raw-stderr behavior).
-fn format_spawn_failure_error(_window_name: &str, stderr: &str) -> Option<String> {
-    let mut failure_reason: Option<&str> = None;
-    let mut log_path: Option<&str> = None;
-
-    for line in stderr.lines() {
-        if let Some(reason) = line.strip_prefix("[conductor] Agent failed: ") {
-            failure_reason = Some(reason);
-        } else if let Some(path) = line.strip_prefix("[conductor] Agent log saved to ") {
-            log_path = Some(path);
-        }
-    }
-
-    let reason = failure_reason?;
-
-    Some(match log_path {
-        Some(path) => format!("Agent exited immediately: {reason}\nSee full log: {path}"),
-        None => format!("Agent exited immediately: {reason}"),
-    })
-}
-
-/// After a successful `tmux new-window`, wait briefly and verify the window
-/// actually exists. Retries once with a longer delay before declaring failure.
-///
-/// On success, cleans up the stderr capture file. On failure, reads the
-/// stderr file contents and includes them in the error message.
-fn verify_tmux_window(window_name: &str, err_file: &str) -> std::result::Result<(), String> {
-    // First check: 300ms after spawn.
-    thread::sleep(Duration::from_millis(300));
-
-    let live = list_live_tmux_windows();
-    if live.contains(window_name) {
-        let _ = std::fs::remove_file(err_file);
-        return Ok(());
-    }
-
-    // Retry: wait another 500ms (800ms total) before declaring failure.
-    thread::sleep(Duration::from_millis(500));
-
-    let live = list_live_tmux_windows();
-    if live.contains(window_name) {
-        let _ = std::fs::remove_file(err_file);
-        return Ok(());
-    }
-
-    // Window never appeared — read stderr capture for diagnostics.
-    let stderr_output = std::fs::read_to_string(err_file).unwrap_or_default();
-    let _ = std::fs::remove_file(err_file);
-
-    // Try to extract a clean, actionable error from conductor-specific patterns.
-    if let Some(friendly) = format_spawn_failure_error(window_name, &stderr_output) {
-        return Err(friendly);
-    }
-
-    let detail = if stderr_output.trim().is_empty() {
-        String::new()
-    } else {
-        format!("\n\nCaptured stderr:\n{stderr_output}")
-    };
-
-    Err(format!(
-        "tmux window '{window_name}' not found after spawn — agent process may have exited immediately{detail}"
-    ))
 }
 
 /// Typed error returned by [`poll_child_completion`].
@@ -326,10 +140,8 @@ const AGENT_ARGS_CAPACITY: usize = 18;
 
 /// Build the `conductor agent run` argument list for a child agent.
 ///
-/// If the prompt exceeds the safe tmux command-length threshold, it is written
-/// to a temp file (`<working_dir>/.conductor-prompt-<run_id>.txt`) and
-/// `--prompt-file` is used instead of `--prompt`.  Returns the argument list
-/// ready to pass to [`spawn_tmux_window`].
+/// The prompt is written to a temp file and passed via `--prompt-file`.
+/// Returns the argument list ready to pass to [`spawn_headless`].
 ///
 /// `permission_mode` optionally overrides the configured permission mode
 /// (e.g. `Some(AgentPermissionMode::RepoSafe)` for repo-scoped read-only agents).
@@ -354,11 +166,53 @@ pub fn build_agent_args(
     )
 }
 
+/// Push optional agent flags shared between arg builders.
+fn push_optional_agent_flags(
+    args: &mut Vec<Cow<'static, str>>,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&crate::config::AgentPermissionMode>,
+    extra_plugin_dirs: &[String],
+) {
+    if let Some(id) = resume_session_id {
+        args.push(Cow::Borrowed("--resume"));
+        args.push(Cow::Owned(id.to_string()));
+    }
+    if let Some(m) = model {
+        args.push(Cow::Borrowed("--model"));
+        args.push(Cow::Owned(m.to_string()));
+    }
+    if let Some(b) = bot_name {
+        args.push(Cow::Borrowed("--bot-name"));
+        args.push(Cow::Owned(b.to_string()));
+    }
+    if let Some(mode) = permission_mode {
+        // Only Plan and RepoSafe have a conductor-level passthrough flag
+        // (--permission-mode <value>).  SkipPermissions and AutoMode are
+        // the default behaviour; passing their claude-level flags here would
+        // cause `conductor agent run` to reject the unknown argument.
+        if let Some(val) = mode.cli_flag_value() {
+            args.push(Cow::Borrowed("--permission-mode"));
+            args.push(Cow::Owned(val.to_string()));
+        }
+    }
+    for dir in extra_plugin_dirs {
+        args.push(Cow::Borrowed("--plugin-dir"));
+        args.push(Cow::Owned(dir.clone()));
+    }
+}
+
 /// Like [`build_agent_args`] but accepts an optional permission mode override.
 ///
 /// The permission mode is encoded via `--permission-mode <name>` in the conductor
 /// args (e.g. `--permission-mode repo-safe`). The actual flags passed to the claude
 /// subprocess differ and are resolved in `run_agent()` via `claude_permission_flag()`.
+///
+/// The prompt is always written to `temp_dir()/conductor-prompt-{run_id}.txt` (mode
+/// 0o600 on Unix) and passed via `--prompt-file`, keeping it out of the git worktree.
+/// The CLI child subprocess reads and deletes the file via
+/// `read_and_maybe_cleanup_prompt_file`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_agent_args_with_mode(
     run_id: &str,
@@ -370,19 +224,38 @@ pub fn build_agent_args_with_mode(
     permission_mode: Option<&crate::config::AgentPermissionMode>,
     extra_plugin_dirs: &[String],
 ) -> std::result::Result<Vec<Cow<'static, str>>, String> {
-    // tmux has a hard limit on command-line length (~2 KB depending on version).
-    // For prompts that exceed a safe threshold, write to a file and pass
-    // --prompt-file instead so we never hit that limit.
-    const PROMPT_FILE_THRESHOLD: usize = 512;
+    let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
 
-    let prompt_file_path: Option<String> = if prompt.len() > PROMPT_FILE_THRESHOLD {
-        let path = format!("{working_dir}/.conductor-prompt-{run_id}.txt");
-        std::fs::write(&path, prompt)
-            .map_err(|e| format!("Failed to write prompt file '{path}': {e}"))?;
-        Some(path)
-    } else {
-        None
-    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&prompt_file_path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(prompt.as_bytes())
+            })
+            .map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&prompt_file_path, prompt).map_err(|e| {
+            format!(
+                "Failed to write prompt file '{}': {e}",
+                prompt_file_path.display()
+            )
+        })?;
+    }
 
     let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY);
     args.push(Cow::Borrowed("agent"));
@@ -392,44 +265,20 @@ pub fn build_agent_args_with_mode(
     args.push(Cow::Borrowed("--worktree-path"));
     args.push(Cow::Owned(working_dir.to_string()));
 
-    if let Some(path) = prompt_file_path {
-        args.push(Cow::Borrowed("--prompt-file"));
-        args.push(Cow::Owned(path));
-    } else {
-        args.push(Cow::Borrowed("--prompt"));
-        args.push(Cow::Owned(prompt.to_string()));
-    }
-
-    if let Some(id) = resume_session_id {
-        args.push(Cow::Borrowed("--resume"));
-        args.push(Cow::Owned(id.to_string()));
-    }
-
-    if let Some(m) = model {
-        args.push(Cow::Borrowed("--model"));
-        args.push(Cow::Owned(m.to_string()));
-    }
-
-    if let Some(b) = bot_name {
-        args.push(Cow::Borrowed("--bot-name"));
-        args.push(Cow::Owned(b.to_string()));
-    }
-
-    if let Some(mode) = permission_mode {
-        args.push(Cow::Owned(mode.cli_flag().to_string()));
-        if let Some(val) = mode.cli_flag_value() {
-            args.push(Cow::Owned(val.to_string()));
-        }
-    }
+    args.push(Cow::Borrowed("--prompt-file"));
+    args.push(Cow::Owned(prompt_file_path.to_string_lossy().into_owned()));
 
     // NOTE: --allowedTools is NOT passed to the conductor binary here.
     // It is derived from --permission-mode and passed to the `claude` CLI
     // subprocess inside run_agent() (conductor-cli/src/main.rs).
-
-    for dir in extra_plugin_dirs {
-        args.push(Cow::Borrowed("--plugin-dir"));
-        args.push(Cow::Owned(dir.clone()));
-    }
+    push_optional_agent_flags(
+        &mut args,
+        resume_session_id,
+        model,
+        bot_name,
+        permission_mode,
+        extra_plugin_dirs,
+    );
 
     Ok(args)
 }
@@ -470,62 +319,471 @@ pub fn build_orchestrate_args(
     args
 }
 
-/// Spawn a child agent in a new tmux window.
-pub fn spawn_child_tmux(
+/// Handle to a headless agent subprocess.
+///
+/// All resource access is through safe decomposition methods:
+/// - [`HeadlessHandle::pid`] — read the subprocess PID (store via
+///   `AgentManager::update_run_subprocess_pid()` immediately after spawn).
+/// - [`HeadlessHandle::into_drain_parts`] — simple sequential drain: stdout →
+///   [`drain_stream_json`], then finish closure drops stderr and waits.
+/// - [`HeadlessHandle::into_stderr_drain_parts`] — concurrent drain: caller
+///   owns stderr for a dedicated drain thread; finish only waits.
+/// - [`HeadlessHandle::abort`] — kill and reap without deadlocking.
+///
+/// The `stdout`, `stderr`, and `child` fields are private to prevent callers
+/// from bypassing the safe decomposition methods and re-introducing the
+/// pipe-buffer deadlock those methods were designed to prevent.
+///
+/// **Not for use on the TUI main thread** — `drain_stream_json` is blocking.
+#[cfg(unix)]
+pub struct HeadlessHandle {
+    pid: u32,
+    stdout: std::process::ChildStdout,
+    stderr: std::process::ChildStderr,
+    child: std::process::Child,
+}
+
+#[cfg(unix)]
+impl HeadlessHandle {
+    /// Build a `HeadlessHandle` from a freshly-spawned `Child` with piped stdio.
+    ///
+    /// Extracts `stdout` and `stderr` from the child.  Returns an error if
+    /// the pipes are missing (i.e. `Stdio::piped()` was not configured).
+    pub fn from_child(mut child: std::process::Child) -> std::result::Result<Self, String> {
+        let pid = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "HeadlessHandle: child has no stdout pipe".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "HeadlessHandle: child has no stderr pipe".to_string())?;
+        Ok(Self {
+            pid,
+            stdout,
+            stderr,
+            child,
+        })
+    }
+
+    /// Returns the PID of the headless subprocess.
+    ///
+    /// Store this immediately after spawn via
+    /// `AgentManager::update_run_subprocess_pid()`.
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Decompose the handle into stderr, stdout, and a finish closure for
+    /// concurrent draining.
+    ///
+    /// Use this when you need to drain `stderr` on a dedicated thread
+    /// concurrently with draining `stdout` — for example when the subprocess
+    /// writes many KB to stderr and you must keep the kernel pipe buffer from
+    /// filling while draining stdout in a separate thread.
+    ///
+    /// ```ignore
+    /// let (stderr_pipe, stdout_pipe, finish) = handle.into_stderr_drain_parts();
+    /// std::thread::spawn(move || drain_stderr(stderr_pipe));
+    /// drain_stream_json(stdout_pipe, ...);
+    /// finish();  // waits for child exit — does NOT drop stderr (caller owns it)
+    /// ```
+    ///
+    /// The caller **must** drain `stderr` concurrently; the `finish` closure
+    /// only calls `child.wait()` and does not drop `stderr`.  For the simple
+    /// sequential case, prefer [`into_drain_parts`] instead.
+    ///
+    /// [`into_drain_parts`]: HeadlessHandle::into_drain_parts
+    pub fn into_stderr_drain_parts(
+        self,
+    ) -> (
+        std::process::ChildStderr,
+        std::process::ChildStdout,
+        impl FnOnce(),
+    ) {
+        let stderr = self.stderr;
+        let stdout = self.stdout;
+        let mut child = self.child;
+        let finish = move || {
+            let _ = child.wait();
+        };
+        (stderr, stdout, finish)
+    }
+
+    /// Decompose the handle into a stdout pipe for draining and a finish closure.
+    ///
+    /// The typical drain pattern moves `stdout` into [`drain_stream_json`] and
+    /// then needs to drop `stderr` **before** calling `child.wait()`.  Because
+    /// `drain_stream_json` consumes `stdout` as a value, the `HeadlessHandle` is
+    /// partially moved after that call and `self`-consuming methods cannot be
+    /// called on it.
+    ///
+    /// `into_drain_parts` splits the handle before any partial move:
+    ///
+    /// ```ignore
+    /// let (stdout, finish) = handle.into_drain_parts();
+    /// drain_stream_json(stdout, &run_id, &log_path, &mgr, on_event);
+    /// finish();  // drops stderr, then waits — no deadlock
+    /// ```
+    ///
+    /// The returned `finish` closure drops `stderr` first so the child receives
+    /// EPIPE on any pending stderr writes and can exit; `wait()` then returns
+    /// immediately.
+    pub fn into_drain_parts(self) -> (std::process::ChildStdout, impl FnOnce()) {
+        let stdout = self.stdout;
+        let stderr = self.stderr;
+        let mut child = self.child;
+        let finish = move || {
+            drop(stderr);
+            let _ = child.wait();
+        };
+        (stdout, finish)
+    }
+
+    /// Abort the subprocess without deadlocking on pipe buffers.
+    ///
+    /// Closes the read ends of stdout and stderr **before** calling `wait()`.
+    /// If the child has filled the pipe buffer it is blocked on a write; calling
+    /// `wait()` while the read end is still open would deadlock because the child
+    /// can never exit.  Dropping the pipes first causes the child's writes to
+    /// fail with EPIPE so it can exit, after which `wait()` reaps it immediately.
+    pub fn abort(self) {
+        drop(self.stdout);
+        drop(self.stderr);
+        let mut child = self.child;
+        // Explicitly kill the process so it terminates immediately rather than
+        // relying on EPIPE, which only fires when the child next attempts a write.
+        // A compute-heavy child that rarely writes could otherwise run indefinitely.
+        // kill() returns an error if the process already exited — safe to ignore.
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// Spawn a headless `conductor agent run` subprocess.
+///
+/// The child is placed in its own process group (`process_group(0)`) so it
+/// survives terminal SIGHUP — the same resilience guarantee as tmux, without
+/// the indirection.  stdout and stderr are piped back to the caller.
+///
+/// Pass `args` as produced by [`build_headless_agent_args`].
+#[cfg(unix)]
+pub fn spawn_headless(
+    args: &[Cow<'static, str>],
+    working_dir: &std::path::Path,
+) -> std::result::Result<HeadlessHandle, String> {
+    use std::process::Stdio;
+    let conductor_bin = resolve_conductor_bin();
+    let child = Command::new(&conductor_bin)
+        .args(args.iter().map(|a| a.as_ref()))
+        .current_dir(working_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0) // own process group; survives terminal SIGHUP
+        .spawn()
+        .map_err(|e| format!("Failed to spawn conductor headless: {e}"))?;
+
+    HeadlessHandle::from_child(child)
+}
+
+/// Parameters for spawning a headless agent subprocess.
+///
+/// Groups the eight shared parameters across [`build_headless_agent_args`] and
+/// [`try_spawn_headless_run`] to keep call sites readable and avoid a
+/// `#[allow(clippy::too_many_arguments)]` suppression.
+pub struct SpawnHeadlessParams<'a> {
+    pub run_id: &'a str,
+    pub working_dir: &'a str,
+    pub prompt: &'a str,
+    pub resume_session_id: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub bot_name: Option<&'a str>,
+    pub permission_mode: Option<&'a crate::config::AgentPermissionMode>,
+    pub plugin_dirs: &'a [String],
+}
+
+/// Build headless args and spawn the conductor subprocess in one step.
+///
+/// Combines [`build_headless_agent_args`] and [`spawn_headless`] into a single
+/// call.  On spawn failure the prompt file is cleaned up before returning the
+/// error string so the caller doesn't need to manage it.
+#[cfg(unix)]
+pub fn try_spawn_headless_run(
+    params: &SpawnHeadlessParams<'_>,
+) -> std::result::Result<(HeadlessHandle, std::path::PathBuf), String> {
+    let (args, pf) = build_headless_agent_args(params).map_err(|e| {
+        format!(
+            "failed to prepare agent args for run {} (working_dir={}): {e}",
+            params.run_id, params.working_dir
+        )
+    })?;
+    let h = spawn_headless(&args, std::path::Path::new(params.working_dir)).map_err(|e| {
+        let _ = std::fs::remove_file(&pf);
+        format!(
+            "spawn failed for run {} (working_dir={}): {e}",
+            params.run_id, params.working_dir
+        )
+    })?;
+    Ok((h, pf))
+}
+
+/// Result of draining a headless subprocess stdout stream.
+#[derive(Copy, Clone)]
+pub enum DrainOutcome {
+    /// A `result` event was seen; the run was finalized in the DB.
+    Completed,
+    /// EOF before any `result` event (SIGTERM path or unexpected crash).
+    /// Caller must mark the run as cancelled/failed in the DB.
+    NoResult,
+}
+
+/// Drain the stdout of a headless subprocess, persisting events to the DB.
+///
+/// Reads `stdout` line-by-line via `BufReader`, writes each line to `log_file`,
+/// calls `parse_events_from_value()` to produce `AgentEvent` values for the
+/// `on_event` callback, and makes eager DB writes:
+/// - `system/init` → `update_run_model_and_session`
+/// - `assistant` with usage → `update_run_tokens_partial`
+/// - `result` → `update_run_completed_if_running` or `update_run_failed_with_session`
+///   and returns [`DrainOutcome::Completed`]
+///
+/// Returns [`DrainOutcome::NoResult`] on EOF without a `result` event (e.g. SIGTERM).
+///
+/// **Blocking** — must not be called from the TUI main thread or an async context.
+/// Use `std::thread::spawn` to run this in a background thread.
+pub fn drain_stream_json(
+    stdout: impl std::io::Read,
     run_id: &str,
-    worktree_path: &str,
-    prompt: &str,
-    model: Option<&str>,
-    window_name: &str,
-    bot_name: Option<&str>,
-    extra_plugin_dirs: &[String],
-) -> std::result::Result<(), String> {
-    let args = build_agent_args(
-        run_id,
-        worktree_path,
-        prompt,
-        None,
+    log_file: &std::path::Path,
+    mgr: &crate::agent::AgentManager<'_>,
+    on_event: impl Fn(&crate::agent::types::AgentEvent),
+) -> DrainOutcome {
+    use std::io::{BufRead, BufReader, Write};
+
+    let mut log_writer = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .map_err(|e| {
+            tracing::warn!(
+                "[drain_stream_json] failed to open log file {}: {e}",
+                log_file.display()
+            );
+        })
+        .ok();
+
+    let reader = BufReader::new(stdout);
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            break;
+        };
+
+        // Persist to log file (best-effort; I/O errors don't abort the drain)
+        if let Some(ref mut w) = log_writer {
+            if let Err(e) = writeln!(w, "{line}") {
+                tracing::warn!("[drain_stream_json] failed to write log line: {e}");
+            }
+        }
+
+        // Parse once for both display events and DB writes
+        let value = match serde_json::from_str::<serde_json::Value>(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Fire display-event callback
+        let events = crate::agent::log_parsing::parse_events_from_value(&value);
+        for event in &events {
+            on_event(event);
+        }
+
+        let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        match event_type {
+            "system" => {
+                let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+                if subtype == "init" {
+                    let model = value.get("model").and_then(|v| v.as_str());
+                    let session_id = value.get("session_id").and_then(|v| v.as_str());
+                    if let Err(e) = mgr.update_run_model_and_session(run_id, model, session_id) {
+                        tracing::warn!("[drain_stream_json] failed to update model/session: {e}");
+                    }
+                }
+            }
+            "assistant" => {
+                let usage = value
+                    .get("message")
+                    .and_then(|m| m.get("usage"))
+                    .or_else(|| value.get("usage"));
+                if let Some(usage) = usage {
+                    let input = usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let output = usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let cache_read = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let cache_create = usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    if let Err(e) = mgr.update_run_tokens_partial(
+                        run_id,
+                        input,
+                        output,
+                        cache_read,
+                        cache_create,
+                    ) {
+                        tracing::warn!("[drain_stream_json] failed to update tokens: {e}");
+                    }
+                }
+            }
+            "result" => {
+                let log_result = crate::agent::log_parsing::parse_result_event(&value);
+                if log_result.is_error {
+                    let error_msg = log_result
+                        .result_text
+                        .as_deref()
+                        .unwrap_or(crate::agent::status::DEFAULT_AGENT_ERROR_MSG);
+                    if let Err(e) = mgr.update_run_failed_with_session(
+                        run_id,
+                        error_msg,
+                        log_result.session_id.as_deref(),
+                    ) {
+                        tracing::warn!("[drain_stream_json] failed to mark run failed: {e}");
+                    }
+                } else {
+                    // Use the if_running variant to avoid clobbering a value already written
+                    // by the subprocess itself (double-write safety). Persist all result-event
+                    // fields (cost_usd, num_turns, duration_ms, final token counts).
+                    if let Err(e) = mgr.update_run_completed_if_running_full(run_id, &log_result) {
+                        tracing::warn!("[drain_stream_json] failed to mark run completed: {e}");
+                    }
+                }
+                return DrainOutcome::Completed;
+            }
+            _ => {}
+        }
+    }
+
+    DrainOutcome::NoResult
+}
+
+/// Send SIGTERM to the process group rooted at `pid`, wait up to 5 seconds
+/// for graceful exit, then escalate to SIGKILL if still alive.
+///
+/// The negative PID targets the entire process group (agent + any children it
+/// spawned). `pid_is_alive` checks the positive PID (the group leader); if the
+/// leader is dead the group is effectively terminated.
+///
+/// This call **blocks** for up to 5 seconds. Call from a background thread or
+/// inside `tokio::task::spawn_blocking` — never from the TUI main thread or an
+/// async task directly.
+///
+/// NOTE: per RFC 016 Q2, SIGTERM does NOT cause Claude CLI to flush a `result`
+/// event. The caller must mark the run as `cancelled` in the DB before calling
+/// this function to prevent a concurrent drain from overwriting the status.
+///
+/// Implementation lives in [`crate::process_utils::cancel_subprocess`].
+///
+/// # Deprecated
+/// Use [`crate::process_utils::cancel_subprocess`] directly instead.
+#[deprecated(
+    since = "0.1.0",
+    note = "use conductor_core::process_utils::cancel_subprocess instead"
+)]
+#[cfg(unix)]
+pub fn cancel_subprocess(pid: u32) {
+    crate::process_utils::cancel_subprocess(pid);
+}
+
+/// Build `conductor agent run` args for a headless launch.
+///
+/// Unlike [`build_agent_args_with_mode`], this always writes the prompt to
+/// `std::env::temp_dir()/conductor-prompt-{run_id}.txt` regardless of length.
+/// Returns `(args, prompt_file_path)` so the caller can delete the prompt file
+/// after [`drain_stream_json`] completes.
+///
+/// The existing [`build_agent_args_with_mode`] always writes the prompt to the temp dir.
+pub fn build_headless_agent_args(
+    params: &SpawnHeadlessParams<'_>,
+) -> std::result::Result<(Vec<Cow<'static, str>>, std::path::PathBuf), String> {
+    let run_id = params.run_id;
+    let working_dir = params.working_dir;
+    let prompt = params.prompt;
+    let resume_session_id = params.resume_session_id;
+    let model = params.model;
+    let bot_name = params.bot_name;
+    let permission_mode = params.permission_mode;
+    let extra_plugin_dirs = params.plugin_dirs;
+    // Always write to temp dir — no worktree dir leakage, no size threshold.
+    let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+    {
+        use std::io::Write;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&prompt_file_path)
+                .map_err(|e| {
+                    format!(
+                        "Failed to write prompt file '{}': {e}",
+                        prompt_file_path.display()
+                    )
+                })?;
+            file.write_all(prompt.as_bytes()).map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&prompt_file_path, prompt).map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+        }
+    }
+
+    let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY + 2);
+    args.push(Cow::Borrowed("agent"));
+    args.push(Cow::Borrowed("run"));
+    args.push(Cow::Borrowed("--run-id"));
+    args.push(Cow::Owned(run_id.to_string()));
+    args.push(Cow::Borrowed("--worktree-path"));
+    args.push(Cow::Owned(working_dir.to_string()));
+    args.push(Cow::Borrowed("--prompt-file"));
+    args.push(Cow::Owned(prompt_file_path.to_string_lossy().into_owned()));
+
+    push_optional_agent_flags(
+        &mut args,
+        resume_session_id,
         model,
         bot_name,
+        permission_mode,
         extra_plugin_dirs,
-    )?;
-    spawn_tmux_window(&args, window_name)
+    );
+
+    Ok((args, prompt_file_path))
 }
 
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-
-    #[test]
-    fn repo_agent_window_name_basic() {
-        let name = super::repo_agent_window_name("my-repo", "01ABCDEF99XYZW");
-        assert_eq!(name, "repo-my-repo-01ABCDEF");
-    }
-
-    #[test]
-    fn repo_agent_window_name_short_run_id() {
-        // run_id shorter than 8 chars — should use full run_id
-        let name = super::repo_agent_window_name("r", "abc");
-        assert_eq!(name, "repo-r-abc");
-    }
-
-    #[test]
-    fn repo_agent_window_name_exact_8_chars() {
-        let name = super::repo_agent_window_name("slug", "12345678");
-        assert_eq!(name, "repo-slug-12345678");
-    }
-
-    fn assert_inline_prompt(args: &[Cow<'static, str>], prompt: &str) {
-        let prompt_idx = args
-            .iter()
-            .position(|a| a == "--prompt")
-            .expect("--prompt flag missing");
-        assert_eq!(args[prompt_idx + 1], prompt);
-        assert!(
-            !args.iter().any(|a| a == "--prompt-file"),
-            "--prompt-file should not appear"
-        );
-    }
 
     fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str, expected_path: &str) {
         let file_idx = args
@@ -549,248 +807,103 @@ mod tests {
     }
 
     #[test]
-    fn verify_tmux_window_rejects_nonexistent_window() {
-        // Whether or not tmux is running, a bogus window name should fail.
-        let err_file = "/tmp/conductor-agent-test-nonexistent.err";
-        let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99999", err_file);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn stderr_file_path_format() {
-        let path = super::stderr_file_path("my-window-123");
-        assert_eq!(path, "/tmp/conductor-agent-my-window-123.err");
-    }
-
-    #[test]
-    fn stderr_file_path_sanitizes_slashes() {
-        let path = super::stderr_file_path("../../etc/passwd");
-        assert_eq!(path, "/tmp/conductor-agent-.._.._etc_passwd.err");
-        assert!(!path.contains('/') || path.starts_with("/tmp/conductor-agent-"));
-    }
-
-    #[test]
-    fn stderr_file_path_sanitizes_backslashes() {
-        let path = super::stderr_file_path("foo\\bar");
-        assert_eq!(path, "/tmp/conductor-agent-foo_bar.err");
-    }
-
-    #[test]
-    fn stderr_file_path_sanitizes_null_bytes() {
-        let path = super::stderr_file_path("foo\0bar");
-        assert_eq!(path, "/tmp/conductor-agent-foo_bar.err");
-    }
-
-    #[test]
-    fn build_shell_command_basic() {
-        use std::borrow::Cow;
-        let args = vec![
-            Cow::Borrowed("agent"),
-            Cow::Borrowed("run"),
-            Cow::Borrowed("--run-id"),
-            Cow::Owned("abc123".to_string()),
-        ];
-        let cmd = super::build_shell_command("/usr/local/bin/conductor", &args, "/tmp/test.err");
-        assert!(cmd.starts_with("'/usr/local/bin/conductor'"));
-        assert!(cmd.contains("'agent'"));
-        assert!(cmd.contains("'run'"));
-        assert!(cmd.contains("'--run-id'"));
-        assert!(cmd.contains("'abc123'"));
-        assert!(cmd.ends_with("2>'/tmp/test.err'"));
-    }
-
-    #[test]
-    fn shell_escape_handles_single_quotes() {
-        let escaped = super::shell_escape("it's a test");
-        assert_eq!(escaped, "'it'\\''s a test'");
-    }
-
-    #[test]
-    fn verify_tmux_window_includes_stderr_on_failure() {
-        // Write a fake stderr file, then verify it's included in the error message.
-        let err_file = format!(
-            "/tmp/conductor-agent-verify-test-{}.err",
-            std::process::id()
-        );
-        std::fs::write(&err_file, "Error: something broke\n").unwrap();
-
-        let result =
-            super::verify_tmux_window("conductor-test-nonexistent-stderr-99999", &err_file);
-        assert!(result.is_err());
-        let msg = result.unwrap_err();
-        assert!(
-            msg.contains("Error: something broke"),
-            "error should include stderr contents: {msg}"
-        );
-        // File should have been cleaned up
-        assert!(
-            !std::path::Path::new(&err_file).exists(),
-            "stderr file should be cleaned up after read"
-        );
-    }
-
-    #[test]
-    fn format_spawn_failure_error_with_failure_and_log_path() {
-        let stderr = "[conductor] Agent failed: Claude exited with status: exit status: 1\n\
-                      [conductor] Agent log saved to /Users/devin/.conductor/agent-logs/01ABC.log\n";
-        let result = super::format_spawn_failure_error("my-window", stderr);
-        assert!(result.is_some());
-        let msg = result.unwrap();
-        assert_eq!(
-            msg,
-            "Agent exited immediately: Claude exited with status: exit status: 1\n\
-             See full log: /Users/devin/.conductor/agent-logs/01ABC.log"
-        );
-    }
-
-    #[test]
-    fn format_spawn_failure_error_with_failure_only() {
-        let stderr = "[conductor] Agent failed: Claude exited with status: exit status: 1\n";
-        let result = super::format_spawn_failure_error("my-window", stderr);
-        assert!(result.is_some());
-        let msg = result.unwrap();
-        assert_eq!(
-            msg,
-            "Agent exited immediately: Claude exited with status: exit status: 1"
-        );
-        assert!(!msg.contains("See full log"), "no log path should appear");
-    }
-
-    #[test]
-    fn format_spawn_failure_error_with_log_only() {
-        // Log path alone without failure line → None (not actionable without reason)
-        let stderr =
-            "[conductor] Agent log saved to /Users/devin/.conductor/agent-logs/01ABC.log\n";
-        let result = super::format_spawn_failure_error("my-window", stderr);
-        assert!(
-            result.is_none(),
-            "expected None when no failure line present"
-        );
-    }
-
-    #[test]
-    fn format_spawn_failure_error_empty() {
-        let result = super::format_spawn_failure_error("my-window", "");
-        assert!(result.is_none(), "expected None for empty stderr");
-    }
-
-    #[test]
-    fn verify_tmux_window_surfaces_conductor_error() {
-        // Write a fake err file with conductor-specific patterns.
-        let err_file = format!(
-            "/tmp/conductor-agent-conductor-error-test-{}.err",
-            std::process::id()
-        );
-        let stderr_content =
-            "[conductor] Agent failed: Claude exited with status: exit status: 1\n\
-             [conductor] Agent log saved to /tmp/fake-agent-run.log\n";
-        std::fs::write(&err_file, stderr_content).unwrap();
-
-        let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99998", &err_file);
-        assert!(result.is_err());
-        let msg = result.unwrap_err();
-
-        // Should show the friendly message, not the raw tmux "not found" message
-        assert!(
-            msg.contains("Agent exited immediately:"),
-            "expected friendly error prefix: {msg}"
-        );
-        assert!(
-            msg.contains("Claude exited with status: exit status: 1"),
-            "expected failure reason in message: {msg}"
-        );
-        assert!(
-            msg.contains("See full log:"),
-            "expected log path hint: {msg}"
-        );
-        assert!(
-            !msg.contains("tmux window"),
-            "should not contain raw tmux error: {msg}"
-        );
-        assert!(
-            !msg.contains("Captured stderr:"),
-            "should not contain raw 'Captured stderr:' prefix: {msg}"
-        );
-
-        // File should have been cleaned up
-        assert!(
-            !std::path::Path::new(&err_file).exists(),
-            "stderr file should be cleaned up"
-        );
-    }
-
-    #[test]
-    fn build_agent_args_short_prompt_uses_inline() {
+    fn build_agent_args_short_prompt_uses_file() {
+        let run_id = "run-short-1";
         let prompt = "short prompt";
-        assert!(prompt.len() <= 512);
         let args =
-            super::build_agent_args("run-1", "/tmp/wt", prompt, None, None, None, &[]).unwrap();
-        assert_inline_prompt(&args, prompt);
+            super::build_agent_args(run_id, "/tmp/wt", prompt, None, None, None, &[]).unwrap();
+        let expected_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+        assert_file_prompt(&args, prompt, expected_path.to_str().unwrap());
+        let _ = std::fs::remove_file(&expected_path);
     }
 
     #[test]
     fn build_agent_args_long_prompt_uses_file() {
-        let tmp = std::env::temp_dir().join(format!("conductor-test-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let worktree = tmp.to_str().unwrap();
         let run_id = "run-long-99";
-
         let prompt = "x".repeat(513);
         let args =
-            super::build_agent_args(run_id, worktree, &prompt, None, None, None, &[]).unwrap();
-
-        let expected_path = format!("{worktree}/.conductor-prompt-{run_id}.txt");
-        assert_file_prompt(&args, &prompt, &expected_path);
-
-        // cleanup
+            super::build_agent_args(run_id, "/tmp/wt", &prompt, None, None, None, &[]).unwrap();
+        let expected_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+        assert_file_prompt(&args, &prompt, expected_path.to_str().unwrap());
         let _ = std::fs::remove_file(&expected_path);
-        let _ = std::fs::remove_dir(&tmp);
     }
 
     #[test]
-    fn build_agent_args_file_write_error_propagates() {
-        let worktree = "/nonexistent/path/that/does/not/exist";
-        let prompt = "x".repeat(513);
-        let result =
-            super::build_agent_args("run-err-01", worktree, &prompt, None, None, None, &[]);
-        assert!(result.is_err(), "expected Err when write fails");
-        let msg = result.unwrap_err();
-        assert!(
-            msg.starts_with("Failed to write prompt file"),
-            "unexpected error message: {msg}"
-        );
-    }
-
-    #[test]
-    fn build_agent_args_exact_boundary_prompt_uses_inline() {
-        // A prompt of exactly PROMPT_FILE_THRESHOLD bytes must still use --prompt,
-        // because the condition is strictly `>`, not `>=`.
-        let prompt = "x".repeat(512);
-        assert_eq!(prompt.len(), 512);
+    fn build_agent_args_prompt_file_in_temp_dir() {
+        let run_id = "run-tempdir-01";
+        let prompt = "any length prompt";
         let args =
-            super::build_agent_args("run-boundary", "/tmp/wt", &prompt, None, None, None, &[])
+            super::build_agent_args(run_id, "/tmp/wt", prompt, None, None, None, &[]).unwrap();
+
+        // --prompt-file must be present, --prompt must not
+        let file_idx = args
+            .iter()
+            .position(|a| a == "--prompt-file")
+            .expect("--prompt-file flag missing");
+        assert!(
+            !args.iter().any(|a| a == "--prompt"),
+            "--prompt should not appear"
+        );
+
+        let file_path = std::path::PathBuf::from(args[file_idx + 1].as_ref());
+
+        // File must be inside temp_dir()
+        assert_eq!(
+            file_path.parent(),
+            Some(std::env::temp_dir().as_path()),
+            "prompt file must be in temp_dir()"
+        );
+
+        // File must exist with correct content
+        assert!(file_path.exists(), "prompt file should exist");
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), prompt);
+
+        // Consumer cleanup: read_and_maybe_cleanup_prompt_file should delete it
+        // (tested via conductor-cli helpers, verified here end-to-end)
+        let _ = std::fs::remove_file(&file_path);
+        assert!(!file_path.exists(), "file should be removed after cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_agent_args_prompt_file_mode_0o600() {
+        use std::os::unix::fs::MetadataExt;
+        let run_id = "run-perm-600-01";
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", "secret prompt", None, None, None, &[])
                 .unwrap();
-        assert_inline_prompt(&args, &prompt);
+        let file_idx = args
+            .iter()
+            .position(|a| a == "--prompt-file")
+            .expect("--prompt-file flag missing");
+        let file_path = std::path::Path::new(args[file_idx + 1].as_ref());
+        let mode = std::fs::metadata(file_path)
+            .expect("prompt file must exist")
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "prompt file must have mode 0o600, got {:#o}",
+            mode & 0o777
+        );
+        let _ = std::fs::remove_file(file_path);
     }
 
     #[test]
     fn build_agent_args_with_resume_sets_flag() {
+        let run_id = "run-resume-sets-flag";
         let prompt = "short prompt";
-        let args = super::build_agent_args(
-            "run-1",
-            "/tmp/wt",
-            prompt,
-            Some("sess-abc"),
-            None,
-            None,
-            &[],
-        )
-        .unwrap();
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", prompt, Some("sess-abc"), None, None, &[])
+                .unwrap();
         let resume_idx = args
             .iter()
             .position(|a| a == "--resume")
             .expect("--resume flag missing");
         assert_eq!(args[resume_idx + 1], "sess-abc");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -823,9 +936,15 @@ mod tests {
 
     #[test]
     fn build_agent_args_with_mode_skip_permissions() {
+        // SkipPermissions and AutoMode must NOT inject their claude-level flags
+        // (--dangerously-skip-permissions / --enable-auto-mode) into the
+        // `conductor agent run` arg list — those flags are unknown to conductor
+        // and would cause an "unexpected argument" clap error.  The flags are
+        // applied later inside run_agent() when the claude subprocess is spawned.
         use crate::config::AgentPermissionMode;
+        let run_id = "run-mode-skip-perms";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -836,16 +955,24 @@ mod tests {
         )
         .unwrap();
         assert!(
-            args.iter().any(|a| a == "--dangerously-skip-permissions"),
-            "expected --dangerously-skip-permissions flag"
+            !args.iter().any(|a| a == "--dangerously-skip-permissions"),
+            "conductor args must not contain --dangerously-skip-permissions (belongs on claude CLI)"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--permission-mode"),
+            "SkipPermissions should not emit --permission-mode"
+        );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
         );
     }
 
     #[test]
     fn build_agent_args_with_mode_auto_mode() {
         use crate::config::AgentPermissionMode;
+        let run_id = "run-mode-auto-mode";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -856,16 +983,24 @@ mod tests {
         )
         .unwrap();
         assert!(
-            args.iter().any(|a| a == "--enable-auto-mode"),
-            "expected --enable-auto-mode flag"
+            !args.iter().any(|a| a == "--enable-auto-mode"),
+            "conductor args must not contain --enable-auto-mode (belongs on claude CLI)"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--permission-mode"),
+            "AutoMode should not emit --permission-mode"
+        );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
         );
     }
 
     #[test]
     fn build_agent_args_with_mode_plan() {
         use crate::config::AgentPermissionMode;
+        let run_id = "run-mode-plan-01";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -887,13 +1022,17 @@ mod tests {
             !args.iter().any(|a| a == "--allowedTools"),
             "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
         );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_with_mode_repo_safe() {
         use crate::config::AgentPermissionMode;
+        let run_id = "run-mode-repo-safe";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -919,18 +1058,21 @@ mod tests {
             !args.iter().any(|a| a == "--allowedTools"),
             "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
         );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_non_plan_no_allowed_tools() {
         use crate::config::AgentPermissionMode;
         // RepoSafe is excluded: its allowed_tools() is applied in run_agent(), not here.
-        for mode in &[
-            AgentPermissionMode::SkipPermissions,
-            AgentPermissionMode::AutoMode,
+        for (mode, run_id) in &[
+            (AgentPermissionMode::SkipPermissions, "run-no-tools-skip"),
+            (AgentPermissionMode::AutoMode, "run-no-tools-auto"),
         ] {
             let args = super::build_agent_args_with_mode(
-                "run-1",
+                run_id,
                 "/tmp/wt",
                 "prompt",
                 None,
@@ -945,13 +1087,17 @@ mod tests {
                 "expected no --allowedTools for {:?}",
                 mode
             );
+            let _ = std::fs::remove_file(
+                std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+            );
         }
     }
 
     #[test]
     fn build_agent_args_with_mode_none() {
+        let run_id = "run-mode-none-01";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -967,12 +1113,16 @@ mod tests {
                 || a == "--permission-mode"),
             "no permission flag should appear when mode is None"
         );
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_with_model_override() {
+        let run_id = "run-model-override";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -987,12 +1137,16 @@ mod tests {
             .position(|a| a == "--model")
             .expect("expected --model flag");
         assert_eq!(args[idx + 1], "claude-sonnet-4-6");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
     fn build_agent_args_with_bot_name() {
+        let run_id = "run-bot-name-01";
         let args = super::build_agent_args_with_mode(
-            "run-1",
+            run_id,
             "/tmp/wt",
             "prompt",
             None,
@@ -1007,6 +1161,9 @@ mod tests {
             .position(|a| a == "--bot-name")
             .expect("expected --bot-name flag");
         assert_eq!(args[idx + 1], "my-bot");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
     }
 
     #[test]
@@ -1048,5 +1205,345 @@ mod tests {
             .position(|a| a == "--permission-mode")
             .expect("--permission-mode missing");
         assert_eq!(args[perm_idx + 1], "plan");
+        let _ = std::fs::remove_file(std::env::temp_dir().join("conductor-prompt-run-all.txt"));
+    }
+
+    fn test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::db::migrations::run(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn build_headless_agent_args_includes_run_id_and_worktree() {
+        let (args, _prompt_file) = super::build_headless_agent_args(&super::SpawnHeadlessParams {
+            run_id: "run-h-1",
+            working_dir: "/tmp/wt",
+            prompt: "test prompt",
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: None,
+            plugin_dirs: &[],
+        })
+        .unwrap();
+        let pos = args.iter().position(|a| a == "--run-id").unwrap();
+        assert_eq!(args[pos + 1], "run-h-1");
+        let pos = args.iter().position(|a| a == "--worktree-path").unwrap();
+        assert_eq!(args[pos + 1], "/tmp/wt");
+    }
+
+    #[test]
+    fn build_headless_agent_args_with_all_options() {
+        use crate::config::AgentPermissionMode;
+        let (args, _prompt_file) = super::build_headless_agent_args(&super::SpawnHeadlessParams {
+            run_id: "run-h-2",
+            working_dir: "/tmp/wt",
+            prompt: "test prompt",
+            resume_session_id: Some("sess-abc"),
+            model: Some("claude-opus-4-6"),
+            bot_name: Some("bot-y"),
+            permission_mode: Some(&AgentPermissionMode::Plan),
+            plugin_dirs: &["dir1".to_string()],
+        })
+        .unwrap();
+
+        let pos = args.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(args[pos + 1], "sess-abc");
+        let pos = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[pos + 1], "claude-opus-4-6");
+        let pos = args.iter().position(|a| a == "--bot-name").unwrap();
+        assert_eq!(args[pos + 1], "bot-y");
+        let pos = args.iter().position(|a| a == "--plugin-dir").unwrap();
+        assert_eq!(args[pos + 1], "dir1");
+    }
+
+    #[test]
+    fn build_headless_agent_args_prompt_file_written() {
+        let (args, prompt_file) = super::build_headless_agent_args(&super::SpawnHeadlessParams {
+            run_id: "run-h-3",
+            working_dir: "/tmp/wt",
+            prompt: "hello world",
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: None,
+            plugin_dirs: &[],
+        })
+        .unwrap();
+        assert!(prompt_file.exists());
+        let content = std::fs::read_to_string(&prompt_file).unwrap();
+        assert_eq!(content, "hello world");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(&prompt_file).unwrap();
+            let mode = metadata.mode() & 0o777;
+            assert_eq!(mode, 0o600, "prompt file should be 0o600, got 0o{mode:o}");
+        }
+        let _ = std::fs::remove_file(&prompt_file);
+        // --prompt-file should be in args
+        assert!(args.iter().any(|a| a == "--prompt-file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_spawn_headless_run_bad_working_dir_error_contains_run_id_and_path() {
+        // A non-existent working_dir causes spawn_headless to fail; the error
+        // string must contain both run_id and working_dir for diagnostics.
+        let run_id = "run-spawn-err-01";
+        let working_dir = "/this/path/does/not/exist/at/all";
+        let params = super::SpawnHeadlessParams {
+            run_id,
+            working_dir,
+            prompt: "test prompt",
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: None,
+            plugin_dirs: &[],
+        };
+        let result = super::try_spawn_headless_run(&params);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("should fail with non-existent working_dir"),
+        };
+        assert!(
+            err.contains(run_id),
+            "error must contain run_id ({run_id}): {err}"
+        );
+        assert!(
+            err.contains(working_dir),
+            "error must contain working_dir ({working_dir}): {err}"
+        );
+    }
+
+    #[test]
+    fn drain_stream_json_completed_on_result_event() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        let json_lines = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-1\"}\n",
+            "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"session_id\":\"sess-1\"}\n",
+        );
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let outcome = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        assert!(matches!(outcome, super::DrainOutcome::Completed));
+    }
+
+    #[test]
+    fn drain_stream_json_no_result_returns_no_result() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        let json_lines =
+            "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-1\"}\n";
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let outcome = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        assert!(matches!(outcome, super::DrainOutcome::NoResult));
+    }
+
+    #[test]
+    fn drain_stream_json_error_result_event() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        let json_lines =
+            "{\"type\":\"result\",\"is_error\":true,\"result\":\"something went wrong\"}\n";
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let outcome = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        assert!(matches!(outcome, super::DrainOutcome::Completed));
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, crate::agent::AgentRunStatus::Failed);
+    }
+
+    #[test]
+    fn drain_stream_json_token_update() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        let json_lines = concat!(
+            "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n",
+            "{\"type\":\"result\",\"is_error\":false,\"result\":\"done\"}\n",
+        );
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let _ = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.input_tokens, Some(10));
+        assert_eq!(fetched.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn drain_stream_json_result_persists_cost_turns_duration() {
+        let conn = test_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+
+        // Result event with cost, turns, duration, and final token usage
+        let json_lines = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-drain-1\"}\n",
+            "{\"type\":\"result\",\"is_error\":false,\"result\":\"task complete\",\"session_id\":\"sess-drain-1\",",
+            "\"total_cost_usd\":0.05,\"num_turns\":3,\"duration_ms\":5000,",
+            "\"usage\":{\"input_tokens\":200,\"output_tokens\":100,",
+            "\"cache_read_input_tokens\":40,\"cache_creation_input_tokens\":20}}\n",
+        );
+        let cursor = std::io::Cursor::new(json_lines.as_bytes());
+        let outcome = super::drain_stream_json(
+            cursor,
+            &run.id,
+            std::path::Path::new("/dev/null"),
+            &mgr,
+            |_| {},
+        );
+        assert!(matches!(outcome, super::DrainOutcome::Completed));
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, crate::agent::AgentRunStatus::Completed);
+        assert_eq!(fetched.result_text.as_deref(), Some("task complete"));
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-drain-1"));
+        assert_eq!(fetched.cost_usd, Some(0.05));
+        assert_eq!(fetched.num_turns, Some(3));
+        assert_eq!(fetched.duration_ms, Some(5000));
+        assert_eq!(fetched.input_tokens, Some(200));
+        assert_eq!(fetched.output_tokens, Some(100));
+        assert_eq!(fetched.cache_read_input_tokens, Some(40));
+        assert_eq!(fetched.cache_creation_input_tokens, Some(20));
+    }
+
+    /// Verify that `abort()` terminates a non-I/O-blocked child (e.g. `sleep 60`)
+    /// promptly.  Without `kill()` before `wait()`, `abort()` would block until
+    /// the child exits naturally — i.e. for 60 seconds.
+    #[cfg(unix)]
+    #[test]
+    fn abort_kills_non_io_blocked_child() {
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn sleep 60");
+
+        let handle = super::HeadlessHandle::from_child(child).expect("from_child failed");
+
+        let start = Instant::now();
+        handle.abort();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_secs() < 5,
+            "abort() took {:?} — kill() before wait() is required to avoid blocking",
+            elapsed
+        );
+    }
+
+    /// Verify that `abort()` terminates a child that is filling its stdout pipe
+    /// (e.g. `yes`) promptly, even when the caller never reads from stdout.
+    /// The pipe buffer fills and the child blocks on write; `kill()` must be sent
+    /// so the child can exit rather than waiting for the buffer to drain.
+    #[cfg(unix)]
+    #[test]
+    fn abort_kills_pipe_filling_child() {
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+
+        let child = Command::new("/bin/sh")
+            .args(["-c", "yes"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn yes via /bin/sh");
+
+        let handle = super::HeadlessHandle::from_child(child).expect("from_child failed");
+
+        // Do NOT read stdout — let the pipe buffer fill so the child blocks on write.
+        let start = Instant::now();
+        handle.abort();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_secs() < 5,
+            "abort() took {:?} on a pipe-filling child — kill() before wait() is required",
+            elapsed
+        );
+    }
+
+    /// `from_child()` must return an error when stdout was not piped.
+    #[cfg(unix)]
+    #[test]
+    fn from_child_rejects_missing_stdout() {
+        use std::process::{Command, Stdio};
+
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn child");
+
+        let err = super::HeadlessHandle::from_child(child)
+            .err()
+            .expect("expected Err for missing stdout");
+        assert!(
+            err.contains("no stdout pipe"),
+            "error message should mention 'no stdout pipe', got: {err}"
+        );
+    }
+
+    /// `from_child()` must return an error when stderr was not piped.
+    #[cfg(unix)]
+    #[test]
+    fn from_child_rejects_missing_stderr() {
+        use std::process::{Command, Stdio};
+
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn child");
+
+        let err = super::HeadlessHandle::from_child(child)
+            .err()
+            .expect("expected Err for missing stderr");
+        assert!(
+            err.contains("no stderr pipe"),
+            "error message should mention 'no stderr pipe', got: {err}"
+        );
     }
 }
+
+// cancel_subprocess tests have moved to crate::process_utils (the canonical home
+// for OS-level process utilities). See process_utils.rs for the test coverage.

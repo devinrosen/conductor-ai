@@ -1,6 +1,6 @@
 # RFC 001: Communication Obligation Tracker
 
-**Status:** Draft
+**Status:** Closed (out of scope — describes a separate tool, not conductor-ai)
 **Date:** 2026-03-10
 **Author:** Devin
 

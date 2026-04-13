@@ -32,6 +32,9 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
         if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
             eprintln!("Warning: reap_orphaned_workflow_runs failed: {e}");
         }
+        if let Err(e) = wf_mgr.reap_orphaned_script_steps() {
+            eprintln!("Warning: reap_orphaned_script_steps failed: {e}");
+        }
     }
 
     match command {
@@ -159,10 +162,10 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
     Ok(())
 }
 
-/// Run a Claude agent for a worktree. Called inside a tmux window by the TUI.
+/// Run a Claude agent for a worktree as a headless subprocess.
 ///
-/// Uses `--output-format json` (single JSON result) since the tmux terminal IS the display.
-/// Claude's interactive output goes directly to the terminal; we only parse the final JSON result.
+/// Uses `--output-format stream-json` to emit structured events. Claude's output is streamed
+/// and parsed for result metadata; a human-readable summary is printed to stderr.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_agent(
     conn: &rusqlite::Connection,
@@ -310,7 +313,7 @@ pub(crate) fn run_agent(
 
         // ── build command for this turn ───────────────────────────────────────
         // stdout: stream-json events (piped, parsed for result metadata)
-        // stderr: verbose turn-by-turn output (inherited, visible in tmux)
+        // stderr: verbose turn-by-turn output (inherited, visible in the terminal)
         let mut cmd = Command::new("claude");
         if let Some(ref feedback) = feedback_response_for_resume {
             // Feedback resume turn: deliver the human response as the next message
@@ -425,11 +428,21 @@ pub(crate) fn run_agent(
                     let _ = writeln!(f, "{line}");
                 }
 
+                // Relay every line to our own stdout so the parent workflow
+                // executor (call.rs drain_stream_json) can process events in
+                // real-time without polling the log file.
+                {
+                    use std::io::Write;
+                    let stdout_handle = std::io::stdout();
+                    let mut out = stdout_handle.lock();
+                    let _ = writeln!(out, "{line}");
+                }
+
                 let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
 
-                // Display human-readable activity in the tmux terminal
+                // Display human-readable activity on stderr
                 print_event_summary(&event);
 
                 // Capture session_id from init message and save immediately for resume
@@ -829,7 +842,6 @@ fn run_orchestrate(
     let orch_config = OrchestratorConfig {
         fail_fast,
         child_timeout: std::time::Duration::from_secs(child_timeout_secs),
-        ..Default::default()
     };
 
     match orchestrator::orchestrate_run(conn, config, run_id, worktree_path, model, &orch_config) {
@@ -849,7 +861,7 @@ fn run_orchestrate(
     Ok(())
 }
 
-/// Print a human-readable summary of a stream-json event to stderr (visible in tmux).
+/// Print a human-readable summary of a stream-json event to stderr.
 fn print_event_summary(event: &serde_json::Value) {
     let msg_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
 

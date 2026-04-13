@@ -399,13 +399,16 @@ it by checking these locations in order. First match wins.
 |---|---|---|
 | 1 | `.conductor/workflows/<workflow>/agents/<name>.md` | Workflow-local override |
 | 2 | `.conductor/agents/<name>.md` | Shared conductor agents |
+| 3 | `.claude/agents/<name>.md` | Claude Code agents (fallback) |
 
 Each priority is checked in the **worktree path** first, then the **repo path**
 (registered repository root). This allows worktree-local overrides without
 modifying shared files.
 
-For the planned explicit-path and extended resolution features, see
-[agent-path-resolution.md](./agent-path-resolution.md).
+Instead of a short name, `call` also accepts a **quoted explicit path** relative
+to the repository root: `call ".claude/agents/code-review.md"`. Explicit paths
+bypass the search order entirely. See [agent-path-resolution.md](./agent-path-resolution.md)
+for the full rules, including `on_fail` and `parallel` usage.
 
 > **Agent resolution vs spawn**: Per-step `plugin_dirs` are used when spawning the Claude session (passing `--plugin-dir` flags) but the agent definition must be resolvable from `.conductor/agents/` or `.claude/agents/` at load time. If the agent .md file only exists in a plugin_dir, a symlink in `.conductor/agents/` is required. Fix in progress to make `load_agent()` search plugin_dirs.
 
