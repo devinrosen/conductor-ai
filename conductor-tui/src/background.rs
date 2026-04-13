@@ -497,12 +497,18 @@ pub fn poll_data() -> Option<PollResult> {
             }
             {
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                match wf_mgr.reap_heartbeat_stuck_runs(&config, 60, conductor_bin_dir) {
-                    Ok(n) if n > 0 => {
-                        tracing::info!("Auto-resuming {n} stuck workflow run(s)")
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("reap_heartbeat_stuck_runs failed: {e}"),
+                let stale_mins = config.general.stale_workflow_minutes;
+                let configurable_threshold = if stale_mins > 0 {
+                    Some((stale_mins * 60) as i64)
+                } else {
+                    None
+                };
+                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
+                    &config,
+                    configurable_threshold,
+                    conductor_bin_dir,
+                ) {
+                    tracing::warn!("auto_resume_stuck_workflows failed: {e}");
                 }
             }
         }

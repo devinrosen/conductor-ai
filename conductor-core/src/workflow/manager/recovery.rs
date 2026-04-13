@@ -512,14 +512,16 @@ impl<'a> WorkflowManager<'a> {
     /// pattern: `validate_resume_preconditions` rejects resuming a `running`-status
     /// run; the CAS flip to `failed` is the required precondition.
     ///
-    /// Detect and auto-resume workflow runs stuck in `running` status using multiple
-    /// thresholds. This combines detection and resumption to avoid duplicate logic.
+    /// Detect and auto-resume workflow runs stuck in `running` status.
     ///
-    /// Checks both the fixed 60-second threshold and an optional configurable threshold.
-    /// For each threshold that finds stuck runs, fires notifications and spawns resume
-    /// threads in the background.
+    /// Uses a single detection threshold: the minimum of the fixed 60-second
+    /// baseline and any caller-supplied configurable threshold. This avoids
+    /// duplicate DB queries and prevents the same run from being resumed twice.
     ///
-    /// Returns the total count of runs resumed across all thresholds.
+    /// For each stuck run found, fires a notification and spawns a background
+    /// thread to resume it.
+    ///
+    /// Returns the count of runs resumed.
     pub fn auto_resume_stuck_workflows(
         &self,
         config: &Config,
@@ -528,86 +530,43 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<usize> {
         use crate::workflow::WorkflowResumeStandalone;
 
-        let mut total_resumed = 0;
+        // Use the smallest threshold so we catch all stuck runs in a single query.
+        let threshold = configurable_threshold_secs.map(|t| t.min(60)).unwrap_or(60);
 
-        // First check: fixed 60-second threshold
-        match self.detect_stuck_workflow_run_ids(60) {
-            Ok(stuck_ids) if !stuck_ids.is_empty() => {
-                let n = stuck_ids.len();
-                tracing::info!("Auto-resuming {n} stuck workflow run(s)");
-                crate::notify::fire_orphan_resumed_notification(
-                    self.conn,
-                    &config.notifications,
-                    &stuck_ids,
-                );
-                let bin_dir_clone = conductor_bin_dir.clone();
-                for run_id in stuck_ids {
-                    let cfg_clone = config.clone();
-                    let bin_dir = bin_dir_clone.clone();
-                    std::thread::spawn(move || {
-                        let params = WorkflowResumeStandalone {
-                            config: cfg_clone,
-                            workflow_run_id: run_id.clone(),
-                            model: None,
-                            from_step: None,
-                            restart: false,
-                            db_path: None,
-                            conductor_bin_dir: bin_dir,
-                        };
-                        if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params)
-                        {
-                            tracing::warn!(run_id = %run_id, "Auto-resume of stuck workflow run failed: {e}");
-                        }
-                    });
-                }
-                total_resumed += n;
-            }
-            Ok(_) => {} // No stuck runs found
-            Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
+        let stuck_ids = self.detect_stuck_workflow_run_ids(threshold)?;
+        if stuck_ids.is_empty() {
+            return Ok(0);
         }
 
-        // Second check: configurable threshold (if different from 60 seconds)
-        if let Some(threshold_secs) = configurable_threshold_secs {
-            if threshold_secs != 60 {
-                match self.detect_stuck_workflow_run_ids(threshold_secs) {
-                    Ok(stuck_ids) if !stuck_ids.is_empty() => {
-                        let n = stuck_ids.len();
-                        tracing::info!("Auto-resuming {n} additional stuck workflow run(s) with configurable threshold");
-                        crate::notify::fire_orphan_resumed_notification(
-                            self.conn,
-                            &config.notifications,
-                            &stuck_ids,
-                        );
-                        let bin_dir_clone = conductor_bin_dir.clone();
-                        for run_id in stuck_ids {
-                            let cfg_clone = config.clone();
-                            let bin_dir = bin_dir_clone.clone();
-                            std::thread::spawn(move || {
-                                let params = WorkflowResumeStandalone {
-                                    config: cfg_clone,
-                                    workflow_run_id: run_id.clone(),
-                                    model: None,
-                                    from_step: None,
-                                    restart: false,
-                                    db_path: None,
-                                    conductor_bin_dir: bin_dir,
-                                };
-                                if let Err(e) =
-                                    crate::workflow::engine::resume_workflow_standalone(&params)
-                                {
-                                    tracing::warn!(run_id = %run_id, "Auto-resume of stuck workflow run failed: {e}");
-                                }
-                            });
-                        }
-                        total_resumed += n;
-                    }
-                    Ok(_) => {} // No stuck runs found
-                    Err(e) => tracing::warn!("detect_stuck_workflow_run_ids failed: {e}"),
+        let n = stuck_ids.len();
+        tracing::info!("Auto-resuming {n} stuck workflow run(s) (threshold={threshold}s)");
+        crate::notify::fire_orphan_resumed_notification(
+            self.conn,
+            &config.notifications,
+            &stuck_ids,
+        );
+
+        for run_id in &stuck_ids {
+            let cfg_clone = config.clone();
+            let bin_dir = conductor_bin_dir.clone();
+            let run_id = run_id.clone();
+            std::thread::spawn(move || {
+                let params = WorkflowResumeStandalone {
+                    config: cfg_clone,
+                    workflow_run_id: run_id.clone(),
+                    model: None,
+                    from_step: None,
+                    restart: false,
+                    db_path: None,
+                    conductor_bin_dir: bin_dir,
+                };
+                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
+                    tracing::warn!(run_id = %run_id, "Auto-resume of stuck workflow run failed: {e}");
                 }
-            }
+            });
         }
 
-        Ok(total_resumed)
+        Ok(n)
     }
 
     /// Returns the count of runs successfully resumed.
