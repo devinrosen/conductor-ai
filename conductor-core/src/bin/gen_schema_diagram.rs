@@ -66,12 +66,7 @@ fn apply_migrations(conn: &Connection, migrations_dir: &Path) -> SqliteResult<us
     let mut entries: Vec<_> = fs::read_dir(migrations_dir)
         .expect("Failed to read migrations directory")
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "sql")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "sql").unwrap_or(false))
         .collect();
 
     // Sort by filename (matches the migration runner's lexicographic order)
@@ -92,9 +87,7 @@ fn list_tables(conn: &Connection) -> SqliteResult<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     )?;
-    let names: SqliteResult<Vec<String>> = stmt
-        .query_map([], |row| row.get(0))?
-        .collect();
+    let names: SqliteResult<Vec<String>> = stmt.query_map([], |row| row.get(0))?.collect();
     names
 }
 
@@ -203,8 +196,8 @@ fn main() {
 
     // Apply migrations to in-memory SQLite
     let conn = Connection::open_in_memory().expect("Failed to open in-memory SQLite");
-    let migration_count = apply_migrations(&conn, migrations_path)
-        .expect("Failed to apply migrations");
+    let migration_count =
+        apply_migrations(&conn, migrations_path).expect("Failed to apply migrations");
 
     eprintln!("Applied {} migrations", migration_count);
 
@@ -220,8 +213,7 @@ fn main() {
     }
 
     // Read existing file to preserve relationship section
-    let existing = fs::read_to_string(output_path)
-        .unwrap_or_else(|_| String::new());
+    let existing = fs::read_to_string(output_path).unwrap_or_else(|_| String::new());
 
     let (_, relationship_section) = split_mmd(&existing);
 
