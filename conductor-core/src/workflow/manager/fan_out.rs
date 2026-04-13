@@ -85,6 +85,47 @@ impl<'a> WorkflowManager<'a> {
         }
     }
 
+    /// Fetch fan-out items for multiple steps in a single query.
+    /// Returns a map from `step_run_id` → items, omitting step IDs that have no items.
+    pub fn get_fan_out_items_for_steps(
+        &self,
+        step_run_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<FanOutItemRow>>> {
+        if step_run_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let placeholders: Vec<String> = (1..=step_run_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
+             status, dispatched_at, completed_at \
+             FROM workflow_run_step_fan_out_items \
+             WHERE step_run_id IN ({}) \
+             ORDER BY step_run_id, id ASC",
+            placeholders.join(", ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(step_run_ids.iter()), |row| {
+            Ok(FanOutItemRow {
+                id: row.get(0)?,
+                step_run_id: row.get(1)?,
+                item_type: row.get(2)?,
+                item_id: row.get(3)?,
+                item_ref: row.get(4)?,
+                child_run_id: row.get(5)?,
+                status: row.get(6)?,
+                dispatched_at: row.get(7)?,
+                completed_at: row.get(8)?,
+            })
+        })?;
+        let mut map: std::collections::HashMap<String, Vec<FanOutItemRow>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let item = row?;
+            map.entry(item.step_run_id.clone()).or_default().push(item);
+        }
+        Ok(map)
+    }
+
     /// Get the IDs of all items already in the fan-out table for a step (for dedup on resume).
     pub fn get_existing_fan_out_item_ids(&self, step_run_id: &str) -> Result<Vec<String>> {
         query_collect(
