@@ -294,10 +294,7 @@ fn test_foreach_scope_unlabeled_false_is_error() {
     let result = parse_workflow_str(input, "test.wf");
     assert!(result.is_err());
     let err = format!("{}", result.unwrap_err());
-    assert!(
-        err.contains("scope.unlabeled must be true"),
-        "got: {err}"
-    );
+    assert!(err.contains("scope.unlabeled must be true"), "got: {err}");
 }
 
 #[test]
