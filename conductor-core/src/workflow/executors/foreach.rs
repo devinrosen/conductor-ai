@@ -1216,7 +1216,11 @@ mod tests {
     // worktree_id correctly — the clearing logic in resolve_child_context_ids must
     // actually reach the WorkflowExecStandalone struct.
 
-    fn make_minimal_item(item_id: &str, item_ref: &str, item_type: &str) -> crate::workflow::manager::FanOutItemRow {
+    fn make_minimal_item(
+        item_id: &str,
+        item_ref: &str,
+        item_type: &str,
+    ) -> crate::workflow::manager::FanOutItemRow {
         crate::workflow::manager::FanOutItemRow {
             id: "item-id".to_string(),
             step_run_id: "step-run-id".to_string(),
