@@ -238,6 +238,10 @@ pub fn api_router() -> Router<AppState> {
             get(workflows::get_workflow_step_log),
         )
         .route(
+            "/api/workflows/runs/{id}/steps/{step_id}/fan_out_items",
+            get(workflows::get_fan_out_items),
+        )
+        .route(
             "/api/workflows/runs/{id}/children",
             get(workflows::get_child_workflow_runs),
         )

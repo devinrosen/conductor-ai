@@ -3638,3 +3638,69 @@ fn test_regression_signals_multiple_workflows_independent() {
         "wf-beta should have duration regression"
     );
 }
+
+// ── get_fan_out_items_checked ownership tests ────────────────────────────────
+
+#[test]
+fn test_get_fan_out_items_checked_returns_items_for_correct_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "fan-step", "actor", false, 0, 0)
+        .unwrap();
+    mgr.insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
+        .unwrap();
+
+    let items = mgr
+        .get_fan_out_items_checked(&run.id, &step_id, None)
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].item_id, "t1");
+}
+
+#[test]
+fn test_get_fan_out_items_checked_rejects_step_from_different_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run_a = create_worktree_run(&conn, "w1");
+    let run_b = create_worktree_run(&conn, "w2");
+
+    // Step belongs to run_a.
+    let step_id = mgr
+        .insert_step(&run_a.id, "fan-step", "actor", false, 0, 0)
+        .unwrap();
+
+    // Querying with run_b's ID must return WorkflowStepNotInRun.
+    let err = mgr
+        .get_fan_out_items_checked(&run_b.id, &step_id, None)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::error::ConductorError::WorkflowStepNotInRun { .. }
+        ),
+        "expected WorkflowStepNotInRun, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_get_fan_out_items_checked_rejects_nonexistent_step() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+
+    let err = mgr
+        .get_fan_out_items_checked(&run.id, "nonexistent-step-id", None)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::error::ConductorError::WorkflowStepNotFound { .. }
+        ),
+        "expected WorkflowStepNotFound, got: {err:?}"
+    );
+}

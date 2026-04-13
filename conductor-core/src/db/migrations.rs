@@ -1095,14 +1095,34 @@ pub fn run(conn: &Connection) -> Result<()> {
 
     // Migration 067: add workflow_run_step_fan_out_items table and fan-out counter
     // columns on workflow_run_steps for foreach step type (RFC 010).
+    //
+    // Guard checks both the new table AND the ALTER TABLE columns.  SQLite's autocommit
+    // means CREATE TABLE can succeed while a subsequent ALTER TABLE in the same batch
+    // fails, leaving a partial state.  If that happens on a re-run, `has_table` alone
+    // would skip the whole batch and bump the version — leaving workflow_run_steps
+    // missing the fan_out_* columns.  We fix this by:
+    //   • neither present  → run the full SQL file (normal first-run path)
+    //   • table present, column absent → apply only the four ALTER TABLEs
+    //   • both present → nothing to do
     if version < 67 {
         let has_table: bool = conn
             .prepare("SELECT id FROM workflow_run_step_fan_out_items LIMIT 0")
             .is_ok();
-        if !has_table {
+        let has_col: bool = conn
+            .prepare("SELECT fan_out_total FROM workflow_run_steps LIMIT 0")
+            .is_ok();
+        if !has_table && !has_col {
             conn.execute_batch(include_str!(
                 "migrations/067_workflow_run_step_fan_out_items.sql"
             ))?;
+        } else if has_table && !has_col {
+            // Partial failure recovery: table was created but ALTER TABLEs did not run.
+            conn.execute_batch(
+                "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_total     INTEGER;\
+                 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER DEFAULT 0;\
+                 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed    INTEGER DEFAULT 0;\
+                 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped   INTEGER DEFAULT 0;",
+            )?;
         }
         bump_version(conn, 67)?;
     }
