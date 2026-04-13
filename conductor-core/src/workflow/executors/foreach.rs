@@ -649,17 +649,21 @@ fn dispatch_child_workflow(
         ForeachOver::WorkflowRuns => Some(format!("run:{}", item.item_ref)),
     };
 
-    // ticket_id and repo_id: pass through if this item is a ticket/repo.
-    let (item_ticket_id, item_repo_id) = match node.over {
-        ForeachOver::Tickets => (Some(item.item_id.clone()), state.repo_id.clone()),
-        ForeachOver::Repos => (None, Some(item.item_id.clone())),
-        ForeachOver::WorkflowRuns => (state.ticket_id.clone(), state.repo_id.clone()),
+    // ticket_id, repo_id, and worktree_id: pass through based on item type.
+    // For ticket/repo fan-outs, clear worktree_id so each child gets its own
+    // independent context instead of colliding with the parent's active run.
+    let (item_ticket_id, item_repo_id, item_worktree_id) = match node.over {
+        ForeachOver::Tickets => (Some(item.item_id.clone()), state.repo_id.clone(), None),
+        ForeachOver::Repos => (None, Some(item.item_id.clone()), None),
+        ForeachOver::WorkflowRuns => {
+            (state.ticket_id.clone(), state.repo_id.clone(), state.worktree_id.clone())
+        }
     };
 
     let params = WorkflowExecStandalone {
         config: state.config.clone(),
         workflow: child_def.clone(),
-        worktree_id: state.worktree_id.clone(),
+        worktree_id: item_worktree_id,
         working_dir: state.working_dir.clone(),
         repo_path: state.repo_path.clone(),
         ticket_id: item_ticket_id,
