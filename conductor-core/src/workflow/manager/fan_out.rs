@@ -51,9 +51,11 @@ impl<'a> WorkflowManager<'a> {
         step_id: &str,
         status_filter: Option<&str>,
     ) -> Result<Vec<FanOutItemRow>> {
-        let step = self
-            .get_step_by_id(step_id)?
-            .ok_or_else(|| ConductorError::WorkflowStepNotFound { id: step_id.to_string() })?;
+        let step =
+            self.get_step_by_id(step_id)?
+                .ok_or_else(|| ConductorError::WorkflowStepNotFound {
+                    id: step_id.to_string(),
+                })?;
         if step.workflow_run_id != run_id {
             return Err(ConductorError::WorkflowStepNotInRun {
                 step_id: step_id.to_string(),
