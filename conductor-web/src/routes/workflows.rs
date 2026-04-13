@@ -1022,10 +1022,18 @@ pub async fn get_workflow_steps(
 /// GET /api/workflows/runs/{id}/steps/{step_id}/fan_out_items
 pub async fn get_fan_out_items(
     State(state): State<AppState>,
-    Path((_id, step_id)): Path<(String, String)>,
+    Path((id, step_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<FanOutItemRow>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
+    let step = mgr
+        .get_step_by_id(&step_id)?
+        .ok_or_else(|| ApiError::NotFound(format!("step {step_id} not found")))?;
+    if step.workflow_run_id != id {
+        return Err(ApiError::NotFound(format!(
+            "step {step_id} does not belong to run {id}"
+        )));
+    }
     let items = mgr.get_fan_out_items(&step_id, None)?;
     Ok(Json(items))
 }
