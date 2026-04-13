@@ -536,7 +536,26 @@ impl<'a> WorkflowManager<'a> {
         conductor_bin_dir: Option<PathBuf>,
     ) -> Result<usize> {
         // Step 1: find orphaned root runs.
-        let orphaned_ids = self.query_stuck_workflow_run_ids(threshold_secs)?;
+        // Unlike detect_stuck_workflow_run_ids (which requires at least one step),
+        // this also reaps runs with zero steps — the executor may have died before
+        // creating any steps.
+        let orphaned_ids: Vec<String> = query_collect(
+            self.conn,
+            "SELECT id FROM workflow_runs \
+             WHERE status = 'running' \
+               AND parent_workflow_run_id IS NULL \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM workflow_run_steps wrs \
+                 WHERE wrs.workflow_run_id = workflow_runs.id \
+                   AND wrs.status IN ('running', 'pending', 'waiting') \
+               ) \
+               AND ( \
+                 CAST(strftime('%s', 'now') AS INTEGER) - \
+                 CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
+               ) > ?1",
+            params![threshold_secs],
+            |row| row.get(0),
+        )?;
 
         if orphaned_ids.is_empty() {
             return Ok(0);
