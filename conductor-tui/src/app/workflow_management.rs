@@ -1196,6 +1196,18 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
+            let working_dir = match worktree_path {
+                Some(p) => p,
+                None => {
+                    if let Some(ref tx) = bg_tx {
+                        tx.send(crate::action::Action::BackgroundError {
+                            message: "Cannot run workflow: worktree path is not set".to_string(),
+                        });
+                    }
+                    return;
+                }
+            };
+
             let feature_id = match resolve_feature_id_for_bg(
                 &config,
                 None,
@@ -1207,18 +1219,6 @@ impl App {
                 Err(e) => {
                     if let Some(ref tx) = bg_tx {
                         tx.send(crate::action::Action::BackgroundError { message: e });
-                    }
-                    return;
-                }
-            };
-
-            let working_dir = match worktree_path {
-                Some(p) => p,
-                None => {
-                    if let Some(ref tx) = bg_tx {
-                        tx.send(crate::action::Action::BackgroundError {
-                            message: "Cannot run workflow: worktree path is not set".to_string(),
-                        });
                     }
                     return;
                 }
