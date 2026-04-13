@@ -7,14 +7,12 @@ workflow label-all-tickets {
     group       = "Analysis"
   }
 
-  call label-all-tickets
-
-  if label-all-tickets.needs_new_labels {
-    gate human_review {
-      prompt     = "Some issues could not be labeled using existing labels. Review the agent's suggestions and provide feedback — e.g. which existing labels to use anyway, or names for new labels to create first. The agent will re-process only the unresolved issues."
-      timeout    = "48h"
-      on_timeout = continue
-    }
-    call label-all-tickets
+  foreach label-tickets {
+    over         = tickets
+    scope        = { unlabeled = true }
+    max_parallel = 3
+    workflow     = "label-ticket"
+    inputs       = { ticket_id = "{{item.id}}" }
+    on_child_fail = continue
   }
 }

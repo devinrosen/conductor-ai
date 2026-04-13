@@ -72,9 +72,10 @@ crate::impl_sql_enum!(WorkflowRunStatus);
 
 /// Status of a single workflow step execution.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStepStatus {
+    #[default]
     Pending,
     Running,
     Completed,

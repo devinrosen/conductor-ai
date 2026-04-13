@@ -380,7 +380,7 @@ pub fn handle_workflow(
                         working_dir: wt.path.clone(),
                         repo_path: r.local_path.clone(),
                         ticket_id: wt.ticket_id.clone(),
-                        repo_id: None,
+                        repo_id: Some(r.id.clone()),
                         model,
                         exec_config,
                         inputs: input_map,
@@ -392,6 +392,7 @@ pub fn handle_workflow(
                         force: false,
                         extra_plugin_dirs: plugin_dirs,
                         db_path: None,
+                        parent_workflow_run_id: None,
                     };
                     let run_id = crate::background::fork_and_run_workflow(params)?;
                     println!("{}", run_id);
@@ -415,7 +416,7 @@ pub fn handle_workflow(
                     working_dir: &wt.path,
                     repo_path: &r.local_path,
                     ticket_id: wt.ticket_id.as_deref(),
-                    repo_id: None,
+                    repo_id: Some(&r.id),
                     model: model.as_deref(),
                     exec_config: &exec_config,
                     inputs: input_map,
@@ -518,6 +519,18 @@ pub fn handle_workflow(
                             }
                             if let Some(ref child) = step.child_run_id {
                                 println!("        child run: {child}");
+                            }
+                            // foreach fan-out progress
+                            if step.role == "foreach" {
+                                if let Some(total) = step.fan_out_total {
+                                    println!(
+                                        "        fan-out: {}/{} completed  ({} failed, {} skipped)",
+                                        step.fan_out_completed,
+                                        total,
+                                        step.fan_out_failed,
+                                        step.fan_out_skipped,
+                                    );
+                                }
                             }
                         }
                     }

@@ -1452,9 +1452,11 @@ fn test_cleanup_merged_worktrees_marks_merged() {
     let mgr = WorktreeManager::new(&conn, &config);
     // Simulate merged PR: merge_check returns all branches as merged
     let count = mgr
-        .cleanup_merged_worktrees_with_merge_check(None, |_, branches| {
-            branches.iter().cloned().collect()
-        })
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |_, branches| branches.iter().cloned().collect(),
+            |_, _| Ok(()),
+        )
         .unwrap();
     assert_eq!(count, 1);
 
@@ -1483,7 +1485,11 @@ fn test_cleanup_merged_worktrees_skips_unmerged() {
     let mgr = WorktreeManager::new(&conn, &config);
     // merge_check returns empty — no cleanup
     let count = mgr
-        .cleanup_merged_worktrees_with_merge_check(None, |_, _| std::collections::HashSet::new())
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |_, _| std::collections::HashSet::new(),
+            |_, _| Ok(()),
+        )
         .unwrap();
     assert_eq!(count, 0);
 
@@ -1509,9 +1515,11 @@ fn test_cleanup_merged_worktrees_skips_already_merged() {
     let mgr = WorktreeManager::new(&conn, &config);
     // merge_check returns all branches, but w1 is already merged so should be skipped
     let count = mgr
-        .cleanup_merged_worktrees_with_merge_check(None, |_, branches| {
-            branches.iter().cloned().collect()
-        })
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |_, branches| branches.iter().cloned().collect(),
+            |_, _| Ok(()),
+        )
         .unwrap();
     assert_eq!(count, 0);
 }
@@ -1536,9 +1544,11 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
     let mgr = WorktreeManager::new(&conn, &config);
     // Both worktrees have merged PRs
     let count = mgr
-        .cleanup_merged_worktrees_with_merge_check(None, |_, branches| {
-            branches.iter().cloned().collect()
-        })
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |_, branches| branches.iter().cloned().collect(),
+            |_, _| Ok(()),
+        )
         .unwrap();
     assert_eq!(count, 2);
 
@@ -1854,9 +1864,11 @@ fn test_cleanup_merged_worktrees_filters_by_repo() {
     let mgr = WorktreeManager::new(&conn, &config);
     // Only clean up "other-repo"
     let count = mgr
-        .cleanup_merged_worktrees_with_merge_check(Some("other-repo"), |_, branches| {
-            branches.iter().cloned().collect()
-        })
+        .cleanup_merged_worktrees_with_merge_check(
+            Some("other-repo"),
+            |_, branches| branches.iter().cloned().collect(),
+            |_, _| Ok(()),
+        )
         .unwrap();
     assert_eq!(count, 1);
 

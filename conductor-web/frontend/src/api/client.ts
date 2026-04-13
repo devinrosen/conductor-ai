@@ -24,6 +24,7 @@ import type {
   WorkflowDefSummary,
   WorkflowRun,
   WorkflowRunStep,
+  FanOutItem,
   RunWorkflowRequest,
   FeedbackRequest,
   Notification,
@@ -274,6 +275,8 @@ export const api = {
     request<WorkflowRun | null>(`/workflows/runs/${runId}`),
   getWorkflowSteps: (runId: string) =>
     request<WorkflowRunStep[]>(`/workflows/runs/${runId}/steps`),
+  getFanOutItems: (runId: string, stepId: string) =>
+    request<FanOutItem[]>(`/workflows/runs/${runId}/steps/${stepId}/fan_out_items`),
   getChildWorkflowRuns: (runId: string) =>
     request<WorkflowRun[]>(`/workflows/runs/${runId}/children`),
   cancelWorkflow: (runId: string) =>

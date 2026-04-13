@@ -290,6 +290,22 @@ export interface WorkflowRunStep {
   output_tokens?: number | null;
   cache_read_input_tokens?: number | null;
   cache_creation_input_tokens?: number | null;
+  fan_out_total?: number | null;
+  fan_out_completed?: number;
+  fan_out_failed?: number;
+  fan_out_skipped?: number;
+}
+
+export interface FanOutItem {
+  id: string;
+  step_run_id: string;
+  item_type: string;
+  item_id: string;
+  item_ref: string;
+  child_run_id: string | null;
+  status: "pending" | "running" | "completed" | "failed" | "skipped";
+  dispatched_at: string | null;
+  completed_at: string | null;
 }
 
 export interface WorkflowTokenAggregate {

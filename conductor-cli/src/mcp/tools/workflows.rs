@@ -306,6 +306,7 @@ pub(super) fn tool_run_workflow(
         force: false,
         extra_plugin_dirs: vec![],
         db_path: None,
+        parent_workflow_run_id: None,
     };
 
     // Slot receives the error message if execute_workflow_standalone fails before

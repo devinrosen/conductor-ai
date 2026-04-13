@@ -170,5 +170,18 @@ pub(in crate::workflow) fn row_to_workflow_step(
         cache_creation_input_tokens: row
             .get::<_, Option<i64>>("cache_creation_input_tokens")
             .unwrap_or(None),
+        fan_out_total: row.get::<_, Option<i64>>("fan_out_total").unwrap_or(None),
+        fan_out_completed: row
+            .get::<_, Option<i64>>("fan_out_completed")
+            .unwrap_or(None)
+            .unwrap_or(0),
+        fan_out_failed: row
+            .get::<_, Option<i64>>("fan_out_failed")
+            .unwrap_or(None)
+            .unwrap_or(0),
+        fan_out_skipped: row
+            .get::<_, Option<i64>>("fan_out_skipped")
+            .unwrap_or(None)
+            .unwrap_or(0),
     })
 }

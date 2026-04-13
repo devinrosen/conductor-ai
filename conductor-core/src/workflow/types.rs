@@ -153,7 +153,7 @@ impl WorkflowRun {
 
 /// A workflow step execution record from the database.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WorkflowRunStep {
     pub id: String,
     pub workflow_run_id: String,
@@ -191,6 +191,14 @@ pub struct WorkflowRunStep {
     pub output_tokens: Option<i64>,
     pub cache_read_input_tokens: Option<i64>,
     pub cache_creation_input_tokens: Option<i64>,
+    /// Total number of fan-out items (foreach steps only).
+    pub fan_out_total: Option<i64>,
+    /// Number of successfully completed fan-out items.
+    pub fan_out_completed: i64,
+    /// Number of failed fan-out items.
+    pub fan_out_failed: i64,
+    /// Number of skipped fan-out items.
+    pub fan_out_skipped: i64,
 }
 
 /// Lightweight summary of the currently-running step for a workflow run.
@@ -496,6 +504,8 @@ pub struct WorkflowExecStandalone {
     /// Override the database path. Uses the default conductor db when `None`.
     /// Useful for tests that operate on a temporary database.
     pub db_path: Option<std::path::PathBuf>,
+    /// Optional parent workflow run ID. Links this run as a child of a foreach step.
+    pub parent_workflow_run_id: Option<String>,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues

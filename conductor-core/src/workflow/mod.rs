@@ -35,7 +35,7 @@ pub use batch_validate::{
 // Re-export all public types and functions to preserve existing import paths.
 pub use constants::{
     CONDUCTOR_OUTPUT_INSTRUCTION, REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
-    REGRESSION_FAILURE_RATE_THRESHOLD_PP, REGRESSION_MIN_RECENT_RUNS,
+    REGRESSION_FAILURE_RATE_THRESHOLD_PP, REGRESSION_MIN_RECENT_RUNS, STEP_ROLE_FOREACH,
 };
 pub use engine::ENGINE_INJECTED_KEYS;
 pub use engine::{
@@ -44,7 +44,7 @@ pub use engine::{
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
-pub use manager::WorkflowManager;
+pub use manager::{FanOutItemRow, WorkflowManager};
 pub use output::{parse_conductor_output, ConductorOutput};
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::{

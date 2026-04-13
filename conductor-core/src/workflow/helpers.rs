@@ -89,6 +89,7 @@ pub(super) fn collect_leaf_step_keys(node: &WorkflowNode) -> Vec<String> {
         WorkflowNode::DoWhile(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
         WorkflowNode::Do(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
         WorkflowNode::Always(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
+        WorkflowNode::ForEach(n) => vec![format!("foreach:{}", n.name)],
     }
 }
 

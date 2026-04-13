@@ -30,6 +30,15 @@ impl BackgroundSender {
         let _ = self.wake_tx.send(Wake::Background);
         true
     }
+
+    /// Create an isolated sender/receiver pair for unit tests.
+    /// No threads are spawned; the receiver can be polled directly.
+    #[cfg(test)]
+    pub fn channel_for_test() -> (Self, mpsc::Receiver<Action>) {
+        let (action_tx, action_rx) = mpsc::channel();
+        let (wake_tx, _wake_rx) = mpsc::channel();
+        (Self { action_tx, wake_tx }, action_rx)
+    }
 }
 
 /// The event loop with priority channels: input events are always processed

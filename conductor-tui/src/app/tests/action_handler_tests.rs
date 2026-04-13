@@ -182,6 +182,7 @@ workflow my-wf {
             step_agent_run: None,
             workflow_parse_warnings: vec![],
             all_run_steps: std::collections::HashMap::new(),
+            fan_out_items: std::collections::HashMap::new(),
         },
     )));
 
@@ -1473,6 +1474,47 @@ fn workflow_picker_confirm_repo_target() {
     assert!(
         matches!(app.state.modal, Modal::ModelPicker { .. }),
         "expected ModelPicker after confirming repo workflow with no inputs"
+    );
+}
+
+// --- ToggleForeachStepExpand ---
+
+#[test]
+fn toggle_foreach_step_expand_inserts_and_removes() {
+    use conductor_core::workflow::STEP_ROLE_FOREACH;
+    let mut app = make_app();
+
+    // Set up a foreach step at index 0.
+    let base = crate::state::tests::make_wf_step("step-foreach", "run-1", "items", 0);
+    app.state.data.workflow_steps = vec![conductor_core::workflow::WorkflowRunStep {
+        role: STEP_ROLE_FOREACH.into(),
+        ..base
+    }];
+    app.state.workflow_step_index = 0;
+
+    // First toggle: step ID should be inserted into the expanded set.
+    assert!(!app.state.expanded_foreach_step_ids.contains("step-foreach"));
+    app.update(Action::ToggleForeachStepExpand);
+    assert!(app.state.expanded_foreach_step_ids.contains("step-foreach"));
+
+    // Second toggle: step ID should be removed.
+    app.update(Action::ToggleForeachStepExpand);
+    assert!(!app.state.expanded_foreach_step_ids.contains("step-foreach"));
+}
+
+#[test]
+fn toggle_foreach_step_expand_ignores_non_foreach_step() {
+    let mut app = make_app();
+
+    // A step with a different role (e.g. "actor") should be ignored.
+    let step = crate::state::tests::make_wf_step("step-actor", "run-1", "build", 0);
+    app.state.data.workflow_steps = vec![step]; // default role is "actor"
+    app.state.workflow_step_index = 0;
+
+    app.update(Action::ToggleForeachStepExpand);
+    assert!(
+        app.state.expanded_foreach_step_ids.is_empty(),
+        "non-foreach step must not be expanded"
     );
 }
 

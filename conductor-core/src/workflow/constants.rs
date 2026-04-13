@@ -1,3 +1,6 @@
+/// Step role value for `foreach` steps, as stored in `workflow_run_steps.role`.
+pub const STEP_ROLE_FOREACH: &str = "foreach";
+
 /// Minimum number of recent runs required to emit a regression signal.
 pub const REGRESSION_MIN_RECENT_RUNS: i64 = 5;
 /// Flag duration regression if P75 increased by more than this percentage.
@@ -13,7 +16,8 @@ pub(super) const STEP_COLUMNS: &str =
      child_run_id, position, started_at, ended_at, result_text, condition_met, \
      iteration, parallel_group_id, context_out, markers_out, retry_count, \
      gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback, \
-     structured_output, output_file, gate_options, gate_selections";
+     structured_output, output_file, gate_options, gate_selections, \
+     fan_out_total, fan_out_completed, fan_out_failed, fan_out_skipped";
 
 /// Table-prefixed variant of `STEP_COLUMNS` for JOIN queries where `s` aliases `workflow_run_steps`.
 /// Use this when selecting step columns alongside columns from other tables to avoid ambiguity.
@@ -58,7 +62,8 @@ mod tests {
              s.child_run_id, s.position, s.started_at, s.ended_at, s.result_text, s.condition_met, \
              s.iteration, s.parallel_group_id, s.context_out, s.markers_out, s.retry_count, \
              s.gate_type, s.gate_prompt, s.gate_timeout, s.gate_approved_by, s.gate_approved_at, \
-             s.gate_feedback, s.structured_output, s.output_file, s.gate_options, s.gate_selections"
+             s.gate_feedback, s.structured_output, s.output_file, s.gate_options, s.gate_selections, \
+             s.fan_out_total, s.fan_out_completed, s.fan_out_failed, s.fan_out_skipped"
         );
 
         let cols: Vec<&str> = STEP_COLUMNS_WITH_PREFIX.split(", ").collect();
@@ -73,6 +78,6 @@ mod tests {
 
         // Spot-check first and last known columns.
         assert_eq!(cols.first().copied(), Some("s.id"));
-        assert_eq!(cols.last().copied(), Some("s.gate_selections"));
+        assert_eq!(cols.last().copied(), Some("s.fan_out_skipped"));
     }
 }

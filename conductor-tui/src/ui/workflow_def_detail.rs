@@ -519,6 +519,27 @@ fn build_node_lines(
                 ])));
                 build_node_lines(&a.body, depth + 1, items, theme, workflow_defs, seen);
             }
+            WorkflowNode::ForEach(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled(
+                        "foreach ",
+                        Style::default()
+                            .fg(theme.label_keyword)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        n.name.clone(),
+                        Style::default()
+                            .fg(theme.label_primary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  workflow={}", n.workflow),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+            }
         }
     }
 }

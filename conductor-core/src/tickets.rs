@@ -134,6 +134,7 @@ pub struct ReadyTicket {
 }
 
 /// Filter options for [`TicketSyncer::list_filtered`].
+#[derive(Default)]
 pub struct TicketFilter {
     /// Only include tickets that have ALL of these labels.
     /// NOTE: label filtering uses the `ticket_labels` join table, which is only
@@ -145,6 +146,8 @@ pub struct TicketFilter {
     pub search: Option<String>,
     /// When `false` (default), only open tickets are returned.
     pub include_closed: bool,
+    /// When `true`, only include tickets with no entries in `ticket_labels`.
+    pub unlabeled_only: bool,
 }
 
 impl Ticket {
@@ -535,6 +538,12 @@ impl<'a> TicketSyncer<'a> {
             let pattern = format!("%{term}%");
             param_values.push(Box::new(pattern.clone()));
             param_values.push(Box::new(pattern));
+        }
+
+        if filter.unlabeled_only {
+            conditions.push(
+                "NOT EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id)".to_string(),
+            );
         }
 
         let sql = if conditions.is_empty() {
@@ -2336,6 +2345,7 @@ mod tests {
             labels: vec![],
             search: None,
             include_closed: false,
+            unlabeled_only: false,
         };
         let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
         assert_eq!(results.len(), 1);
@@ -2360,6 +2370,7 @@ mod tests {
             labels: vec![],
             search: None,
             include_closed: true,
+            unlabeled_only: false,
         };
         let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
         assert_eq!(results.len(), 2);
@@ -2383,6 +2394,7 @@ mod tests {
             labels: vec!["bug".to_string()],
             search: None,
             include_closed: false,
+            unlabeled_only: false,
         };
         let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
         assert_eq!(results.len(), 1);
@@ -2420,6 +2432,7 @@ mod tests {
             labels: vec!["bug".to_string(), "urgent".to_string()],
             search: None,
             include_closed: false,
+            unlabeled_only: false,
         };
         let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
         assert_eq!(results.len(), 1);
@@ -2445,6 +2458,7 @@ mod tests {
             labels: vec![],
             search: Some("login".to_string()),
             include_closed: false,
+            unlabeled_only: false,
         };
         let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
         assert_eq!(results.len(), 1);
@@ -2470,6 +2484,7 @@ mod tests {
             labels: vec![],
             search: Some("xyz".to_string()),
             include_closed: false,
+            unlabeled_only: false,
         };
         let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
         assert_eq!(results.len(), 1);
@@ -2498,6 +2513,7 @@ mod tests {
             labels: vec![],
             search: None,
             include_closed: false,
+            unlabeled_only: false,
         };
         let results = syncer.list_filtered(None, &filter).unwrap();
         assert_eq!(results.len(), 2);
@@ -2633,10 +2649,63 @@ mod tests {
             labels: vec![],
             search: None,
             include_closed: false,
+            unlabeled_only: false,
         };
         let result = syncer.list_filtered(Some("r1"), &filter).unwrap();
         let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
         assert_eq!(ids, vec!["200", "10", "3"]);
+    }
+
+    #[test]
+    fn test_list_filtered_unlabeled_only() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // t1 has a label, t2 and t3 do not.
+        let mut t1 = make_ticket("1", "Labeled issue");
+        t1.label_details = vec![TicketLabelInput {
+            name: "bug".to_string(),
+            color: None,
+        }];
+        let t2 = make_ticket("2", "Unlabeled issue A");
+        let t3 = make_ticket("3", "Unlabeled issue B");
+
+        syncer.upsert_tickets("r1", &[t1, t2, t3]).unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: None,
+            include_closed: false,
+            unlabeled_only: true,
+        };
+        let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        let ids: Vec<&str> = results.iter().map(|t| t.source_id.as_str()).collect();
+        // Only t2 and t3 are unlabeled (sorted descending by source_id)
+        assert_eq!(ids, vec!["3", "2"]);
+    }
+
+    #[test]
+    fn test_list_filtered_unlabeled_only_excludes_closed() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // t1 is unlabeled and open, t2 is unlabeled but closed.
+        let t1 = make_ticket("1", "Open unlabeled");
+        let t2 = make_ticket("2", "Closed unlabeled");
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+        syncer
+            .close_missing_tickets("r1", "github", &["1"])
+            .unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: None,
+            include_closed: false,
+            unlabeled_only: true,
+        };
+        let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_id, "1");
     }
 
     #[test]

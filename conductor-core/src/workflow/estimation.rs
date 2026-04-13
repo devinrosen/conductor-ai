@@ -571,7 +571,11 @@ mod tests {
     // ── Test helpers ─────────────────────────────────────────────────
 
     fn make_step(structured_output: Option<&str>, status: WorkflowStepStatus) -> WorkflowRunStep {
-        make_named_step("", status, None).with_structured_output(structured_output)
+        WorkflowRunStep {
+            status,
+            structured_output: structured_output.map(String::from),
+            ..Default::default()
+        }
     }
 
     fn make_named_step(
@@ -580,49 +584,10 @@ mod tests {
         started_at: Option<&str>,
     ) -> WorkflowRunStep {
         WorkflowRunStep {
-            id: String::new(),
-            workflow_run_id: String::new(),
             step_name: name.to_string(),
-            role: String::new(),
-            can_commit: false,
-            condition_expr: None,
             status,
-            child_run_id: None,
-            position: 0,
             started_at: started_at.map(String::from),
-            ended_at: None,
-            result_text: None,
-            condition_met: None,
-            iteration: 0,
-            parallel_group_id: None,
-            context_out: None,
-            markers_out: None,
-            retry_count: 0,
-            gate_type: None,
-            gate_prompt: None,
-            gate_timeout: None,
-            gate_approved_by: None,
-            gate_approved_at: None,
-            gate_feedback: None,
-            structured_output: None,
-            output_file: None,
-            gate_options: None,
-            gate_selections: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-        }
-    }
-
-    trait WithStructuredOutput {
-        fn with_structured_output(self, output: Option<&str>) -> Self;
-    }
-
-    impl WithStructuredOutput for WorkflowRunStep {
-        fn with_structured_output(mut self, output: Option<&str>) -> Self {
-            self.structured_output = output.map(String::from);
-            self
+            ..Default::default()
         }
     }
 }

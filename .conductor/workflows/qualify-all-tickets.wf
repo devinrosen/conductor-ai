@@ -1,0 +1,18 @@
+workflow qualify-all-tickets {
+  meta {
+    title       = "Qualify All Tickets"
+    description = "Assess all open tickets in a repo and post a GitHub comment with a READY verdict or list of open questions"
+    trigger     = "manual"
+    targets     = ["repo"]
+    group       = "Analysis"
+  }
+
+  foreach qualify-tickets {
+    over          = tickets
+    scope         = { unlabeled = true }
+    max_parallel  = 3
+    workflow      = "qualify-ticket-comment"
+    inputs        = { ticket_id = "{{item.id}}" }
+    on_child_fail = continue
+  }
+}
