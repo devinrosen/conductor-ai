@@ -2473,4 +2473,69 @@ mod tests {
             "AgentActivity focus should be reset to Steps when there is no agent"
         );
     }
+
+    // ── spawn_workflow_in_background: None worktree_path ─────────────────────
+
+    /// Regression test: when `worktree_path` is `None`,
+    /// `spawn_workflow_in_background` must send a `BackgroundError` and return
+    /// early — it must NOT pass an empty string to `execute_workflow_standalone`.
+    ///
+    /// Prior to fix this used `worktree_path.unwrap_or_default()` which silently
+    /// provided `""` as the working directory.
+    #[test]
+    fn spawn_workflow_in_background_none_worktree_path_sends_background_error() {
+        use conductor_core::workflow::{WorkflowDef, WorkflowTrigger};
+
+        let mut app = make_app();
+
+        // Wire up a test channel so we can observe what the background thread sends.
+        let (bg_tx, bg_rx) = crate::event::BackgroundSender::channel_for_test();
+        app.bg_tx = Some(bg_tx);
+
+        let def = WorkflowDef {
+            name: "test-wf".into(),
+            title: None,
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec!["worktree".to_string()],
+            group: None,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: ".conductor/workflows/test-wf.wf".into(),
+        };
+
+        app.spawn_workflow_in_background(SpawnWorkflowParams {
+            def,
+            worktree_id: Some("w1".into()),
+            worktree_path: None, // the problematic case
+            repo_path: "/tmp/repo".into(),
+            ticket_id: None,
+            inputs: std::collections::HashMap::new(),
+            target_label: None,
+            model: None,
+            repo_slug: None,
+            wt_slug: None,
+            repo_id: None,
+            extra_plugin_dirs: vec![],
+        });
+
+        // Join all background threads — must complete quickly because the None
+        // worktree_path path returns early without executing any workflow.
+        for handle in app.workflow_threads.drain(..) {
+            handle.join().expect("background thread panicked");
+        }
+
+        // The background thread must have sent exactly one BackgroundError.
+        let actions: Vec<crate::action::Action> =
+            std::iter::from_fn(|| bg_rx.try_recv().ok()).collect();
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                crate::action::Action::BackgroundError { message }
+                    if message.contains("worktree path is not set")
+            )),
+            "expected a BackgroundError about missing worktree path; got: {actions:?}"
+        );
+    }
 }

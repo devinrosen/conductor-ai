@@ -1096,33 +1096,60 @@ pub fn run(conn: &Connection) -> Result<()> {
     // Migration 067: add workflow_run_step_fan_out_items table and fan-out counter
     // columns on workflow_run_steps for foreach step type (RFC 010).
     //
-    // Guard checks both the new table AND the ALTER TABLE columns.  SQLite's autocommit
-    // means CREATE TABLE can succeed while a subsequent ALTER TABLE in the same batch
-    // fails, leaving a partial state.  If that happens on a re-run, `has_table` alone
-    // would skip the whole batch and bump the version — leaving workflow_run_steps
-    // missing the fan_out_* columns.  We fix this by:
-    //   • neither present  → run the full SQL file (normal first-run path)
-    //   • table present, column absent → apply only the four ALTER TABLEs
-    //   • both present → nothing to do
+    // Guard checks both the new table AND ALL four ALTER TABLE columns.  SQLite's
+    // autocommit means CREATE TABLE and individual ALTER TABLEs can succeed or fail
+    // independently, leaving any subset of the four columns present.  We handle
+    // all partial states:
+    //   • neither table nor any column present  → run the full SQL file
+    //   • table present, ≥1 column missing      → add only the missing columns
+    //   • table and all columns present          → nothing to do
     if version < 67 {
         let has_table: bool = conn
             .prepare("SELECT id FROM workflow_run_step_fan_out_items LIMIT 0")
             .is_ok();
-        let has_col: bool = conn
+        // Check all four columns — partial failure can leave any subset present.
+        let has_total: bool = conn
             .prepare("SELECT fan_out_total FROM workflow_run_steps LIMIT 0")
             .is_ok();
-        if !has_table && !has_col {
+        let has_completed: bool = conn
+            .prepare("SELECT fan_out_completed FROM workflow_run_steps LIMIT 0")
+            .is_ok();
+        let has_failed: bool = conn
+            .prepare("SELECT fan_out_failed FROM workflow_run_steps LIMIT 0")
+            .is_ok();
+        let has_skipped: bool = conn
+            .prepare("SELECT fan_out_skipped FROM workflow_run_steps LIMIT 0")
+            .is_ok();
+        let has_all_cols = has_total && has_completed && has_failed && has_skipped;
+
+        if !has_table && !has_all_cols {
             conn.execute_batch(include_str!(
                 "migrations/067_workflow_run_step_fan_out_items.sql"
             ))?;
-        } else if has_table && !has_col {
-            // Partial failure recovery: table was created but ALTER TABLEs did not run.
-            conn.execute_batch(
-                "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_total     INTEGER;\
-                 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER DEFAULT 0;\
-                 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed    INTEGER DEFAULT 0;\
-                 ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped   INTEGER DEFAULT 0;",
-            )?;
+        } else if has_table && !has_all_cols {
+            // Partial failure recovery: table was created but some ALTER TABLEs did
+            // not run (or were interrupted mid-batch).  Add only the missing columns
+            // so we don't re-add ones that already exist.
+            if !has_total {
+                conn.execute_batch(
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_total INTEGER;",
+                )?;
+            }
+            if !has_completed {
+                conn.execute_batch(
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_completed INTEGER DEFAULT 0;",
+                )?;
+            }
+            if !has_failed {
+                conn.execute_batch(
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_failed INTEGER DEFAULT 0;",
+                )?;
+            }
+            if !has_skipped {
+                conn.execute_batch(
+                    "ALTER TABLE workflow_run_steps ADD COLUMN fan_out_skipped INTEGER DEFAULT 0;",
+                )?;
+            }
         }
         bump_version(conn, 67)?;
     }
@@ -2222,5 +2249,119 @@ mod tests {
             err.is_err(),
             "invalid role must still be rejected after migration 068"
         );
+    }
+
+    /// Regression: partial-failure recovery for migration 067 must add ALL four
+    /// fan_out columns, not only the first one it checks (`fan_out_total`).
+    ///
+    /// Simulates the case where a prior run's ALTER TABLE batch was interrupted
+    /// after adding `fan_out_total` but before the remaining three columns.
+    /// When `run()` is called again it must add the three missing columns so
+    /// that migration 068 (which references all four) can succeed.
+    #[test]
+    fn test_migration_067_partial_failure_recovery_adds_all_missing_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Build the full schema at schema_version = 66 that already has
+        // `workflow_run_step_fan_out_items` and `fan_out_total` present —
+        // simulating a crash that created the table and added only the first
+        // ALTER TABLE column before failing.
+        //
+        // The schema must include ALL columns referenced by migration 068's
+        // INSERT…SELECT so that run() can complete the partial state and then
+        // apply 068 without errors.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY,
+                 workflow_name TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'pending',
+                 started_at TEXT NOT NULL
+             );
+             CREATE TABLE workflow_run_steps (
+                 id                TEXT PRIMARY KEY,
+                 workflow_run_id   TEXT NOT NULL,
+                 step_name         TEXT NOT NULL,
+                 role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate','workflow','script')),
+                 can_commit        INTEGER NOT NULL DEFAULT 0,
+                 condition_expr    TEXT,
+                 status            TEXT NOT NULL DEFAULT 'pending'
+                                   CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
+                 child_run_id      TEXT,
+                 position          INTEGER NOT NULL,
+                 started_at        TEXT,
+                 ended_at          TEXT,
+                 result_text       TEXT,
+                 condition_met     INTEGER,
+                 iteration         INTEGER NOT NULL DEFAULT 0,
+                 parallel_group_id TEXT,
+                 context_out       TEXT,
+                 markers_out       TEXT,
+                 retry_count       INTEGER NOT NULL DEFAULT 0,
+                 gate_type         TEXT,
+                 gate_prompt       TEXT,
+                 gate_timeout      TEXT,
+                 gate_approved_by  TEXT,
+                 gate_approved_at  TEXT,
+                 gate_feedback     TEXT,
+                 structured_output TEXT,
+                 output_file       TEXT,
+                 gate_options      TEXT,
+                 gate_selections   TEXT,
+                 subprocess_pid    INTEGER,
+                 fan_out_total     INTEGER
+             );
+             CREATE TABLE workflow_run_step_fan_out_items (
+                 id           TEXT PRIMARY KEY,
+                 step_run_id  TEXT NOT NULL,
+                 item_type    TEXT NOT NULL,
+                 item_id      TEXT NOT NULL,
+                 item_ref     TEXT NOT NULL,
+                 status       TEXT NOT NULL DEFAULT 'pending'
+             );
+             INSERT INTO _conductor_meta VALUES ('schema_version', '66');",
+        )
+        .unwrap();
+
+        // Confirm the partial-failure state: table present, fan_out_total present,
+        // but the other three columns absent.
+        assert!(
+            conn.prepare("SELECT fan_out_total FROM workflow_run_steps LIMIT 0")
+                .is_ok(),
+            "fan_out_total should already exist (partial failure state)"
+        );
+        assert!(
+            conn.prepare("SELECT fan_out_completed FROM workflow_run_steps LIMIT 0")
+                .is_err(),
+            "fan_out_completed should NOT yet exist"
+        );
+
+        // run() must detect the partial state and add the three missing columns.
+        run(&conn).unwrap();
+
+        // All four fan_out_* columns must now exist.
+        for col in &[
+            "fan_out_total",
+            "fan_out_completed",
+            "fan_out_failed",
+            "fan_out_skipped",
+        ] {
+            assert!(
+                conn.prepare(&format!("SELECT {col} FROM workflow_run_steps LIMIT 0"))
+                    .is_ok(),
+                "column {col} must exist after recovery"
+            );
+        }
+
+        // Migration 068's INSERT…SELECT (which references all four columns)
+        // must also work — i.e., the schema is fully consistent.
+        conn.execute(
+            "INSERT INTO workflow_run_steps
+             (id, workflow_run_id, step_name, role, position)
+             VALUES ('s1', 'run1', 'step', 'foreach', 0)",
+            [],
+        )
+        .expect("role='foreach' must be accepted after full 067+068 recovery");
     }
 }
