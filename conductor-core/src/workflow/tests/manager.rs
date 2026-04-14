@@ -2476,8 +2476,16 @@ fn test_reap_stuck_workflow_runs_skips_waiting_step() {
 #[test]
 fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     let conn = setup_db();
-    // Insert a root run first to satisfy the FK for parent_workflow_run_id.
+    // Insert a root run with a running step so it is NOT detected as stuck.
     insert_running_root_run(&conn, "root-run");
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
+         VALUES ('root-step', 'root-run', 'step-a', 'actor', 0, 'running', 0, \
+                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        [],
+    )
+    .unwrap();
     // Insert a sub-workflow with parent_workflow_run_id set.
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
@@ -2533,14 +2541,21 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
 }
 
 #[test]
-fn test_reap_stuck_workflow_runs_skips_no_steps() {
+fn test_reap_stuck_workflow_runs_detects_zero_step_runs() {
     let conn = setup_db();
     insert_running_root_run(&conn, "no-steps-run");
-    // No steps inserted → last_step_ended IS NULL → skipped by SQL guard.
+    // No steps inserted — the executor may have died before creating any steps.
+    // detect_stuck_workflow_run_ids now matches reap_heartbeat_stuck_runs behavior:
+    // zero-step runs ARE detected as stuck.
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
-    assert_eq!(ids.len(), 0, "run with no steps must not be detected");
+    assert_eq!(
+        ids.len(),
+        1,
+        "run with no steps should be detected as stuck"
+    );
+    assert_eq!(ids[0], "no-steps-run");
 }
 
 #[test]

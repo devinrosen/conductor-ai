@@ -345,28 +345,14 @@ impl<'a> WorkflowManager<'a> {
     /// executor process died between steps (all steps terminal, no active work).
     ///
     /// This is the detection-only counterpart of [`reap_heartbeat_stuck_runs`],
-    /// useful for diagnostics and tests. Uses the same heartbeat-based query.
+    /// useful for diagnostics and tests. Uses the same query (including runs
+    /// with zero steps — the executor may have died before creating any).
     pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
-        self.query_stuck_workflow_run_ids(threshold_secs)
-    }
-
-    /// Shared SQL query for detecting stuck workflow runs based on heartbeat.
-    ///
-    /// A run is considered stuck when ALL of the following hold:
-    /// 1. `status = 'running'`
-    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
-    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
-    /// 4. `COALESCE(last_heartbeat, started_at)` is older than `threshold_secs`
-    fn query_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
         query_collect(
             self.conn,
             "SELECT id FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
-               AND EXISTS ( \
-                 SELECT 1 FROM workflow_run_steps wrs \
-                 WHERE wrs.workflow_run_id = workflow_runs.id \
-               ) \
                AND NOT EXISTS ( \
                  SELECT 1 FROM workflow_run_steps wrs \
                  WHERE wrs.workflow_run_id = workflow_runs.id \
@@ -448,7 +434,6 @@ impl<'a> WorkflowManager<'a> {
         }
 
         let agent_mgr = crate::agent::AgentManager::new(self.conn);
-        let now_str = Utc::now().to_rfc3339();
         let mut reaped = Vec::new();
 
         for s in stale {
@@ -474,11 +459,9 @@ impl<'a> WorkflowManager<'a> {
             }
 
             // Mark the workflow step as failed.
-            self.conn.execute(
-                "UPDATE workflow_run_steps SET status = 'failed', ended_at = ?1, \
-                 result_text = 'Agent process died — marked by stale workflow watchdog' \
-                 WHERE id = ?2",
-                params![now_str, s.step_id],
+            self.fail_step_with_message(
+                &s.step_id,
+                "Agent process died — marked by stale workflow watchdog",
             )?;
 
             // Mark the workflow run as failed.
@@ -535,10 +518,8 @@ impl<'a> WorkflowManager<'a> {
         threshold_secs: i64,
         conductor_bin_dir: Option<PathBuf>,
     ) -> Result<usize> {
-        // Step 1: find orphaned root runs.
-        // Unlike detect_stuck_workflow_run_ids (which requires at least one step),
-        // this also reaps runs with zero steps — the executor may have died before
-        // creating any steps.
+        // Step 1: find orphaned root runs (including zero-step runs — the
+        // executor may have died before creating any steps).
         let orphaned_ids: Vec<String> = query_collect(
             self.conn,
             "SELECT id FROM workflow_runs \

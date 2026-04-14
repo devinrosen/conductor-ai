@@ -10,13 +10,12 @@ use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, estimation, execute_workflow, validate_resume_preconditions,
-    FanOutItemRow,
-    GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow,
-    StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity, WorkflowDef, WorkflowExecConfig,
-    WorkflowExecInput, WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles,
-    WorkflowRegressionSignal, WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow,
-    WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate,
-    WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
+    FanOutItemRow, GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot,
+    StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
+    WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowFailureRateTrendRow,
+    WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResumeStandalone,
+    WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+    WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -973,18 +972,22 @@ pub async fn list_all_workflow_runs_handler(
     // Batch-fetch historical durations (workflow-level) and step histories
     let historical_durations: HashMap<String, Vec<i64>> = active_workflow_names
         .iter()
-        .filter_map(|name| {
-            mgr.get_completed_run_durations(name, 15)
-                .ok()
-                .map(|d| (name.to_string(), d))
+        .filter_map(|name| match mgr.get_completed_run_durations(name, 15) {
+            Ok(d) => Some((name.to_string(), d)),
+            Err(e) => {
+                tracing::warn!(workflow = %name, "get_completed_run_durations failed: {e}");
+                None
+            }
         })
         .collect();
     let step_histories: HashMap<String, HashMap<String, Vec<i64>>> = active_workflow_names
         .into_iter()
-        .filter_map(|name| {
-            mgr.get_completed_step_durations(name, 20)
-                .ok()
-                .map(|d| (name.to_string(), d))
+        .filter_map(|name| match mgr.get_completed_step_durations(name, 20) {
+            Ok(d) => Some((name.to_string(), d)),
+            Err(e) => {
+                tracing::warn!(workflow = %name, "get_completed_step_durations failed: {e}");
+                None
+            }
         })
         .collect();
 

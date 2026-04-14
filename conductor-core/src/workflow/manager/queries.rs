@@ -1047,7 +1047,7 @@ impl<'a> WorkflowManager<'a> {
                AND started_at IS NOT NULL \
                AND ended_at IS NOT NULL"
         );
-        let mut step_stmt = self.conn.prepare_cached(&step_sql)?;
+        let mut step_stmt = self.conn.prepare(&step_sql)?;
         let rows = step_stmt.query_map(rusqlite::params_from_iter(run_ids.iter()), |row| {
             let name: String = row.get(0)?;
             let dur: i64 = row.get(1)?;
