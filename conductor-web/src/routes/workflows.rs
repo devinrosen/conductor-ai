@@ -10,12 +10,12 @@ use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, estimation, execute_workflow, validate_resume_preconditions,
-    FanOutItemRow, GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot,
-    StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
+    validate_workflows_batch, FanOutItemRow, GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow,
+    RunIdSlot, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
     WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowFailureRateTrendRow,
     WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResumeStandalone,
     WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
+    WorkflowTokenAggregate, WorkflowTokenTrendRow, WorkflowWarning, REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -188,6 +188,10 @@ pub struct WorkflowDefSummary {
     pub node_count: usize,
     pub group: Option<String>,
     pub targets: Vec<String>,
+    /// Whether the workflow definition is valid (parsed and passed validation).
+    pub valid: bool,
+    /// Human-readable error message if `valid` is false.
+    pub error: Option<String>,
 }
 
 impl From<&WorkflowDef> for WorkflowDefSummary {
@@ -201,11 +205,58 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             node_count: def.top_level_steps(),
             group: def.group.clone(),
             targets: def.targets.clone(),
+            valid: true,
+            error: None,
+        }
+    }
+}
+
+impl WorkflowDefSummary {
+    /// Build an invalid summary from a parse warning.
+    ///
+    /// Uses the filename stem as the display name since parsing may have failed
+    /// before a name could be extracted from the file contents.
+    fn from_parse_warning(w: &WorkflowWarning) -> Self {
+        let name = std::path::Path::new(&w.file)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&w.file)
+            .to_string();
+        Self {
+            name,
+            title: None,
+            description: String::new(),
+            trigger: String::new(),
+            inputs: Vec::new(),
+            node_count: 0,
+            group: None,
+            targets: Vec::new(),
+            valid: false,
+            error: Some(w.message.clone()),
         }
     }
 }
 
 // ── Request types ─────────────────────────────────────────────────────
+
+/// Filter for workflow listing endpoints.
+#[derive(Deserialize, utoipa::ToSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusFilter {
+    /// Return all workflows (valid and invalid). This is the default.
+    #[default]
+    All,
+    /// Return only successfully-parsed and validated workflows.
+    Valid,
+    /// Return only workflows that failed to parse or failed validation.
+    Invalid,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct WorkflowListParams {
+    /// Filter by validity status. Defaults to `all`.
+    pub status: Option<StatusFilter>,
+}
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct RunWorkflowRequest {
@@ -248,9 +299,10 @@ pub struct GateActionRequest {
     path = "/api/repos/{id}/workflows",
     params(
         ("id" = String, Path, description = "Repo ID"),
+        ("status" = Option<StatusFilter>, Query, description = "Filter by validity: valid, invalid, or all (default)"),
     ),
     responses(
-        (status = 200, description = "List of workflow definitions for repo", body = Vec<WorkflowDefSummary>),
+        (status = 200, description = "List of workflow definitions for repo (includes invalid entries)", body = Vec<WorkflowDefSummary>),
         (status = 404, description = "Repo not found"),
     ),
     tag = "workflows",
@@ -259,17 +311,76 @@ pub struct GateActionRequest {
 pub async fn list_repo_workflow_defs(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
+    Query(params): Query<WorkflowListParams>,
 ) -> Result<Json<Vec<WorkflowDefSummary>>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
 
     let (defs, warnings) = WorkflowManager::list_defs("", &repo.local_path).unwrap_or_default();
-    for w in &warnings {
-        tracing::warn!("Failed to parse {}: {}", w.file, w.message);
+
+    // Convert parse failures to invalid summaries.
+    let mut summaries: Vec<WorkflowDefSummary> = warnings
+        .iter()
+        .map(WorkflowDefSummary::from_parse_warning)
+        .collect();
+
+    // Build a name→def map for the batch-validate loader closure.
+    let def_map: std::collections::HashMap<String, WorkflowDef> =
+        defs.iter().map(|d| (d.name.clone(), d.clone())).collect();
+
+    // Run post-parse validation on successfully-parsed defs.
+    let validation = validate_workflows_batch(
+        &defs,
+        &[],
+        "",
+        &repo.local_path,
+        &std::collections::HashSet::new(),
+        &|name: &str| {
+            def_map
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("workflow '{name}' not found"))
+        },
+    );
+
+    // Build a map of workflow name → joined validation error string.
+    let validation_errors: std::collections::HashMap<String, String> = validation
+        .entries
+        .iter()
+        .filter(|e| !e.errors.is_empty())
+        .map(|e| {
+            let msg = e
+                .errors
+                .iter()
+                .map(|v| v.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            (e.name.clone(), msg)
+        })
+        .collect();
+
+    // Convert parsed defs to summaries, marking validation failures.
+    for def in &defs {
+        let mut summary = WorkflowDefSummary::from(def);
+        if let Some(err) = validation_errors.get(&def.name) {
+            summary.valid = false;
+            summary.error = Some(err.clone());
+        }
+        summaries.push(summary);
     }
-    let summaries: Vec<WorkflowDefSummary> = defs.iter().map(WorkflowDefSummary::from).collect();
-    Ok(Json(summaries))
+
+    // Sort alphabetically by name for a consistent ordering.
+    summaries.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Apply optional status filter.
+    let result = match params.status.unwrap_or_default() {
+        StatusFilter::All => summaries,
+        StatusFilter::Valid => summaries.into_iter().filter(|s| s.valid).collect(),
+        StatusFilter::Invalid => summaries.into_iter().filter(|s| !s.valid).collect(),
+    };
+
+    Ok(Json(result))
 }
 
 #[utoipa::path(
@@ -277,9 +388,10 @@ pub async fn list_repo_workflow_defs(
     path = "/api/worktrees/{id}/workflows/defs",
     params(
         ("id" = String, Path, description = "Worktree ID"),
+        ("status" = Option<StatusFilter>, Query, description = "Filter by validity: valid, invalid, or all (default)"),
     ),
     responses(
-        (status = 200, description = "List of workflow definitions for worktree", body = Vec<WorkflowDefSummary>),
+        (status = 200, description = "List of workflow definitions for worktree (includes invalid entries)", body = Vec<WorkflowDefSummary>),
         (status = 404, description = "Worktree not found"),
     ),
     tag = "workflows",
@@ -288,6 +400,7 @@ pub async fn list_repo_workflow_defs(
 pub async fn list_workflow_defs(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
+    Query(params): Query<WorkflowListParams>,
 ) -> Result<Json<Vec<WorkflowDefSummary>>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
@@ -297,11 +410,69 @@ pub async fn list_workflow_defs(
 
     let (defs, warnings) =
         WorkflowManager::list_defs(&wt.path, &repo.local_path).unwrap_or_default();
-    for w in &warnings {
-        tracing::warn!("Failed to parse {}: {}", w.file, w.message);
+
+    // Convert parse failures to invalid summaries.
+    let mut summaries: Vec<WorkflowDefSummary> = warnings
+        .iter()
+        .map(WorkflowDefSummary::from_parse_warning)
+        .collect();
+
+    // Build a name→def map for the batch-validate loader closure.
+    let def_map: std::collections::HashMap<String, WorkflowDef> =
+        defs.iter().map(|d| (d.name.clone(), d.clone())).collect();
+
+    // Run post-parse validation on successfully-parsed defs.
+    let validation = validate_workflows_batch(
+        &defs,
+        &[],
+        &wt.path,
+        &repo.local_path,
+        &std::collections::HashSet::new(),
+        &|name: &str| {
+            def_map
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("workflow '{name}' not found"))
+        },
+    );
+
+    // Build a map of workflow name → joined validation error string.
+    let validation_errors: std::collections::HashMap<String, String> = validation
+        .entries
+        .iter()
+        .filter(|e| !e.errors.is_empty())
+        .map(|e| {
+            let msg = e
+                .errors
+                .iter()
+                .map(|v| v.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            (e.name.clone(), msg)
+        })
+        .collect();
+
+    // Convert parsed defs to summaries, marking validation failures.
+    for def in &defs {
+        let mut summary = WorkflowDefSummary::from(def);
+        if let Some(err) = validation_errors.get(&def.name) {
+            summary.valid = false;
+            summary.error = Some(err.clone());
+        }
+        summaries.push(summary);
     }
-    let summaries: Vec<WorkflowDefSummary> = defs.iter().map(WorkflowDefSummary::from).collect();
-    Ok(Json(summaries))
+
+    // Sort alphabetically by name for a consistent ordering.
+    summaries.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Apply optional status filter.
+    let result = match params.status.unwrap_or_default() {
+        StatusFilter::All => summaries,
+        StatusFilter::Valid => summaries.into_iter().filter(|s| s.valid).collect(),
+        StatusFilter::Invalid => summaries.into_iter().filter(|s| !s.valid).collect(),
+    };
+
+    Ok(Json(result))
 }
 
 #[utoipa::path(
