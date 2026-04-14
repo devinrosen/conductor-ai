@@ -135,7 +135,7 @@ pub fn execute_parallel(
             Some(&state.workflow_name),
         )?;
 
-        let prompt = build_agent_prompt(state, &agent_def, effective_schema, &snippet_text);
+        let prompt = build_agent_prompt(state, &agent_def, effective_schema, &snippet_text, None);
         let step_model = agent_def.model.as_deref().or(state.model.as_deref());
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,

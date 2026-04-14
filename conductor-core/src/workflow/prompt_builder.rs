@@ -98,6 +98,7 @@ pub(super) fn build_agent_prompt(
     agent_def: &crate::agent_config::AgentDef,
     schema: Option<&schema_config::OutputSchema>,
     snippet_text: &str,
+    retry_context: Option<&str>,
 ) -> String {
     let vars = build_variable_map(state);
     let mut prompt = substitute_variables(&agent_def.prompt, &vars);
@@ -106,6 +107,14 @@ pub(super) fn build_agent_prompt(
     prompt = format!(
         "Your task below is your ONLY priority. Complete it fully before considering anything else.\n\n{prompt}"
     );
+
+    // Retry failure preamble: prepended before the task reinforcement so the
+    // agent sees it first when retrying after a failed attempt.
+    if let Some(msg) = retry_context {
+        prompt = format!(
+            "[Previous attempt failed]\nError: {msg}\nPlease re-read the instructions below and correct your output.\n\n{prompt}"
+        );
+    }
 
     if agent_def.can_commit && state.exec_config.dry_run {
         prompt = format!("DO NOT commit or push any changes. This is a dry run.\n\n{prompt}");
@@ -310,6 +319,60 @@ mod tests {
         vars.insert("name", "world".to_string());
         let result = substitute_variables("hello {{name}} and {{unknown}}", &vars);
         assert_eq!(result, "hello world and ");
+    }
+
+    #[test]
+    fn test_build_agent_prompt_no_retry_context() {
+        let conn = crate::test_helpers::create_test_conn();
+        let state = make_state(&conn);
+        let agent_def = crate::agent_config::AgentDef {
+            name: "test-agent".into(),
+            prompt: "Do the thing.".into(),
+            role: crate::agent_config::AgentRole::Actor,
+            can_commit: false,
+            model: None,
+        };
+        let result = build_agent_prompt(&state, &agent_def, None, "", None);
+        assert!(
+            !result.contains("[Previous attempt failed]"),
+            "No retry preamble expected when retry_context is None"
+        );
+    }
+
+    #[test]
+    fn test_build_agent_prompt_with_retry_context() {
+        let conn = crate::test_helpers::create_test_conn();
+        let state = make_state(&conn);
+        let agent_def = crate::agent_config::AgentDef {
+            name: "test-agent".into(),
+            prompt: "Do the thing.".into(),
+            role: crate::agent_config::AgentRole::Actor,
+            can_commit: false,
+            model: None,
+        };
+        let error_msg = "schema validation failed: missing field 'context'";
+        let result = build_agent_prompt(&state, &agent_def, None, "", Some(error_msg));
+        assert!(
+            result.contains("[Previous attempt failed]"),
+            "Retry preamble expected when retry_context is Some"
+        );
+        assert!(
+            result.contains(error_msg),
+            "Error message should appear in retry preamble"
+        );
+        assert!(
+            result.contains("Please re-read the instructions below and correct your output."),
+            "Correction instruction should appear in retry preamble"
+        );
+        // The preamble should appear before the task reinforcement line
+        let preamble_pos = result.find("[Previous attempt failed]").unwrap();
+        let reinforcement_pos = result
+            .find("Your task below is your ONLY priority")
+            .unwrap();
+        assert!(
+            preamble_pos < reinforcement_pos,
+            "Retry preamble should appear before task reinforcement"
+        );
     }
 
     #[test]
