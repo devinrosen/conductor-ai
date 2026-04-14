@@ -986,7 +986,7 @@ impl<'a> WorkflowManager<'a> {
                AND structured_output IS NOT NULL \
              ORDER BY position ASC"
         );
-        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(run_ids.iter()), |row| {
             let run_id: String = row.get(0)?;
             let json_str: String = row.get(1)?;
