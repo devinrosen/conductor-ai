@@ -1846,8 +1846,16 @@ mod tests {
             .get_plan_estimates_for_runs(&["run-est-1", "run-est-2"])
             .unwrap();
 
-        assert_eq!(estimates.get("run-est-1"), Some(&1_800_000i64), "30 min → 1_800_000 ms");
-        assert_eq!(estimates.get("run-est-2"), Some(&600_000i64), "10 min → 600_000 ms");
+        assert_eq!(
+            estimates.get("run-est-1"),
+            Some(&1_800_000i64),
+            "30 min → 1_800_000 ms"
+        );
+        assert_eq!(
+            estimates.get("run-est-2"),
+            Some(&600_000i64),
+            "10 min → 600_000 ms"
+        );
 
         // Empty input should return an empty map without querying the DB.
         let empty = mgr.get_plan_estimates_for_runs(&[]).unwrap();
