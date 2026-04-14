@@ -154,6 +154,32 @@ impl Parser {
         }
     }
 
+    /// Check if the given token can be used as a value in KV pairs
+    fn is_value_token(token: &Token) -> bool {
+        matches!(
+            token,
+            Token::StringLit(_)
+                | Token::Int(_)
+                | Token::Ident(_)
+                | Token::LBracket
+                | Token::LBrace
+                // Keyword tokens that are accepted as values
+                | Token::Required
+                | Token::Default
+                | Token::Description
+                | Token::Boolean
+                | Token::Call
+                | Token::If
+                | Token::Unless
+                | Token::While
+                | Token::Parallel
+                | Token::Gate
+                | Token::Always
+                | Token::Script
+                | Token::ForEach
+        )
+    }
+
     fn expect_value(&mut self) -> std::result::Result<KvValue, String> {
         match self.advance() {
             Token::StringLit(s) => Ok(KvValue::Quoted(s)),
@@ -258,37 +284,17 @@ impl Parser {
                     // Bare shorthand: `key value` (no `=`).
                     // Allowed when the next token is a value literal (string, ident,
                     // int, keyword, or array opener) but NOT a brace (which would be a block).
-                    let next_is_value = matches!(
-                        next_token,
-                        Some(Token::StringLit(_))
-                            | Some(Token::Ident(_))
-                            | Some(Token::Int(_))
-                            | Some(Token::LBracket)
-                            // Include all keyword tokens that are accepted by expect_value()
-                            | Some(Token::Required)
-                            | Some(Token::Default)
-                            | Some(Token::Description)
-                            | Some(Token::Boolean)
-                            | Some(Token::Call)
-                            | Some(Token::If)
-                            | Some(Token::Unless)
-                            | Some(Token::While)
-                            | Some(Token::Parallel)
-                            | Some(Token::Gate)
-                            | Some(Token::Always)
-                            | Some(Token::Script)
-                            | Some(Token::ForEach)
+                    let next_is_value = next_token.is_some_and(|token|
+                        Self::is_value_token(token) && !matches!(token, Token::LBrace)
                     );
 
-                    if next_is_eq {
-                        // Standard form: `key = value`
+                    if next_is_eq || next_is_value {
                         let key = self.expect_ident()?;
-                        self.expect(&Token::Equals)?;
-                        let value = self.expect_value()?;
-                        kvs.insert(key, value);
-                        continue;
-                    } else if next_is_value {
-                        let key = self.expect_ident()?;
+                        if next_is_eq {
+                            // Standard form: `key = value`
+                            self.expect(&Token::Equals)?;
+                        }
+                        // Bare shorthand: `key value` (no `=`) or standard form after consuming `=`
                         let value = self.expect_value()?;
                         kvs.insert(key, value);
                         continue;

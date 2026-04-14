@@ -632,28 +632,38 @@ workflow bare-kv-test {
 }
 
 #[test]
-fn test_bare_kv_with_integer_values() {
-    // Test bare `key integer` syntax for numeric values
+fn test_bare_kv_with_keyword_values() {
+    // Test bare `key keyword` syntax for keyword token values
     let src = r#"
-workflow bare-int-test {
+workflow bare-keyword-test {
   meta {
-    description "Test integer bare KV"
+    description "Test keyword bare KV"
     trigger     manual
     targets     ["worktree"]
   }
 
   call build {
-    description "Build with retries"
-    retries 3
-    timeout 300
+    description "Build with keyword values"
+    mode parallel
+    type call
+    state required
   }
 }
 "#;
     let def = parse_workflow_str(src, "test.wf").unwrap();
 
-    // This test verifies that Token::Int bare-KV syntax works (e.g., `retries 3`, `timeout 300`)
-    // The successful parsing without syntax errors confirms the feature works
+    // This test verifies that keyword tokens can be used as bare values
+    // The successful parsing without syntax errors demonstrates that keyword tokens
+    // like 'parallel', 'call', and 'required' are now accepted as bare values
     assert_eq!(def.body.len(), 1);
+
+    // Verify the call node was parsed successfully
+    match &def.body[0] {
+        WorkflowNode::Call(_) => {
+            // Test passes if parsing succeeds - the keyword tokens were accepted as values
+        }
+        _ => panic!("Expected call node"),
+    }
 }
 
 #[test]
