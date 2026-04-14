@@ -3943,5 +3943,8 @@ fn test_spike_baseline_excludes_sub_workflow_runs() {
         "avg_cost_usd should exclude sub-workflow runs, got {}",
         baseline.avg_cost_usd
     );
-    assert_eq!(baseline.run_count, 6, "run_count should be 6 root runs only");
+    assert_eq!(
+        baseline.run_count, 6,
+        "run_count should be 6 root runs only"
+    );
 }
