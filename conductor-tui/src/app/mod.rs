@@ -130,6 +130,24 @@ impl App {
         Ok(())
     }
 
+    /// Return a cloned background sender, or show an error modal and return `None`.
+    ///
+    /// Use this as a guard at the top of any action that requires the background
+    /// channel (any action that spawns a thread). The three call sites in
+    /// `modal_dialog.rs` (DeleteWorktree, UnregisterRepo, ClearConversation) all
+    /// follow the same pattern — this method eliminates that duplication.
+    pub(super) fn require_bg_tx(&mut self) -> Option<crate::event::BackgroundSender> {
+        match self.bg_tx.clone() {
+            Some(tx) => Some(tx),
+            None => {
+                self.state.modal = crate::state::Modal::Error {
+                    message: BG_TX_NOT_READY.into(),
+                };
+                None
+            }
+        }
+    }
+
     /// Handle an action by mutating state. Returns true if the UI needs a redraw.
     ///
     /// This thin wrapper delegates to `handle_action` and updates

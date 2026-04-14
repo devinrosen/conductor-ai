@@ -38,10 +38,7 @@ impl App {
                 );
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
-                let Some(bg_tx) = self.bg_tx.clone() else {
-                    self.state.modal = Modal::Error {
-                        message: "Cannot delete worktree: background sender not ready.".into(),
-                    };
+                let Some(bg_tx) = self.require_bg_tx() else {
                     return;
                 };
                 self.state.modal = Modal::Progress {
@@ -63,10 +60,7 @@ impl App {
                 });
             }
             ConfirmAction::UnregisterRepo { repo_slug } => {
-                let Some(bg_tx) = self.bg_tx.clone() else {
-                    self.state.modal = Modal::Error {
-                        message: "Cannot unregister repo: background sender not ready.".into(),
-                    };
+                let Some(bg_tx) = self.require_bg_tx() else {
                     return;
                 };
                 self.state.modal = Modal::Progress {
@@ -177,10 +171,7 @@ impl App {
                 wt_slug,
                 wt_id,
             } => {
-                let Some(bg_tx) = self.bg_tx.clone() else {
-                    self.state.modal = Modal::Error {
-                        message: "Cannot clear conversation: background sender not ready.".into(),
-                    };
+                let Some(bg_tx) = self.require_bg_tx() else {
                     return;
                 };
                 self.state.modal = Modal::Progress {
@@ -192,11 +183,9 @@ impl App {
                         let db = conductor_core::config::db_path();
                         let conn = conductor_core::db::open_database(&db)?;
                         let conv_mgr = ConversationManager::new(&conn);
-                        let convs = conv_mgr.list(&ConversationScope::Worktree, &wt_id)?;
-                        let conv = convs.into_iter().next().ok_or_else(|| {
-                            anyhow::anyhow!("No conversation found for this worktree")
-                        })?;
-                        conv_mgr.delete(&conv.id).map_err(anyhow::Error::from)
+                        conv_mgr
+                            .clear_for_scope(&ConversationScope::Worktree, &wt_id)
+                            .map_err(anyhow::Error::from)
                     })();
                     let _ = bg_tx.send(crate::action::Action::ClearConversationComplete {
                         repo_slug,

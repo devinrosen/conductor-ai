@@ -27,11 +27,12 @@ pub fn handle_conversation(
             let wt = wt_mgr.get_by_slug(&repo_rec.id, &worktree)?;
 
             let conv_mgr = ConversationManager::new(conn);
+
+            // Verify a conversation exists before prompting the user.
             let convs = conv_mgr.list(&ConversationScope::Worktree, &wt.id)?;
-            let conv = match convs.into_iter().next() {
-                Some(c) => c,
-                None => bail!("No conversation found for {repo}/{worktree}"),
-            };
+            if convs.is_empty() {
+                bail!("No conversation found for {repo}/{worktree}");
+            }
 
             if !yes {
                 eprint!("Clear all conversation history for {repo}/{worktree}? [y/N] ");
@@ -44,7 +45,7 @@ pub fn handle_conversation(
                 }
             }
 
-            match conv_mgr.delete(&conv.id) {
+            match conv_mgr.clear_for_scope(&ConversationScope::Worktree, &wt.id) {
                 Ok(()) => {
                     println!("Conversation cleared.");
                 }
@@ -60,6 +61,7 @@ pub fn handle_conversation(
 
 #[cfg(test)]
 mod tests {
+    use conductor_core::agent::AgentManager;
     use conductor_core::config::Config;
     use conductor_core::conversation::{ConversationManager, ConversationScope};
     use conductor_core::db::open_database;
@@ -147,5 +149,60 @@ mod tests {
         // Confirm it was deleted
         let convs_after = conv_mgr.list(&ConversationScope::Worktree, "wt2").unwrap();
         assert!(convs_after.is_empty());
+    }
+
+    #[test]
+    fn test_clear_fails_when_active_run_exists() {
+        let db_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        let conn = open_database(&db_path).unwrap();
+        let config = Config::default();
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo_mgr = RepoManager::new(&conn, &config);
+        repo_mgr
+            .register(
+                "test-repo3",
+                dir.path().to_str().unwrap(),
+                "https://github.com/test/repo3.git",
+                None,
+            )
+            .unwrap();
+        let repo = repo_mgr.get_by_slug("test-repo3").unwrap();
+        let wt_dir = tempfile::tempdir().unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at)
+             VALUES ('wt3', ?1, 'my-wt3', 'feat/my-wt3', ?2, 'active', '2024-01-01T00:00:00Z')",
+            rusqlite::params![repo.id, wt_dir.path().to_str().unwrap()],
+        )
+        .unwrap();
+
+        // Create a conversation and immediately attach a running agent run.
+        let conv_mgr = ConversationManager::new(&conn);
+        let conv = conv_mgr
+            .create(ConversationScope::Worktree, "wt3")
+            .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        agent_mgr
+            .create_run_for_conversation("wt3", "hello", None, None, &conv.id)
+            .unwrap();
+
+        // The active run should block the clear.
+        let cmd = crate::commands::ConversationCommands::Clear {
+            repo: "test-repo3".into(),
+            worktree: "my-wt3".into(),
+            yes: true,
+        };
+        let err = super::handle_conversation(cmd, &conn, &config).unwrap_err();
+        assert!(
+            err.to_string().contains("active"),
+            "unexpected error: {err}"
+        );
+
+        // Conversation must still exist.
+        let convs = conv_mgr
+            .list(&ConversationScope::Worktree, "wt3")
+            .unwrap();
+        assert_eq!(convs.len(), 1);
     }
 }

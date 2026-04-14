@@ -140,6 +140,25 @@ impl<'a> ConversationManager<'a> {
         Ok(())
     }
 
+    /// Clear the most-recent conversation for a scope (repo or worktree).
+    ///
+    /// Equivalent to calling `list` then `delete` on the first result, but
+    /// encapsulated here so callers do not need to duplicate the orchestration.
+    ///
+    /// # Errors
+    /// - `ConductorError::ConversationNotFound` if no conversation exists for the scope.
+    /// - `ConductorError::ConversationHasActiveRun` if the conversation has an active run.
+    pub fn clear_for_scope(&self, scope: &ConversationScope, scope_id: &str) -> Result<()> {
+        let conv = self
+            .list(scope, scope_id)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| ConductorError::ConversationNotFound {
+                id: scope_id.to_string(),
+            })?;
+        self.delete(&conv.id)
+    }
+
     /// Hard-delete a conversation and all its associated agent runs.
     ///
     /// Child tables of `agent_runs` (events, steps, feedback, created issues) are
