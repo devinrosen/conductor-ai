@@ -90,6 +90,8 @@ pub struct DataCache {
     pub all_repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
     /// Fan-out items keyed by step_run_id (foreach steps only); populated by background poller.
     pub fan_out_items: HashMap<String, Vec<FanOutItemRow>>,
+    /// Cumulative completed token totals per worktree (worktree_id -> (input, output)).
+    pub completed_token_totals_by_worktree: HashMap<String, (i64, i64)>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

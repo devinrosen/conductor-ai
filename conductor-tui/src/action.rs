@@ -75,6 +75,8 @@ pub struct DataRefreshedPayload {
     pub worktree_agent_events: HashMap<String, Vec<AgentRunEvent>>,
     /// All repo-scoped agent events keyed by repo_id (populated by background poller).
     pub repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
+    /// Cumulative completed token totals per worktree (worktree_id -> (input, output)).
+    pub completed_token_totals_by_worktree: HashMap<String, (i64, i64)>,
 }
 
 /// Every user intent or background result flows through this enum.

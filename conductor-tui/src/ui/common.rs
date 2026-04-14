@@ -286,19 +286,34 @@ pub fn worktree_list_item_with_prefix(
         ));
     }
 
-    // Token counts at end for active agent runs.
+    // Show cumulative token totals: completed runs + active run overlay.
+    let (mut total_in, mut total_out) = state
+        .data
+        .completed_token_totals_by_worktree
+        .get(&wt.id)
+        .copied()
+        .unwrap_or((0, 0));
+
+    // Add live-run tokens only if the run is still active (not yet counted in DB aggregate).
     if let Some(run) = agent_run {
         if matches!(
             run.status,
             AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
         ) {
-            if let (Some(input), Some(output)) = (run.input_tokens, run.output_tokens) {
-                spans.push(Span::styled(
-                    format!("  ↑{} ↓{}", fmt_tokens_k(input), fmt_tokens_k(output)),
-                    Style::default().fg(state.theme.status_waiting),
-                ));
-            }
+            total_in += run.input_tokens.unwrap_or(0);
+            total_out += run.output_tokens.unwrap_or(0);
         }
+    }
+
+    if total_in > 0 || total_out > 0 {
+        spans.push(Span::styled(
+            format!(
+                "  up{} dn{}",
+                fmt_tokens_k(total_in),
+                fmt_tokens_k(total_out)
+            ),
+            Style::default().fg(state.theme.status_waiting),
+        ));
     }
 
     ListItem::new(Line::from(spans))
