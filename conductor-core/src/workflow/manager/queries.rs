@@ -1792,4 +1792,65 @@ mod tests {
         let v = pct_change(Some(80.0), Some(100.0)).unwrap();
         assert!((v - (-20.0)).abs() < 1e-9, "expected -20% got {v}");
     }
+
+    /// Regression test for #2130: get_plan_estimates_for_runs previously used
+    /// `prepare_cached` which panics with variable-length IN clauses. Verify
+    /// that querying multiple run IDs in a single call works correctly.
+    #[test]
+    fn get_plan_estimates_for_runs_multiple_ids() {
+        let conn = setup_db();
+
+        // Insert two workflow runs (foreign_keys = OFF, so no workflow needed).
+        for id in &["run-est-1", "run-est-2"] {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+                 VALUES (?1, 'test-wf', NULL, 'dummy-ar', 'completed', datetime('now'))",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        }
+
+        // Insert a completed step with structured_output for run-est-1 (30 min → 1_800_000 ms).
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, structured_output) \
+             VALUES ('step-1', 'run-est-1', 'plan', 'actor', 'completed', 0, '{\"estimated_minutes\": 30}')",
+            [],
+        )
+        .unwrap();
+
+        // Insert a completed step with structured_output for run-est-2 (10 min → 600_000 ms).
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, structured_output) \
+             VALUES ('step-2', 'run-est-2', 'plan', 'actor', 'completed', 0, '{\"estimated_minutes\": 10}')",
+            [],
+        )
+        .unwrap();
+
+        // Insert a step without structured_output — should be ignored.
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, structured_output) \
+             VALUES ('step-3', 'run-est-1', 'build', 'actor', 'completed', 1, NULL)",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+
+        // Query both runs at once — this exercises the variable-length IN clause that
+        // previously triggered the prepare_cached bug.
+        let estimates = mgr
+            .get_plan_estimates_for_runs(&["run-est-1", "run-est-2"])
+            .unwrap();
+
+        assert_eq!(estimates.get("run-est-1"), Some(&1_800_000i64), "30 min → 1_800_000 ms");
+        assert_eq!(estimates.get("run-est-2"), Some(&600_000i64), "10 min → 600_000 ms");
+
+        // Empty input should return an empty map without querying the DB.
+        let empty = mgr.get_plan_estimates_for_runs(&[]).unwrap();
+        assert!(empty.is_empty(), "empty input → empty result");
+    }
 }
