@@ -603,7 +603,10 @@ mod tests {
         let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "completed", "running");
 
         let reaped = mgr.reap_workflow_runs_with_dead_parent().unwrap();
-        assert_eq!(reaped, 1, "workflow_run with completed parent should be reaped");
+        assert_eq!(
+            reaped, 1,
+            "workflow_run with completed parent should be reaped"
+        );
 
         let wf_status: String = conn
             .query_row(
@@ -624,7 +627,10 @@ mod tests {
         let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "cancelled", "running");
 
         let reaped = mgr.reap_workflow_runs_with_dead_parent().unwrap();
-        assert_eq!(reaped, 1, "workflow_run with cancelled parent should be reaped");
+        assert_eq!(
+            reaped, 1,
+            "workflow_run with cancelled parent should be reaped"
+        );
 
         let wf_status: String = conn
             .query_row(
