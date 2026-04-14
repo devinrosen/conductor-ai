@@ -17,12 +17,18 @@ pub struct Feature {
     pub status: FeatureStatus,
     pub created_at: String,
     pub merged_at: Option<String>,
+    pub source_type: Option<String>,
+    pub source_id: Option<String>,
+    pub tickets_total: u32,
+    pub tickets_merged: u32,
 }
 
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FeatureStatus {
-    Active,
+    InProgress,
+    ReadyForReview,
+    Approved,
     Merged,
     Closed,
 }
@@ -30,7 +36,9 @@ pub enum FeatureStatus {
 impl fmt::Display for FeatureStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Active => write!(f, "active"),
+            Self::InProgress => write!(f, "in_progress"),
+            Self::ReadyForReview => write!(f, "ready_for_review"),
+            Self::Approved => write!(f, "approved"),
             Self::Merged => write!(f, "merged"),
             Self::Closed => write!(f, "closed"),
         }
@@ -41,7 +49,9 @@ impl FromStr for FeatureStatus {
     type Err = String;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "active" => Ok(Self::Active),
+            "in_progress" | "active" => Ok(Self::InProgress),
+            "ready_for_review" => Ok(Self::ReadyForReview),
+            "approved" => Ok(Self::Approved),
             "merged" => Ok(Self::Merged),
             "closed" => Ok(Self::Closed),
             other => Err(format!("unknown feature status: {other}")),

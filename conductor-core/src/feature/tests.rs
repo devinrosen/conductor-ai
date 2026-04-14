@@ -30,7 +30,7 @@ fn insert_feature(conn: &Connection, repo_id: &str, name: &str, branch: &str) ->
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, 'main', 'active', ?5)",
+         VALUES (?1, ?2, ?3, ?4, 'main', 'in_progress', ?5)",
         params![id, repo_id, name, branch, now],
     )
     .unwrap();
@@ -133,7 +133,7 @@ fn test_list_active_filters_by_status() {
     let active = mgr.list_active("test-repo").unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].name, "active-feat");
-    assert_eq!(active[0].status, FeatureStatus::Active);
+    assert_eq!(active[0].status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -442,7 +442,7 @@ fn test_create_feature_happy_path() {
     assert_eq!(feature.name, "my-feature");
     assert_eq!(feature.branch, "feat/my-feature");
     assert_eq!(feature.base_branch, "main");
-    assert!(matches!(feature.status, FeatureStatus::Active));
+    assert!(matches!(feature.status, FeatureStatus::InProgress));
     assert!(feature.merged_at.is_none());
 
     // Verify the branch exists in git
@@ -850,7 +850,7 @@ fn test_resolve_active_feature_returns_active() {
     let mgr = FeatureManager::new(&conn, &config);
     let f = mgr.resolve_active_feature("test-repo", "my-feat").unwrap();
     assert_eq!(f.name, "my-feat");
-    assert_eq!(f.status, FeatureStatus::Active);
+    assert_eq!(f.status, FeatureStatus::InProgress);
 }
 
 // -----------------------------------------------------------------------
@@ -1060,7 +1060,7 @@ fn test_ensure_feature_for_branch_creates_feature() {
     assert_eq!(feature.name, "notifications");
     assert_eq!(feature.branch, "feat/notifications");
     assert_eq!(feature.base_branch, "main"); // fallback to default
-    assert_eq!(feature.status, FeatureStatus::Active);
+    assert_eq!(feature.status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -1169,7 +1169,7 @@ fn test_ensure_feature_for_branch_reactivates_closed_feature() {
         "should reuse the name by reactivating the closed feature"
     );
     assert_eq!(feature.branch, "feat/notifications");
-    assert_eq!(feature.status, FeatureStatus::Active);
+    assert_eq!(feature.status, FeatureStatus::InProgress);
     assert_eq!(feature.id, feat_id, "should reactivate the same record");
 }
 
@@ -1348,7 +1348,7 @@ fn test_auto_close_skips_when_active_worktrees_remain() {
 
     // Feature should still be active
     let f = mgr.get_by_name("test-repo", "my-feat").unwrap();
-    assert_eq!(f.status, FeatureStatus::Active);
+    assert_eq!(f.status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -1428,7 +1428,7 @@ fn test_auto_close_skips_when_branch_still_exists() {
 
     // Feature should remain active because the branch still exists
     let f = mgr.get_by_name("test-repo", "still-here").unwrap();
-    assert_eq!(f.status, FeatureStatus::Active);
+    assert_eq!(f.status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -1485,7 +1485,7 @@ fn test_auto_close_after_worktree_delete_skips_default_branch() {
 
     // Feature should remain active
     let f = mgr.get_by_name("test-repo", "main-feat").unwrap();
-    assert_eq!(f.status, FeatureStatus::Active);
+    assert_eq!(f.status, FeatureStatus::InProgress);
 }
 
 /// Regression: FEATURE_ROW_FRAGMENT wt_count subquery must only count
@@ -1559,7 +1559,7 @@ fn make_feature_row(last_commit_at: Option<&str>, last_wt_activity: Option<&str>
         name: "test-feature".to_string(),
         branch: "feat/test".to_string(),
         base_branch: "main".to_string(),
-        status: FeatureStatus::Active,
+        status: FeatureStatus::InProgress,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         worktree_count: 0,
         ticket_count: 0,

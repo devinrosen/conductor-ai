@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 69;
+pub const LATEST_SCHEMA_VERSION: u32 = 70;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -960,6 +960,28 @@ pub fn run(conn: &Connection) -> Result<()> {
     if version < 69 {
         conn.execute_batch(include_str!("migrations/069_workflow_step_error.sql"))?;
         bump_version(conn, 69)?;
+    }
+
+    // Migration 070: RFC-018 features — source_type, source_id, tickets_total,
+    // tickets_merged; expanded status CHECK; data-migrate active → in_progress.
+    //
+    // Guarded: only runs when the features table exists AND has a `status` column
+    // (i.e. is the real schema from migration 042, not a minimal test stub).
+    // Also skips if `source_type` is already present (idempotent against partial failure).
+    if version < 70 {
+        let has_status_col = conn.prepare("SELECT status FROM features LIMIT 0").is_ok();
+        if has_status_col {
+            let has_source_type = conn
+                .prepare("SELECT source_type FROM features LIMIT 0")
+                .is_ok();
+            if !has_source_type {
+                with_foreign_keys_off(conn, || {
+                    conn.execute_batch(include_str!("migrations/070_features_rfc018.sql"))?;
+                    Ok(())
+                })?;
+            }
+        }
+        bump_version(conn, 70)?;
     }
 
     Ok(())

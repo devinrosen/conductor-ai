@@ -1059,7 +1059,7 @@ fn test_resume_workflow_preserves_feature_id() {
     // Insert a feature so the engine can look it up during execute_workflow.
     conn.execute(
         "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
-         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'active', '2025-01-01T00:00:00Z')",
+         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'in_progress', '2025-01-01T00:00:00Z')",
         [],
     )
     .unwrap();

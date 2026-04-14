@@ -1817,9 +1817,13 @@ mod tests {
             name: "my-feature".to_string(),
             branch: "feat/my-feature".to_string(),
             base_branch: "main".to_string(),
-            status: crate::feature::FeatureStatus::Active,
+            status: crate::feature::FeatureStatus::InProgress,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             merged_at: None,
+            source_type: None,
+            source_id: None,
+            tickets_total: 0,
+            tickets_merged: 0,
         }
     }
 

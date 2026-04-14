@@ -318,6 +318,13 @@ pub struct GeneralConfig {
     /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,
+    /// Max concurrent agent runs when using `conductor feature run`. Defaults to 3.
+    #[serde(default = "default_max_feature_parallelism")]
+    pub max_feature_parallelism: u32,
+    /// Automatically transition a feature to ready_for_review when its last
+    /// worktree is marked merged. Set to false to require an explicit call.
+    #[serde(default = "default_auto_ready_for_review")]
+    pub auto_ready_for_review: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +373,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_max_feature_parallelism() -> u32 {
+    3
+}
+
+fn default_auto_ready_for_review() -> bool {
+    true
+}
+
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
@@ -379,6 +394,8 @@ impl Default for GeneralConfig {
             auto_cleanup_merged_branches: true,
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
+            max_feature_parallelism: default_max_feature_parallelism(),
+            auto_ready_for_review: default_auto_ready_for_review(),
         }
     }
 }

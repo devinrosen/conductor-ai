@@ -872,7 +872,7 @@ fn test_execute_workflow_injects_feature_variables() {
     // Insert a feature for repo r1 (created by setup_db).
     conn.execute(
         "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
-         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'active', '2025-01-01T00:00:00Z')",
+         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'in_progress', '2025-01-01T00:00:00Z')",
         [],
     )
     .unwrap();
@@ -1031,7 +1031,7 @@ fn test_execute_workflow_worktree_base_branch_wins_over_feature_base_branch() {
     // Insert a feature with base_branch="main".
     conn.execute(
         "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
-         VALUES ('f-masq', 'r1', 'masq-feature', 'feat/masq', 'main', 'active', '2025-01-01T00:00:00Z')",
+         VALUES ('f-masq', 'r1', 'masq-feature', 'feat/masq', 'main', 'in_progress', '2025-01-01T00:00:00Z')",
         [],
     )
     .unwrap();
