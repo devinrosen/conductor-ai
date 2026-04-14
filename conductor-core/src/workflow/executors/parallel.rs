@@ -229,7 +229,7 @@ pub fn execute_parallel(
         let outcome_tx = completion_tx.clone();
         let child_index = children.len(); // index this child will have in children vec
         let drain_handle = std::thread::spawn(move || {
-            let conn = match crate::db::open_database(&crate::config::db_path()) {
+            let conn = match crate::db::open_database_compat(&crate::config::db_path()) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!(
