@@ -1725,7 +1725,7 @@ fn render_step_list(
                 }
             };
             spans.push(Span::styled(
-                format!("  ↑{} ↓{}", fmt_k(inp), fmt_k(out)),
+                format!("  {}↓ {}↑", fmt_k(inp), fmt_k(out)),
                 Style::default().fg(state.theme.label_secondary),
             ));
         }
