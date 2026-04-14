@@ -253,7 +253,33 @@ impl Parser {
                 );
 
                 if is_kv_key {
-                    let next_is_eq = self.tokens.get(self.pos + 1) == Some(&Token::Equals);
+                    let next_token = self.tokens.get(self.pos + 1);
+                    let next_is_eq = next_token == Some(&Token::Equals);
+                    // Bare shorthand: `key value` (no `=`).
+                    // Allowed when the next token is a value literal (string, ident,
+                    // int, keyword, or array opener) but NOT a brace (which would be a block).
+                    let next_is_value = matches!(
+                        next_token,
+                        Some(Token::StringLit(_))
+                            | Some(Token::Ident(_))
+                            | Some(Token::Int(_))
+                            | Some(Token::LBracket)
+                            // Include all keyword tokens that are accepted by expect_value()
+                            | Some(Token::Required)
+                            | Some(Token::Default)
+                            | Some(Token::Description)
+                            | Some(Token::Boolean)
+                            | Some(Token::Call)
+                            | Some(Token::If)
+                            | Some(Token::Unless)
+                            | Some(Token::While)
+                            | Some(Token::Parallel)
+                            | Some(Token::Gate)
+                            | Some(Token::Always)
+                            | Some(Token::Script)
+                            | Some(Token::ForEach)
+                    );
+
                     if next_is_eq {
                         // Standard form: `key = value`
                         let key = self.expect_ident()?;
@@ -261,19 +287,7 @@ impl Parser {
                         let value = self.expect_value()?;
                         kvs.insert(key, value);
                         continue;
-                    }
-
-                    // Bare shorthand: `key value` (no `=`).
-                    // Allowed when the next token is a value literal (string, ident,
-                    // int, or array opener) but NOT a brace (which would be a block).
-                    let next_is_value = matches!(
-                        self.tokens.get(self.pos + 1),
-                        Some(Token::StringLit(_))
-                            | Some(Token::Ident(_))
-                            | Some(Token::Int(_))
-                            | Some(Token::LBracket)
-                    );
-                    if next_is_value {
+                    } else if next_is_value {
                         let key = self.expect_ident()?;
                         let value = self.expect_value()?;
                         kvs.insert(key, value);

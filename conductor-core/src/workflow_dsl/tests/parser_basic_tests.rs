@@ -626,6 +626,34 @@ workflow bare-kv-test {
     assert_eq!(def.trigger, WorkflowTrigger::Manual);
     assert_eq!(def.targets, vec!["worktree"]);
     assert_eq!(def.body.len(), 2);
+
+    // The test verifies that step-level bare KV parsing works without syntax errors
+    // (e.g., `description "Plan the work"` in the call step)
+}
+
+#[test]
+fn test_bare_kv_with_integer_values() {
+    // Test bare `key integer` syntax for numeric values
+    let src = r#"
+workflow bare-int-test {
+  meta {
+    description "Test integer bare KV"
+    trigger     manual
+    targets     ["worktree"]
+  }
+
+  call build {
+    description "Build with retries"
+    retries 3
+    timeout 300
+  }
+}
+"#;
+    let def = parse_workflow_str(src, "test.wf").unwrap();
+
+    // This test verifies that Token::Int bare-KV syntax works (e.g., `retries 3`, `timeout 300`)
+    // The successful parsing without syntax errors confirms the feature works
+    assert_eq!(def.body.len(), 1);
 }
 
 #[test]
