@@ -1845,6 +1845,29 @@ fn test_create_perf_prefix_produces_correct_branch() {
 }
 
 #[test]
+fn test_create_release_prefix_produces_correct_branch() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let mut config = Config::default();
+    config.general.workspace_root = tmp.path().to_path_buf();
+    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+    repo_mgr
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "release-0.4.2", Default::default())
+        .expect("create should succeed");
+    assert_eq!(wt.slug, "release-0.4.2");
+    assert_eq!(wt.branch, "release/0.4.2");
+}
+
+#[test]
 fn test_cleanup_merged_worktrees_filters_by_repo() {
     let conn = crate::test_helpers::setup_db();
     let config = Config::default();
