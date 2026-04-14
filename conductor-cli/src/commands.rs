@@ -62,6 +62,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: NotificationsCommands,
     },
+    /// Manage conversations
+    Conversation {
+        #[command(subcommand)]
+        command: ConversationCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ConversationCommands {
+    /// Clear (hard-delete) the conversation and all its agent runs for a worktree.
+    Clear {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]

@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod conversation;
 pub mod dev;
 pub mod feature;
 pub mod mcp;
