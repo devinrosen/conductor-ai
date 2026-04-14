@@ -908,12 +908,15 @@ pub fn fire_stale_workflow_notification(
 pub fn fire_orphan_resumed_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
     run_ids: &[String],
 ) {
-    let Some(wf) = &config.workflows else {
-        return;
-    };
-    if !config.enabled || !wf.on_stale {
+    let has_hooks = !notify_hooks.is_empty();
+    let legacy_enabled = config
+        .workflows
+        .as_ref()
+        .is_some_and(|wf| config.enabled && wf.on_stale);
+    if !legacy_enabled && !has_hooks {
         return;
     }
     if run_ids.is_empty() {
@@ -922,7 +925,8 @@ pub fn fire_orphan_resumed_notification(
 
     // Use a synthetic dedup key so we don't spam on every poll tick.
     // One notification per batch of resumed runs.
-    let dedup_key = format!("orphan_resumed_{}", run_ids.first().unwrap());
+    let first_run_id = run_ids.first().unwrap();
+    let dedup_key = format!("orphan_resumed_{first_run_id}");
 
     let n = run_ids.len();
     let title = "Conductor \u{2014} Orphaned Workflows Recovered";
@@ -930,6 +934,28 @@ pub fn fire_orphan_resumed_notification(
         "1 stuck workflow run was automatically resumed".to_string()
     } else {
         format!("{n} stuck workflow runs were automatically resumed")
+    };
+
+    // Fetch the first run's workflow_name and target_label for the hook event.
+    let (workflow_name, target_label) = conn
+        .query_row(
+            "SELECT workflow_name, target_label FROM workflow_runs WHERE id = ?1",
+            rusqlite::params![first_run_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .unwrap_or_else(|_| (String::new(), None));
+    let (repo_slug, branch) = parse_target_label(target_label.as_deref());
+
+    let hook_event = NotificationEvent::WorkflowRunOrphanResumed {
+        run_id: first_run_id.clone(),
+        label: body.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        url: None,
+        workflow_name,
+        repo_slug: repo_slug.to_string(),
+        branch: branch.to_string(),
+        duration_ms: None,
+        ticket_url: None,
     };
 
     dispatch_notification(
@@ -945,8 +971,81 @@ pub fn fire_orphan_resumed_notification(
                 entity_id: None,
                 entity_type: None,
             },
-            hooks: &[],
-            event: None,
+            hooks: notify_hooks,
+            event: Some(&hook_event),
+        },
+    );
+}
+
+/// Fire a notification when a stuck workflow run fails to auto-resume after being reaped.
+///
+/// Gated on `config.enabled && wf.on_stale`. Uses `(run_id, "workflow_run.reaped")` as
+/// the dedup key so each failure fires at most one notification across all processes.
+pub fn fire_heartbeat_stuck_failed_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
+    run_id: &str,
+    error: &str,
+) {
+    let has_hooks = !notify_hooks.is_empty();
+    let gated = config
+        .workflows
+        .as_ref()
+        .is_some_and(|wf| config.enabled && wf.on_stale);
+    if !gated && !has_hooks {
+        return;
+    }
+
+    let wf = match crate::workflow::WorkflowManager::new(conn).get_workflow_run(run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => {
+            tracing::warn!(
+                run_id,
+                "fire_heartbeat_stuck_failed_notification: run not found, skipping"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(
+                run_id,
+                "fire_heartbeat_stuck_failed_notification: DB error fetching run: {e}"
+            );
+            return;
+        }
+    };
+
+    let (repo_slug, branch) = parse_target_label(wf.target_label.as_deref());
+    let body = notification_body(&wf.workflow_name, wf.target_label.as_deref());
+
+    let hook_event = NotificationEvent::WorkflowRunReaped {
+        run_id: run_id.to_string(),
+        label: body.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        url: None,
+        workflow_name: wf.workflow_name.clone(),
+        repo_slug: repo_slug.to_string(),
+        branch: branch.to_string(),
+        duration_ms: None,
+        ticket_url: None,
+        error: Some(error.to_string()),
+    };
+
+    dispatch_notification(
+        conn,
+        &DispatchParams {
+            dedup_entity_id: run_id,
+            dedup_event_type: "workflow_run.reaped",
+            notification: &CreateNotification {
+                kind: "workflow_reaped",
+                title: "Conductor \u{2014} Workflow Auto-Resume Failed",
+                body: &body,
+                severity: NotificationSeverity::ActionRequired,
+                entity_id: Some(run_id),
+                entity_type: Some("workflow_run"),
+            },
+            hooks: notify_hooks,
+            event: Some(&hook_event),
         },
     );
 }
@@ -3292,7 +3391,7 @@ mod tests {
         let cfg = config(true, true, true);
         let ids = vec!["run-orphan-1".to_string(), "run-orphan-2".to_string()];
 
-        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+        fire_orphan_resumed_notification(&conn, &cfg, &[], &ids);
 
         let count: i64 = conn
             .query_row(
@@ -3309,7 +3408,7 @@ mod tests {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
 
-        fire_orphan_resumed_notification(&conn, &cfg, &[]);
+        fire_orphan_resumed_notification(&conn, &cfg, &[], &[]);
 
         let count: i64 = conn
             .query_row(
@@ -3327,8 +3426,8 @@ mod tests {
         let cfg = config(true, true, true);
         let ids = vec!["run-orphan-dedup".to_string()];
 
-        fire_orphan_resumed_notification(&conn, &cfg, &ids);
-        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+        fire_orphan_resumed_notification(&conn, &cfg, &[], &ids);
+        fire_orphan_resumed_notification(&conn, &cfg, &[], &ids);
 
         let count: i64 = conn
             .query_row(
@@ -3454,7 +3553,7 @@ mod tests {
         let cfg = config(false, true, true); // enabled=false
         let ids = vec!["run-orphan-disabled".to_string()];
 
-        fire_orphan_resumed_notification(&conn, &cfg, &ids);
+        fire_orphan_resumed_notification(&conn, &cfg, &[], &ids);
 
         let count: i64 = conn
             .query_row(
