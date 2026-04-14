@@ -1341,6 +1341,59 @@ impl<'a> WorkflowManager<'a> {
         }))
     }
 
+    /// Compute the 30-day spike detection baseline for a workflow.
+    ///
+    /// Returns `None` when fewer than `min_runs` completed root runs exist in the window,
+    /// or when `avg_cost_usd` is NULL (all runs have no cost data).
+    pub fn get_workflow_spike_baseline(
+        &self,
+        workflow_name: &str,
+        days: u32,
+        min_runs: usize,
+    ) -> crate::error::Result<Option<crate::workflow::SpikeBaseline>> {
+        let mut stmt = self.conn.prepare_cached(
+            "WITH ranked AS ( \
+               SELECT \
+                 total_cost_usd, \
+                 total_duration_ms, \
+                 ROW_NUMBER() OVER (ORDER BY total_duration_ms) AS rn_dur, \
+                 COUNT(*) OVER () AS cnt \
+               FROM workflow_runs \
+               WHERE workflow_name = ?1 \
+                 AND status = 'completed' \
+                 AND parent_workflow_run_id IS NULL \
+                 AND started_at >= datetime('now', '-' || ?2 || ' days') \
+                 AND total_duration_ms IS NOT NULL \
+             ) \
+             SELECT \
+               AVG(total_cost_usd) AS avg_cost_usd, \
+               AVG(CASE WHEN rn_dur = (cnt * 75 + 99) / 100 THEN total_duration_ms END) AS p75_duration_ms, \
+               MAX(cnt) AS run_count \
+             FROM ranked",
+        )?;
+        let row = stmt.query_row(params![workflow_name, days], |row| {
+            Ok((
+                row.get::<_, Option<f64>>(0)?,
+                row.get::<_, Option<f64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })?;
+        let run_count = row.2.unwrap_or(0);
+        if run_count < min_runs as i64 {
+            return Ok(None);
+        }
+        let avg_cost_usd = match row.0 {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let p75_duration_ms = row.1.unwrap_or(0.0);
+        Ok(Some(crate::workflow::SpikeBaseline {
+            avg_cost_usd,
+            p75_duration_ms,
+            run_count,
+        }))
+    }
+
     /// Compute passive regression signals for all workflows with sufficient recent run history.
     ///
     /// Compares a recent window (`recent_days`) against a baseline window

@@ -649,6 +649,14 @@ pub struct WorkflowPercentiles {
     pub run_count: i64,
 }
 
+/// Spike detection baseline for a workflow: average cost and P75 duration over a rolling window.
+#[derive(Debug, Clone)]
+pub struct SpikeBaseline {
+    pub avg_cost_usd: f64,
+    pub p75_duration_ms: f64,
+    pub run_count: i64,
+}
+
 /// Passive regression signal for a single workflow.
 ///
 /// Compares a recent window (last N days) against a baseline window (prior M days)
