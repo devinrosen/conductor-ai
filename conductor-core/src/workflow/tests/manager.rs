@@ -3322,3 +3322,119 @@ fn test_step_error_persisted_on_schema_validation_failure() {
         "raw result_text must still be stored even on validation failure"
     );
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// auto_resume_stuck_workflows
+// ────────────────────────────────────────────────────────────────────────────
+
+/// A stuck run (running, all steps terminal, old ended_at) should be detected,
+/// CAS-flipped to failed, and counted as resumed.
+#[test]
+fn test_auto_resume_stuck_workflows_detects_and_flips() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "stuck-auto");
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "stuck-auto",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = Config::default();
+    // The spawned resume thread will fail (no definition_snapshot etc.) — that's fine;
+    // we're testing detection + CAS flip.
+    let count = mgr
+        .auto_resume_stuck_workflows(&config, None, None)
+        .unwrap();
+    assert_eq!(count, 1, "one stuck run should be detected and flipped");
+
+    // After CAS flip the run must be in 'failed' status.
+    assert_eq!(
+        get_run_status(&conn, "stuck-auto"),
+        "failed",
+        "CAS flip should transition run from running to failed"
+    );
+}
+
+/// A second concurrent call should see 0 runs because the first call already
+/// CAS-flipped the status to failed (detection query only finds running runs).
+#[test]
+fn test_auto_resume_stuck_workflows_concurrent_race() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "race-auto");
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "race-auto",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = Config::default();
+
+    let count1 = mgr
+        .auto_resume_stuck_workflows(&config, None, None)
+        .unwrap();
+    assert_eq!(count1, 1, "first call should win the CAS");
+
+    let count2 = mgr
+        .auto_resume_stuck_workflows(&config, None, None)
+        .unwrap();
+    assert_eq!(count2, 0, "second call must see no stuck runs");
+}
+
+/// Fresh runs (step ended recently) must not be detected.
+#[test]
+fn test_auto_resume_stuck_workflows_skips_fresh_run() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "fresh-auto");
+    // Insert a step that ended just now.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, ended_at) \
+         VALUES ('s1', 'fresh-auto', 'step-a', 'actor', 0, 'completed', 0, \
+                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        [],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = Config::default();
+    let count = mgr
+        .auto_resume_stuck_workflows(&config, None, None)
+        .unwrap();
+    assert_eq!(count, 0, "fresh run must not be resumed");
+
+    // Status must remain running.
+    assert_eq!(get_run_status(&conn, "fresh-auto"), "running");
+}
+
+/// When a configurable threshold is supplied, the function should use the
+/// minimum of 60s and the configurable value.
+#[test]
+fn test_auto_resume_stuck_workflows_uses_min_threshold() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "thresh-auto");
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "thresh-auto",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let config = Config::default();
+
+    // Even with a very large configurable threshold, min(60, 9999) = 60 and
+    // the 2020 ended_at is well past 60s.
+    let count = mgr
+        .auto_resume_stuck_workflows(&config, Some(9999), None)
+        .unwrap();
+    assert_eq!(count, 1);
+
+    assert_eq!(get_run_status(&conn, "thresh-auto"), "failed");
+}

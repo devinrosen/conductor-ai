@@ -492,34 +492,20 @@ impl<'a> WorkflowManager<'a> {
         Ok(reaped)
     }
 
-    /// Detect and auto-resume workflow runs that are stuck in `running` status
-    /// because the executor process died between steps.
-    ///
-    /// **Detection** — a root run is considered orphaned when ALL of the following hold:
-    /// 1. `status = 'running'`
-    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
-    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
-    /// 4. `COALESCE(last_heartbeat, started_at)` is older than `threshold_secs`
-    ///    (the `COALESCE` handles pre-migration rows that have `NULL` heartbeat)
-    ///
-    /// **CAS flip** — before calling `resume_workflow_standalone` the run is
-    /// atomically flipped to `failed` via:
-    /// `UPDATE ... WHERE id=? AND status='running'`
-    /// `changes() == 1` is required to proceed; a concurrent watchdog call that
-    /// already won the race sees `changes() == 0` and skips the run.
-    ///
-    /// This fixes the previously-broken `detect_stuck_workflow_run_ids` + resume
-    /// pattern: `validate_resume_preconditions` rejects resuming a `running`-status
-    /// run; the CAS flip to `failed` is the required precondition.
-    ///
     /// Detect and auto-resume workflow runs stuck in `running` status.
     ///
-    /// Uses a single detection threshold: the minimum of the fixed 60-second
-    /// baseline and any caller-supplied configurable threshold. This avoids
-    /// duplicate DB queries and prevents the same run from being resumed twice.
+    /// **Detection** — uses `detect_stuck_workflow_run_ids` with the minimum of the
+    /// fixed 60-second baseline and any caller-supplied configurable threshold. This
+    /// avoids duplicate DB queries and prevents the same run from being resumed twice.
     ///
-    /// For each stuck run found, fires a notification and spawns a background
-    /// thread to resume it.
+    /// **CAS flip** — before spawning a resume thread, the run is atomically flipped
+    /// to `failed` via `UPDATE ... WHERE id=? AND status='running'`. If `changes() == 0`
+    /// the run was already claimed by a concurrent watchdog and is skipped. This is
+    /// required because `validate_resume_preconditions` rejects resuming a
+    /// `running`-status run.
+    ///
+    /// For each successfully flipped run, fires a notification and spawns a
+    /// background thread to resume it.
     ///
     /// Returns the count of runs resumed.
     pub fn auto_resume_stuck_workflows(
@@ -538,22 +524,47 @@ impl<'a> WorkflowManager<'a> {
             return Ok(0);
         }
 
-        let n = stuck_ids.len();
+        // CAS flip each run from running → failed before resuming.
+        // Only runs we successfully flip get resumed — losers of the race are skipped.
+        let mut flipped_ids: Vec<String> = Vec::new();
+        for run_id in &stuck_ids {
+            let changed = self.conn.execute(
+                "UPDATE workflow_runs \
+                 SET status = 'failed', \
+                     error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
+                 WHERE id = ?1 AND status = 'running'",
+                params![run_id],
+            )?;
+            if changed == 1 {
+                flipped_ids.push(run_id.clone());
+            } else {
+                tracing::debug!(
+                    run_id = %run_id,
+                    "auto_resume_stuck_workflows: CAS lost race (already claimed)"
+                );
+            }
+        }
+
+        if flipped_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let n = flipped_ids.len();
         tracing::info!("Auto-resuming {n} stuck workflow run(s) (threshold={threshold}s)");
         crate::notify::fire_orphan_resumed_notification(
             self.conn,
             &config.notifications,
-            &stuck_ids,
+            &flipped_ids,
         );
 
-        for run_id in &stuck_ids {
+        for run_id in flipped_ids {
             let cfg_clone = config.clone();
             let bin_dir = conductor_bin_dir.clone();
-            let run_id = run_id.clone();
+            let rid = run_id.clone();
             std::thread::spawn(move || {
                 let params = WorkflowResumeStandalone {
                     config: cfg_clone,
-                    workflow_run_id: run_id.clone(),
+                    workflow_run_id: rid.clone(),
                     model: None,
                     from_step: None,
                     restart: false,
@@ -561,7 +572,7 @@ impl<'a> WorkflowManager<'a> {
                     conductor_bin_dir: bin_dir,
                 };
                 if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
-                    tracing::warn!(run_id = %run_id, "Auto-resume of stuck workflow run failed: {e}");
+                    tracing::warn!(run_id = %rid, "Auto-resume of stuck workflow run failed: {e}");
                 }
             });
         }
