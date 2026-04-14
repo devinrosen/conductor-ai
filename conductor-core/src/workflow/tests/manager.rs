@@ -2978,3 +2978,69 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
         "sub-workflow run must not be reaped"
     );
 }
+
+/// Regression test for #2038: step_error must be persisted when post-execution
+/// schema validation fails on a call step.
+///
+/// This mirrors exactly what `execute_call_with_schema` does in call.rs lines
+/// 321-338: on a validation error it calls `update_step_status_full` with
+/// `status = Failed` and `step_error = Some(&validation_err)`.  We verify here
+/// that the value round-trips through SQLite and is readable via
+/// `get_workflow_steps`.
+#[test]
+fn test_step_error_persisted_on_schema_validation_failure() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let run = mgr
+        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    // Insert a step that simulates being mid-execution.
+    let step_id = mgr
+        .insert_step(&run.id, "call-step", "reviewer", false, 0, 0)
+        .unwrap();
+
+    // Simulate what call.rs does when `interpret_agent_output` returns an Err:
+    // mark the step Failed and record the validation error message.
+    let validation_err =
+        "structured output validation failed: missing required field 'approved'";
+    mgr.update_step_status_full(
+        &step_id,
+        WorkflowStepStatus::Failed,
+        Some("child-run-id"),
+        Some("raw agent output text"),
+        None,  // no context_out on validation failure
+        None,  // no markers_out on validation failure
+        Some(0),
+        None,  // no structured_output (validation failed)
+        Some(validation_err),
+    )
+    .unwrap();
+
+    // Read the step back and assert step_error is set correctly.
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(steps.len(), 1, "expected exactly one step");
+    let step = &steps[0];
+    assert_eq!(step.status, WorkflowStepStatus::Failed);
+    assert_eq!(
+        step.step_error.as_deref(),
+        Some(validation_err),
+        "step_error must be persisted when schema validation fails"
+    );
+    // Sanity: structured_output must NOT be set when validation failed.
+    assert!(
+        step.structured_output.is_none(),
+        "structured_output must be None when validation failed"
+    );
+    // Sanity: raw result text must be preserved.
+    assert_eq!(
+        step.result_text.as_deref(),
+        Some("raw agent output text"),
+        "raw result_text must still be stored even on validation failure"
+    );
+}
