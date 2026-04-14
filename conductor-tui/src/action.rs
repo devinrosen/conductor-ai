@@ -420,6 +420,10 @@ pub enum Action {
     /// Resume the latest failed/paused workflow run for the selected worktree (WorktreeDetail view).
     ResumeWorktreeWorkflow,
     CancelWorkflow,
+    /// Background result: workflow cancel completed.
+    WorkflowCancelComplete {
+        result: Result<(), String>,
+    },
     ApproveGate,
     RejectGate,
     /// View the selected workflow definition's YAML source in a scrollable modal.
