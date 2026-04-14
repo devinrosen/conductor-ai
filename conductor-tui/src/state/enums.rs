@@ -450,6 +450,11 @@ pub enum ConfirmAction {
     ResumeWorkflow {
         workflow_run_id: String,
     },
+    ClearConversation {
+        repo_slug: String,
+        wt_slug: String,
+        wt_id: String,
+    },
     Quit,
 }
 

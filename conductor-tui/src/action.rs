@@ -321,6 +321,14 @@ pub enum Action {
         run_id: String,
     },
 
+    // Conversation clear
+    ClearConversation,
+    ClearConversationComplete {
+        repo_slug: String,
+        wt_slug: String,
+        result: Result<(), String>,
+    },
+
     // Background result for worktree delete readiness check
     DeleteWorktreeReady {
         repo_slug: String,

@@ -254,6 +254,7 @@ impl App {
             Action::RegisterRepo => self.handle_register_repo(),
             Action::Create => self.handle_create(),
             Action::Delete => self.handle_delete(),
+            Action::ClearConversation => self.handle_clear_conversation(),
             Action::Push => self.handle_push(),
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
@@ -1188,6 +1189,24 @@ impl App {
                     Err(e) => {
                         self.state.modal = Modal::Error {
                             message: format!("Delete failed: {e}"),
+                        };
+                    }
+                }
+            }
+            Action::ClearConversationComplete {
+                repo_slug,
+                wt_slug,
+                result,
+            } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(()) => {
+                        self.state.status_message =
+                            Some(format!("Conversation cleared for {repo_slug}/{wt_slug}."));
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Clear conversation failed: {e}"),
                         };
                     }
                 }

@@ -55,6 +55,9 @@ fn main() -> Result<()> {
         Commands::Notifications { command } => {
             handlers::notifications::handle_notifications(command, &config)?
         }
+        Commands::Conversation { command } => {
+            handlers::conversation::handle_conversation(command, &conn, &config)?
+        }
     }
 
     Ok(())
