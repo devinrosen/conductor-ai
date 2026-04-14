@@ -178,8 +178,7 @@ fn execute_call_with_schema(
                     }
                 }
 
-                let resolved_model =
-                    step_model.unwrap_or(super::api_call::DEFAULT_API_MODEL);
+                let resolved_model = step_model.unwrap_or(super::api_call::DEFAULT_API_MODEL);
                 tracing::info!(
                     "Step '{}' (attempt {}/{}): using direct API path (schema: {})",
                     agent_label,

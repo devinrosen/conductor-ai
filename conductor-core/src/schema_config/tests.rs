@@ -1283,8 +1283,7 @@ fn test_derive_output_from_value_summary_field() {
 #[test]
 fn test_derive_output_from_value_context_field_preferred() {
     // A schema with both "context" and "summary" — "context" wins.
-    let schema_yaml =
-        "fields:\n  context:\n    type: string\n  summary:\n    type: string\n";
+    let schema_yaml = "fields:\n  context:\n    type: string\n  summary:\n    type: string\n";
     let schema = parse_schema_content(schema_yaml, "test").unwrap();
     let value = serde_json::json!({"context": "Primary context", "summary": "Secondary"});
 

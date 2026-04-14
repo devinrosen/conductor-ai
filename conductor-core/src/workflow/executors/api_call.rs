@@ -238,10 +238,7 @@ mod tests {
         });
 
         let err = extract_tool_use_input(&response).unwrap_err();
-        assert!(
-            err.contains("no tool_use block"),
-            "unexpected error: {err}"
-        );
+        assert!(err.contains("no tool_use block"), "unexpected error: {err}");
     }
 
     /// Verify that a tool_use block missing its `input` field produces an appropriate error.
