@@ -1,8 +1,8 @@
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
-use rust_embed::Embed;
+use rust_embed::RustEmbed;
 
-#[derive(Embed)]
+#[derive(RustEmbed)]
 #[folder = "frontend/dist/"]
 struct Assets;
 
