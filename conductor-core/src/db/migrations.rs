@@ -2364,7 +2364,10 @@ mod tests {
         )
         .unwrap();
         let result = run_compat(&conn);
-        assert!(result.is_ok(), "run_compat must tolerate a newer schema; got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "run_compat must tolerate a newer schema; got: {result:?}"
+        );
     }
 
     /// `run` (strict) must return an error when the DB schema version is ahead
@@ -2382,7 +2385,10 @@ mod tests {
         )
         .unwrap();
         let result = run(&conn);
-        assert!(result.is_err(), "run must reject a schema newer than the binary");
+        assert!(
+            result.is_err(),
+            "run must reject a schema newer than the binary"
+        );
         assert!(
             matches!(result.unwrap_err(), ConductorError::Schema(_)),
             "error must be ConductorError::Schema"
