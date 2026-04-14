@@ -1864,3 +1864,59 @@ fn test_delete_unmerged_branch_returns_git_error() {
         "expected ConductorError::Git for unmerged branch, got: {err:?}"
     );
 }
+
+#[test]
+fn test_insert_feature_record_new_fields_round_trip() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let now = Utc::now().to_rfc3339();
+
+    let id = crate::new_id();
+    let feature = Feature {
+        id: id.clone(),
+        repo_id: repo_id.clone(),
+        name: "milestone-feature".to_string(),
+        branch: "feat/milestone-feature".to_string(),
+        base_branch: "main".to_string(),
+        status: FeatureStatus::InProgress,
+        created_at: now.clone(),
+        merged_at: None,
+        source_type: Some("github".to_string()),
+        source_id: Some("github.com/owner/repo/milestones/1".to_string()),
+        tickets_total: 5,
+        tickets_merged: 3,
+    };
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    // insert_feature_record is private, so insert directly via raw SQL using
+    // the same statement that insert_feature_record uses.
+    conn.execute(
+        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at, source_type, source_id, tickets_total, tickets_merged)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            feature.id,
+            feature.repo_id,
+            feature.name,
+            feature.branch,
+            feature.base_branch,
+            feature.status,
+            feature.created_at,
+            feature.source_type,
+            feature.source_id,
+            feature.tickets_total,
+            feature.tickets_merged,
+        ],
+    )
+    .unwrap();
+
+    let fetched = mgr.get_by_id(&id).unwrap();
+    assert_eq!(fetched.source_type, Some("github".to_string()));
+    assert_eq!(
+        fetched.source_id,
+        Some("github.com/owner/repo/milestones/1".to_string())
+    );
+    assert_eq!(fetched.tickets_total, 5);
+    assert_eq!(fetched.tickets_merged, 3);
+    assert_eq!(fetched.status, FeatureStatus::InProgress);
+}

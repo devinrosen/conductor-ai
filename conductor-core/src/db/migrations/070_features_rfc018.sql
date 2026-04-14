@@ -6,10 +6,11 @@ ALTER TABLE features ADD COLUMN source_id   TEXT;
 ALTER TABLE features ADD COLUMN tickets_total   INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE features ADD COLUMN tickets_merged  INTEGER NOT NULL DEFAULT 0;
 
--- 2. Data migration: active → in_progress
-UPDATE features SET status = 'in_progress' WHERE status = 'active';
-
--- 3. Rebuild table to widen CHECK constraint
+-- 2. Rebuild table to widen CHECK constraint and data-migrate active → in_progress.
+-- The UPDATE approach cannot be used here because the old table still has
+-- CHECK (status IN ('active', 'merged', 'closed')) which rejects 'in_progress'.
+-- Instead, the CASE expression in the INSERT…SELECT performs the rename atomically
+-- during the table rebuild, after which the new CHECK constraint takes over.
 CREATE TABLE features_new (
     id           TEXT PRIMARY KEY,
     repo_id      TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
@@ -29,7 +30,9 @@ CREATE TABLE features_new (
 );
 
 INSERT INTO features_new
-    SELECT id, repo_id, name, branch, base_branch, status, created_at, merged_at,
+    SELECT id, repo_id, name, branch, base_branch,
+           CASE WHEN status = 'active' THEN 'in_progress' ELSE status END,
+           created_at, merged_at,
            last_commit_at, source_type, source_id, tickets_total, tickets_merged
     FROM features;
 

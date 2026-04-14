@@ -65,8 +65,12 @@ pub(super) fn map_feature_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> 
         merged_at: row.get(7)?,
         source_type: row.get(8)?,
         source_id: row.get(9)?,
-        tickets_total: row.get::<_, i64>(10).map(|v| v as u32)?,
-        tickets_merged: row.get::<_, i64>(11).map(|v| v as u32)?,
+        tickets_total: row.get::<_, i64>(10).and_then(|v| {
+            u32::try_from(v).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(10, v))
+        })?,
+        tickets_merged: row.get::<_, i64>(11).and_then(|v| {
+            u32::try_from(v).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(11, v))
+        })?,
     })
 }
 
