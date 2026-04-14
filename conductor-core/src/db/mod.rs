@@ -18,6 +18,21 @@ pub fn open_database(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Open (or create) the SQLite database in compatibility mode.
+///
+/// Same as [`open_database`] but uses [`migrations::run_compat`], which treats
+/// a DB schema version ahead of this binary as a warning rather than a fatal
+/// error.  Use this in headless subprocesses and drain threads that must keep
+/// running after an `implement` agent step has applied a newer migration.
+pub fn open_database_compat(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.pragma_update(None, "journal_mode", "wal")?;
+    conn.pragma_update(None, "foreign_keys", "on")?;
+    conn.pragma_update(None, "busy_timeout", 5000)?;
+    migrations::run_compat(&conn)?;
+    Ok(conn)
+}
+
 /// Prepend `prefix` to every column token in a comma-separated column list.
 ///
 /// Splits `cols` on `','`, trims whitespace from each token, prepends `prefix`,

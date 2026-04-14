@@ -123,6 +123,7 @@ fn data_refreshed_updates_repos() {
             worktree_agent_events: std::collections::HashMap::new(),
             repo_agent_events: std::collections::HashMap::new(),
             workflow_run_estimates: std::collections::HashMap::new(),
+            completed_token_totals_by_worktree: std::collections::HashMap::new(),
         },
     )));
 

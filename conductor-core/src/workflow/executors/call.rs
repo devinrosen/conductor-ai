@@ -103,7 +103,6 @@ fn execute_call_with_schema(
         Some(&state.workflow_name),
     )?;
 
-    let prompt = build_agent_prompt(state, &agent_def, schema.as_ref(), &snippet_text);
     let step_model = agent_def.model.as_deref().or(state.model.as_deref());
 
     // Retry loop
@@ -111,6 +110,16 @@ fn execute_call_with_schema(
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
+        // Rebuild prompt each attempt so we can inject the previous failure reason
+        // on retries. On attempt 0 there is no prior error, so pass None.
+        let retry_ctx = if attempt == 0 {
+            None
+        } else {
+            Some(last_error.as_str())
+        };
+        let prompt =
+            build_agent_prompt(state, &agent_def, schema.as_ref(), &snippet_text, retry_ctx);
+
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
             agent_label,
@@ -142,6 +151,143 @@ fn execute_call_with_schema(
             None,
             Some(attempt as i64),
         )?;
+
+        // --- API-enforced path for schema-constrained steps ---
+        // When a schema is defined and ANTHROPIC_API_KEY is available, route
+        // directly to the Anthropic Messages API using tool_use enforcement.
+        // This makes schema field mismatches impossible at the API level.
+        if let Some(ref schema) = schema {
+            if let Some(api_key) = state.config.anthropic_api_key() {
+                // Check shutdown flag before making the API call
+                if let Some(ref flag) = state.exec_config.shutdown {
+                    if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        let cancel_msg = "executor shutdown requested".to_string();
+                        let _ = state
+                            .agent_mgr
+                            .update_run_failed(&child_run.id, &cancel_msg);
+                        state.wf_mgr.update_step_status(
+                            &step_id,
+                            WorkflowStepStatus::Failed,
+                            Some(&child_run.id),
+                            Some(&cancel_msg),
+                            None,
+                            None,
+                            Some(attempt as i64),
+                        )?;
+                        return Err(ConductorError::Workflow(cancel_msg));
+                    }
+                }
+
+                let resolved_model = step_model.unwrap_or(super::api_call::DEFAULT_API_MODEL);
+                tracing::info!(
+                    "Step '{}' (attempt {}/{}): using direct API path (schema: {})",
+                    agent_label,
+                    attempt + 1,
+                    max_attempts,
+                    schema.name,
+                );
+
+                match super::api_call::execute_via_api(
+                    &prompt,
+                    schema,
+                    resolved_model,
+                    state.exec_config.step_timeout,
+                    &api_key,
+                ) {
+                    Ok(result) => {
+                        let structured =
+                            crate::schema_config::derive_output_from_value(result.json, schema);
+                        let markers_json =
+                            serde_json::to_string(&structured.markers).unwrap_or_default();
+
+                        if let Err(e) = state.agent_mgr.update_run_completed(
+                            &child_run.id,
+                            None,
+                            Some(&result.json_string),
+                            None,
+                            Some(1),
+                            None,
+                            Some(result.input_tokens),
+                            Some(result.output_tokens),
+                            None,
+                            None,
+                        ) {
+                            tracing::warn!(
+                                "Step '{}': failed to mark API run completed in DB: {e}",
+                                agent_label
+                            );
+                        }
+
+                        tracing::info!(
+                            "Step '{}' completed via API: {} input tokens, {} output tokens, markers={:?}",
+                            agent_label,
+                            result.input_tokens,
+                            result.output_tokens,
+                            structured.markers,
+                        );
+
+                        state.wf_mgr.update_step_status_full(
+                            &step_id,
+                            WorkflowStepStatus::Completed,
+                            Some(&child_run.id),
+                            Some(&result.json_string),
+                            Some(&structured.context),
+                            Some(&markers_json),
+                            Some(attempt as i64),
+                            Some(&structured.json_string),
+                            None,
+                        )?;
+
+                        record_step_success(
+                            state,
+                            step_key.clone(),
+                            agent_label,
+                            Some(result.json_string),
+                            None,
+                            Some(1),
+                            None,
+                            Some(result.input_tokens),
+                            Some(result.output_tokens),
+                            None,
+                            None,
+                            structured.markers,
+                            structured.context,
+                            Some(child_run.id),
+                            iteration,
+                            Some(structured.json_string),
+                            None,
+                        );
+
+                        return Ok(());
+                    }
+                    Err(err_msg) => {
+                        tracing::warn!(
+                            "Step '{}' API call failed (attempt {}/{}): {err_msg}",
+                            agent_label,
+                            attempt + 1,
+                            max_attempts,
+                        );
+                        if let Err(e) = state.agent_mgr.update_run_failed(&child_run.id, &err_msg) {
+                            tracing::warn!(
+                                "Step '{}': failed to mark API run failed in DB: {e}",
+                                agent_label
+                            );
+                        }
+                        state.wf_mgr.update_step_status(
+                            &step_id,
+                            WorkflowStepStatus::Failed,
+                            Some(&child_run.id),
+                            Some(&err_msg),
+                            None,
+                            None,
+                            Some(attempt as i64),
+                        )?;
+                        last_error = err_msg;
+                        continue;
+                    }
+                }
+            }
+        }
 
         tracing::info!(
             "Step '{}' (attempt {}/{}): spawning headless",
@@ -221,7 +367,7 @@ fn execute_call_with_schema(
         });
 
         std::thread::spawn(move || {
-            let conn = match crate::db::open_database(&crate::config::db_path()) {
+            let conn = match crate::db::open_database_compat(&crate::config::db_path()) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!("drain thread: failed to open DB: {e}");
@@ -323,7 +469,7 @@ fn execute_call_with_schema(
                             "Step '{}' structured output validation failed: {validation_err}",
                             agent_label,
                         );
-                        state.wf_mgr.update_step_status(
+                        state.wf_mgr.update_step_status_full(
                             &step_id,
                             WorkflowStepStatus::Failed,
                             Some(&completed_run.id),
@@ -331,6 +477,8 @@ fn execute_call_with_schema(
                             None,
                             None,
                             Some(attempt as i64),
+                            None,
+                            Some(&validation_err),
                         )?;
                         last_error = validation_err;
                         continue;
@@ -357,6 +505,7 @@ fn execute_call_with_schema(
                         Some(&markers_json),
                         Some(attempt as i64),
                         structured_json.as_deref(),
+                        None,
                     )?;
 
                     record_step_success(

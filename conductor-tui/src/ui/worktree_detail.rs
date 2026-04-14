@@ -309,12 +309,12 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
             }
         } else if has_resumable_wf {
-            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  w=workflow  r=resume wf  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  X=clear conv  w=workflow  r=resume wf  d=del  Esc=back"
         } else {
-            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  w=workflow  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  X=clear conv  w=workflow  d=del  Esc=back"
         }
     } else {
-        "Tab=switch panel  y=copy  o=act  Esc=back  (archived)"
+        "Tab=switch panel  y=copy  o=act  X=clear conv  Esc=back  (archived)"
     };
     lines.push(Line::from(Span::styled(
         actions_text,
@@ -531,7 +531,7 @@ fn render_agent_status_line(
             let in_k = super::common::fmt_tokens_k(totals.total_input_tokens);
             let out_k = super::common::fmt_tokens_k(totals.total_output_tokens);
             let stats = if totals.total_input_tokens > 0 || totals.total_output_tokens > 0 {
-                format!(" {in_k}↓ {out_k}↑ · {turns} turns · {dur_secs:.1}s{runs_label}")
+                format!(" → {in_k} ⊙ {out_k} → · {turns} turns · {dur_secs:.1}s{runs_label}")
             } else {
                 format!(" {turns} turns · {dur_secs:.1}s{runs_label}")
             };
@@ -566,7 +566,7 @@ fn render_agent_status_line(
             let in_k = super::common::fmt_tokens_k(totals.total_input_tokens);
             let out_k = super::common::fmt_tokens_k(totals.total_output_tokens);
             let stats = if totals.total_input_tokens > 0 || totals.total_output_tokens > 0 {
-                format!(" {in_k}↓ {out_k}↑ · {turns} turns · {dur_secs:.1}s{runs_label}")
+                format!(" → {in_k} ⊙ {out_k} → · {turns} turns · {dur_secs:.1}s{runs_label}")
             } else {
                 format!(" {turns} turns · {dur_secs:.1}s{runs_label}")
             };
@@ -659,7 +659,7 @@ fn render_child_run_line(
         let in_k = super::common::fmt_tokens_k(in_tok);
         let out_k = super::common::fmt_tokens_k(out_tok);
         let tok_str = if in_tok > 0 || out_tok > 0 {
-            format!("  {in_k}↓ {out_k}↑ {turns}t")
+            format!("  → {in_k} ⊙ {out_k} → {turns}t")
         } else {
             format!("  {turns}t")
         };

@@ -1262,3 +1262,72 @@ fn test_parse_structured_output_swift_keypath() {
     let structured = result.unwrap();
     assert!(structured.context.contains(r"\.openURL"));
 }
+
+// ---------------------------------------------------------------------------
+// derive_output_from_value unit tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_derive_output_from_value_summary_field() {
+    let schema_yaml = "fields:\n  summary:\n    type: string\n";
+    let schema = parse_schema_content(schema_yaml, "test").unwrap();
+    let value = serde_json::json!({"summary": "All checks passed"});
+
+    let out = derive_output_from_value(value, &schema);
+
+    assert_eq!(out.context, "All checks passed");
+    assert!(out.markers.is_empty());
+    assert_eq!(out.json_string, r#"{"summary":"All checks passed"}"#);
+}
+
+#[test]
+fn test_derive_output_from_value_context_field_preferred() {
+    // A schema with both "context" and "summary" — "context" wins.
+    let schema_yaml = "fields:\n  context:\n    type: string\n  summary:\n    type: string\n";
+    let schema = parse_schema_content(schema_yaml, "test").unwrap();
+    let value = serde_json::json!({"context": "Primary context", "summary": "Secondary"});
+
+    let out = derive_output_from_value(value, &schema);
+
+    assert_eq!(out.context, "Primary context");
+}
+
+#[test]
+fn test_derive_output_from_value_fallback_first_string_field() {
+    // Schema has no "context" or "summary" — falls back to first string field.
+    let schema_yaml = "fields:\n  description:\n    type: string\n  count:\n    type: number\n";
+    let schema = parse_schema_content(schema_yaml, "test").unwrap();
+    let value = serde_json::json!({"description": "Fallback text", "count": 3});
+
+    let out = derive_output_from_value(value, &schema);
+
+    assert_eq!(out.context, "Fallback text");
+}
+
+#[test]
+fn test_derive_output_from_value_no_string_field_empty_context() {
+    // Schema has no string field at all — context must be empty (not panic).
+    let schema_yaml = "fields:\n  approved:\n    type: boolean\n";
+    let schema = parse_schema_content(schema_yaml, "test").unwrap();
+    let value = serde_json::json!({"approved": true});
+
+    let out = derive_output_from_value(value, &schema);
+
+    assert_eq!(out.context, "");
+}
+
+#[test]
+fn test_derive_output_from_value_markers_derived() {
+    let schema_yaml = "fields:\n  approved:\n    type: boolean\n  summary:\n    type: string\nmarkers:\n  not_approved: \"approved == false\"\n";
+    let schema = parse_schema_content(schema_yaml, "test").unwrap();
+    let value = serde_json::json!({"approved": false, "summary": "Needs work"});
+
+    let out = derive_output_from_value(value, &schema);
+
+    assert!(
+        out.markers.contains(&"not_approved".to_string()),
+        "expected not_approved marker, got: {:?}",
+        out.markers
+    );
+    assert_eq!(out.context, "Needs work");
+}

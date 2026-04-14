@@ -38,10 +38,7 @@ impl App {
                 );
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
-                let Some(bg_tx) = self.bg_tx.clone() else {
-                    self.state.modal = Modal::Error {
-                        message: "Cannot delete worktree: background sender not ready.".into(),
-                    };
+                let Some(bg_tx) = self.require_bg_tx() else {
                     return;
                 };
                 self.state.modal = Modal::Progress {
@@ -63,10 +60,7 @@ impl App {
                 });
             }
             ConfirmAction::UnregisterRepo { repo_slug } => {
-                let Some(bg_tx) = self.bg_tx.clone() else {
-                    self.state.modal = Modal::Error {
-                        message: "Cannot unregister repo: background sender not ready.".into(),
-                    };
+                let Some(bg_tx) = self.require_bg_tx() else {
                     return;
                 };
                 self.state.modal = Modal::Progress {
@@ -87,24 +81,26 @@ impl App {
                 });
             }
             ConfirmAction::CancelWorkflow { workflow_run_id } => {
-                use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
-                let wf_mgr = WorkflowManager::new(&self.conn);
-                match wf_mgr.update_workflow_status(
-                    &workflow_run_id,
-                    WorkflowRunStatus::Cancelled,
-                    Some("Cancelled by user"),
-                    None,
-                ) {
-                    Ok(()) => {
-                        self.state.status_message = Some("Workflow run cancelled".to_string());
-                        self.reload_workflow_data();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("Cancel failed: {e}"),
-                        };
-                    }
-                }
+                let Some(bg_tx) = self.require_bg_tx() else {
+                    return;
+                };
+                let run_id = workflow_run_id.clone();
+                self.state.modal = Modal::Progress {
+                    message: "Cancelling workflow…".to_string(),
+                };
+                std::thread::spawn(move || {
+                    let result = (|| -> anyhow::Result<()> {
+                        let db = conductor_core::config::db_path();
+                        let conn = conductor_core::db::open_database(&db)?;
+                        use conductor_core::workflow::WorkflowManager;
+                        let mgr = WorkflowManager::new(&conn);
+                        mgr.cancel_run(&run_id, "Cancelled by user")
+                            .map_err(anyhow::Error::from)
+                    })();
+                    let _ = bg_tx.send(Action::WorkflowCancelComplete {
+                        result: result.map_err(|e| e.to_string()),
+                    });
+                });
             }
             ConfirmAction::ResumeWorkflow { workflow_run_id } => {
                 let config = self.config.clone();
@@ -171,6 +167,34 @@ impl App {
                         };
                     }
                 }
+            }
+            ConfirmAction::ClearConversation {
+                repo_slug,
+                wt_slug,
+                wt_id,
+            } => {
+                let Some(bg_tx) = self.require_bg_tx() else {
+                    return;
+                };
+                self.state.modal = Modal::Progress {
+                    message: "Clearing conversation…".to_string(),
+                };
+                std::thread::spawn(move || {
+                    use conductor_core::conversation::{ConversationManager, ConversationScope};
+                    let result = (|| -> anyhow::Result<()> {
+                        let db = conductor_core::config::db_path();
+                        let conn = conductor_core::db::open_database(&db)?;
+                        let conv_mgr = ConversationManager::new(&conn);
+                        conv_mgr
+                            .clear_for_scope(&ConversationScope::Worktree, &wt_id)
+                            .map_err(anyhow::Error::from)
+                    })();
+                    let _ = bg_tx.send(crate::action::Action::ClearConversationComplete {
+                        repo_slug,
+                        wt_slug,
+                        result: result.map_err(|e| e.to_string()),
+                    });
+                });
             }
             ConfirmAction::Quit => {
                 self.state.should_quit = true;

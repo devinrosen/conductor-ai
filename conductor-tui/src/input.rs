@@ -393,6 +393,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             {
                 return Action::ToggleDefStepTree;
             }
+            KeyCode::Enter => return Action::Select,
             _ => {}
         }
     }
@@ -492,6 +493,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('p') => return Action::LaunchAgent,
             KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
+            KeyCode::Char('X') if !is_active => return Action::ClearConversation,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('R') if is_failed => return Action::RestartAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
@@ -1487,6 +1489,30 @@ mod tests {
         assert!(!matches!(
             map_key(key(KeyCode::Char('t')), &state),
             Action::PickTemplate
+        ));
+    }
+
+    // Regression test for #2092: Enter in workflow column (Runs focus) must
+    // produce Action::Select (drill into run), not Action::LinkTicket.
+    #[test]
+    fn enter_in_workflow_column_runs_maps_to_select() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::Select
+        ));
+    }
+
+    #[test]
+    fn enter_in_workflow_column_defs_maps_to_select() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Defs;
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::Select
         ));
     }
 

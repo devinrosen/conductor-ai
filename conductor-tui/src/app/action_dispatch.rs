@@ -273,6 +273,7 @@ impl App {
             Action::RegisterRepo => self.handle_register_repo(),
             Action::Create => self.handle_create(),
             Action::Delete => self.handle_delete(),
+            Action::ClearConversation => self.handle_clear_conversation(),
             Action::Push => self.handle_push(),
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
@@ -996,6 +997,8 @@ impl App {
                 self.state.data.all_worktree_agent_events = payload.worktree_agent_events;
                 self.state.data.all_repo_agent_events = payload.repo_agent_events;
                 self.state.data.workflow_run_estimates = payload.workflow_run_estimates;
+                self.state.data.completed_token_totals_by_worktree =
+                    payload.completed_token_totals_by_worktree;
                 self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
                 self.refresh_pending_repo_feedback();
@@ -1196,6 +1199,38 @@ impl App {
                     Err(e) => {
                         self.state.modal = Modal::Error {
                             message: format!("Delete failed: {e}"),
+                        };
+                    }
+                }
+            }
+            Action::WorkflowCancelComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(()) => {
+                        self.state.status_message = Some("Workflow run cancelled".to_string());
+                        self.reload_workflow_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Cancel failed: {e}"),
+                        };
+                    }
+                }
+            }
+            Action::ClearConversationComplete {
+                repo_slug,
+                wt_slug,
+                result,
+            } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(()) => {
+                        self.state.status_message =
+                            Some(format!("Conversation cleared for {repo_slug}/{wt_slug}."));
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Clear conversation failed: {e}"),
                         };
                     }
                 }

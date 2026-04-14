@@ -10,14 +10,73 @@ impl<'a> AgentManager<'a> {
     ///
     /// Tries `try_recover_from_log` first; if no result is found in the log,
     /// marks the run as `failed` with `fail_msg`.
+    /// Either way, cascades the failure to any associated `workflow_runs` whose
+    /// `parent_run_id` points to this agent run.
     fn reap_one(&self, run_id: &str, fail_msg: &str) -> crate::error::Result<()> {
         if try_recover_from_log(self, run_id).is_some() {
             tracing::info!("reap_orphaned_runs: recovered result from log for run {run_id}");
-            return Ok(());
+        } else {
+            tracing::warn!(
+                "reap_orphaned_runs: no log recovery for run {run_id}, marking as failed"
+            );
+            self.update_run_failed(run_id, fail_msg)?;
         }
-        tracing::warn!("reap_orphaned_runs: no log recovery for run {run_id}, marking as failed");
-        self.update_run_failed(run_id, fail_msg)?;
+        // Cascade to any associated workflow runs, regardless of recovery outcome.
+        let wf_reaped = self.fail_child_workflow_runs(run_id)?;
+        if wf_reaped > 0 {
+            tracing::warn!(
+                "reap_orphaned_runs: failed {wf_reaped} workflow run(s) whose parent agent run {run_id} was reaped"
+            );
+        }
         Ok(())
+    }
+
+    /// Mark non-terminal `workflow_runs` whose `parent_run_id` matches the given
+    /// agent run as `failed`. This is called after an agent run is reaped so that
+    /// any associated workflow runs do not remain stuck in a non-terminal state.
+    fn fail_child_workflow_runs(&self, agent_run_id: &str) -> Result<usize> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let changed = self.conn.execute(
+            "UPDATE workflow_runs \
+             SET status = 'failed', ended_at = ?1, blocked_on = NULL, \
+                 error = 'parent agent run was orphaned and reaped' \
+             WHERE parent_run_id = ?2 \
+               AND status IN ('running', 'waiting', 'pending')",
+            rusqlite::params![now, agent_run_id],
+        )?;
+        Ok(changed)
+    }
+
+    /// Sweep for workflow runs that are stuck in an active state because their
+    /// parent agent run has already reached a terminal state (failed, completed,
+    /// or cancelled).
+    ///
+    /// This covers the case where the `active_wf_parent_ids` guard in
+    /// `reap_orphaned_runs()` prevented the parent agent run from being reaped
+    /// while the workflow was nominally active, but the workflow executor
+    /// subsequently died without updating the workflow run status.
+    ///
+    /// Returns the number of workflow runs transitioned to `failed`.
+    pub fn reap_workflow_runs_with_dead_parent(&self) -> Result<usize> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let changed = self.conn.execute(
+            "UPDATE workflow_runs \
+             SET status = 'failed', ended_at = ?1, blocked_on = NULL, \
+                 error = 'parent agent run reached terminal state without completing the workflow' \
+             WHERE status IN ('running', 'waiting', 'pending') \
+               AND parent_run_id IS NOT NULL \
+               AND parent_run_id IN ( \
+                   SELECT id FROM agent_runs \
+                   WHERE status IN ('failed', 'completed', 'cancelled') \
+               )",
+            rusqlite::params![now],
+        )?;
+        if changed > 0 {
+            tracing::warn!(
+                "reap_workflow_runs_with_dead_parent: failed {changed} workflow run(s) whose parent agent run is terminal"
+            );
+        }
+        Ok(changed)
     }
 
     /// Reap orphaned agent runs whose subprocess has exited.
@@ -38,7 +97,9 @@ impl<'a> AgentManager<'a> {
         )?;
 
         if active_runs.is_empty() {
-            return Ok(0);
+            // No active agent runs — still run the workflow sweep in case a previous
+            // reap cycle left workflow_runs stuck with a now-terminal parent.
+            return self.reap_workflow_runs_with_dead_parent();
         }
 
         tracing::debug!(
@@ -135,6 +196,11 @@ impl<'a> AgentManager<'a> {
         if reaped > 0 {
             tracing::info!("reap_orphaned_runs: reaped {reaped} orphaned run(s)");
         }
+
+        // Separately sweep for workflow runs whose parent agent run is already
+        // terminal (handles the guard-deadlock case where the parent agent run
+        // cannot be reaped while the workflow_run is still active).
+        reaped += self.reap_workflow_runs_with_dead_parent()?;
 
         Ok(reaped)
     }
@@ -403,6 +469,205 @@ mod tests {
             AgentRunStatus::Running,
             "child run status must remain running"
         );
+    }
+
+    /// Helper: create a terminal agent_run (with `parent_status`) and a workflow_run
+    /// pointing at it (with `wf_status`). Returns the workflow_run id.
+    ///
+    /// Used by the dead-parent cascade tests so they share identical setup boilerplate
+    /// without copy-pasting the ~10-line block into each test body.
+    fn setup_dead_parent_with_wf_run(
+        conn: &rusqlite::Connection,
+        mgr: &AgentManager,
+        parent_status: &str,
+        wf_status: &str,
+    ) -> String {
+        let run = mgr
+            .create_run(Some("w1"), "test prompt", None, None)
+            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = ?1, ended_at = '2025-01-01T00:01:00Z' WHERE id = ?2",
+            rusqlite::params![parent_status, run.id],
+        )
+        .unwrap();
+        let wf_run_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
+             VALUES (?1, 'test-wf', NULL, ?2, ?3, 0, 'manual', '2025-01-01T00:00:00Z')",
+            rusqlite::params![wf_run_id, run.id, wf_status],
+        )
+        .unwrap();
+        wf_run_id
+    }
+
+    /// A workflow_run in `running` status whose parent agent_run is already
+    /// terminal (failed) must be transitioned to `failed` by
+    /// `reap_workflow_runs_with_dead_parent` (called inside `reap_orphaned_runs`).
+    ///
+    /// Note: the `active_wf_parent_ids` guard prevents agent_runs from being
+    /// reaped while they are the parent of a non-terminal workflow_run. This test
+    /// therefore pre-terminates the agent_run directly in the DB to simulate the
+    /// scenario where the parent died without the workflow_run being updated.
+    #[test]
+    fn test_reap_orphaned_runs_fails_associated_workflow_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "running");
+
+        // reap_orphaned_runs calls reap_workflow_runs_with_dead_parent internally.
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 1, "one workflow_run should be reaped");
+
+        let wf_status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![wf_run_id],
+                |r: &rusqlite::Row<'_>| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(wf_status, "failed");
+
+        let wf_error: Option<String> = conn
+            .query_row(
+                "SELECT error FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![wf_run_id],
+                |r: &rusqlite::Row<'_>| r.get(0),
+            )
+            .unwrap();
+        assert!(wf_error
+            .as_deref()
+            .unwrap()
+            .contains("parent agent run reached terminal state"));
+    }
+
+    /// A workflow_run in `waiting` status (which may carry a `blocked_on` value)
+    /// must be transitioned to `failed` and have `blocked_on` cleared.
+    #[test]
+    fn test_reap_orphaned_runs_fails_waiting_workflow_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "waiting");
+        // Simulate a stale blocked_on value left by the workflow executor.
+        conn.execute(
+            "UPDATE workflow_runs SET blocked_on = '{\"type\":\"stale\"}' WHERE id = ?1",
+            rusqlite::params![wf_run_id],
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 1);
+
+        let (wf_status, blocked_on): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, blocked_on FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![wf_run_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(wf_status, "failed");
+        assert!(blocked_on.is_none(), "blocked_on must be cleared on reap");
+    }
+
+    /// A workflow_run in `pending` status whose parent agent_run is terminal must
+    /// be reaped — `pending` appears in both SQL IN-lists but previously had no test.
+    #[test]
+    fn test_reap_orphaned_runs_fails_pending_workflow_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "pending");
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 1, "pending workflow_run should be reaped");
+
+        let wf_status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![wf_run_id],
+                |r: &rusqlite::Row<'_>| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(wf_status, "failed");
+    }
+
+    /// `reap_workflow_runs_with_dead_parent` must cascade for a `completed` parent,
+    /// not just a `failed` one.
+    #[test]
+    fn test_reap_wf_runs_dead_parent_completed() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "completed", "running");
+
+        let reaped = mgr.reap_workflow_runs_with_dead_parent().unwrap();
+        assert_eq!(
+            reaped, 1,
+            "workflow_run with completed parent should be reaped"
+        );
+
+        let wf_status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![wf_run_id],
+                |r: &rusqlite::Row<'_>| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(wf_status, "failed");
+    }
+
+    /// `reap_workflow_runs_with_dead_parent` must cascade for a `cancelled` parent.
+    #[test]
+    fn test_reap_wf_runs_dead_parent_cancelled() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "cancelled", "running");
+
+        let reaped = mgr.reap_workflow_runs_with_dead_parent().unwrap();
+        assert_eq!(
+            reaped, 1,
+            "workflow_run with cancelled parent should be reaped"
+        );
+
+        let wf_status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![wf_run_id],
+                |r: &rusqlite::Row<'_>| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(wf_status, "failed");
+    }
+
+    /// A workflow_run that is already in a terminal state (`completed`) must NOT
+    /// be touched even if its parent agent_run is also terminal.
+    #[test]
+    fn test_reap_orphaned_runs_does_not_affect_terminal_workflow_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "completed");
+        // Mark the workflow_run as ended (terminal state).
+        conn.execute(
+            "UPDATE workflow_runs SET ended_at = '2025-01-01T01:00:00Z' WHERE id = ?1",
+            rusqlite::params![wf_run_id],
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 0, "completed workflow_run must not be reaped");
+
+        let wf_status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![wf_run_id],
+                |r: &rusqlite::Row<'_>| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(wf_status, "completed");
     }
 
     /// A run with a subprocess_pid pointing to the current (live) process must NOT be reaped.

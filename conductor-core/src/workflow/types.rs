@@ -199,6 +199,8 @@ pub struct WorkflowRunStep {
     pub fan_out_failed: i64,
     /// Number of skipped fan-out items.
     pub fan_out_skipped: i64,
+    /// Validation error message populated when a call step's agent output fails schema validation.
+    pub step_error: Option<String>,
 }
 
 /// Lightweight summary of the currently-running step for a workflow run.
@@ -644,6 +646,14 @@ pub struct WorkflowPercentiles {
     pub p75_total_tokens: Option<f64>,
     pub p95_total_tokens: Option<f64>,
     pub p99_total_tokens: Option<f64>,
+    pub run_count: i64,
+}
+
+/// Spike detection baseline for a workflow: average cost and P75 duration over a rolling window.
+#[derive(Debug, Clone)]
+pub struct SpikeBaseline {
+    pub avg_cost_usd: f64,
+    pub p75_duration_ms: f64,
     pub run_count: i64,
 }
 

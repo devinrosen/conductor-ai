@@ -135,7 +135,7 @@ pub fn execute_parallel(
             Some(&state.workflow_name),
         )?;
 
-        let prompt = build_agent_prompt(state, &agent_def, effective_schema, &snippet_text);
+        let prompt = build_agent_prompt(state, &agent_def, effective_schema, &snippet_text, None);
         let step_model = agent_def.model.as_deref().or(state.model.as_deref());
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
@@ -229,7 +229,7 @@ pub fn execute_parallel(
         let outcome_tx = completion_tx.clone();
         let child_index = children.len(); // index this child will have in children vec
         let drain_handle = std::thread::spawn(move || {
-            let conn = match crate::db::open_database(&crate::config::db_path()) {
+            let conn = match crate::db::open_database_compat(&crate::config::db_path()) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!(
@@ -445,6 +445,7 @@ pub fn execute_parallel(
                             Some(&markers_json),
                             None,
                             structured_json.as_deref(),
+                            None,
                         ) {
                             tracing::warn!(
                                 "parallel: failed to update step status for '{}': {e}",

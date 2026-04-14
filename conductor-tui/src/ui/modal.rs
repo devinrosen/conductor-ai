@@ -350,11 +350,12 @@ pub fn render_ticket_info(frame: &mut Frame, area: Rect, data: &TicketInfoData<'
         lines.push(Line::from(vec![
             Span::styled("    Tokens:  ", dim_style),
             Span::styled(
-                format!(
-                    "{}↓ {}↑",
-                    fmt_k(totals.total_input_tokens),
-                    fmt_k(totals.total_output_tokens)
-                ),
+                format!("→ {} ", fmt_k(totals.total_input_tokens)),
+                Style::default().fg(theme.status_waiting),
+            ),
+            Span::styled("⊙", dim_style),
+            Span::styled(
+                format!(" {} →", fmt_k(totals.total_output_tokens)),
                 Style::default().fg(theme.status_waiting),
             ),
             Span::styled("   Turns: ", dim_style),

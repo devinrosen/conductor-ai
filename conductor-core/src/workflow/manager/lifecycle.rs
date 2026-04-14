@@ -237,11 +237,16 @@ impl<'a> WorkflowManager<'a> {
                     continue;
                 }
                 if let Some(ref child_id) = step.child_run_id {
-                    if let Err(e) = agent_mgr.update_run_cancelled(child_id) {
+                    let subprocess_pid = agent_mgr
+                        .get_run(child_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|r| r.subprocess_pid);
+                    if let Err(e) = agent_mgr.cancel_run(child_id, subprocess_pid) {
                         tracing::warn!(
                             step_id = %step.id,
                             child_run_id = %child_id,
-                            "Failed to mark child agent run as cancelled during workflow cancellation: {e}"
+                            "Failed to cancel child agent run during workflow cancellation: {e}"
                         );
                     }
                 }

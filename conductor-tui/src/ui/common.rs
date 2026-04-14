@@ -286,19 +286,31 @@ pub fn worktree_list_item_with_prefix(
         ));
     }
 
-    // Token counts at end for active agent runs.
+    // Show cumulative token totals: completed runs + active run overlay.
+    let (mut total_in, mut total_out) = state
+        .data
+        .completed_token_totals_by_worktree
+        .get(&wt.id)
+        .copied()
+        .unwrap_or((0, 0));
+
+    // Add live-run tokens only if the run is still active (not yet counted in DB aggregate).
     if let Some(run) = agent_run {
         if matches!(
             run.status,
             AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
         ) {
-            if let (Some(input), Some(output)) = (run.input_tokens, run.output_tokens) {
-                spans.push(Span::styled(
-                    format!("  ↑{} ↓{}", fmt_tokens_k(input), fmt_tokens_k(output)),
-                    Style::default().fg(state.theme.status_waiting),
-                ));
-            }
+            total_in += run.input_tokens.unwrap_or(0);
+            total_out += run.output_tokens.unwrap_or(0);
         }
+    }
+
+    if total_in > 0 || total_out > 0 {
+        spans.extend(token_flow_spans(
+            &fmt_tokens_k(total_in),
+            &fmt_tokens_k(total_out),
+            &state.theme,
+        ));
     }
 
     ListItem::new(Line::from(spans))
@@ -331,6 +343,24 @@ pub(super) fn fmt_tokens_k(n: i64) -> String {
     }
 }
 
+/// Build a 3-span flow-format token display: `→ {in_k} ⊙ {out_k} →`
+///
+/// The `⊙` separator is styled dim (label_secondary) to visually distinguish
+/// it from the counts, which use status_waiting color.
+pub(super) fn token_flow_spans(in_k: &str, out_k: &str, theme: &Theme) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            format!("  → {in_k} "),
+            Style::default().fg(theme.status_waiting),
+        ),
+        Span::styled("⊙", Style::default().fg(theme.label_secondary)),
+        Span::styled(
+            format!(" {out_k} →"),
+            Style::default().fg(theme.status_waiting),
+        ),
+    ]
+}
+
 /// Build optional agent-totals spans for a ticket row.
 ///
 /// Compact views (dashboard, repo-detail) pass `show_duration: false`
@@ -347,21 +377,25 @@ pub fn ticket_agent_total_spans(
     };
     let in_k = fmt_tokens_k(totals.total_input_tokens);
     let out_k = fmt_tokens_k(totals.total_output_tokens);
-    let text = if show_duration {
+    let suffix = if show_duration {
         let dur_secs = totals.total_duration_ms as f64 / 1000.0;
         let mins = (dur_secs / 60.0) as i64;
         let secs = (dur_secs % 60.0) as i64;
-        format!(
-            "{leading}{in_k}↓ {out_k}↑ {}t  {}m{:02}s",
-            totals.total_turns, mins, secs
-        )
+        format!(" {}t  {}m{:02}s", totals.total_turns, mins, secs)
     } else {
-        format!("{leading}{in_k}↓ {out_k}↑ {}t", totals.total_turns)
+        format!(" {}t", totals.total_turns)
     };
-    vec![Span::styled(
-        text,
-        Style::default().fg(state.theme.status_waiting),
-    )]
+    vec![
+        Span::styled(
+            format!("{leading}→ {in_k} "),
+            Style::default().fg(state.theme.status_waiting),
+        ),
+        Span::styled("⊙", Style::default().fg(state.theme.label_secondary)),
+        Span::styled(
+            format!(" {out_k} →{suffix}"),
+            Style::default().fg(state.theme.status_waiting),
+        ),
+    ]
 }
 
 /// Return the canonical (icon, color) pair for a gate type.

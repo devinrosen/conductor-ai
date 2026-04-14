@@ -78,6 +78,8 @@ pub struct DataRefreshedPayload {
     pub repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
     /// Estimated remaining time for active workflow runs, keyed by run_id.
     pub workflow_run_estimates: HashMap<String, LiveEstimate>,
+    /// Cumulative completed token totals per worktree (worktree_id -> (input, output)).
+    pub completed_token_totals_by_worktree: HashMap<String, (i64, i64)>,
 }
 
 /// Every user intent or background result flows through this enum.
@@ -324,6 +326,14 @@ pub enum Action {
         run_id: String,
     },
 
+    // Conversation clear
+    ClearConversation,
+    ClearConversationComplete {
+        repo_slug: String,
+        wt_slug: String,
+        result: Result<(), String>,
+    },
+
     // Background result for worktree delete readiness check
     DeleteWorktreeReady {
         repo_slug: String,
@@ -410,6 +420,10 @@ pub enum Action {
     /// Resume the latest failed/paused workflow run for the selected worktree (WorktreeDetail view).
     ResumeWorktreeWorkflow,
     CancelWorkflow,
+    /// Background result: workflow cancel completed.
+    WorkflowCancelComplete {
+        result: Result<(), String>,
+    },
     ApproveGate,
     RejectGate,
     /// View the selected workflow definition's YAML source in a scrollable modal.
