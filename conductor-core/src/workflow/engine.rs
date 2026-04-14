@@ -28,8 +28,11 @@ use super::types::{
 pub const ENGINE_INJECTED_KEYS: &[&str] = &[
     "ticket_id",
     "ticket_source_id",
+    "ticket_source_type",
     "ticket_title",
+    "ticket_body",
     "ticket_url",
+    "ticket_raw_json",
     "repo_id",
     "repo_path",
     "repo_name",
@@ -448,11 +451,20 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             .entry("ticket_source_id".to_string())
             .or_insert_with(|| ticket.source_id.clone());
         merged_inputs
+            .entry("ticket_source_type".to_string())
+            .or_insert_with(|| ticket.source_type.clone());
+        merged_inputs
             .entry("ticket_title".to_string())
             .or_insert_with(|| ticket.title.clone());
         merged_inputs
+            .entry("ticket_body".to_string())
+            .or_insert_with(|| ticket.body.clone());
+        merged_inputs
             .entry("ticket_url".to_string())
             .or_insert_with(|| ticket.url.clone());
+        merged_inputs
+            .entry("ticket_raw_json".to_string())
+            .or_insert_with(|| ticket.raw_json.clone());
     }
     if let Some(rid) = input.repo_id {
         let repo = crate::repo::RepoManager::new(conn, config).get_by_id(rid)?;

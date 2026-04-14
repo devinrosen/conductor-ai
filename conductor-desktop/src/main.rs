@@ -69,6 +69,17 @@ fn main() {
                 WorkflowManager::new(&conn).reap_orphaned_script_steps()
             });
 
+            // Auto-resume stuck workflow runs on startup.
+            {
+                use conductor_core::workflow::WorkflowManager;
+                let wf_mgr = WorkflowManager::new(&conn);
+                let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(&config, None, conductor_bin_dir)
+                {
+                    tracing::warn!("auto_resume_stuck_workflows failed on startup: {e}");
+                }
+            }
+
             // Build the conductor-web AppState for the embedded HTTP server.
             let web_state = conductor_web::state::AppState::new(conn, config, db_path_val, 64);
 
@@ -144,9 +155,26 @@ fn main() {
                                 if let Err(e) = wt_mgr.reap_stale_worktrees() {
                                     tracing::warn!("reap_stale_worktrees failed: {e}");
                                 }
+                                // Workflow orphan recovery + stale watchdog
                                 let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
-                                if let Err(e) = wf_mgr.reap_orphaned_script_steps() {
-                                    tracing::warn!("reap_orphaned_script_steps failed: {e}");
+                                if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
+                                    tracing::warn!("reap_orphaned_workflow_runs failed: {e}");
+                                }
+                                // Auto-resume stuck workflow runs using both fixed and configurable thresholds
+                                let conductor_bin_dir =
+                                    conductor_core::workflow::resolve_conductor_bin_dir();
+                                let stale_mins = cfg.general.stale_workflow_minutes;
+                                let configurable_threshold = if stale_mins > 0 {
+                                    Some((stale_mins * 60) as i64)
+                                } else {
+                                    None
+                                };
+                                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
+                                    &cfg,
+                                    configurable_threshold,
+                                    conductor_bin_dir,
+                                ) {
+                                    tracing::warn!("auto_resume_stuck_workflows failed: {e}");
                                 }
                             })
                             .await
