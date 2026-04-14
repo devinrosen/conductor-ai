@@ -1195,6 +1195,21 @@ impl App {
                     }
                 }
             }
+            Action::WorkflowCancelComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(()) => {
+                        self.state.status_message =
+                            Some("Workflow run cancelled".to_string());
+                        self.reload_workflow_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Cancel failed: {e}"),
+                        };
+                    }
+                }
+            }
             Action::ClearConversationComplete {
                 repo_slug,
                 wt_slug,
