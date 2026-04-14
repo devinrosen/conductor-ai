@@ -333,34 +333,9 @@ pub fn run(conn: &Connection) -> Result<()> {
             .is_ok();
         if !has_feedback_requests {
             with_foreign_keys_off(conn, || {
-                conn.execute_batch(
-                    "CREATE TABLE agent_runs_new (
-                    id                TEXT PRIMARY KEY,
-                    worktree_id       TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
-                    claude_session_id TEXT,
-                    prompt            TEXT NOT NULL,
-                    status            TEXT NOT NULL DEFAULT 'running'
-                                      CHECK (status IN ('running','completed','failed','cancelled','waiting_for_feedback')),
-                    result_text       TEXT,
-                    cost_usd          REAL,
-                    num_turns         INTEGER,
-                    duration_ms       INTEGER,
-                    started_at        TEXT NOT NULL,
-                    ended_at          TEXT,
-                    tmux_window       TEXT,
-                    log_file          TEXT,
-                    model             TEXT,
-                    plan              TEXT,
-                    parent_run_id     TEXT REFERENCES agent_runs_new(id) ON DELETE SET NULL
-                );
-                INSERT INTO agent_runs_new SELECT id, worktree_id, claude_session_id, prompt, status,
-                    result_text, cost_usd, num_turns, duration_ms, started_at, ended_at,
-                    tmux_window, log_file, model, plan, parent_run_id FROM agent_runs;
-                DROP TABLE agent_runs;
-                ALTER TABLE agent_runs_new RENAME TO agent_runs;
-                CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);
-                CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree ON agent_runs(worktree_id);",
-                )?;
+                conn.execute_batch(include_str!(
+                    "migrations/018_agent_runs_check_constraint.sql"
+                ))?;
                 Ok(())
             })?;
 
@@ -396,68 +371,11 @@ pub fn run(conn: &Connection) -> Result<()> {
         }
         // Recreate tables to update CHECK constraints (add 'waiting' status).
         with_foreign_keys_off(conn, || {
-            conn.execute_batch(
-                "CREATE TABLE workflow_runs_new (
-                id                  TEXT PRIMARY KEY,
-                workflow_name       TEXT NOT NULL,
-                worktree_id         TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
-                parent_run_id       TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-                status              TEXT NOT NULL DEFAULT 'pending'
-                                    CHECK (status IN ('pending','running','completed','failed','cancelled','waiting')),
-                dry_run             INTEGER NOT NULL DEFAULT 0,
-                trigger             TEXT NOT NULL DEFAULT 'manual',
-                started_at          TEXT NOT NULL,
-                ended_at            TEXT,
-                result_summary      TEXT,
-                definition_snapshot TEXT
-            );
-            INSERT INTO workflow_runs_new SELECT id, workflow_name, worktree_id, parent_run_id,
-                status, dry_run, trigger, started_at, ended_at, result_summary, definition_snapshot
-                FROM workflow_runs;
-            DROP TABLE workflow_runs;
-            ALTER TABLE workflow_runs_new RENAME TO workflow_runs;
-            CREATE INDEX IF NOT EXISTS idx_workflow_runs_worktree ON workflow_runs(worktree_id);
-            CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent ON workflow_runs(parent_run_id);",
-            )?;
+            conn.execute_batch(include_str!("migrations/021_workflow_runs_table_swap.sql"))?;
 
-            conn.execute_batch(
-                "CREATE TABLE workflow_run_steps_new (
-                id                TEXT PRIMARY KEY,
-                workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
-                step_name         TEXT NOT NULL,
-                role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate')),
-                can_commit        INTEGER NOT NULL DEFAULT 0,
-                condition_expr    TEXT,
-                status            TEXT NOT NULL DEFAULT 'pending'
-                                  CHECK (status IN ('pending','running','completed','failed','skipped','waiting')),
-                child_run_id      TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
-                position          INTEGER NOT NULL,
-                started_at        TEXT,
-                ended_at          TEXT,
-                result_text       TEXT,
-                condition_met     INTEGER,
-                iteration         INTEGER NOT NULL DEFAULT 0,
-                parallel_group_id TEXT,
-                context_out       TEXT,
-                markers_out       TEXT,
-                retry_count       INTEGER NOT NULL DEFAULT 0,
-                gate_type         TEXT,
-                gate_prompt       TEXT,
-                gate_timeout      TEXT,
-                gate_approved_by  TEXT,
-                gate_approved_at  TEXT,
-                gate_feedback     TEXT
-            );
-            INSERT INTO workflow_run_steps_new SELECT id, workflow_run_id, step_name, role,
-                can_commit, condition_expr, status, child_run_id, position, started_at, ended_at,
-                result_text, condition_met, iteration, parallel_group_id, context_out, markers_out,
-                retry_count, gate_type, gate_prompt, gate_timeout, gate_approved_by,
-                gate_approved_at, gate_feedback
-                FROM workflow_run_steps;
-            DROP TABLE workflow_run_steps;
-            ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
-            CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);",
-            )?;
+            conn.execute_batch(include_str!(
+                "migrations/021_workflow_run_steps_table_swap.sql"
+            ))?;
 
             Ok(())
         })?;
@@ -481,48 +399,9 @@ pub fn run(conn: &Connection) -> Result<()> {
     // PRAGMA foreign_keys = OFF must be done outside a transaction (handled in Rust).
     if version < 24 {
         with_foreign_keys_off(conn, || {
-            conn.execute_batch(
-                "BEGIN;
-            CREATE TABLE workflow_run_steps_new (
-                id                TEXT PRIMARY KEY,
-                workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
-                step_name         TEXT NOT NULL,
-                role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate')),
-                can_commit        INTEGER NOT NULL DEFAULT 0,
-                condition_expr    TEXT,
-                status            TEXT NOT NULL DEFAULT 'pending'
-                                  CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
-                child_run_id      TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
-                position          INTEGER NOT NULL,
-                started_at        TEXT,
-                ended_at          TEXT,
-                result_text       TEXT,
-                condition_met     INTEGER,
-                iteration         INTEGER NOT NULL DEFAULT 0,
-                parallel_group_id TEXT,
-                context_out       TEXT,
-                markers_out       TEXT,
-                retry_count       INTEGER NOT NULL DEFAULT 0,
-                gate_type         TEXT,
-                gate_prompt       TEXT,
-                gate_timeout      TEXT,
-                gate_approved_by  TEXT,
-                gate_approved_at  TEXT,
-                gate_feedback     TEXT,
-                structured_output TEXT
-            );
-            INSERT INTO workflow_run_steps_new SELECT
-                id, workflow_run_id, step_name, role, can_commit, condition_expr,
-                status, child_run_id, position, started_at, ended_at, result_text,
-                condition_met, iteration, parallel_group_id, context_out, markers_out,
-                retry_count, gate_type, gate_prompt, gate_timeout, gate_approved_by,
-                gate_approved_at, gate_feedback, structured_output
-                FROM workflow_run_steps;
-            DROP TABLE workflow_run_steps;
-            ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
-            CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);
-            COMMIT;",
-            )?;
+            conn.execute_batch(include_str!(
+                "migrations/024_workflow_run_steps_timed_out.sql"
+            ))?;
             Ok(())
         })?;
         bump_version(conn, 24)?;
@@ -531,48 +410,9 @@ pub fn run(conn: &Connection) -> Result<()> {
     // Migration 025: add 'workflow' to the workflow_run_steps role CHECK constraint.
     if version < 25 {
         with_foreign_keys_off(conn, || {
-            conn.execute_batch(
-                "BEGIN;
-            CREATE TABLE workflow_run_steps_new (
-                id                TEXT PRIMARY KEY,
-                workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
-                step_name         TEXT NOT NULL,
-                role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate','workflow')),
-                can_commit        INTEGER NOT NULL DEFAULT 0,
-                condition_expr    TEXT,
-                status            TEXT NOT NULL DEFAULT 'pending'
-                                  CHECK (status IN ('pending','running','waiting','completed','failed','skipped','timed_out')),
-                child_run_id      TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
-                position          INTEGER NOT NULL,
-                started_at        TEXT,
-                ended_at          TEXT,
-                result_text       TEXT,
-                condition_met     INTEGER,
-                iteration         INTEGER NOT NULL DEFAULT 0,
-                parallel_group_id TEXT,
-                context_out       TEXT,
-                markers_out       TEXT,
-                retry_count       INTEGER NOT NULL DEFAULT 0,
-                gate_type         TEXT,
-                gate_prompt       TEXT,
-                gate_timeout      TEXT,
-                gate_approved_by  TEXT,
-                gate_approved_at  TEXT,
-                gate_feedback     TEXT,
-                structured_output TEXT
-            );
-            INSERT INTO workflow_run_steps_new SELECT
-                id, workflow_run_id, step_name, role, can_commit, condition_expr,
-                status, child_run_id, position, started_at, ended_at, result_text,
-                condition_met, iteration, parallel_group_id, context_out, markers_out,
-                retry_count, gate_type, gate_prompt, gate_timeout, gate_approved_by,
-                gate_approved_at, gate_feedback, structured_output
-                FROM workflow_run_steps;
-            DROP TABLE workflow_run_steps;
-            ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
-            CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);
-            COMMIT;",
-            )?;
+            conn.execute_batch(include_str!(
+                "migrations/025_workflow_run_steps_workflow_role.sql"
+            ))?;
             Ok(())
         })?;
         bump_version(conn, 25)?;
@@ -594,59 +434,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     // that have no registered worktree).
     if version < 27 {
         with_foreign_keys_off(conn, || {
-            conn.execute_batch(
-                "BEGIN;
-
-            -- Recreate workflow_runs with nullable worktree_id
-            CREATE TABLE workflow_runs_new (
-                id                  TEXT PRIMARY KEY,
-                workflow_name       TEXT NOT NULL,
-                worktree_id         TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
-                parent_run_id       TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-                status              TEXT NOT NULL DEFAULT 'pending'
-                                    CHECK (status IN ('pending','running','completed','failed','cancelled','waiting')),
-                dry_run             INTEGER NOT NULL DEFAULT 0,
-                trigger             TEXT NOT NULL DEFAULT 'manual',
-                started_at          TEXT NOT NULL,
-                ended_at            TEXT,
-                result_summary      TEXT,
-                definition_snapshot TEXT,
-                inputs              TEXT
-            );
-            INSERT INTO workflow_runs_new SELECT * FROM workflow_runs;
-            DROP TABLE workflow_runs;
-            ALTER TABLE workflow_runs_new RENAME TO workflow_runs;
-            CREATE INDEX IF NOT EXISTS idx_workflow_runs_worktree ON workflow_runs(worktree_id);
-            CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent ON workflow_runs(parent_run_id);
-
-            -- Recreate agent_runs with nullable worktree_id
-            CREATE TABLE agent_runs_new (
-                id                TEXT PRIMARY KEY,
-                worktree_id       TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
-                claude_session_id TEXT,
-                prompt            TEXT NOT NULL,
-                status            TEXT NOT NULL DEFAULT 'running'
-                                  CHECK (status IN ('running','completed','failed','cancelled','waiting_for_feedback')),
-                result_text       TEXT,
-                cost_usd          REAL,
-                num_turns         INTEGER,
-                duration_ms       INTEGER,
-                started_at        TEXT NOT NULL,
-                ended_at          TEXT,
-                tmux_window       TEXT,
-                log_file          TEXT,
-                model             TEXT,
-                plan              TEXT,
-                parent_run_id     TEXT REFERENCES agent_runs_new(id) ON DELETE SET NULL
-            );
-            INSERT INTO agent_runs_new SELECT * FROM agent_runs;
-            DROP TABLE agent_runs;
-            ALTER TABLE agent_runs_new RENAME TO agent_runs;
-            CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);
-            CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree ON agent_runs(worktree_id);
-
-            COMMIT;",
-            )?;
+            conn.execute_batch(include_str!("migrations/027_nullable_worktree_id.sql"))?;
             Ok(())
         })?;
         bump_version(conn, 27)?;
@@ -883,11 +671,7 @@ pub fn run(conn: &Connection) -> Result<()> {
             })?;
         } else {
             // Table is up-to-date — just ensure indexes exist (idempotent).
-            conn.execute_batch(
-                "CREATE INDEX IF NOT EXISTS idx_workflow_runs_ticket ON workflow_runs(ticket_id);
-                 CREATE INDEX IF NOT EXISTS idx_workflow_runs_repo ON workflow_runs(repo_id);
-                 CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_wf ON workflow_runs(parent_workflow_run_id);",
-            )?;
+            conn.execute_batch(include_str!("migrations/047_workflow_runs_indexes.sql"))?;
         }
         bump_version(conn, 47)?;
     }
