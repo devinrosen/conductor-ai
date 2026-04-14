@@ -913,7 +913,6 @@ fn stale_notifications_active(config: &NotificationConfig, notify_hooks: &[HookC
     legacy_enabled || !notify_hooks.is_empty()
 }
 
-
 /// Fire a notification when orphaned/stuck workflow runs are auto-resumed on
 /// startup or during periodic recovery.
 pub fn fire_orphan_resumed_notification(

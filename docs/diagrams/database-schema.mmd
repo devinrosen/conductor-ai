@@ -1,4 +1,4 @@
-%% Updated 2026-04-13 — Entity-relationship diagram for conductor.db (64 migrations)
+%% Updated 2026-04-14 — Entity-relationship diagram for conductor.db (72 migrations)
 erDiagram
 
     _conductor_meta {
@@ -224,6 +224,7 @@ erDiagram
         int fan_out_completed
         int fan_out_failed
         int fan_out_skipped
+        text step_error
     }
 
     workflow_runs {
