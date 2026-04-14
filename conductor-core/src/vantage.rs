@@ -292,7 +292,11 @@ fn notify_dispatched(deliverable_id: &str, sdlc_root: &str, workflow_run_id: &st
     Ok(())
 }
 
-/// Update Vantage conductor status to "completed" when a workflow succeeds.
+/// Update Vantage conductor status to "pr_approved" when a workflow succeeds.
+///
+/// The ticket-to-pr workflow completion means conductor has reviewed and approved
+/// the PR — the deliverable is ready for merge. This status is used by dependent
+/// tickets to determine when they are unblocked.
 fn notify_completed(
     deliverable_id: &str,
     sdlc_root: &str,
@@ -305,7 +309,7 @@ fn notify_completed(
         "set",
         "--",
         deliverable_id,
-        "conductor.status=completed",
+        "conductor.status=pr_approved",
     ];
     let completed_at = format!("conductor.completed_at={now}");
     args.push(&completed_at);
@@ -320,7 +324,7 @@ fn notify_completed(
         args.push(&wt_arg);
     }
     run_sdlc(sdlc_root, &args)?;
-    tracing::info!("Vantage: marked {deliverable_id} as completed");
+    tracing::info!("Vantage: marked {deliverable_id} as pr_approved");
     Ok(())
 }
 
@@ -430,7 +434,7 @@ impl VantageLifecycle {
         notify_dispatched(&self.deliverable_id, &self.sdlc_root, workflow_run_id)
     }
 
-    /// Notify Vantage that the workflow completed successfully (best-effort).
+    /// Notify Vantage that the workflow completed and the PR is approved (best-effort).
     pub fn on_completed(&self, pr_url: Option<&str>, worktree_slug: Option<&str>) -> Result<()> {
         notify_completed(&self.deliverable_id, &self.sdlc_root, pr_url, worktree_slug)
     }
