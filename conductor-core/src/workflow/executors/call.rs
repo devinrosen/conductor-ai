@@ -117,7 +117,8 @@ fn execute_call_with_schema(
         } else {
             Some(last_error.as_str())
         };
-        let prompt = build_agent_prompt(state, &agent_def, schema.as_ref(), &snippet_text, retry_ctx);
+        let prompt =
+            build_agent_prompt(state, &agent_def, schema.as_ref(), &snippet_text, retry_ctx);
 
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
