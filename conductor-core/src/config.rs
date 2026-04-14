@@ -323,7 +323,7 @@ pub struct GeneralConfig {
     pub max_feature_parallelism: u32,
     /// Automatically transition a feature to ready_for_review when its last
     /// worktree is marked merged. Set to false to require an explicit call.
-    #[serde(default = "default_auto_ready_for_review")]
+    #[serde(default = "default_true")]
     pub auto_ready_for_review: bool,
 }
 
@@ -377,9 +377,6 @@ fn default_max_feature_parallelism() -> u32 {
     3
 }
 
-fn default_auto_ready_for_review() -> bool {
-    true
-}
 
 impl Default for GeneralConfig {
     fn default() -> Self {
@@ -395,7 +392,7 @@ impl Default for GeneralConfig {
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
             max_feature_parallelism: default_max_feature_parallelism(),
-            auto_ready_for_review: default_auto_ready_for_review(),
+            auto_ready_for_review: default_true(),
         }
     }
 }

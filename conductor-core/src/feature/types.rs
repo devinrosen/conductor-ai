@@ -79,6 +79,39 @@ pub struct FeatureRow {
     pub last_worktree_activity: Option<String>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feature_status_display_round_trip() {
+        let cases = [
+            (FeatureStatus::InProgress, "in_progress"),
+            (FeatureStatus::ReadyForReview, "ready_for_review"),
+            (FeatureStatus::Approved, "approved"),
+            (FeatureStatus::Merged, "merged"),
+            (FeatureStatus::Closed, "closed"),
+        ];
+        for (status, expected) in &cases {
+            assert_eq!(status.to_string(), *expected);
+            let parsed: FeatureStatus = expected.parse().expect("parse should succeed");
+            assert_eq!(parsed, *status);
+        }
+    }
+
+    #[test]
+    fn feature_status_legacy_active_maps_to_in_progress() {
+        let parsed: FeatureStatus = "active".parse().expect("legacy 'active' should parse");
+        assert_eq!(parsed, FeatureStatus::InProgress);
+    }
+
+    #[test]
+    fn feature_status_unknown_returns_error() {
+        let result = "unknown_status".parse::<FeatureStatus>();
+        assert!(result.is_err());
+    }
+}
+
 /// A branch that has active worktrees but no matching feature record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnregisteredBranch {

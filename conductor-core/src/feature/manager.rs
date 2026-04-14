@@ -273,7 +273,7 @@ impl<'a> FeatureManager<'a> {
         let f = self.get_by_name(repo_slug, name)?;
         if f.status != FeatureStatus::InProgress {
             return Err(ConductorError::Workflow(format!(
-                "Feature '{}' is {} — only active features can be used.",
+                "Feature '{}' is {} — only in-progress features can be used.",
                 name, f.status
             )));
         }
@@ -877,8 +877,8 @@ impl<'a> FeatureManager<'a> {
 
     fn insert_feature_record(&self, feature: &Feature) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at, source_type, source_id, tickets_total, tickets_merged)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 feature.id,
                 feature.repo_id,
@@ -887,6 +887,10 @@ impl<'a> FeatureManager<'a> {
                 feature.base_branch,
                 feature.status,
                 feature.created_at,
+                feature.source_type,
+                feature.source_id,
+                feature.tickets_total,
+                feature.tickets_merged,
             ],
         )?;
         Ok(())

@@ -1544,8 +1544,8 @@ fn test_resolve_active_feature_rejects_closed() {
         .resolve_active_feature("test-repo", "done-feat")
         .unwrap_err();
     assert!(
-        matches!(err, ConductorError::Workflow(ref msg) if msg.contains("only active features")),
-        "expected Workflow error about active features, got: {err:?}"
+        matches!(err, ConductorError::Workflow(ref msg) if msg.contains("only in-progress features")),
+        "expected Workflow error about in-progress features, got: {err:?}"
     );
 }
 
