@@ -554,6 +554,7 @@ impl<'a> WorkflowManager<'a> {
         crate::notify::fire_orphan_resumed_notification(
             self.conn,
             &config.notifications,
+            &config.notify.hooks,
             &flipped_ids,
         );
 
