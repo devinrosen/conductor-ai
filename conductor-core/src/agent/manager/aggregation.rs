@@ -312,7 +312,9 @@ mod tests {
         .unwrap();
 
         // A running (non-completed) run on w1 — must NOT be included
-        let _run4 = mgr.create_run(Some("w1"), "In progress", None, None).unwrap();
+        let _run4 = mgr
+            .create_run(Some("w1"), "In progress", None, None)
+            .unwrap();
 
         let totals = mgr.totals_by_worktree().unwrap();
         assert_eq!(totals.len(), 2);

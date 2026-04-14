@@ -307,7 +307,11 @@ pub fn worktree_list_item_with_prefix(
 
     if total_in > 0 || total_out > 0 {
         spans.push(Span::styled(
-            format!("  up{} dn{}", fmt_tokens_k(total_in), fmt_tokens_k(total_out)),
+            format!(
+                "  up{} dn{}",
+                fmt_tokens_k(total_in),
+                fmt_tokens_k(total_out)
+            ),
             Style::default().fg(state.theme.status_waiting),
         ));
     }
