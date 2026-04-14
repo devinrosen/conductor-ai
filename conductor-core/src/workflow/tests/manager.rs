@@ -3007,17 +3007,16 @@ fn test_step_error_persisted_on_schema_validation_failure() {
 
     // Simulate what call.rs does when `interpret_agent_output` returns an Err:
     // mark the step Failed and record the validation error message.
-    let validation_err =
-        "structured output validation failed: missing required field 'approved'";
+    let validation_err = "structured output validation failed: missing required field 'approved'";
     mgr.update_step_status_full(
         &step_id,
         WorkflowStepStatus::Failed,
         Some("child-run-id"),
         Some("raw agent output text"),
-        None,  // no context_out on validation failure
-        None,  // no markers_out on validation failure
+        None, // no context_out on validation failure
+        None, // no markers_out on validation failure
         Some(0),
-        None,  // no structured_output (validation failed)
+        None, // no structured_output (validation failed)
         Some(validation_err),
     )
     .unwrap();
