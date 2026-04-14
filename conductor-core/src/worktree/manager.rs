@@ -250,6 +250,7 @@ impl<'a> WorktreeManager<'a> {
             ("fix-", "fix"),
             ("bug-", "fix"),
             ("feat-", "feat"),
+            ("release-", "release"),
             ("chore-", "chore"),
             ("docs-", "docs"),
             ("refactor-", "refactor"),
