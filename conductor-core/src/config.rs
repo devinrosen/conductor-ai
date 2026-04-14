@@ -377,7 +377,6 @@ fn default_max_feature_parallelism() -> u32 {
     3
 }
 
-
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
