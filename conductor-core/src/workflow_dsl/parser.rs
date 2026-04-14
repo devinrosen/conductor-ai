@@ -284,9 +284,9 @@ impl Parser {
                     // Bare shorthand: `key value` (no `=`).
                     // Allowed when the next token is a value literal (string, ident,
                     // int, keyword, or array opener) but NOT a brace (which would be a block).
-                    let next_is_value = next_token.is_some_and(|token|
+                    let next_is_value = next_token.is_some_and(|token| {
                         Self::is_value_token(token) && !matches!(token, Token::LBrace)
-                    );
+                    });
 
                     if next_is_eq || next_is_value {
                         let key = self.expect_ident()?;
