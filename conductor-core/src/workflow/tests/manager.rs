@@ -3386,20 +3386,14 @@ fn test_auto_resume_stuck_workflows_concurrent_race() {
     assert_eq!(count2, 0, "second call must see no stuck runs");
 }
 
-/// Fresh runs (step ended recently) must not be detected.
+/// Fresh runs (recent heartbeat) must not be detected.
 #[test]
 fn test_auto_resume_stuck_workflows_skips_fresh_run() {
     let conn = setup_db();
-    insert_running_root_run(&conn, "fresh-auto");
-    // Insert a step that ended just now.
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, ended_at) \
-         VALUES ('s1', 'fresh-auto', 'step-a', 'actor', 0, 'completed', 0, \
-                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
-        [],
-    )
-    .unwrap();
+    // Use insert_orphaned_root_run with a fresh heartbeat so the detection
+    // query (COALESCE(last_heartbeat, started_at)) sees a recent timestamp.
+    let now = chrono::Utc::now().to_rfc3339();
+    let run_id = insert_orphaned_root_run(&conn, &now, Some(&now));
 
     let mgr = WorkflowManager::new(&conn);
     let config = Config::default();
@@ -3409,7 +3403,7 @@ fn test_auto_resume_stuck_workflows_skips_fresh_run() {
     assert_eq!(count, 0, "fresh run must not be resumed");
 
     // Status must remain running.
-    assert_eq!(get_run_status(&conn, "fresh-auto"), "running");
+    assert_eq!(get_run_status(&conn, &run_id), "running");
 }
 
 /// When a configurable threshold is supplied, the function should use the
