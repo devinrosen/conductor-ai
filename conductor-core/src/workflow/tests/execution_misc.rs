@@ -40,6 +40,7 @@ fn test_metadata_fields_basic() {
         fan_out_completed: 0,
         fan_out_failed: 0,
         fan_out_skipped: 0,
+        step_error: None,
     };
     let entries = step.metadata_fields();
     assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
@@ -130,6 +131,7 @@ fn test_metadata_fields_optional_sections() {
         fan_out_completed: 0,
         fan_out_failed: 0,
         fan_out_skipped: 0,
+        step_error: None,
     };
     let entries = step.metadata_fields();
     assert!(entries.contains(&MetadataEntry::Field {

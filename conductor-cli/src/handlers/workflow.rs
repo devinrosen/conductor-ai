@@ -517,6 +517,11 @@ pub fn handle_workflow(
                                     println!("        result: {result}");
                                 }
                             }
+                            if let Some(ref err) = step.step_error {
+                                if !err.is_empty() {
+                                    println!("        validation error: {err}");
+                                }
+                            }
                             if let Some(ref child) = step.child_run_id {
                                 println!("        child run: {child}");
                             }

@@ -199,6 +199,8 @@ pub struct WorkflowRunStep {
     pub fan_out_failed: i64,
     /// Number of skipped fan-out items.
     pub fan_out_skipped: i64,
+    /// Validation error message populated when a call step's agent output fails schema validation.
+    pub step_error: Option<String>,
 }
 
 /// Lightweight summary of the currently-running step for a workflow run.
