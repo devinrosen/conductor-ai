@@ -1730,7 +1730,9 @@ fn render_step_list(
             ));
             spans.push(Span::styled(
                 "⊙",
-                Style::default().fg(state.theme.label_secondary).add_modifier(ratatui::style::Modifier::DIM),
+                Style::default()
+                    .fg(state.theme.label_secondary)
+                    .add_modifier(ratatui::style::Modifier::DIM),
             ));
             spans.push(Span::styled(
                 format!(" {} →", fmt_k(out)),
