@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 68;
+pub const LATEST_SCHEMA_VERSION: u32 = 69;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1168,6 +1168,14 @@ pub fn run(conn: &Connection) -> Result<()> {
             Ok(())
         })?;
         bump_version(conn, 68)?;
+    }
+
+    // Migration 069: add step_error TEXT to workflow_run_steps.
+    // Persists schema validation error messages from call steps so they are
+    // visible in `run-show` output and the web UI.
+    if version < 69 {
+        conn.execute_batch(include_str!("migrations/069_workflow_step_error.sql"))?;
+        bump_version(conn, 69)?;
     }
 
     Ok(())

@@ -421,6 +421,13 @@ export function WorkflowRunDetailPage() {
                     </div>
                   )}
 
+                  {/* Schema validation error — shown when step_error is set */}
+                  {step.step_error && (
+                    <div className="ml-9 mt-2 px-3 py-2 text-xs bg-orange-50 border border-orange-200 rounded-md text-orange-700">
+                      <span className="font-medium">Validation error:</span> {step.step_error}
+                    </div>
+                  )}
+
                   {/* Gate feedback — always visible inline */}
                   {step.gate_feedback && (
                     <div className="ml-6 mt-2 px-3 py-2 text-xs bg-amber-50 border border-amber-200 rounded-md text-amber-700">

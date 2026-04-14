@@ -100,6 +100,16 @@ export function StepDetailPanel({ step, worktreeId, onClose }: StepDetailPanelPr
           </div>
         )}
 
+        {/* Schema validation error */}
+        {step.step_error && (
+          <div>
+            <h4 className="text-xs font-medium text-gray-500 mb-1">Validation Error</h4>
+            <div className="text-xs px-3 py-2 bg-orange-50 border border-orange-200 rounded-md text-orange-700">
+              {step.step_error}
+            </div>
+          </div>
+        )}
+
         {/* Gate info */}
         {step.gate_type && (
           <div>

@@ -17,7 +17,7 @@ pub(super) const STEP_COLUMNS: &str =
      iteration, parallel_group_id, context_out, markers_out, retry_count, \
      gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback, \
      structured_output, output_file, gate_options, gate_selections, \
-     fan_out_total, fan_out_completed, fan_out_failed, fan_out_skipped";
+     fan_out_total, fan_out_completed, fan_out_failed, fan_out_skipped, step_error";
 
 /// Table-prefixed variant of `STEP_COLUMNS` for JOIN queries where `s` aliases `workflow_run_steps`.
 /// Use this when selecting step columns alongside columns from other tables to avoid ambiguity.
@@ -63,7 +63,7 @@ mod tests {
              s.iteration, s.parallel_group_id, s.context_out, s.markers_out, s.retry_count, \
              s.gate_type, s.gate_prompt, s.gate_timeout, s.gate_approved_by, s.gate_approved_at, \
              s.gate_feedback, s.structured_output, s.output_file, s.gate_options, s.gate_selections, \
-             s.fan_out_total, s.fan_out_completed, s.fan_out_failed, s.fan_out_skipped"
+             s.fan_out_total, s.fan_out_completed, s.fan_out_failed, s.fan_out_skipped, s.step_error"
         );
 
         let cols: Vec<&str> = STEP_COLUMNS_WITH_PREFIX.split(", ").collect();
@@ -78,6 +78,6 @@ mod tests {
 
         // Spot-check first and last known columns.
         assert_eq!(cols.first().copied(), Some("s.id"));
-        assert_eq!(cols.last().copied(), Some("s.fan_out_skipped"));
+        assert_eq!(cols.last().copied(), Some("s.step_error"));
     }
 }

@@ -317,6 +317,7 @@ fn test_update_step_status_full_with_structured_output() {
         Some(r#"[]"#),
         Some(0),
         Some(structured_json),
+        None,
     )
     .unwrap();
 
@@ -351,10 +352,47 @@ fn test_update_step_status_full_without_structured_output() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert!(step.structured_output.is_none());
+}
+
+#[test]
+fn test_update_step_status_full_with_step_error() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let run = mgr
+        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+    let step_id = mgr
+        .insert_step(&run.id, "call-step", "reviewer", false, 0, 0)
+        .unwrap();
+
+    let validation_error = "expected field 'approved' but output was missing required keys";
+    mgr.update_step_status_full(
+        &step_id,
+        WorkflowStepStatus::Failed,
+        None,
+        Some("raw agent output"),
+        None,
+        None,
+        Some(0),
+        None,
+        Some(validation_error),
+    )
+    .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.step_error.as_deref(), Some(validation_error));
+    assert_eq!(step.result_text.as_deref(), Some("raw agent output"));
     assert!(step.structured_output.is_none());
 }
 

@@ -285,6 +285,7 @@ export interface WorkflowRunStep {
   fan_out_completed?: number;
   fan_out_failed?: number;
   fan_out_skipped?: number;
+  step_error?: string | null;
 }
 
 export interface FanOutItem {

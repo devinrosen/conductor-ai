@@ -58,10 +58,11 @@ impl<'a> WorkflowManager<'a> {
             markers_out,
             retry_count,
             None,
+            None,
         )
     }
 
-    /// Update a step's status with all fields including structured_output.
+    /// Update a step's status with all fields including structured_output and step_error.
     #[allow(clippy::too_many_arguments)]
     pub fn update_step_status_full(
         &self,
@@ -73,6 +74,7 @@ impl<'a> WorkflowManager<'a> {
         markers_out: Option<&str>,
         retry_count: Option<i64>,
         structured_output: Option<&str>,
+        step_error: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let is_starting =
@@ -95,8 +97,8 @@ impl<'a> WorkflowManager<'a> {
             self.conn.execute(
                 "UPDATE workflow_run_steps SET status = ?1, child_run_id = ?2, ended_at = ?3, \
                  result_text = ?4, context_out = ?5, markers_out = ?6, \
-                 retry_count = COALESCE(?7, retry_count), structured_output = ?8 \
-                 WHERE id = ?9",
+                 retry_count = COALESCE(?7, retry_count), structured_output = ?8, step_error = ?9 \
+                 WHERE id = ?10",
                 params![
                     status,
                     child_run_id,
@@ -106,6 +108,7 @@ impl<'a> WorkflowManager<'a> {
                     markers_out,
                     retry_count,
                     structured_output,
+                    step_error,
                     step_id,
                 ],
             )?;

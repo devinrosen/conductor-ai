@@ -183,5 +183,6 @@ pub(in crate::workflow) fn row_to_workflow_step(
             .get::<_, Option<i64>>("fan_out_skipped")
             .unwrap_or(None)
             .unwrap_or(0),
+        step_error: row.get::<_, Option<String>>("step_error").unwrap_or(None),
     })
 }
