@@ -1,6 +1,6 @@
 # RFC 018: Feature Epic Orchestration
 
-**Status:** Draft
+**Status:** Accepted
 **Date:** 2026-04-12
 **Author:** Devin
 
@@ -77,11 +77,21 @@ GitHub Milestone / Jira Epic
 ### `features` table (existing, modified)
 
 Add columns:
-- `source_type TEXT` — `github_milestone`, `jira_epic`, or `manual`
-- `source_id TEXT` — milestone number or epic ID (nullable for manual)
+- `source_type TEXT` — `github_milestone`, `jira_epic`, or `manual` (free-form; no CHECK constraint so new source types never require a migration)
+- `source_id TEXT` — globally-namespaced identifier (nullable for manual); see format below
 - `status TEXT NOT NULL DEFAULT 'in_progress'` — replaces implicit open/closed
 - `tickets_total INTEGER NOT NULL DEFAULT 0` — denormalized count, updated on sync
 - `tickets_merged INTEGER NOT NULL DEFAULT 0` — updated when worktree PR merges
+
+**`source_id` format** (globally namespaced to not foreclose multi-repo support):
+
+| `source_type` | `source_id` format | Example |
+|---|---|---|
+| `github_milestone` | `github.com/{owner}/{repo}/milestones/{number}` | `github.com/acme/api/milestones/42` |
+| `jira_epic` | `{jira_base_url}/browse/{epic_key}` | `acme.atlassian.net/browse/PLAT-100` |
+| `manual` | `NULL` | — |
+
+`repo_id` stays required in v1 (features are still per-repo). When multi-repo support is added, `repo_id` becomes nullable and a `feature_repos` join table is introduced — no `source_id` migration needed because the format is already globally unique.
 
 Remove implicit behavior:
 - Drop trigger/code that auto-creates features on worktree creation
@@ -109,6 +119,64 @@ conductor feature close <repo> <name>
 
 ---
 
+## Config
+
+Two new fields in `[general]` (`config.toml`):
+
+```toml
+[general]
+# Max concurrent agent runs when using `conductor feature run`.
+# Override per-invocation with --parallel <n>.
+max_feature_parallelism = 3
+
+# Automatically transition a feature to ready_for_review when its last
+# worktree is marked merged. Set to false to require an explicit
+# `conductor feature review` call instead.
+auto_ready_for_review = true
+```
+
+---
+
+## Fan-out Behavior
+
+### Parallelism
+
+`conductor feature run` reads `general.max_feature_parallelism` (default **3**) and spawns at most that many agents concurrently. Remaining tickets are queued; each time a running agent finishes, the next ticket in the queue is dispatched. The `--parallel <n>` flag overrides the config value for that invocation.
+
+3 is the right default — it balances review bandwidth (3 concurrent PRs against a feature branch is already a heavy review load), GitHub API pressure from simultaneous polling, and disk consumption from concurrent full-checkout worktrees.
+
+### Partial fan-out (skip detection)
+
+`conductor feature run` skips a ticket if it already has a worktree in `active` or `merged` status for the same repo:
+
+```sql
+SELECT t.id FROM tickets t
+JOIN feature_tickets ft ON ft.ticket_id = t.id
+WHERE ft.feature_id = ?1
+  AND NOT EXISTS (
+    SELECT 1 FROM worktrees w
+    WHERE w.ticket_id = t.id
+      AND w.repo_id = ?2
+      AND w.status IN ('active', 'merged')
+  )
+```
+
+- `active` → in-flight, skip
+- `merged` → done, skip
+- `abandoned` → retry-eligible, include
+
+This is a pure DB query with no `gh` API call at fan-out time. The edge case of an abandoned worktree with an open PR is not handled in v1 — the agent will discover the existing PR and either update it or fail with a clear message.
+
+---
+
+## Ready-for-Review Automation
+
+The `ready_for_review` transition fires **automatically** when `cleanup_merged_worktrees` marks the last active worktree for a feature as `merged` (i.e., when its active worktree count hits zero). A notification is dispatched via RFC-013 push if configured.
+
+When `general.auto_ready_for_review = false`, the transition requires an explicit `conductor feature review` call. The automatic path only changes a status field — it does not merge the feature branch to `main` — so a false-positive `ready_for_review` is harmless.
+
+---
+
 ## TUI & Web Changes
 
 **TUI:** Add a Features view (alongside Repos, Worktrees, Tickets) showing feature name, status, progress bar (`tickets_merged / tickets_total`), and staleness. Key bindings: `r` to run fan-out, `v` to mark ready-for-review, `a` to approve, `x` to close.
@@ -125,17 +193,10 @@ conductor feature close <repo> <name>
 
 ---
 
-## Open Questions
+## Deferred
 
-1. **Parallelism limit.** What is the right default for concurrent agent runs per feature? Suggest 3, configurable in `config.toml`.
-
-2. **Partial fan-out.** Should `conductor feature run` skip tickets that already have an open worktree or PR? Yes — but the detection logic needs to be specified.
-
-3. **Ready-for-review automation.** Should the `ready_for_review` transition be fully automatic when the last ticket merges, or require an explicit `conductor feature review` call? Automatic is more ergonomic but may surprise users if the last PR merges unexpectedly.
-
-4. **Multi-repo features.** The schema today is per-repo. Cross-repo epics (one Jira epic touching multiple repos) are out of scope for this RFC but the `source_id` design should not foreclose it.
-
-5. **Jira support.** RFC-018 assumes GitHub milestone support in v1 and treats Jira as a follow-on. The `source_type`/`source_id` columns are intentionally generic to allow both without a schema migration.
+- **Multi-repo features.** The `source_id` format is globally namespaced so no migration is needed when cross-repo support is added. `repo_id` becoming nullable and a `feature_repos` join table are the two schema changes required at that time.
+- **Jira support.** `source_type = 'jira_epic'` is reserved in the schema from day one. The sync implementation (calling `sync_jira_issues_acli()` with a JQL like `"Epic Link" = {key}`) is a follow-on. The existing `jira_acli.rs` module and `JiraConfig` struct are the integration points.
 
 ---
 
