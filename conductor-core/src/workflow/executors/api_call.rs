@@ -12,6 +12,10 @@ const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u64 = 8192;
 
+/// Default model used for schema-constrained direct API calls when no model is
+/// configured at the step, worktree, or global level.
+pub const DEFAULT_API_MODEL: &str = "claude-sonnet-4-6";
+
 /// Result of a successful direct API call.
 pub struct ApiCallResult {
     /// The parsed JSON value from the `tool_use.input` block.
@@ -83,21 +87,7 @@ pub fn execute_via_api(
         }
     };
 
-    // Extract tool_use block from response content array
-    let content = response_value
-        .get("content")
-        .and_then(|c| c.as_array())
-        .ok_or_else(|| "API response missing 'content' array".to_string())?;
-
-    let tool_use_block = content
-        .iter()
-        .find(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
-        .ok_or_else(|| "API response contained no tool_use block".to_string())?;
-
-    let input = tool_use_block
-        .get("input")
-        .ok_or_else(|| "tool_use block missing 'input' field".to_string())?
-        .clone();
+    let input = extract_tool_use_input(&response_value)?;
 
     let json_string = serde_json::to_string(&input)
         .map_err(|e| format!("Failed to serialize tool_use input: {e}"))?;
@@ -121,6 +111,33 @@ pub fn execute_via_api(
         input_tokens,
         output_tokens,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Extract the `input` field from the first `tool_use` block in an API response.
+///
+/// Returns `Err` when the response is missing a `content` array, contains no
+/// `tool_use` block, or the `tool_use` block is missing its `input` field.
+fn extract_tool_use_input(
+    response_value: &serde_json::Value,
+) -> std::result::Result<serde_json::Value, String> {
+    let content = response_value
+        .get("content")
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| "API response missing 'content' array".to_string())?;
+
+    let tool_use_block = content
+        .iter()
+        .find(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        .ok_or_else(|| "API response contained no tool_use block".to_string())?;
+
+    tool_use_block
+        .get("input")
+        .ok_or_else(|| "tool_use block missing 'input' field".to_string())
+        .cloned()
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +192,7 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "user");
     }
 
-    /// Verify extraction logic for a well-formed tool_use response.
+    /// Verify extraction of a well-formed tool_use response via the dedicated helper.
     #[test]
     fn test_extract_tool_use_input() {
         let response = serde_json::json!({
@@ -198,14 +215,7 @@ mod tests {
             }
         });
 
-        // Replicate the extraction logic from execute_via_api
-        let content = response["content"].as_array().unwrap();
-        let tool_use_block = content
-            .iter()
-            .find(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
-            .unwrap();
-
-        let input = tool_use_block["input"].clone();
+        let input = extract_tool_use_input(&response).unwrap();
         assert_eq!(input["summary"], "This is a test summary");
 
         let input_tokens = response["usage"]["input_tokens"].as_i64().unwrap();
@@ -227,11 +237,32 @@ mod tests {
             "usage": {"input_tokens": 10, "output_tokens": 5}
         });
 
-        let content = response["content"].as_array().unwrap();
-        let tool_use_block = content
-            .iter()
-            .find(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"));
+        let err = extract_tool_use_input(&response).unwrap_err();
+        assert!(
+            err.contains("no tool_use block"),
+            "unexpected error: {err}"
+        );
+    }
 
-        assert!(tool_use_block.is_none());
+    /// Verify that a tool_use block missing its `input` field produces an appropriate error.
+    #[test]
+    fn test_tool_use_block_missing_input() {
+        let response = serde_json::json!({
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01abc",
+                    "name": "test-output"
+                    // no "input" field
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+
+        let err = extract_tool_use_input(&response).unwrap_err();
+        assert!(
+            err.contains("missing 'input' field"),
+            "unexpected error: {err}"
+        );
     }
 }

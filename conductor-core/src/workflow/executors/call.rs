@@ -157,7 +157,7 @@ fn execute_call_with_schema(
         // directly to the Anthropic Messages API using tool_use enforcement.
         // This makes schema field mismatches impossible at the API level.
         if let Some(ref schema) = schema {
-            if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+            if let Some(api_key) = state.config.anthropic_api_key() {
                 // Check shutdown flag before making the API call
                 if let Some(ref flag) = state.exec_config.shutdown {
                     if flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -178,7 +178,8 @@ fn execute_call_with_schema(
                     }
                 }
 
-                let resolved_model = step_model.unwrap_or("claude-sonnet-4-6");
+                let resolved_model =
+                    step_model.unwrap_or(super::api_call::DEFAULT_API_MODEL);
                 tracing::info!(
                     "Step '{}' (attempt {}/{}): using direct API path (schema: {})",
                     agent_label,
