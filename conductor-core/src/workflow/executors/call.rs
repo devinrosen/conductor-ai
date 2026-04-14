@@ -323,7 +323,7 @@ fn execute_call_with_schema(
                             "Step '{}' structured output validation failed: {validation_err}",
                             agent_label,
                         );
-                        state.wf_mgr.update_step_status(
+                        state.wf_mgr.update_step_status_full(
                             &step_id,
                             WorkflowStepStatus::Failed,
                             Some(&completed_run.id),
@@ -331,6 +331,8 @@ fn execute_call_with_schema(
                             None,
                             None,
                             Some(attempt as i64),
+                            None,
+                            Some(&validation_err),
                         )?;
                         last_error = validation_err;
                         continue;
@@ -357,6 +359,7 @@ fn execute_call_with_schema(
                         Some(&markers_json),
                         Some(attempt as i64),
                         structured_json.as_deref(),
+                        None,
                     )?;
 
                     record_step_success(

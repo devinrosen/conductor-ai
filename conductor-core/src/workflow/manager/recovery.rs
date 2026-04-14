@@ -220,6 +220,7 @@ impl<'a> WorkflowManager<'a> {
                 None,
                 None,
                 None,
+                None,
             )?;
             recovered += 1;
         }

@@ -294,6 +294,7 @@ pub(super) fn make_test_step(
         fan_out_completed: 0,
         fan_out_failed: 0,
         fan_out_skipped: 0,
+        step_error: None,
     }
 }
 

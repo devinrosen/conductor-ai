@@ -445,6 +445,7 @@ pub fn execute_parallel(
                             Some(&markers_json),
                             None,
                             structured_json.as_deref(),
+                            None,
                         ) {
                             tracing::warn!(
                                 "parallel: failed to update step status for '{}': {e}",
