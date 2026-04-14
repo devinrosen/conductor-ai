@@ -100,6 +100,35 @@ pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<Stru
     })
 }
 
+/// Derive [`StructuredOutput`] from a pre-validated [`serde_json::Value`].
+///
+/// This is used by the direct API execution path (see `api_call.rs`) where the
+/// Anthropic API has already enforced schema conformance via `tool_use`. There is
+/// no `<<<CONDUCTOR_OUTPUT>>>` block to extract and no JSON validation step needed —
+/// the value is already a clean, schema-conformant JSON object.
+pub fn derive_output_from_value(
+    value: serde_json::Value,
+    schema: &OutputSchema,
+) -> StructuredOutput {
+    let markers = derive_markers(&value, schema);
+
+    let context = value
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let json_string = serde_json::to_string(&value)
+        .expect("re-serializing a valid serde_json::Value should never fail");
+
+    StructuredOutput {
+        value,
+        markers,
+        context,
+        json_string,
+    }
+}
+
 /// Strip markdown code fences (```json ... ```) from the output.
 pub fn strip_code_fences(s: &str) -> String {
     let s = s.trim();
