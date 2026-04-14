@@ -1622,7 +1622,10 @@ fn test_cancel_run_kills_child_agent_subprocess() {
 
     // Child agent run should be cancelled in the DB.
     let updated_agent = agent_mgr.get_run(&child_run.id).unwrap().unwrap();
-    assert_eq!(updated_agent.status, crate::agent::AgentRunStatus::Cancelled);
+    assert_eq!(
+        updated_agent.status,
+        crate::agent::AgentRunStatus::Cancelled
+    );
 }
 
 // ── workflow def target filter predicate ─────────────────────────────────

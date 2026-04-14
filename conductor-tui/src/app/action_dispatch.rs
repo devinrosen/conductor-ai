@@ -1199,8 +1199,7 @@ impl App {
                 self.state.modal = Modal::None;
                 match result {
                     Ok(()) => {
-                        self.state.status_message =
-                            Some("Workflow run cancelled".to_string());
+                        self.state.status_message = Some("Workflow run cancelled".to_string());
                         self.reload_workflow_data();
                     }
                     Err(e) => {
