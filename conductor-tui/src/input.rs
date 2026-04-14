@@ -493,6 +493,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('p') => return Action::LaunchAgent,
             KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
+            KeyCode::Char('X') if !is_active => return Action::ClearConversation,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('R') if is_failed => return Action::RestartAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,

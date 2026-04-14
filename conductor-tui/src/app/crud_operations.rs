@@ -502,6 +502,35 @@ impl App {
         }
     }
 
+    pub(super) fn handle_clear_conversation(&mut self) {
+        let Some(wt_id) = self.state.selected_worktree_id.clone() else {
+            return;
+        };
+        let Some(wt) = self.state.data.worktrees.iter().find(|w| w.id == wt_id) else {
+            return;
+        };
+        let wt_slug = wt.slug.clone();
+        let repo_slug = self
+            .state
+            .data
+            .repo_slug_map
+            .get(&wt.repo_id)
+            .cloned()
+            .unwrap_or_else(|| "?".to_string());
+
+        self.state.modal = crate::state::Modal::Confirm {
+            title: "Clear conversation?".to_string(),
+            message: format!(
+                "This will hard-delete all conversation history and agent runs for {repo_slug}/{wt_slug}. This cannot be undone."
+            ),
+            on_confirm: crate::state::ConfirmAction::ClearConversation {
+                repo_slug,
+                wt_slug,
+                wt_id,
+            },
+        };
+    }
+
     pub(super) fn handle_link_ticket(&mut self) {
         if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
             if let Some(wt) = self.state.data.worktrees.iter().find(|w| &w.id == wt_id) {

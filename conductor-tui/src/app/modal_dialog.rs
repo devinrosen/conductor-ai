@@ -172,6 +172,39 @@ impl App {
                     }
                 }
             }
+            ConfirmAction::ClearConversation {
+                repo_slug,
+                wt_slug,
+                wt_id,
+            } => {
+                let Some(bg_tx) = self.bg_tx.clone() else {
+                    self.state.modal = Modal::Error {
+                        message: "Cannot clear conversation: background sender not ready.".into(),
+                    };
+                    return;
+                };
+                self.state.modal = Modal::Progress {
+                    message: "Clearing conversation…".to_string(),
+                };
+                std::thread::spawn(move || {
+                    use conductor_core::conversation::{ConversationManager, ConversationScope};
+                    let result = (|| -> anyhow::Result<()> {
+                        let db = conductor_core::config::db_path();
+                        let conn = conductor_core::db::open_database(&db)?;
+                        let conv_mgr = ConversationManager::new(&conn);
+                        let convs = conv_mgr.list(&ConversationScope::Worktree, &wt_id)?;
+                        let conv = convs.into_iter().next().ok_or_else(|| {
+                            anyhow::anyhow!("No conversation found for this worktree")
+                        })?;
+                        conv_mgr.delete(&conv.id).map_err(anyhow::Error::from)
+                    })();
+                    let _ = bg_tx.send(crate::action::Action::ClearConversationComplete {
+                        repo_slug,
+                        wt_slug,
+                        result: result.map_err(|e| e.to_string()),
+                    });
+                });
+            }
             ConfirmAction::Quit => {
                 self.state.should_quit = true;
             }
