@@ -1726,7 +1726,7 @@ fn render_step_list(
             ),
         ];
 
-        // Token columns: show compact ↑/↓ counts when present
+        // Token columns: show compact flow-format counts when present
         if let (Some(inp), Some(out)) = (step.input_tokens, step.output_tokens) {
             let fmt_k = |n: i64| -> String {
                 if n >= 1_000_000 {
@@ -1738,7 +1738,17 @@ fn render_step_list(
                 }
             };
             spans.push(Span::styled(
-                format!("  {}↓ {}↑", fmt_k(inp), fmt_k(out)),
+                format!("  → {} ", fmt_k(inp)),
+                Style::default().fg(state.theme.label_secondary),
+            ));
+            spans.push(Span::styled(
+                "⊙",
+                Style::default()
+                    .fg(state.theme.label_secondary)
+                    .add_modifier(ratatui::style::Modifier::DIM),
+            ));
+            spans.push(Span::styled(
+                format!(" {} →", fmt_k(out)),
                 Style::default().fg(state.theme.label_secondary),
             ));
         }

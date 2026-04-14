@@ -38,9 +38,9 @@ function fmtTokensK(n: number): string {
   return String(Math.round(n));
 }
 
-/** Format input/output token counts as "5.8k↓ 342↑". */
+/** Format input/output token counts as "→ 5.8k ⊙ 342 →". */
 export function formatTokens(input: number, output: number): string {
-  return `${fmtTokensK(input)}↓ ${fmtTokensK(output)}↑`;
+  return `→ ${fmtTokensK(input)} ⊙ ${fmtTokensK(output)} →`;
 }
 
 /** Format duration from milliseconds to human-readable. */

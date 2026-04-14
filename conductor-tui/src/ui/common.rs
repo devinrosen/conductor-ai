@@ -306,9 +306,10 @@ pub fn worktree_list_item_with_prefix(
     }
 
     if total_in > 0 || total_out > 0 {
-        spans.push(Span::styled(
-            format!("  {}↓ {}↑", fmt_tokens_k(total_in), fmt_tokens_k(total_out)),
-            Style::default().fg(state.theme.status_waiting),
+        spans.extend(token_flow_spans(
+            &fmt_tokens_k(total_in),
+            &fmt_tokens_k(total_out),
+            &state.theme,
         ));
     }
 
@@ -342,6 +343,24 @@ pub(super) fn fmt_tokens_k(n: i64) -> String {
     }
 }
 
+/// Build a 3-span flow-format token display: `→ {in_k} ⊙ {out_k} →`
+///
+/// The `⊙` separator is styled dim (label_secondary) to visually distinguish
+/// it from the counts, which use status_waiting color.
+pub(super) fn token_flow_spans(in_k: &str, out_k: &str, theme: &Theme) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            format!("  → {in_k} "),
+            Style::default().fg(theme.status_waiting),
+        ),
+        Span::styled("⊙", Style::default().fg(theme.label_secondary)),
+        Span::styled(
+            format!(" {out_k} →"),
+            Style::default().fg(theme.status_waiting),
+        ),
+    ]
+}
+
 /// Build optional agent-totals spans for a ticket row.
 ///
 /// Compact views (dashboard, repo-detail) pass `show_duration: false`
@@ -358,21 +377,25 @@ pub fn ticket_agent_total_spans(
     };
     let in_k = fmt_tokens_k(totals.total_input_tokens);
     let out_k = fmt_tokens_k(totals.total_output_tokens);
-    let text = if show_duration {
+    let suffix = if show_duration {
         let dur_secs = totals.total_duration_ms as f64 / 1000.0;
         let mins = (dur_secs / 60.0) as i64;
         let secs = (dur_secs % 60.0) as i64;
-        format!(
-            "{leading}{in_k}↓ {out_k}↑ {}t  {}m{:02}s",
-            totals.total_turns, mins, secs
-        )
+        format!(" {}t  {}m{:02}s", totals.total_turns, mins, secs)
     } else {
-        format!("{leading}{in_k}↓ {out_k}↑ {}t", totals.total_turns)
+        format!(" {}t", totals.total_turns)
     };
-    vec![Span::styled(
-        text,
-        Style::default().fg(state.theme.status_waiting),
-    )]
+    vec![
+        Span::styled(
+            format!("{leading}→ {in_k} "),
+            Style::default().fg(state.theme.status_waiting),
+        ),
+        Span::styled("⊙", Style::default().fg(state.theme.label_secondary)),
+        Span::styled(
+            format!(" {out_k} →{suffix}"),
+            Style::default().fg(state.theme.status_waiting),
+        ),
+    ]
 }
 
 /// Return the canonical (icon, color) pair for a gate type.
