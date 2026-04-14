@@ -294,30 +294,17 @@ pub struct GateActionRequest {
 
 // ── Endpoints ─────────────────────────────────────────────────────────
 
-#[utoipa::path(
-    get,
-    path = "/api/repos/{id}/workflows",
-    params(
-        ("id" = String, Path, description = "Repo ID"),
-        ("status" = Option<StatusFilter>, Query, description = "Filter by validity: valid, invalid, or all (default)"),
-    ),
-    responses(
-        (status = 200, description = "List of workflow definitions for repo (includes invalid entries)", body = Vec<WorkflowDefSummary>),
-        (status = 404, description = "Repo not found"),
-    ),
-    tag = "workflows",
-)]
-/// GET /api/repos/{id}/workflows
-pub async fn list_repo_workflow_defs(
-    State(state): State<AppState>,
-    Path(repo_id): Path<String>,
-    Query(params): Query<WorkflowListParams>,
-) -> Result<Json<Vec<WorkflowDefSummary>>, ApiError> {
-    let db = state.db.lock().await;
-    let config = state.config.read().await;
-    let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
-
-    let (defs, warnings) = WorkflowManager::list_defs("", &repo.local_path).unwrap_or_default();
+/// Build workflow definition summaries from a worktree+repo path pair.
+///
+/// Combines parse-failure warnings and post-parse batch validation into a
+/// single sorted `Vec<WorkflowDefSummary>`. Uses `known_bots` derived from
+/// the caller's config so bot-name validation matches the CLI.
+fn build_workflow_summaries(
+    wt_path: &str,
+    repo_path: &str,
+    known_bots: &std::collections::HashSet<String>,
+) -> Vec<WorkflowDefSummary> {
+    let (defs, warnings) = WorkflowManager::list_defs(wt_path, repo_path).unwrap_or_default();
 
     // Convert parse failures to invalid summaries.
     let mut summaries: Vec<WorkflowDefSummary> = warnings
@@ -330,19 +317,13 @@ pub async fn list_repo_workflow_defs(
         defs.iter().map(|d| (d.name.clone(), d.clone())).collect();
 
     // Run post-parse validation on successfully-parsed defs.
-    let validation = validate_workflows_batch(
-        &defs,
-        &[],
-        "",
-        &repo.local_path,
-        &std::collections::HashSet::new(),
-        &|name: &str| {
+    let validation =
+        validate_workflows_batch(&defs, &[], wt_path, repo_path, known_bots, &|name: &str| {
             def_map
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("workflow '{name}' not found"))
-        },
-    );
+        });
 
     // Build a map of workflow name → joined validation error string.
     let validation_errors: std::collections::HashMap<String, String> = validation
@@ -373,7 +354,36 @@ pub async fn list_repo_workflow_defs(
     // Sort alphabetically by name for a consistent ordering.
     summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Apply optional status filter.
+    summaries
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/repos/{id}/workflows",
+    params(
+        ("id" = String, Path, description = "Repo ID"),
+        ("status" = Option<StatusFilter>, Query, description = "Filter by validity: valid, invalid, or all (default)"),
+    ),
+    responses(
+        (status = 200, description = "List of workflow definitions for repo (includes invalid entries)", body = Vec<WorkflowDefSummary>),
+        (status = 404, description = "Repo not found"),
+    ),
+    tag = "workflows",
+)]
+/// GET /api/repos/{id}/workflows
+pub async fn list_repo_workflow_defs(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+    Query(params): Query<WorkflowListParams>,
+) -> Result<Json<Vec<WorkflowDefSummary>>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
+
+    let known_bots: std::collections::HashSet<String> =
+        config.github.apps.keys().cloned().collect();
+    let summaries = build_workflow_summaries("", &repo.local_path, &known_bots);
+
     let result = match params.status.unwrap_or_default() {
         StatusFilter::All => summaries,
         StatusFilter::Valid => summaries.into_iter().filter(|s| s.valid).collect(),
@@ -408,64 +418,10 @@ pub async fn list_workflow_defs(
     let wt = wt_mgr.get_by_id(&worktree_id)?;
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
 
-    let (defs, warnings) =
-        WorkflowManager::list_defs(&wt.path, &repo.local_path).unwrap_or_default();
+    let known_bots: std::collections::HashSet<String> =
+        config.github.apps.keys().cloned().collect();
+    let summaries = build_workflow_summaries(&wt.path, &repo.local_path, &known_bots);
 
-    // Convert parse failures to invalid summaries.
-    let mut summaries: Vec<WorkflowDefSummary> = warnings
-        .iter()
-        .map(WorkflowDefSummary::from_parse_warning)
-        .collect();
-
-    // Build a name→def map for the batch-validate loader closure.
-    let def_map: std::collections::HashMap<String, WorkflowDef> =
-        defs.iter().map(|d| (d.name.clone(), d.clone())).collect();
-
-    // Run post-parse validation on successfully-parsed defs.
-    let validation = validate_workflows_batch(
-        &defs,
-        &[],
-        &wt.path,
-        &repo.local_path,
-        &std::collections::HashSet::new(),
-        &|name: &str| {
-            def_map
-                .get(name)
-                .cloned()
-                .ok_or_else(|| format!("workflow '{name}' not found"))
-        },
-    );
-
-    // Build a map of workflow name → joined validation error string.
-    let validation_errors: std::collections::HashMap<String, String> = validation
-        .entries
-        .iter()
-        .filter(|e| !e.errors.is_empty())
-        .map(|e| {
-            let msg = e
-                .errors
-                .iter()
-                .map(|v| v.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ");
-            (e.name.clone(), msg)
-        })
-        .collect();
-
-    // Convert parsed defs to summaries, marking validation failures.
-    for def in &defs {
-        let mut summary = WorkflowDefSummary::from(def);
-        if let Some(err) = validation_errors.get(&def.name) {
-            summary.valid = false;
-            summary.error = Some(err.clone());
-        }
-        summaries.push(summary);
-    }
-
-    // Sort alphabetically by name for a consistent ordering.
-    summaries.sort_by(|a, b| a.name.cmp(&b.name));
-
-    // Apply optional status filter.
     let result = match params.status.unwrap_or_default() {
         StatusFilter::All => summaries,
         StatusFilter::Valid => summaries.into_iter().filter(|s| s.valid).collect(),
@@ -3260,6 +3216,139 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["log"], "deploy iteration 1 log");
+    }
+
+    #[test]
+    fn workflow_def_summary_from_parse_warning_uses_stem_as_name() {
+        let w = WorkflowWarning {
+            file: "doc-pipeline-full.wf".to_string(),
+            message: "Parse error: Expected RBrace, got Description".to_string(),
+        };
+        let summary = WorkflowDefSummary::from_parse_warning(&w);
+        assert_eq!(summary.name, "doc-pipeline-full");
+        assert!(!summary.valid);
+        assert_eq!(
+            summary.error.as_deref(),
+            Some("Parse error: Expected RBrace, got Description")
+        );
+        assert!(summary.title.is_none());
+        assert!(summary.inputs.is_empty());
+        assert_eq!(summary.node_count, 0);
+    }
+
+    #[test]
+    fn workflow_def_summary_from_parse_warning_no_extension() {
+        let w = WorkflowWarning {
+            file: "plain-name".to_string(),
+            message: "some error".to_string(),
+        };
+        let summary = WorkflowDefSummary::from_parse_warning(&w);
+        // With no extension, file_stem returns the whole name.
+        assert_eq!(summary.name, "plain-name");
+        assert!(!summary.valid);
+    }
+
+    #[test]
+    fn status_filter_defaults_to_all() {
+        let filter: StatusFilter = Default::default();
+        let summaries = vec![
+            WorkflowDefSummary {
+                name: "valid-wf".to_string(),
+                title: None,
+                description: String::new(),
+                trigger: String::new(),
+                inputs: vec![],
+                node_count: 1,
+                group: None,
+                targets: vec![],
+                valid: true,
+                error: None,
+            },
+            WorkflowDefSummary {
+                name: "invalid-wf".to_string(),
+                title: None,
+                description: String::new(),
+                trigger: String::new(),
+                inputs: vec![],
+                node_count: 0,
+                group: None,
+                targets: vec![],
+                valid: false,
+                error: Some("parse error".to_string()),
+            },
+        ];
+        let result: Vec<WorkflowDefSummary> = match filter {
+            StatusFilter::All => summaries,
+            StatusFilter::Valid => unreachable!(),
+            StatusFilter::Invalid => unreachable!(),
+        };
+        assert_eq!(result.len(), 2, "All filter should return both entries");
+    }
+
+    #[test]
+    fn status_filter_valid_excludes_invalid() {
+        let summaries = vec![
+            WorkflowDefSummary {
+                name: "good".to_string(),
+                title: None,
+                description: String::new(),
+                trigger: String::new(),
+                inputs: vec![],
+                node_count: 1,
+                group: None,
+                targets: vec![],
+                valid: true,
+                error: None,
+            },
+            WorkflowDefSummary {
+                name: "bad".to_string(),
+                title: None,
+                description: String::new(),
+                trigger: String::new(),
+                inputs: vec![],
+                node_count: 0,
+                group: None,
+                targets: vec![],
+                valid: false,
+                error: Some("error".to_string()),
+            },
+        ];
+        let valid: Vec<WorkflowDefSummary> = summaries.into_iter().filter(|s| s.valid).collect();
+        assert_eq!(valid.len(), 1);
+        assert_eq!(valid[0].name, "good");
+    }
+
+    #[test]
+    fn status_filter_invalid_excludes_valid() {
+        let summaries = vec![
+            WorkflowDefSummary {
+                name: "good".to_string(),
+                title: None,
+                description: String::new(),
+                trigger: String::new(),
+                inputs: vec![],
+                node_count: 1,
+                group: None,
+                targets: vec![],
+                valid: true,
+                error: None,
+            },
+            WorkflowDefSummary {
+                name: "bad".to_string(),
+                title: None,
+                description: String::new(),
+                trigger: String::new(),
+                inputs: vec![],
+                node_count: 0,
+                group: None,
+                targets: vec![],
+                valid: false,
+                error: Some("error".to_string()),
+            },
+        ];
+        let invalid: Vec<WorkflowDefSummary> = summaries.into_iter().filter(|s| !s.valid).collect();
+        assert_eq!(invalid.len(), 1);
+        assert_eq!(invalid[0].name, "bad");
     }
 
     #[test]
