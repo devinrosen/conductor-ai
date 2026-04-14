@@ -82,12 +82,7 @@ pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<Stru
     // Derive markers
     let markers = derive_markers(&value, schema);
 
-    // Extract context from summary field
-    let context = value
-        .get("summary")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let context = derive_context(&value, schema);
 
     let json_string = serde_json::to_string(&value)
         .expect("re-serializing a valid serde_json::Value should never fail");
@@ -98,6 +93,64 @@ pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<Stru
         context,
         json_string,
     })
+}
+
+/// Extract a human-readable context string from a structured output value.
+///
+/// Searches the schema's top-level string fields in this order:
+/// 1. A field named `"context"`
+/// 2. A field named `"summary"`
+/// 3. The first top-level `String`-typed field in schema order
+///
+/// Returns an empty string when no suitable field is found, which is the
+/// correct behaviour for schemas that contain no string summary field.
+fn derive_context(value: &serde_json::Value, schema: &OutputSchema) -> String {
+    // Preference order: "context" → "summary" → first string field
+    for preferred in &["context", "summary"] {
+        if schema
+            .fields
+            .iter()
+            .any(|f| f.name == *preferred && matches!(f.field_type, FieldType::String))
+        {
+            if let Some(s) = value.get(*preferred).and_then(|v| v.as_str()) {
+                return s.to_string();
+            }
+        }
+    }
+    // Fall back to the first top-level string field in schema order.
+    for field in &schema.fields {
+        if matches!(field.field_type, FieldType::String) {
+            if let Some(s) = value.get(&field.name).and_then(|v| v.as_str()) {
+                return s.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Derive [`StructuredOutput`] from a pre-validated [`serde_json::Value`].
+///
+/// This is used by the direct API execution path (see `api_call.rs`) where the
+/// Anthropic API has already enforced schema conformance via `tool_use`. There is
+/// no `<<<CONDUCTOR_OUTPUT>>>` block to extract and no JSON validation step needed —
+/// the value is already a clean, schema-conformant JSON object.
+pub fn derive_output_from_value(
+    value: serde_json::Value,
+    schema: &OutputSchema,
+) -> StructuredOutput {
+    let markers = derive_markers(&value, schema);
+
+    let context = derive_context(&value, schema);
+
+    let json_string = serde_json::to_string(&value)
+        .expect("re-serializing a valid serde_json::Value should never fail");
+
+    StructuredOutput {
+        value,
+        markers,
+        context,
+        json_string,
+    }
 }
 
 /// Strip markdown code fences (```json ... ```) from the output.

@@ -15,6 +15,7 @@
 mod issues;
 mod loader;
 mod prompt;
+mod tool_definition;
 mod types;
 mod validation;
 
@@ -25,8 +26,9 @@ mod tests;
 pub use issues::{check_schemas, find_missing_schemas, SchemaIssue};
 pub use loader::{load_schema, parse_schema_content};
 pub use prompt::generate_prompt_instructions;
+pub use tool_definition::schema_to_tool_json;
 pub use types::{ArrayItems, FieldDef, FieldType, OutputSchema, SchemaRef};
-pub use validation::{parse_structured_output, StructuredOutput};
+pub use validation::{derive_output_from_value, parse_structured_output, StructuredOutput};
 
 // Items that are pub(crate) in the original file — re-export with same visibility.
 pub(crate) use validation::extract_output_block;

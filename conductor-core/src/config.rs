@@ -514,6 +514,16 @@ pub fn agent_log_path(run_id: &str) -> PathBuf {
     agent_log_dir().join(format!("{run_id}.log"))
 }
 
+impl Config {
+    /// Returns the Anthropic API key from the `ANTHROPIC_API_KEY` environment variable.
+    ///
+    /// Centralising this lookup here ensures that all library code reads the key
+    /// through the config layer rather than calling `std::env::var` directly.
+    pub fn anthropic_api_key(&self) -> Option<String> {
+        std::env::var("ANTHROPIC_API_KEY").ok()
+    }
+}
+
 /// Load config from disk, returning defaults if the file doesn't exist.
 pub fn load_config() -> Result<Config> {
     load_config_from(&config_path())
