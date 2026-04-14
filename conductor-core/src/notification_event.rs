@@ -96,6 +96,42 @@ pub enum NotificationEvent {
         /// Optional error message from the failed run.
         error: Option<String>,
     },
+    /// An orphaned workflow run was auto-resumed by the heartbeat watchdog.
+    WorkflowRunOrphanResumed {
+        run_id: String,
+        label: String,
+        timestamp: String,
+        url: Option<String>,
+        /// Raw workflow name, e.g. `"deploy-staging"`.
+        workflow_name: String,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
+    },
+    /// A stuck workflow run failed to auto-resume after being reaped by the watchdog.
+    WorkflowRunReaped {
+        run_id: String,
+        label: String,
+        timestamp: String,
+        url: Option<String>,
+        /// Raw workflow name, e.g. `"deploy-staging"`.
+        workflow_name: String,
+        /// Repository slug.
+        repo_slug: String,
+        /// Branch name.
+        branch: String,
+        /// Run duration in milliseconds.
+        duration_ms: Option<u64>,
+        /// Optional ticket URL.
+        ticket_url: Option<String>,
+        /// Error message from the failed auto-resume attempt.
+        error: Option<String>,
+    },
     /// A workflow run's cost exceeded the configured multiple over baseline.
     /// Not yet wired — defined for schema completeness.
     WorkflowRunCostSpike {
@@ -306,6 +342,29 @@ impl NotificationEvent {
                 duration_ms: Some(1000),
                 ticket_url,
             },
+            "workflow_run.orphan_resumed" => Self::WorkflowRunOrphanResumed {
+                run_id,
+                label: "Test Run".to_string(),
+                timestamp: now,
+                url,
+                workflow_name: "test-workflow".to_string(),
+                repo_slug: "test-repo".to_string(),
+                branch: "main".to_string(),
+                duration_ms: Some(1000),
+                ticket_url,
+            },
+            "workflow_run.reaped" => Self::WorkflowRunReaped {
+                run_id,
+                label: "Test Run".to_string(),
+                timestamp: now,
+                url,
+                workflow_name: "test-workflow".to_string(),
+                repo_slug: "test-repo".to_string(),
+                branch: "main".to_string(),
+                duration_ms: Some(1000),
+                ticket_url,
+                error: Some("Test error".to_string()),
+            },
             other => {
                 return Err(ConductorError::InvalidInput(format!(
                     "unknown event name: '{other}'. Valid events: {}",
@@ -343,6 +402,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { .. } => "workflow_run.completed",
             Self::WorkflowRunFailed { .. } => "workflow_run.failed",
+            Self::WorkflowRunOrphanResumed { .. } => "workflow_run.orphan_resumed",
+            Self::WorkflowRunReaped { .. } => "workflow_run.reaped",
             Self::WorkflowRunCostSpike { .. } => "workflow_run.cost_spike",
             Self::WorkflowRunDurationSpike { .. } => "workflow_run.duration_spike",
             Self::AgentRunCompleted { .. } => "agent_run.completed",
@@ -452,6 +513,20 @@ impl NotificationEvent {
             Self::FeedbackRequested { prompt_preview, .. } => {
                 map.insert("CONDUCTOR_PROMPT_PREVIEW".into(), prompt_preview.clone());
             }
+            Self::WorkflowRunOrphanResumed { workflow_name, .. } => {
+                map.insert("CONDUCTOR_WORKFLOW_NAME".into(), workflow_name.clone());
+            }
+            Self::WorkflowRunReaped {
+                workflow_name,
+                error,
+                ..
+            } => {
+                map.insert("CONDUCTOR_WORKFLOW_NAME".into(), workflow_name.clone());
+                map.insert(
+                    "CONDUCTOR_ERROR".into(),
+                    error.as_deref().unwrap_or("").into(),
+                );
+            }
             _ => {}
         }
 
@@ -547,6 +622,19 @@ impl NotificationEvent {
             Self::FeedbackRequested { prompt_preview, .. } => {
                 obj["prompt_preview"] = Value::String(prompt_preview.clone());
             }
+            Self::WorkflowRunOrphanResumed { workflow_name, .. } => {
+                obj["workflow_name"] = Value::String(workflow_name.clone());
+            }
+            Self::WorkflowRunReaped {
+                workflow_name,
+                error,
+                ..
+            } => {
+                obj["workflow_name"] = Value::String(workflow_name.clone());
+                if let Some(e) = error {
+                    obj["error"] = Value::String(e.clone());
+                }
+            }
             _ => {}
         }
 
@@ -559,6 +647,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { run_id, .. }
             | Self::WorkflowRunFailed { run_id, .. }
+            | Self::WorkflowRunOrphanResumed { run_id, .. }
+            | Self::WorkflowRunReaped { run_id, .. }
             | Self::WorkflowRunCostSpike { run_id, .. }
             | Self::WorkflowRunDurationSpike { run_id, .. }
             | Self::AgentRunCompleted { run_id, .. }
@@ -573,6 +663,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { label, .. }
             | Self::WorkflowRunFailed { label, .. }
+            | Self::WorkflowRunOrphanResumed { label, .. }
+            | Self::WorkflowRunReaped { label, .. }
             | Self::WorkflowRunCostSpike { label, .. }
             | Self::WorkflowRunDurationSpike { label, .. }
             | Self::AgentRunCompleted { label, .. }
@@ -587,6 +679,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { timestamp, .. }
             | Self::WorkflowRunFailed { timestamp, .. }
+            | Self::WorkflowRunOrphanResumed { timestamp, .. }
+            | Self::WorkflowRunReaped { timestamp, .. }
             | Self::WorkflowRunCostSpike { timestamp, .. }
             | Self::WorkflowRunDurationSpike { timestamp, .. }
             | Self::AgentRunCompleted { timestamp, .. }
@@ -601,6 +695,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { url, .. }
             | Self::WorkflowRunFailed { url, .. }
+            | Self::WorkflowRunOrphanResumed { url, .. }
+            | Self::WorkflowRunReaped { url, .. }
             | Self::WorkflowRunCostSpike { url, .. }
             | Self::WorkflowRunDurationSpike { url, .. }
             | Self::AgentRunCompleted { url, .. }
@@ -615,6 +711,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { repo_slug, .. }
             | Self::WorkflowRunFailed { repo_slug, .. }
+            | Self::WorkflowRunOrphanResumed { repo_slug, .. }
+            | Self::WorkflowRunReaped { repo_slug, .. }
             | Self::WorkflowRunCostSpike { repo_slug, .. }
             | Self::WorkflowRunDurationSpike { repo_slug, .. }
             | Self::AgentRunCompleted { repo_slug, .. }
@@ -629,6 +727,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { branch, .. }
             | Self::WorkflowRunFailed { branch, .. }
+            | Self::WorkflowRunOrphanResumed { branch, .. }
+            | Self::WorkflowRunReaped { branch, .. }
             | Self::WorkflowRunCostSpike { branch, .. }
             | Self::WorkflowRunDurationSpike { branch, .. }
             | Self::AgentRunCompleted { branch, .. }
@@ -643,6 +743,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { duration_ms, .. }
             | Self::WorkflowRunFailed { duration_ms, .. }
+            | Self::WorkflowRunOrphanResumed { duration_ms, .. }
+            | Self::WorkflowRunReaped { duration_ms, .. }
             | Self::WorkflowRunCostSpike { duration_ms, .. }
             | Self::WorkflowRunDurationSpike { duration_ms, .. }
             | Self::AgentRunCompleted { duration_ms, .. }
@@ -657,6 +759,8 @@ impl NotificationEvent {
         match self {
             Self::WorkflowRunCompleted { ticket_url, .. }
             | Self::WorkflowRunFailed { ticket_url, .. }
+            | Self::WorkflowRunOrphanResumed { ticket_url, .. }
+            | Self::WorkflowRunReaped { ticket_url, .. }
             | Self::WorkflowRunCostSpike { ticket_url, .. }
             | Self::WorkflowRunDurationSpike { ticket_url, .. }
             | Self::AgentRunCompleted { ticket_url, .. }

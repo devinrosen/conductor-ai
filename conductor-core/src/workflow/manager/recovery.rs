@@ -521,9 +521,9 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<usize> {
         // Step 1: find orphaned root runs (including zero-step runs — the
         // executor may have died before creating any steps).
-        let orphaned_ids: Vec<String> = query_collect(
+        let orphaned: Vec<(String, String, Option<String>)> = query_collect(
             self.conn,
-            "SELECT id FROM workflow_runs \
+            "SELECT id, workflow_name, target_label FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
                AND NOT EXISTS ( \
@@ -536,16 +536,17 @@ impl<'a> WorkflowManager<'a> {
                  CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
                ) > ?1",
             params![threshold_secs],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
 
-        if orphaned_ids.is_empty() {
+        if orphaned.is_empty() {
             return Ok(0);
         }
 
         let mut resumed = 0usize;
+        let mut resumed_ids: Vec<String> = Vec::new();
 
-        for run_id in orphaned_ids {
+        for (run_id, workflow_name, target_label) in orphaned {
             // Step 2: CAS flip running → failed.
             // If another watchdog already won the race, changes() == 0 and we skip.
             let changed = self.conn.execute(
@@ -573,9 +574,11 @@ impl<'a> WorkflowManager<'a> {
             let config_clone = config.clone();
             let bin_dir = conductor_bin_dir.clone();
             let run_id_clone = run_id.clone();
+            let workflow_name_clone = workflow_name.clone();
+            let target_label_clone = target_label.clone();
             std::thread::spawn(move || {
                 let params = WorkflowResumeStandalone {
-                    config: config_clone,
+                    config: config_clone.clone(),
                     workflow_run_id: run_id_clone.clone(),
                     model: None,
                     from_step: None,
@@ -588,10 +591,33 @@ impl<'a> WorkflowManager<'a> {
                         run_id = %run_id_clone,
                         "reap_heartbeat_stuck_runs: auto-resume failed: {e}"
                     );
+                    // Best-effort: fire a notification that this run failed to auto-resume.
+                    if let Ok(db) = crate::db::open_database(&crate::config::db_path()) {
+                        crate::notify::fire_heartbeat_stuck_failed_notification(
+                            &db,
+                            &config_clone.notifications,
+                            &config_clone.notify.hooks,
+                            &run_id_clone,
+                            &workflow_name_clone,
+                            target_label_clone.as_deref(),
+                            &e.to_string(),
+                        );
+                    }
                 }
             });
 
+            resumed_ids.push(run_id);
             resumed += 1;
+        }
+
+        // Fire a single batch notification for all runs that were claimed for resumption.
+        if !resumed_ids.is_empty() {
+            crate::notify::fire_orphan_resumed_notification(
+                self.conn,
+                &config.notifications,
+                &config.notify.hooks,
+                &resumed_ids,
+            );
         }
 
         Ok(resumed)
