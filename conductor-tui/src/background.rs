@@ -411,6 +411,7 @@ pub fn poll_data() -> Option<PollResult> {
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
+    let completed_token_totals_by_worktree = agent_mgr.totals_by_worktree().unwrap_or_default();
 
     // Fetch all worktree-scoped agent events in a single batch query; fall back to log-file
     // parsing for worktrees whose runs pre-date DB-backed event storage.
@@ -623,6 +624,7 @@ pub fn poll_data() -> Option<PollResult> {
         worktree_agent_events,
         repo_agent_events,
         workflow_run_estimates,
+        completed_token_totals_by_worktree,
     }));
     Some(PollResult {
         action,
