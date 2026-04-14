@@ -3851,3 +3851,100 @@ fn test_skip_fan_out_items_by_item_ids_empty_list_is_noop() {
     let items = mgr.get_fan_out_items(&step_id, None).unwrap();
     assert_eq!(items[0].status, "pending");
 }
+
+// ── get_workflow_spike_baseline ────────────────────────────────────────────
+
+#[test]
+fn test_spike_baseline_insufficient_runs_returns_none() {
+    // Fewer than 5 completed root runs → None.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    for _ in 0..4 {
+        let run = create_named_worktree_run(&conn, "w1", "spike-wf");
+        complete_with_duration_cost(&conn, &run.id, 1000, 0.10);
+    }
+    let result = mgr.get_workflow_spike_baseline("spike-wf", 30, 5).unwrap();
+    assert!(result.is_none(), "should return None with < 5 runs");
+}
+
+#[test]
+fn test_spike_baseline_returns_correct_values() {
+    // 5 runs with known cost and duration — verify avg cost and P75 duration.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    // durations: 1000, 2000, 3000, 4000, 5000 ms → P75 = 4000 ms (index ceil(5*75/100) = 4th)
+    let durations = [1000i64, 2000, 3000, 4000, 5000];
+    let cost_per_run = 0.20f64;
+    for &dur in &durations {
+        let run = create_named_worktree_run(&conn, "w1", "spike-vals-wf");
+        complete_with_duration_cost(&conn, &run.id, dur, cost_per_run);
+    }
+    let baseline = mgr
+        .get_workflow_spike_baseline("spike-vals-wf", 30, 5)
+        .unwrap()
+        .expect("should return Some with 5 runs");
+    assert_eq!(baseline.run_count, 5);
+    assert!(
+        (baseline.avg_cost_usd - 0.20).abs() < 1e-9,
+        "avg_cost_usd should be 0.20, got {}",
+        baseline.avg_cost_usd
+    );
+    // P75 of [1000,2000,3000,4000,5000] = 4000
+    assert!(
+        (baseline.p75_duration_ms - 4000.0).abs() < 1.0,
+        "p75_duration_ms should be ~4000, got {}",
+        baseline.p75_duration_ms
+    );
+}
+
+#[test]
+fn test_spike_baseline_excludes_sub_workflow_runs() {
+    // Sub-workflow runs (parent_workflow_run_id IS NOT NULL) must not count.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Create 5 root runs (should count).
+    for _ in 0..5 {
+        let run = create_named_worktree_run(&conn, "w1", "excl-wf");
+        complete_with_duration_cost(&conn, &run.id, 2000, 0.10);
+    }
+    // Create 10 sub-workflow runs (parent_workflow_run_id set — must be excluded).
+    let root_run = create_named_worktree_run(&conn, "w1", "excl-wf");
+    complete_with_duration_cost(&conn, &root_run.id, 9999, 9.99);
+    for _ in 0..10 {
+        let parent_agent_id = make_parent_id(&conn, "w1");
+        let sub = mgr
+            .create_workflow_run_with_targets(
+                "excl-wf",
+                Some("w1"),
+                None,
+                None,
+                &parent_agent_id,
+                false,
+                "manual",
+                None,
+                Some(&root_run.id),
+                None,
+                None,
+            )
+            .unwrap();
+        complete_with_duration_cost(&conn, &sub.id, 99_000, 99.0);
+    }
+
+    // Baseline should only see 6 root runs (5 + root_run).
+    let baseline = mgr
+        .get_workflow_spike_baseline("excl-wf", 30, 5)
+        .unwrap()
+        .expect("should return Some for 6 root runs");
+    // avg_cost = (5 * 0.10 + 9.99) / 6 ≈ 1.748
+    let expected_avg = (5.0 * 0.10 + 9.99) / 6.0;
+    assert!(
+        (baseline.avg_cost_usd - expected_avg).abs() < 1e-6,
+        "avg_cost_usd should exclude sub-workflow runs, got {}",
+        baseline.avg_cost_usd
+    );
+    assert_eq!(
+        baseline.run_count, 6,
+        "run_count should be 6 root runs only"
+    );
+}

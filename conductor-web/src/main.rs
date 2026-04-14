@@ -397,6 +397,112 @@ async fn main() -> Result<()> {
                     }
                 }
 
+                // Fire cost/duration spike notifications for completed root runs.
+                {
+                    let run_by_id: std::collections::HashMap<
+                        &str,
+                        &conductor_core::workflow::WorkflowRun,
+                    > = workflow_runs.iter().map(|r| (r.id.as_str(), r)).collect();
+                    for t in &wf_transitions {
+                        if t.succeeded && t.parent_workflow_run_id.is_none() {
+                            if let Ok(Some(baseline)) =
+                                wf_mgr.get_workflow_spike_baseline(&t.workflow_name, 30, 5)
+                            {
+                                if let Some(run) = run_by_id.get(t.run_id.as_str()) {
+                                    if let Some(cost_usd) = run.total_cost_usd {
+                                        if baseline.avg_cost_usd > 0.0 {
+                                            let multiple = cost_usd / baseline.avg_cost_usd;
+                                            conductor_web::notify::fire_cost_spike_notification(
+                                                &conn,
+                                                &cfg.notifications,
+                                                &cfg.notify.hooks,
+                                                &conductor_web::notify::CostSpikeArgs {
+                                                    run_id: &t.run_id,
+                                                    workflow_name: &t.workflow_name,
+                                                    target_label: t.target_label.as_deref(),
+                                                    cost_usd,
+                                                    multiple,
+                                                    duration_ms: run.total_duration_ms,
+                                                    repo_slug: &t.repo_slug,
+                                                    branch: &t.branch,
+                                                    parent_workflow_run_id: t
+                                                        .parent_workflow_run_id
+                                                        .as_deref(),
+                                                    repo_id: t.repo_id.as_deref(),
+                                                    worktree_id: t.worktree_id.as_deref(),
+                                                },
+                                            );
+                                        }
+                                    }
+                                    if let Some(dur_ms) = run.total_duration_ms {
+                                        if baseline.p75_duration_ms > 0.0 {
+                                            let multiple = dur_ms as f64 / baseline.p75_duration_ms;
+                                            conductor_web::notify::fire_duration_spike_notification(
+                                                &conn,
+                                                &cfg.notifications,
+                                                &cfg.notify.hooks,
+                                                &conductor_web::notify::DurationSpikeArgs {
+                                                    run_id: &t.run_id,
+                                                    workflow_name: &t.workflow_name,
+                                                    target_label: t.target_label.as_deref(),
+                                                    multiple,
+                                                    duration_ms: run.total_duration_ms,
+                                                    repo_slug: &t.repo_slug,
+                                                    branch: &t.branch,
+                                                    parent_workflow_run_id: t
+                                                        .parent_workflow_run_id
+                                                        .as_deref(),
+                                                    repo_id: t.repo_id.as_deref(),
+                                                    worktree_id: t.worktree_id.as_deref(),
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fire gate-pending-too-long notifications.
+                {
+                    let waiting_steps = wf_mgr.list_all_waiting_gate_steps()?;
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    for (step, workflow_name, target_label) in &waiting_steps {
+                        if let Some(ref started_at_str) = step.started_at {
+                            let pending_ms = chrono::DateTime::parse_from_rfc3339(started_at_str)
+                                .ok()
+                                .map(|dt| {
+                                    now_ms.saturating_sub(dt.timestamp_millis().max(0) as u64)
+                                })
+                                .unwrap_or(0);
+                            let (rs, br) =
+                                conductor_core::notify::parse_target_label(target_label.as_deref());
+                            conductor_web::notify::fire_gate_pending_too_long_notification(
+                                &conn,
+                                &cfg.notifications,
+                                &cfg.notify.hooks,
+                                &conductor_web::notify::GatePendingTooLongArgs {
+                                    step_id: &step.id,
+                                    step_name: &step.step_name,
+                                    workflow_run_id: &step.workflow_run_id,
+                                    workflow_name,
+                                    target_label: target_label.as_deref(),
+                                    pending_ms,
+                                    duration_ms: None,
+                                    repo_slug: rs,
+                                    branch: br,
+                                    repo_id: None,
+                                    worktree_id: None,
+                                },
+                            );
+                        }
+                    }
+                }
+
                 Ok::<_, conductor_core::error::ConductorError>((seen, init, wf_seen, wf_init))
             })
             .await;

@@ -97,6 +97,15 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         &mut initialized,
                     );
                     if let Some(ref conn) = claim_conn {
+                        // Build a run_id → WorkflowRun lookup for spike detection.
+                        let run_by_id: HashMap<&str, &conductor_core::workflow::WorkflowRun> =
+                            payload
+                                .latest_workflow_runs_by_worktree
+                                .values()
+                                .chain(payload.active_non_worktree_workflow_runs.iter())
+                                .map(|r| (r.id.as_str(), r))
+                                .collect();
+
                         for t in transitions {
                             crate::notify::fire_workflow_notification(
                                 conn,
@@ -117,6 +126,69 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     worktree_id: t.worktree_id.as_deref(),
                                 },
                             );
+
+                            // Fire cost/duration spike notifications for completed root runs.
+                            if t.succeeded && t.parent_workflow_run_id.is_none() {
+                                let wf_mgr = conductor_core::workflow::WorkflowManager::new(conn);
+                                if let Ok(Some(baseline)) =
+                                    wf_mgr.get_workflow_spike_baseline(&t.workflow_name, 30, 5)
+                                {
+                                    // Cost spike detection
+                                    if let Some(run) = run_by_id.get(t.run_id.as_str()) {
+                                        if let Some(cost_usd) = run.total_cost_usd {
+                                            if baseline.avg_cost_usd > 0.0 {
+                                                let multiple = cost_usd / baseline.avg_cost_usd;
+                                                crate::notify::fire_cost_spike_notification(
+                                                    conn,
+                                                    &config.notifications,
+                                                    &config.notify.hooks,
+                                                    &crate::notify::CostSpikeArgs {
+                                                        run_id: &t.run_id,
+                                                        workflow_name: &t.workflow_name,
+                                                        target_label: t.target_label.as_deref(),
+                                                        cost_usd,
+                                                        multiple,
+                                                        duration_ms: run.total_duration_ms,
+                                                        repo_slug: &t.repo_slug,
+                                                        branch: &t.branch,
+                                                        parent_workflow_run_id: t
+                                                            .parent_workflow_run_id
+                                                            .as_deref(),
+                                                        repo_id: t.repo_id.as_deref(),
+                                                        worktree_id: t.worktree_id.as_deref(),
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        // Duration spike detection
+                                        if let Some(dur_ms) = run.total_duration_ms {
+                                            if baseline.p75_duration_ms > 0.0 {
+                                                let multiple =
+                                                    dur_ms as f64 / baseline.p75_duration_ms;
+                                                crate::notify::fire_duration_spike_notification(
+                                                    conn,
+                                                    &config.notifications,
+                                                    &config.notify.hooks,
+                                                    &crate::notify::DurationSpikeArgs {
+                                                        run_id: &t.run_id,
+                                                        workflow_name: &t.workflow_name,
+                                                        target_label: t.target_label.as_deref(),
+                                                        multiple,
+                                                        duration_ms: run.total_duration_ms,
+                                                        repo_slug: &t.repo_slug,
+                                                        branch: &t.branch,
+                                                        parent_workflow_run_id: t
+                                                            .parent_workflow_run_id
+                                                            .as_deref(),
+                                                        repo_id: t.repo_id.as_deref(),
+                                                        worktree_id: t.worktree_id.as_deref(),
+                                                    },
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Fire feedback-requested notifications, skipping IDs already notified
@@ -208,6 +280,49 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     for (step, _, _) in steps {
                                         notified_gate_ids.insert(step.id.clone());
                                     }
+                                }
+                            }
+                        }
+
+                        // Fire gate-pending-too-long notifications for any gate step that has
+                        // been waiting past the configured threshold.
+                        {
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            for (step, workflow_name, target_label) in &payload.waiting_gate_steps {
+                                if let Some(ref started_at_str) = step.started_at {
+                                    let pending_ms =
+                                        chrono::DateTime::parse_from_rfc3339(started_at_str)
+                                            .ok()
+                                            .map(|dt| {
+                                                now_ms.saturating_sub(
+                                                    dt.timestamp_millis().max(0) as u64
+                                                )
+                                            })
+                                            .unwrap_or(0);
+                                    let (rs, br) = conductor_core::notify::parse_target_label(
+                                        target_label.as_deref(),
+                                    );
+                                    crate::notify::fire_gate_pending_too_long_notification(
+                                        conn,
+                                        &config.notifications,
+                                        &config.notify.hooks,
+                                        &crate::notify::GatePendingTooLongArgs {
+                                            step_id: &step.id,
+                                            step_name: &step.step_name,
+                                            workflow_run_id: &step.workflow_run_id,
+                                            workflow_name,
+                                            target_label: target_label.as_deref(),
+                                            pending_ms,
+                                            duration_ms: None,
+                                            repo_slug: rs,
+                                            branch: br,
+                                            repo_id: None,
+                                            worktree_id: None,
+                                        },
+                                    );
                                 }
                             }
                         }
