@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use conductor_core::config::{ensure_dirs, load_config};
-use conductor_core::db::open_database;
+use conductor_core::db::{open_database, open_database_compat};
 
 #[cfg(unix)]
 mod background;
@@ -12,7 +12,7 @@ mod helpers;
 mod mcp;
 mod setup;
 
-use commands::{Cli, Commands};
+use commands::{AgentCommands, Cli, Commands};
 
 fn main() -> Result<()> {
     // Initialize tracing subscriber so workflow engine log events appear on
@@ -30,7 +30,22 @@ fn main() -> Result<()> {
     ensure_dirs(&config)?;
 
     let db_path = conductor_core::config::db_path();
-    let conn = open_database(&db_path)?;
+    // Headless agent subprocesses use compat mode so they tolerate a DB schema
+    // that is ahead of this binary (e.g. after an implement step applied a new
+    // migration and rebuilt the binary, but the subprocess was spawned with the
+    // old binary). All other interactive commands use strict open_database so
+    // users still get the "please rebuild" prompt when running an outdated binary.
+    let use_compat = matches!(
+        &cli.command,
+        Commands::Agent {
+            command: AgentCommands::Run { .. }
+        }
+    );
+    let conn = if use_compat {
+        open_database_compat(&db_path)?
+    } else {
+        open_database(&db_path)?
+    };
 
     helpers::check_prerequisites();
 

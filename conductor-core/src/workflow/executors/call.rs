@@ -230,7 +230,7 @@ fn execute_call_with_schema(
         });
 
         std::thread::spawn(move || {
-            let conn = match crate::db::open_database(&crate::config::db_path()) {
+            let conn = match crate::db::open_database_compat(&crate::config::db_path()) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!("drain thread: failed to open DB: {e}");
