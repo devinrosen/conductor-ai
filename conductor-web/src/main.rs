@@ -137,6 +137,15 @@ async fn main() -> Result<()> {
                 tracing::warn!("reap_finalization_stuck_workflow_runs failed on startup: {e}")
             }
         }
+        if config.general.stale_workflow_minutes > 0 {
+            match wf_mgr.reap_stale_workflow_runs(config.general.stale_workflow_minutes as i64) {
+                Ok(reaped) if !reaped.is_empty() => {
+                    tracing::info!("Reaped {} stale workflow run(s) on startup", reaped.len());
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_stale_workflow_runs failed on startup: {e}"),
+            }
+        }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
             match wf_mgr.reap_heartbeat_stuck_runs(&config, 60, conductor_bin_dir) {
@@ -213,6 +222,16 @@ async fn main() -> Result<()> {
                     Ok(_) => {}
                     Err(e) => {
                         tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}")
+                    }
+                }
+                if cfg.general.stale_workflow_minutes > 0 {
+                    match wf_mgr.reap_stale_workflow_runs(cfg.general.stale_workflow_minutes as i64)
+                    {
+                        Ok(reaped) if !reaped.is_empty() => {
+                            tracing::info!("Reaped {} stale workflow run(s)", reaped.len());
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
                     }
                 }
                 {

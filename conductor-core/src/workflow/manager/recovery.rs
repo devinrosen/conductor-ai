@@ -28,6 +28,34 @@ macro_rules! reset_sql {
     };
 }
 
+/// A workflow run whose active step has been running longer than the
+/// configured threshold without progress.
+#[derive(Debug, Clone)]
+pub struct StaleWorkflowRun {
+    pub run_id: String,
+    pub workflow_name: String,
+    pub target_label: Option<String>,
+    pub step_name: String,
+    /// How many minutes the step has been running.
+    pub running_minutes: i64,
+    /// The workflow_run_steps row ID (needed to mark the step as failed).
+    pub step_id: String,
+    /// The child agent_run ID for this step (if any).
+    pub child_run_id: Option<String>,
+    /// The subprocess PID for the child agent run (if any).
+    pub subprocess_pid: Option<i64>,
+}
+
+/// Result of reaping a stale workflow run whose agent process is confirmed dead.
+#[derive(Debug, Clone)]
+pub struct ReapedStaleRun {
+    pub run_id: String,
+    pub workflow_name: String,
+    pub target_label: Option<String>,
+    pub step_name: String,
+    pub running_minutes: i64,
+}
+
 impl<'a> WorkflowManager<'a> {
     /// Reap workflow_run_steps stuck in `running` status whose script subprocess
     /// has died while conductor was not running.
@@ -83,14 +111,9 @@ impl<'a> WorkflowManager<'a> {
                         pid,
                         "reap_orphaned_script_steps: PID recycled — original script process is gone"
                     );
-                    self.update_step_status(
+                    self.fail_step_with_message(
                         &step_id,
-                        WorkflowStepStatus::Failed,
-                        None,
-                        Some("subprocess PID recycled — original script process is gone"),
-                        None,
-                        None,
-                        None,
+                        "subprocess PID recycled — original script process is gone",
                     )?;
                     reaped += 1;
                     continue;
@@ -101,14 +124,9 @@ impl<'a> WorkflowManager<'a> {
                     pid,
                     "reap_orphaned_script_steps: subprocess lost — script process exited while conductor was not running"
                 );
-                self.update_step_status(
+                self.fail_step_with_message(
                     &step_id,
-                    WorkflowStepStatus::Failed,
-                    None,
-                    Some("subprocess lost — script process exited while conductor was not running"),
-                    None,
-                    None,
-                    None,
+                    "subprocess lost — script process exited while conductor was not running",
                 )?;
                 reaped += 1;
             }
@@ -124,6 +142,20 @@ impl<'a> WorkflowManager<'a> {
         }
 
         Ok(reaped)
+    }
+
+    /// Helper function to fail a workflow step with a specific error message.
+    /// Sets all optional fields to None.
+    fn fail_step_with_message(&self, step_id: &str, error_message: &str) -> Result<()> {
+        self.update_step_status(
+            step_id,
+            WorkflowStepStatus::Failed,
+            None,
+            Some(error_message),
+            None,
+            None,
+            None,
+        )
     }
 
     /// Recover steps stuck in `running` status whose child agent run has
@@ -309,42 +341,154 @@ impl<'a> WorkflowManager<'a> {
         Ok(reaped)
     }
 
-    /// Detect workflow runs that are stuck in `running` status because the
-    /// executor process died between steps.
+    /// Detect workflow run IDs that are stuck in `running` status because the
+    /// executor process died between steps (all steps terminal, no active work).
     ///
-    /// A run is "stuck" when ALL of the following hold:
-    /// 1. `status = 'running'`
-    /// 2. `parent_workflow_run_id IS NULL` (root runs only — sub-workflows are
-    ///    driven by their parent engine loop)
-    /// 3. No step has `status IN ('running', 'pending', 'waiting')` — all
-    ///    current steps are terminal
-    /// 4. The most recent step's `ended_at` is older than `threshold_secs`
-    ///
-    /// Returns the IDs of all stuck runs. Callers are responsible for resuming
-    /// them (e.g. by spawning a thread per ID and calling
-    /// `resume_workflow_standalone`).
+    /// This is the detection-only counterpart of [`reap_heartbeat_stuck_runs`],
+    /// useful for diagnostics and tests. Uses the same query (including runs
+    /// with zero steps — the executor may have died before creating any).
     pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
         query_collect(
             self.conn,
-            "SELECT id FROM ( \
-               SELECT wr.id, \
-                 (SELECT MAX(ended_at) \
-                  FROM workflow_run_steps wrs2 \
-                  WHERE wrs2.workflow_run_id = wr.id) AS last_step_ended \
-               FROM workflow_runs wr \
-               WHERE wr.status = 'running' \
-                 AND NOT EXISTS ( \
-                   SELECT 1 FROM workflow_run_steps wrs \
-                   WHERE wrs.workflow_run_id = wr.id \
-                     AND wrs.status IN ('running', 'pending', 'waiting') \
-                 ) \
-             ) \
-             WHERE last_step_ended IS NOT NULL \
-               AND (CAST(strftime('%s', 'now') AS INTEGER) \
-                    - CAST(strftime('%s', last_step_ended) AS INTEGER)) > ?1",
+            "SELECT id FROM workflow_runs \
+             WHERE status = 'running' \
+               AND parent_workflow_run_id IS NULL \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM workflow_run_steps wrs \
+                 WHERE wrs.workflow_run_id = workflow_runs.id \
+                   AND wrs.status IN ('running', 'pending', 'waiting') \
+               ) \
+               AND ( \
+                 CAST(strftime('%s', 'now') AS INTEGER) - \
+                 CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
+               ) > ?1",
             params![threshold_secs],
             |row| row.get(0),
         )
+    }
+
+    /// Detect workflow runs with an active step that has been running longer
+    /// than `threshold_minutes` without completing.
+    ///
+    /// Unlike [`reap_heartbeat_stuck_runs`] (all steps terminal, executor
+    /// crashed between steps), this catches the case where a step's child
+    /// process is alive but hung — no crash, just no progress.
+    ///
+    /// Returns metadata for each stale run including the child agent run's
+    /// subprocess PID, so callers can verify whether the process is still
+    /// alive before taking action.
+    pub fn detect_stale_workflow_runs(
+        &self,
+        threshold_minutes: i64,
+    ) -> Result<Vec<StaleWorkflowRun>> {
+        if threshold_minutes <= 0 {
+            return Ok(vec![]);
+        }
+        query_collect(
+            self.conn,
+            "SELECT wr.id, wr.workflow_name, wr.target_label, \
+                    wrs.step_name, \
+                    (CAST(strftime('%s', 'now') AS INTEGER) \
+                     - CAST(strftime('%s', wrs.started_at) AS INTEGER)) / 60, \
+                    wrs.id, wrs.child_run_id, \
+                    COALESCE(wrs.subprocess_pid, ar.subprocess_pid) \
+             FROM workflow_runs wr \
+             JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
+             LEFT JOIN agent_runs ar ON ar.id = wrs.child_run_id \
+             WHERE wr.status = 'running' \
+               AND wr.parent_workflow_run_id IS NULL \
+               AND wrs.status = 'running' \
+               AND wrs.started_at IS NOT NULL \
+               AND (CAST(strftime('%s', 'now') AS INTEGER) \
+                    - CAST(strftime('%s', wrs.started_at) AS INTEGER)) > ?1 * 60",
+            params![threshold_minutes],
+            |row| {
+                Ok(StaleWorkflowRun {
+                    run_id: row.get(0)?,
+                    workflow_name: row.get(1)?,
+                    target_label: row.get(2)?,
+                    step_name: row.get(3)?,
+                    running_minutes: row.get(4)?,
+                    step_id: row.get(5)?,
+                    child_run_id: row.get(6)?,
+                    subprocess_pid: row.get(7)?,
+                })
+            },
+        )
+    }
+
+    /// Reap stale workflow runs whose agent process is confirmed dead.
+    ///
+    /// For each stale run returned by [`detect_stale_workflow_runs`]:
+    /// 1. Check if the child agent's subprocess PID is still alive.
+    /// 2. If the process is gone, mark the child agent run as failed, mark the
+    ///    workflow step as failed, and mark the workflow run as failed.
+    /// 3. If the process is still alive, the agent is running (just slow) — skip.
+    ///
+    /// Returns the list of reaped runs so callers can fire notifications and
+    /// optionally auto-restart them.
+    pub fn reap_stale_workflow_runs(&self, threshold_minutes: i64) -> Result<Vec<ReapedStaleRun>> {
+        let stale = self.detect_stale_workflow_runs(threshold_minutes)?;
+        if stale.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let agent_mgr = crate::agent::AgentManager::new(self.conn);
+        let mut reaped = Vec::new();
+
+        for s in stale {
+            // If the subprocess is still alive, the agent is running — just slow.
+            #[cfg(unix)]
+            if let Some(pid) = s.subprocess_pid {
+                if crate::process_utils::pid_is_alive(pid as u32) {
+                    continue;
+                }
+            }
+
+            // Agent process is dead. Mark child agent run as failed.
+            if let Some(child_run_id) = &s.child_run_id {
+                if let Err(e) = agent_mgr
+                    .update_run_failed(child_run_id, "Stale workflow watchdog: agent process died")
+                {
+                    tracing::warn!(
+                        child_run_id = %child_run_id,
+                        error = %e,
+                        "Failed to mark child agent run as failed during stale workflow cleanup"
+                    );
+                }
+            }
+
+            // Mark the workflow step as failed.
+            self.fail_step_with_message(
+                &s.step_id,
+                "Agent process died — marked by stale workflow watchdog",
+            )?;
+
+            // Mark the workflow run as failed.
+            self.update_workflow_status(
+                &s.run_id,
+                WorkflowRunStatus::Failed,
+                Some("Stale workflow watchdog: agent process died, run marked as failed"),
+                None,
+            )?;
+
+            tracing::info!(
+                run_id = %s.run_id,
+                step_name = %s.step_name,
+                running_minutes = s.running_minutes,
+                "Reaped stale workflow run — agent process was dead"
+            );
+
+            reaped.push(ReapedStaleRun {
+                run_id: s.run_id,
+                workflow_name: s.workflow_name,
+                target_label: s.target_label,
+                step_name: s.step_name,
+                running_minutes: s.running_minutes,
+            });
+        }
+
+        Ok(reaped)
     }
 
     /// Detect and auto-resume workflow runs that are stuck in `running` status
@@ -374,7 +518,8 @@ impl<'a> WorkflowManager<'a> {
         threshold_secs: i64,
         conductor_bin_dir: Option<PathBuf>,
     ) -> Result<usize> {
-        // Step 1: find orphaned root runs.
+        // Step 1: find orphaned root runs (including zero-step runs — the
+        // executor may have died before creating any steps).
         let orphaned_ids: Vec<String> = query_collect(
             self.conn,
             "SELECT id FROM workflow_runs \

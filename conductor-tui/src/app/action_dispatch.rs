@@ -10,6 +10,25 @@ use super::helpers::{collapse_loop_iterations, max_scroll, workflow_parse_warnin
 use super::App;
 
 impl App {
+    /// Find the key (id) in a map by searching for an item with a matching run_id.
+    /// This eliminates the duplicated find_map closures.
+    fn find_run_owner_id<T, F>(
+        runs: &std::collections::HashMap<String, T>,
+        target_run_id: &str,
+        get_run_id: F,
+    ) -> Option<String>
+    where
+        F: Fn(&T) -> &str,
+    {
+        runs.iter().find_map(|(id, run)| {
+            if get_run_id(run) == target_run_id {
+                Some(id.clone())
+            } else {
+                None
+            }
+        })
+    }
+
     pub(super) fn handle_action(&mut self, action: Action) -> bool {
         match action {
             Action::None => return false,
@@ -976,6 +995,7 @@ impl App {
                 self.state.data.latest_repo_agent_runs = payload.latest_repo_agent_runs;
                 self.state.data.all_worktree_agent_events = payload.worktree_agent_events;
                 self.state.data.all_repo_agent_events = payload.repo_agent_events;
+                self.state.data.workflow_run_estimates = payload.workflow_run_estimates;
                 self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
                 self.refresh_pending_repo_feedback();
@@ -1071,17 +1091,9 @@ impl App {
                     metadata: event.metadata,
                 };
                 // Find which worktree owns this run_id, then append to cache.
-                let wt_id = self
-                    .state
-                    .data
-                    .latest_agent_runs
-                    .iter()
-                    .find_map(|(id, run)| {
-                        if run.id == run_id {
-                            Some(id.clone())
-                        } else {
-                            None
-                        }
+                let wt_id =
+                    Self::find_run_owner_id(&self.state.data.latest_agent_runs, &run_id, |run| {
+                        &run.id
                     });
                 if let Some(wt_id) = wt_id {
                     self.state
@@ -1090,10 +1102,12 @@ impl App {
                         .entry(wt_id)
                         .or_default()
                         .push(run_event);
-                    self.reload_agent_events();
+                    // Note: reload_agent_events() removed for performance - streaming events
+                    // only need in-memory cache updates, not expensive DB reloads
                     let len = self.state.data.agent_activity_len();
                     let cur = self.state.agent_list_state.borrow().selected();
-                    let at_bottom = cur.is_none_or(|idx| idx + 1 >= len);
+                    // Fix off-by-one: check if user was at bottom before the new event was added
+                    let at_bottom = cur.is_none_or(|idx| idx + 1 >= len - 1);
                     if at_bottom && len > 0 {
                         self.state
                             .agent_list_state
@@ -1102,18 +1116,11 @@ impl App {
                     }
                 } else {
                     // Check repo-scoped runs
-                    let repo_id =
-                        self.state
-                            .data
-                            .latest_repo_agent_runs
-                            .iter()
-                            .find_map(|(id, run)| {
-                                if run.id == run_id {
-                                    Some(id.clone())
-                                } else {
-                                    None
-                                }
-                            });
+                    let repo_id = Self::find_run_owner_id(
+                        &self.state.data.latest_repo_agent_runs,
+                        &run_id,
+                        |run| &run.id,
+                    );
                     if let Some(repo_id) = repo_id {
                         self.state
                             .data
@@ -1121,7 +1128,8 @@ impl App {
                             .entry(repo_id)
                             .or_default()
                             .push(run_event);
-                        self.reload_repo_agent_events();
+                        // Note: reload_repo_agent_events() removed for performance - streaming events
+                        // only need in-memory cache updates, not expensive DB reloads
                     }
                 }
                 return true;

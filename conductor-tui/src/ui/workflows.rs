@@ -1121,8 +1121,21 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                 run_status_icon(run, &state.data.workflow_run_steps, &state.theme);
             let duration = if let Some(ref ended) = run.ended_at {
                 format_duration(&run.started_at, ended)
+            } else if let Some(est) = state.data.workflow_run_estimates.get(run_id) {
+                use conductor_core::workflow::Confidence;
+                if est.confidence == Confidence::Low
+                    || est.low_remaining_ms == est.high_remaining_ms
+                {
+                    format!("~{}m left", (est.remaining_ms + 30_000) / 60_000)
+                } else {
+                    format!(
+                        "~{}-{}m left",
+                        (est.low_remaining_ms + 30_000) / 60_000,
+                        (est.high_remaining_ms + 30_000) / 60_000
+                    )
+                }
             } else {
-                "…".to_string()
+                "\u{2026}".to_string()
             };
 
             match row {

@@ -380,6 +380,16 @@ pub fn poll_data() -> Option<PollResult> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
             }
+            if config.general.stale_workflow_minutes > 0 {
+                match wf_mgr.reap_stale_workflow_runs(config.general.stale_workflow_minutes as i64)
+                {
+                    Ok(reaped) if !reaped.is_empty() => {
+                        tracing::info!("Reaped {} stale workflow run(s)", reaped.len());
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reap_stale_workflow_runs failed: {e}"),
+                }
+            }
             {
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
                 match wf_mgr.reap_heartbeat_stuck_runs(&config, 60, conductor_bin_dir) {
@@ -475,6 +485,72 @@ pub fn poll_data() -> Option<PollResult> {
         .get_step_summaries_for_runs(&active_run_id_refs)
         .unwrap_or_default();
 
+    // ── Time estimation for active workflow runs ──
+    let workflow_run_estimates = {
+        use conductor_core::workflow::estimation;
+        use conductor_core::workflow::{WorkflowRun, WorkflowRunStatus};
+
+        let mut estimates = std::collections::HashMap::new();
+        let active_runs: Vec<&WorkflowRun> = latest_workflow_runs_by_worktree
+            .values()
+            .chain(active_non_worktree_workflow_runs.iter())
+            .filter(|r| {
+                matches!(
+                    r.status,
+                    WorkflowRunStatus::Running | WorkflowRunStatus::Pending
+                )
+            })
+            .collect();
+
+        // Cache step histories per workflow name to avoid redundant queries
+        let mut step_history_cache: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, Vec<i64>>,
+        > = std::collections::HashMap::new();
+
+        for run in &active_runs {
+            let step_histories = step_history_cache
+                .entry(run.workflow_name.clone())
+                .or_insert_with(|| {
+                    wf_mgr
+                        .get_completed_step_durations(&run.workflow_name, 20)
+                        .unwrap_or_default()
+                });
+
+            if step_histories.is_empty() {
+                // Fall back to workflow-level estimate
+                let hist = wf_mgr
+                    .get_completed_run_durations(&run.workflow_name, 20)
+                    .unwrap_or_default();
+                if let Some(est) = estimation::estimate_with_confidence(None, &hist) {
+                    let remaining =
+                        estimation::estimated_remaining_ms(est.point_ms, &run.started_at);
+                    let remaining_low =
+                        estimation::estimated_remaining_ms(est.low_ms, &run.started_at);
+                    let remaining_high =
+                        estimation::estimated_remaining_ms(est.high_ms, &run.started_at);
+                    estimates.insert(
+                        run.id.clone(),
+                        conductor_core::workflow::LiveEstimate {
+                            remaining_ms: remaining,
+                            low_remaining_ms: remaining_low,
+                            high_remaining_ms: remaining_high,
+                            confidence: est.confidence,
+                        },
+                    );
+                }
+                continue;
+            }
+
+            let step_ests = estimation::estimate_all_steps(step_histories);
+            let steps = wf_mgr.get_workflow_steps(&run.id).unwrap_or_default();
+            if let Some(live_est) = estimation::live_remaining_estimate(&steps, &step_ests) {
+                estimates.insert(run.id.clone(), live_est);
+            }
+        }
+        estimates
+    };
+
     // Only run notification-specific queries when notifications are enabled.
     let pending_feedback_requests = query_if_enabled(config.notifications.enabled, || {
         agent_mgr
@@ -546,6 +622,7 @@ pub fn poll_data() -> Option<PollResult> {
         latest_repo_agent_runs,
         worktree_agent_events,
         repo_agent_events,
+        workflow_run_estimates,
     }));
     Some(PollResult {
         action,

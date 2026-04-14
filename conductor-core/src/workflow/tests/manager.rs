@@ -2340,7 +2340,6 @@ fn test_get_active_steps_for_runs_empty_ids() {
 // ---------------------------------------------------------------------------
 // detect_stuck_workflow_run_ids — detection logic tests
 // ---------------------------------------------------------------------------
-
 /// Insert a workflow run in 'running' status with no parent_workflow_run_id.
 fn insert_running_root_run(conn: &Connection, run_id: &str) {
     let agent_mgr = AgentManager::new(conn);
@@ -2368,6 +2367,7 @@ fn insert_non_terminal_step(conn: &Connection, step_id: &str, run_id: &str, stat
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_reap_stuck_workflow_runs_detects_stale_run() {
     let conn = setup_db();
     insert_running_root_run(&conn, "stuck-run");
@@ -2390,6 +2390,13 @@ fn test_reap_stuck_workflow_runs_detects_stale_run() {
 fn test_reap_stuck_workflow_runs_skips_fresh_run() {
     let conn = setup_db();
     insert_running_root_run(&conn, "fresh-run");
+    // Update heartbeat to now so the run appears fresh.
+    conn.execute(
+        "UPDATE workflow_runs SET last_heartbeat = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \
+         WHERE id = 'fresh-run'",
+        [],
+    )
+    .unwrap();
     // Step completed just now — store ended_at as the current UTC time.
     conn.execute(
         "INSERT INTO workflow_run_steps \
@@ -2401,9 +2408,36 @@ fn test_reap_stuck_workflow_runs_skips_fresh_run() {
     .unwrap();
 
     let mgr = WorkflowManager::new(&conn);
-    // Very large threshold — a just-completed step should not be detected.
+    // Very large threshold — a run with recent heartbeat should not be detected.
     let ids = mgr.detect_stuck_workflow_run_ids(999_999).unwrap();
     assert_eq!(ids.len(), 0, "fresh run must not be detected");
+}
+
+#[test]
+fn test_detect_stuck_workflow_run_ids_detects_stale_heartbeat() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "stale-heartbeat-run");
+    insert_terminal_step_with_id(
+        &conn,
+        "s1",
+        "stale-heartbeat-run",
+        "completed",
+        "2020-01-01T00:00:00Z",
+    );
+    // Set heartbeat to 200 seconds ago — stale with threshold=60.
+    let stale_time = chrono::Utc::now() - chrono::Duration::seconds(200);
+    let stale_str = stale_time.to_rfc3339();
+    conn.execute(
+        "UPDATE workflow_runs SET last_heartbeat = ?1 WHERE id = 'stale-heartbeat-run'",
+        params![stale_str],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    // threshold_secs = 60: heartbeat 200s ago >> 60 → detected
+    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    assert_eq!(ids.len(), 1, "stale heartbeat run should be detected");
+    assert_eq!(ids[0], "stale-heartbeat-run");
 }
 
 #[test]
@@ -2442,8 +2476,16 @@ fn test_reap_stuck_workflow_runs_skips_waiting_step() {
 #[test]
 fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     let conn = setup_db();
-    // Insert a root run first to satisfy the FK for parent_workflow_run_id.
+    // Insert a root run with a running step so it is NOT detected as stuck.
     insert_running_root_run(&conn, "root-run");
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
+         VALUES ('root-step', 'root-run', 'step-a', 'actor', 0, 'running', 0, \
+                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        [],
+    )
+    .unwrap();
     // Insert a sub-workflow with parent_workflow_run_id set.
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
@@ -2459,9 +2501,10 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     insert_terminal_step_with_id(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
 
     let mgr = WorkflowManager::new(&conn);
+    // Sub-workflows (parent_workflow_run_id IS NOT NULL) are excluded from
+    // stuck detection — only root runs are checked.
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
-    assert_eq!(ids.len(), 1, "sub-workflow must also be detected as stuck");
-    assert_eq!(ids[0], "sub-run");
+    assert_eq!(ids.len(), 0, "sub-workflow must not be detected as stuck");
 }
 
 #[test]
@@ -2498,14 +2541,21 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
 }
 
 #[test]
-fn test_reap_stuck_workflow_runs_skips_no_steps() {
+fn test_reap_stuck_workflow_runs_detects_zero_step_runs() {
     let conn = setup_db();
     insert_running_root_run(&conn, "no-steps-run");
-    // No steps inserted → last_step_ended IS NULL → skipped by SQL guard.
+    // No steps inserted — the executor may have died before creating any steps.
+    // detect_stuck_workflow_run_ids now matches reap_heartbeat_stuck_runs behavior:
+    // zero-step runs ARE detected as stuck.
 
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
-    assert_eq!(ids.len(), 0, "run with no steps must not be detected");
+    assert_eq!(
+        ids.len(),
+        1,
+        "run with no steps should be detected as stuck"
+    );
+    assert_eq!(ids[0], "no-steps-run");
 }
 
 #[test]
@@ -2521,6 +2571,235 @@ fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
     let mgr = WorkflowManager::new(&conn);
     let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
     assert_eq!(ids.len(), 3, "all 3 stuck runs should be detected");
+}
+
+// ---------------------------------------------------------------------------
+// detect_stale_workflow_runs — stale watchdog tests
+// ---------------------------------------------------------------------------
+
+/// Insert a running root run with target_label for stale tests.
+fn insert_running_root_run_with_label(
+    conn: &Connection,
+    run_id: &str,
+    workflow_name: &str,
+    target_label: Option<&str>,
+) {
+    let agent_mgr = AgentManager::new(conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id, target_label) \
+         VALUES (?1, ?2, NULL, ?3, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL, ?4)",
+        params![run_id, workflow_name, parent.id, target_label],
+    )
+    .unwrap();
+}
+
+/// Insert a step in 'running' status with a specific started_at.
+fn insert_running_step_with_started_at(
+    conn: &Connection,
+    step_id: &str,
+    run_id: &str,
+    step_name: &str,
+    started_at: &str,
+) {
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
+         VALUES (?1, ?2, ?3, 'actor', 0, 'running', 0, ?4)",
+        params![step_id, run_id, step_name, started_at],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_detect_stale_workflow_runs_finds_old_running_step() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "stale-run", "deploy", Some("repo/wt"));
+    // Step started 2 hours ago
+    insert_running_step_with_started_at(
+        &conn,
+        "s1",
+        "stale-run",
+        "code-review",
+        "2020-01-01T00:00:00Z",
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].run_id, "stale-run");
+    assert_eq!(stale[0].workflow_name, "deploy");
+    assert_eq!(stale[0].target_label.as_deref(), Some("repo/wt"));
+    assert_eq!(stale[0].step_name, "code-review");
+    assert!(stale[0].running_minutes > 60);
+}
+
+#[test]
+fn test_detect_stale_workflow_runs_skips_fresh_step() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "fresh-run", "deploy", None);
+    // Step started just now — use SQL now() to set started_at.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
+         VALUES ('s1', 'fresh-run', 'code-review', 'actor', 0, 'running', 0, \
+                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        [],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert!(stale.is_empty(), "fresh running step should not be stale");
+}
+
+#[test]
+fn test_detect_stale_workflow_runs_skips_completed_step() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "done-run", "deploy", None);
+    // Step is completed, not running — should not be detected.
+    insert_terminal_step(&conn, "done-run", WorkflowStepStatus::Completed, 0);
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert!(stale.is_empty(), "completed step should not trigger stale");
+}
+
+#[test]
+fn test_detect_stale_workflow_runs_skips_sub_workflows() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "root-run", "parent-wf", None);
+    // Insert a sub-workflow with old running step.
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES ('sub-run', 'child-wf', NULL, ?1, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', 'root-run')",
+        params![parent.id],
+    )
+    .unwrap();
+    insert_running_step_with_started_at(&conn, "s1", "sub-run", "step-a", "2020-01-01T00:00:00Z");
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert!(
+        stale.is_empty(),
+        "sub-workflow steps should not trigger stale"
+    );
+}
+
+#[test]
+fn test_detect_stale_workflow_runs_disabled_when_zero() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "stale-run", "deploy", None);
+    insert_running_step_with_started_at(&conn, "s1", "stale-run", "step-a", "2020-01-01T00:00:00Z");
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(0).unwrap();
+    assert!(stale.is_empty(), "threshold 0 should disable detection");
+}
+
+// ---------------------------------------------------------------------------
+// reap_stale_workflow_runs — PID liveness check + mark-as-failed tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_reap_stale_reaps_dead_agent() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "stale-run", "deploy", Some("repo/wt"));
+    // Create a child agent run — no live subprocess.
+    let agent_mgr = AgentManager::new(&conn);
+    let child = agent_mgr
+        .create_run(None, "step prompt", None, None)
+        .unwrap();
+    // Insert step referencing that child agent run (no subprocess_pid → treated as dead).
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          started_at, child_run_id) \
+         VALUES ('s1', 'stale-run', 'code-review', 'actor', 0, 'running', 0, \
+                 '2020-01-01T00:00:00Z', ?1)",
+        params![child.id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_stale_workflow_runs(60).unwrap();
+    assert_eq!(reaped.len(), 1);
+    assert_eq!(reaped[0].run_id, "stale-run");
+    assert_eq!(reaped[0].step_name, "code-review");
+
+    // Verify the workflow run is now failed.
+    let run = mgr.get_workflow_run("stale-run").unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Failed);
+
+    // Verify the child agent run is now failed.
+    let agent_run = agent_mgr.get_run(&child.id).unwrap().unwrap();
+    assert_eq!(agent_run.status, crate::agent::AgentRunStatus::Failed);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_reap_stale_skips_live_agent() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "alive-run", "deploy", None);
+    let agent_mgr = AgentManager::new(&conn);
+    let child = agent_mgr
+        .create_run(None, "step prompt", None, None)
+        .unwrap();
+    // Set subprocess_pid to current process PID (alive).
+    let live_pid = std::process::id() as i64;
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          started_at, child_run_id, subprocess_pid) \
+         VALUES ('s1', 'alive-run', 'code-review', 'actor', 0, 'running', 0, \
+                 '2020-01-01T00:00:00Z', ?1, ?2)",
+        params![child.id, live_pid],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_stale_workflow_runs(60).unwrap();
+    assert!(reaped.is_empty(), "live agent should not be reaped");
+
+    // Verify the workflow run is still running.
+    let run = mgr.get_workflow_run("alive-run").unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Running);
+}
+
+#[test]
+fn test_reap_stale_reaps_step_with_no_pid() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "no-pid-run", "deploy", None);
+    // Child agent run with no subprocess PID → treated as dead.
+    let agent_mgr = AgentManager::new(&conn);
+    let child = agent_mgr
+        .create_run(None, "step prompt", None, None)
+        .unwrap();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          started_at, child_run_id) \
+         VALUES ('s1', 'no-pid-run', 'step-a', 'actor', 0, 'running', 0, \
+                 '2020-01-01T00:00:00Z', ?1)",
+        params![child.id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_stale_workflow_runs(60).unwrap();
+    assert_eq!(
+        reaped.len(),
+        1,
+        "no subprocess PID should be treated as dead"
+    );
 }
 
 // ---------------------------------------------------------------------------
