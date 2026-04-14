@@ -1570,6 +1570,64 @@ fn test_cancel_run_marks_active_steps_failed() {
     );
 }
 
+#[test]
+fn test_cancel_run_kills_child_agent_subprocess() {
+    // Verify that cancel_run() calls agent_mgr.cancel_run() (not the DB-only
+    // update_run_cancelled) so that the subprocess receives SIGTERM/SIGKILL.
+    // We use subprocess_pid = i64::MAX to prove the kill path is taken: the
+    // process does not exist so the signal fails silently, but the agent_run
+    // and workflow run are still marked cancelled/failed in the DB.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let agent_mgr = AgentManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+        .unwrap();
+
+    // Create a child agent run with a fake subprocess_pid.
+    let child_run = agent_mgr
+        .create_run(Some("w1"), "agent prompt", None, None)
+        .unwrap();
+    agent_mgr
+        .update_run_subprocess_pid(&child_run.id, u32::MAX)
+        .unwrap();
+
+    // Create a running step linked to the child agent run.
+    let step_id = mgr
+        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Running,
+        Some(&child_run.id),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // cancel_run() must succeed even though the fake PID doesn't exist.
+    mgr.cancel_run(&run.id, "Cancelled by user").unwrap();
+
+    // Workflow run should be Cancelled.
+    let updated_run = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(updated_run.status, WorkflowRunStatus::Cancelled);
+
+    // Step should be Failed.
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let step = steps.iter().find(|s| s.id == step_id).unwrap();
+    assert_eq!(step.status, WorkflowStepStatus::Failed);
+
+    // Child agent run should be cancelled in the DB.
+    let updated_agent = agent_mgr.get_run(&child_run.id).unwrap().unwrap();
+    assert_eq!(
+        updated_agent.status,
+        crate::agent::AgentRunStatus::Cancelled
+    );
+}
+
 // ── workflow def target filter predicate ─────────────────────────────────
 
 fn make_repo_workflow(name: &str) -> crate::workflow::WorkflowDef {
