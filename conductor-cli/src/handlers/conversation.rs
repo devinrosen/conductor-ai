@@ -178,9 +178,7 @@ mod tests {
 
         // Create a conversation and immediately attach a running agent run.
         let conv_mgr = ConversationManager::new(&conn);
-        let conv = conv_mgr
-            .create(ConversationScope::Worktree, "wt3")
-            .unwrap();
+        let conv = conv_mgr.create(ConversationScope::Worktree, "wt3").unwrap();
 
         let agent_mgr = AgentManager::new(&conn);
         agent_mgr
@@ -200,9 +198,7 @@ mod tests {
         );
 
         // Conversation must still exist.
-        let convs = conv_mgr
-            .list(&ConversationScope::Worktree, "wt3")
-            .unwrap();
+        let convs = conv_mgr.list(&ConversationScope::Worktree, "wt3").unwrap();
         assert_eq!(convs.len(), 1);
     }
 }
