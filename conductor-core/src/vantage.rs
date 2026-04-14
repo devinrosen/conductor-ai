@@ -8,11 +8,15 @@ use crate::error::{ConductorError, Result};
 use crate::issue_source::{IssueSourceManager, VantageConfig};
 use crate::tickets::TicketInput;
 
-/// Conductor pipeline statuses that should be synced into Conductor.
-/// Pre-ready states (pending_audit, audited, enriching) are excluded —
+/// Conductor pipeline statuses that should be synced into Conductor as open
+/// tickets. Pre-ready states (pending_audit, audited, enriching) are excluded —
 /// those deliverables aren't actionable yet.
 const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] =
-    &["ready", "dispatched", "running", "completed", "failed"];
+    &["ready", "dispatched", "running", "in_progress", "completed", "failed"];
+
+/// Terminal conductor statuses that are synced as closed tickets so that
+/// `close_missing_tickets` can reconcile stale DB rows.
+const TERMINAL_CONDUCTOR_STATUSES: &[&str] = &["merged", "pr_approved", "released"];
 
 /// Sync deliverables from a Vantage SDLC project, filtered to those whose
 /// `codebase` field matches the given `repo_slug`.
@@ -56,13 +60,13 @@ pub fn sync_vantage_deliverables(
             tracing::debug!("Vantage sync: skipping {id} (codebase={codebase:?} != {repo_slug:?})");
             continue;
         }
-        // Only sync conductor-mode deliverables in actionable pipeline states.
-        // The sdlc CLI may not include these fields in JSON output, so fall back
-        // to the pre-loaded YAML frontmatter cache.
+        // Only sync conductor-mode deliverables in actionable or terminal pipeline
+        // states. The sdlc CLI may not include these fields in JSON output, so
+        // fall back to the pre-loaded YAML frontmatter cache.
         let (exec_mode, conductor_status) = resolve_conductor_fields(item, id, &frontmatter_cache);
-        if exec_mode != "conductor"
-            || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status.as_str())
-        {
+        let is_actionable = ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status.as_str());
+        let is_terminal = TERMINAL_CONDUCTOR_STATUSES.contains(&conductor_status.as_str());
+        if exec_mode != "conductor" || (!is_actionable && !is_terminal) {
             skipped_mode_or_status += 1;
             tracing::debug!(
                 "Vantage sync: skipping {id} (execution_mode={exec_mode:?}, conductor.status={conductor_status:?})"
@@ -72,7 +76,7 @@ pub fn sync_vantage_deliverables(
         let status = item["status"].as_str().unwrap_or("");
         tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?}, conductor.status={conductor_status:?})");
         // Use list data directly when body is present; fetch full detail only if missing.
-        let ticket = if item["body"].as_str().is_some_and(|b| !b.is_empty()) {
+        let mut ticket = if item["body"].as_str().is_some_and(|b| !b.is_empty()) {
             parse_vantage_deliverable(item)
         } else {
             match fetch_vantage_deliverable(id, sdlc_root) {
@@ -83,6 +87,11 @@ pub fn sync_vantage_deliverables(
                 }
             }
         };
+        // Terminal-state deliverables are synced as closed so that
+        // close_missing_tickets can reconcile the DB.
+        if is_terminal {
+            ticket.state = "closed".to_string();
+        }
         tickets.push(ticket);
     }
 
