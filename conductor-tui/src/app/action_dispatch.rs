@@ -977,6 +977,8 @@ impl App {
                 self.state.data.latest_repo_agent_runs = payload.latest_repo_agent_runs;
                 self.state.data.all_worktree_agent_events = payload.worktree_agent_events;
                 self.state.data.all_repo_agent_events = payload.repo_agent_events;
+                self.state.data.completed_token_totals_by_worktree =
+                    payload.completed_token_totals_by_worktree;
                 self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
                 self.refresh_pending_repo_feedback();

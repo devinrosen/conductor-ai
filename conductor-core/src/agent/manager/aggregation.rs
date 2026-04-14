@@ -184,6 +184,37 @@ impl<'a> AgentManager<'a> {
         Ok(row)
     }
 
+    /// Returns cumulative completed-run token totals per worktree.
+    ///
+    /// Only `completed` runs are included so the caller can safely add live-run
+    /// tokens on top without double-counting.
+    ///
+    /// Returns `worktree_id -> (total_input_tokens, total_output_tokens)`.
+    pub fn totals_by_worktree(&self) -> Result<HashMap<String, (i64, i64)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT a.worktree_id, \
+                    COALESCE(SUM(a.input_tokens), 0), \
+                    COALESCE(SUM(a.output_tokens), 0) \
+             FROM agent_runs a \
+             WHERE a.status = 'completed' \
+               AND a.worktree_id IS NOT NULL \
+             GROUP BY a.worktree_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (wt_id, input, output) = row?;
+            map.insert(wt_id, (input, output));
+        }
+        Ok(map)
+    }
+
     /// Returns counts of active agent runs (running / waiting_for_feedback) per repo_id.
     /// Repos with no active runs are absent from the map.
     pub fn active_run_counts_by_repo(&self) -> Result<HashMap<String, ActiveAgentCounts>> {
@@ -218,6 +249,82 @@ impl<'a> AgentManager<'a> {
 mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
+
+    #[test]
+    fn test_totals_by_worktree_empty() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let totals = mgr.totals_by_worktree().unwrap();
+        assert!(totals.is_empty());
+    }
+
+    #[test]
+    fn test_totals_by_worktree() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Two completed runs on w1
+        let run1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        mgr.update_run_completed(
+            &run1.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(1000),
+            Some(500),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let run2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        mgr.update_run_completed(
+            &run2.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(600),
+            Some(300),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // One completed run on w2
+        let run3 = mgr.create_run(Some("w2"), "Task 3", None, None).unwrap();
+        mgr.update_run_completed(
+            &run3.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(400),
+            Some(200),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // A running (non-completed) run on w1 — must NOT be included
+        let _run4 = mgr.create_run(Some("w1"), "In progress", None, None).unwrap();
+
+        let totals = mgr.totals_by_worktree().unwrap();
+        assert_eq!(totals.len(), 2);
+
+        let (in1, out1) = totals["w1"];
+        assert_eq!(in1, 1600);
+        assert_eq!(out1, 800);
+
+        let (in2, out2) = totals["w2"];
+        assert_eq!(in2, 400);
+        assert_eq!(out2, 200);
+    }
 
     #[test]
     fn test_active_run_counts_by_repo() {
