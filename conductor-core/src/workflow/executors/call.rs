@@ -103,7 +103,6 @@ fn execute_call_with_schema(
         Some(&state.workflow_name),
     )?;
 
-    let prompt = build_agent_prompt(state, &agent_def, schema.as_ref(), &snippet_text);
     let step_model = agent_def.model.as_deref().or(state.model.as_deref());
 
     // Retry loop
@@ -111,6 +110,15 @@ fn execute_call_with_schema(
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
+        // Rebuild prompt each attempt so we can inject the previous failure reason
+        // on retries. On attempt 0 there is no prior error, so pass None.
+        let retry_ctx = if attempt == 0 {
+            None
+        } else {
+            Some(last_error.as_str())
+        };
+        let prompt = build_agent_prompt(state, &agent_def, schema.as_ref(), &snippet_text, retry_ctx);
+
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
             agent_label,
