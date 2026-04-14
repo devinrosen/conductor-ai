@@ -913,8 +913,9 @@ export function WorkflowAnalyticsPage() {
                         <div className="flex items-center justify-between gap-2 mb-1">
                           <span className="text-xs text-gray-700">{row.step_name.replace(/^workflow:/, "")}</span>
                           <div className="flex items-center gap-3 text-xs font-mono tabular-nums text-gray-500 shrink-0">
-                            <span>↑{fmtK(row.avg_input)}</span>
-                            <span>↓{fmtK(row.avg_output)}</span>
+                            <span>→ {fmtK(row.avg_input)}</span>
+                            <span className="text-gray-400">⊙</span>
+                            <span>{fmtK(row.avg_output)} →</span>
                             <span className="text-gray-400">{row.run_count} runs</span>
                           </div>
                         </div>
