@@ -239,7 +239,6 @@ impl Parser {
     fn parse_kvs(&mut self) -> std::result::Result<HashMap<String, KvValue>, String> {
         let mut kvs = HashMap::new();
         loop {
-            // Peek ahead: if it's an ident/keyword followed by '=', it's a kv.
             if self.pos + 1 < self.tokens.len() {
                 let is_kv_key = matches!(
                     self.peek(),
@@ -252,13 +251,34 @@ impl Parser {
                         | Token::Workflow
                         | Token::Inputs
                 );
-                let next_is_eq = self.tokens.get(self.pos + 1) == Some(&Token::Equals);
-                if is_kv_key && next_is_eq {
-                    let key = self.expect_ident()?;
-                    self.expect(&Token::Equals)?;
-                    let value = self.expect_value()?;
-                    kvs.insert(key, value);
-                    continue;
+
+                if is_kv_key {
+                    let next_is_eq = self.tokens.get(self.pos + 1) == Some(&Token::Equals);
+                    if next_is_eq {
+                        // Standard form: `key = value`
+                        let key = self.expect_ident()?;
+                        self.expect(&Token::Equals)?;
+                        let value = self.expect_value()?;
+                        kvs.insert(key, value);
+                        continue;
+                    }
+
+                    // Bare shorthand: `key value` (no `=`).
+                    // Allowed when the next token is a value literal (string, ident,
+                    // int, or array opener) but NOT a brace (which would be a block).
+                    let next_is_value = matches!(
+                        self.tokens.get(self.pos + 1),
+                        Some(Token::StringLit(_))
+                            | Some(Token::Ident(_))
+                            | Some(Token::Int(_))
+                            | Some(Token::LBracket)
+                    );
+                    if next_is_value {
+                        let key = self.expect_ident()?;
+                        let value = self.expect_value()?;
+                        kvs.insert(key, value);
+                        continue;
+                    }
                 }
             }
             break;
@@ -369,6 +389,12 @@ impl Parser {
                     self.advance();
                     self.expect(&Token::LBrace)?;
                     always.extend(self.parse_body()?);
+                }
+                // Allow an optional `body { ... }` wrapper for step nodes.
+                Token::Ident(ref s) if s == "body" => {
+                    self.advance();
+                    self.expect(&Token::LBrace)?;
+                    body.extend(self.parse_body()?);
                 }
                 _ => {
                     body.push(self.parse_node()?);

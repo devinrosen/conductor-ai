@@ -598,3 +598,53 @@ workflow my-wf {
     let def = parse_workflow_str(input, "test.wf").unwrap();
     assert_eq!(def.display_name(), "my-wf");
 }
+
+#[test]
+fn test_bare_kv_shorthand_without_equals() {
+    // Bare `key value` syntax (without `=`) should be accepted in meta and step blocks.
+    let src = r#"
+workflow bare-kv-test {
+  meta {
+    description "A bare description"
+    trigger     manual
+    targets     ["worktree"]
+  }
+
+  call plan {
+    description "Plan the work"
+    retries = 1
+  }
+
+  script fmt {
+    description "Run formatter"
+    run = ".conductor/scripts/fmt.sh"
+  }
+}
+"#;
+    let def = parse_workflow_str(src, "test.wf").unwrap();
+    assert_eq!(def.description, "A bare description");
+    assert_eq!(def.trigger, WorkflowTrigger::Manual);
+    assert_eq!(def.targets, vec!["worktree"]);
+    assert_eq!(def.body.len(), 2);
+}
+
+#[test]
+fn test_body_wrapper_block() {
+    // An explicit `body { ... }` wrapper around step nodes should be accepted.
+    let src = r#"
+workflow body-wrapper {
+  meta {
+    description = "Test body block"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  body {
+    call plan
+    call implement
+  }
+}
+"#;
+    let def = parse_workflow_str(src, "test.wf").unwrap();
+    assert_eq!(def.body.len(), 2);
+}
