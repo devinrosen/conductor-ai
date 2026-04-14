@@ -401,7 +401,7 @@ impl<'a> WorkflowManager<'a> {
         let mut resumed = 0usize;
         let mut resumed_ids: Vec<String> = Vec::new();
 
-        for (run_id, _workflow_name, _target_label) in orphaned {
+        for (run_id, workflow_name, target_label) in orphaned {
             // Step 2: CAS flip running → failed.
             // If another watchdog already won the race, changes() == 0 and we skip.
             let changed = self.conn.execute(
@@ -429,6 +429,8 @@ impl<'a> WorkflowManager<'a> {
             let config_clone = config.clone();
             let bin_dir = conductor_bin_dir.clone();
             let run_id_clone = run_id.clone();
+            let workflow_name_clone = workflow_name.clone();
+            let target_label_clone = target_label.clone();
             std::thread::spawn(move || {
                 let params = WorkflowResumeStandalone {
                     config: config_clone.clone(),
@@ -451,6 +453,8 @@ impl<'a> WorkflowManager<'a> {
                             &config_clone.notifications,
                             &config_clone.notify.hooks,
                             &run_id_clone,
+                            &workflow_name_clone,
+                            target_label_clone.as_deref(),
                             &e.to_string(),
                         );
                     }
