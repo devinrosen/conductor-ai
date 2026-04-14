@@ -965,6 +965,51 @@ pub fn run(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Run all schema migrations in compatibility mode.
+///
+/// Identical to [`run`] except that a DB schema version *ahead* of this binary
+/// (`version > LATEST_SCHEMA_VERSION`) emits a [`tracing::warn!`] and returns
+/// `Ok(())` instead of a hard error.
+///
+/// # Safety
+/// Compat mode is safe only for **additive** migrations (ADD COLUMN, CREATE
+/// TABLE, ALTER TABLE ADD). If a future migration drops or renames a column
+/// that this binary actively queries, compat mode will produce silent data
+/// corruption rather than a clear error. This must be revisited before any
+/// destructive migration is shipped.
+pub fn run_compat(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS _conductor_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    )?;
+
+    let version: i64 = conn.query_row(
+        "SELECT COALESCE(
+                (SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'),
+                0
+            )",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if version > LATEST_SCHEMA_VERSION as i64 {
+        tracing::warn!(
+            db_version = version,
+            binary_version = LATEST_SCHEMA_VERSION,
+            "DB schema is newer than this binary (db={}, binary={}); running in compatibility \
+             mode. Safe only for additive migrations.",
+            version,
+            LATEST_SCHEMA_VERSION,
+        );
+        return Ok(());
+    }
+
+    // Delegate to run() for normal migration path.
+    run(conn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2301,5 +2346,52 @@ mod tests {
             [],
         )
         .expect("role='foreach' must be accepted after full 067+068 recovery");
+    }
+
+    /// `run_compat` must return `Ok(())` when the DB schema version is ahead of
+    /// the binary (simulating a post-migration headless agent invocation).
+    #[test]
+    fn test_run_compat_tolerates_newer_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        // Set schema version to LATEST_SCHEMA_VERSION + 1 to simulate a newer DB.
+        conn.execute(
+            "INSERT INTO _conductor_meta (key, value) VALUES ('schema_version', ?1)",
+            rusqlite::params![(LATEST_SCHEMA_VERSION + 1).to_string()],
+        )
+        .unwrap();
+        let result = run_compat(&conn);
+        assert!(
+            result.is_ok(),
+            "run_compat must tolerate a newer schema; got: {result:?}"
+        );
+    }
+
+    /// `run` (strict) must return an error when the DB schema version is ahead
+    /// of the binary.
+    #[test]
+    fn test_run_strict_rejects_newer_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO _conductor_meta (key, value) VALUES ('schema_version', ?1)",
+            rusqlite::params![(LATEST_SCHEMA_VERSION + 1).to_string()],
+        )
+        .unwrap();
+        let result = run(&conn);
+        assert!(
+            result.is_err(),
+            "run must reject a schema newer than the binary"
+        );
+        assert!(
+            matches!(result.unwrap_err(), ConductorError::Schema(_)),
+            "error must be ConductorError::Schema"
+        );
     }
 }
