@@ -21,7 +21,7 @@ macro_rules! reset_sql {
             "UPDATE workflow_run_steps \
              SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
              context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
-             subprocess_pid = NULL \
+             subprocess_pid = NULL, step_error = NULL \
              ",
             $where
         )
