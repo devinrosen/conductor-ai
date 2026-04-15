@@ -76,7 +76,8 @@ const FEATURE_ROW_FRAGMENT: &str = "\
     (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch AND w.status = 'active') AS wt_count, \
     (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count, \
     f.last_commit_at, \
-    (SELECT MAX(w2.created_at) FROM worktrees w2 WHERE w2.repo_id = f.repo_id AND w2.base_branch = f.branch AND w2.status = 'active') AS last_wt_activity \
+    (SELECT MAX(w2.created_at) FROM worktrees w2 WHERE w2.repo_id = f.repo_id AND w2.base_branch = f.branch AND w2.status = 'active') AS last_wt_activity, \
+    f.tickets_total, f.tickets_merged \
     FROM features f";
 
 const FEATURE_ROW_ORDER: &str = " ORDER BY f.created_at DESC";
@@ -110,6 +111,8 @@ fn map_feature_row_cols(
         ticket_count: row.get(offset + 7)?,
         last_commit_at: row.get(offset + 8)?,
         last_worktree_activity: row.get(offset + 9)?,
+        tickets_total: row.get(offset + 10)?,
+        tickets_merged: row.get(offset + 11)?,
     })
 }
 
@@ -1131,6 +1134,40 @@ impl<'a> FeatureManager<'a> {
             }
         }
         Ok(ids)
+    }
+
+    /// Return all tickets linked to a feature (via the feature_tickets join table).
+    /// Intended for the TUI feature detail view; fast indexed read, acceptable on main thread.
+    pub fn linked_tickets(&self, feature_id: &str) -> Result<Vec<crate::tickets::Ticket>> {
+        query_collect(
+            self.conn,
+            "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, \
+             t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
+             FROM tickets t \
+             JOIN feature_tickets ft ON ft.ticket_id = t.id \
+             WHERE ft.feature_id = ?1 \
+             ORDER BY CAST(t.source_id AS INTEGER) ASC",
+            params![feature_id],
+            |row| {
+                Ok(crate::tickets::Ticket {
+                    id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    source_type: row.get(2)?,
+                    source_id: row.get(3)?,
+                    title: row.get(4)?,
+                    body: row.get(5)?,
+                    state: row.get(6)?,
+                    labels: row.get(7)?,
+                    assignee: row.get(8)?,
+                    priority: row.get(9)?,
+                    url: row.get(10)?,
+                    synced_at: row.get(11)?,
+                    raw_json: row.get(12)?,
+                    workflow: row.get(13)?,
+                    agent_map: row.get(14)?,
+                })
+            },
+        )
     }
 
     /// Link a single ticket to a feature (idempotent — uses INSERT OR IGNORE).

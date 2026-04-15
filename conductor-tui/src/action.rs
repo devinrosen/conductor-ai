@@ -480,6 +480,26 @@ pub enum Action {
     #[allow(dead_code)]
     SettingsToggleBool,
 
+    // ── Features view actions ──────────────────────────────────────────────
+    /// Navigate to View::Features (global key `F`, or `f` from RepoDetail).
+    OpenFeatures,
+    /// User pressed `r` — dispatch fan-out in background thread.
+    FeatureRunFanOut,
+    /// Background result from fan-out (`r` key).
+    FeatureRunFanOutComplete {
+        result: Result<conductor_core::feature::RunSummary, String>,
+    },
+    /// User pressed `v` — transition selected feature to ReadyForReview (inline SQL).
+    FeatureTransitionReady,
+    /// User pressed `a` — transition selected feature to Approved (inline SQL).
+    FeatureTransitionApprove,
+    /// User pressed `x` — close the selected feature (off-thread: calls git for merge detection).
+    FeatureClose,
+    /// Background result from `x` close action.
+    FeatureCloseComplete {
+        result: Result<(), String>,
+    },
+
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,
 

@@ -1771,6 +1771,8 @@ fn make_feature_row(last_commit_at: Option<&str>, last_wt_activity: Option<&str>
         ticket_count: 0,
         last_commit_at: last_commit_at.map(|s| s.to_string()),
         last_worktree_activity: last_wt_activity.map(|s| s.to_string()),
+        tickets_total: 0,
+        tickets_merged: 0,
     }
 }
 

@@ -1007,6 +1007,10 @@ impl App {
                 self.reload_repo_agent_events();
                 self.state.rebuild_filtered_tickets();
                 self.clamp_indices();
+                // Rebuild feature list if the Features or FeatureDetail view is active.
+                if matches!(self.state.view, View::Features | View::FeatureDetail) {
+                    self.rebuild_detail_features();
+                }
                 // Always redraw since workflow column is persistent across all views.
                 return true;
             }
@@ -1361,8 +1365,236 @@ impl App {
                     nav.pan_y = nav.pan_y.saturating_add(4);
                 }
             }
+
+            // ── Features view actions ──────────────────────────────────────────
+            Action::OpenFeatures => {
+                self.state.previous_view = Some(self.state.view);
+                // Rebuild detail_features from the data cache.
+                // If a repo is selected, scope to that repo; otherwise flatten all.
+                self.rebuild_detail_features();
+                self.state.features_index = 0;
+                self.state.view = View::Features;
+            }
+
+            Action::FeatureRunFanOut => {
+                let Some(feature_name) = self.state.selected_feature_name.clone() else {
+                    self.state.status_message = Some("No feature selected".to_string());
+                    return true;
+                };
+                let repo_slug = self
+                    .state
+                    .detail_feature_repo_slugs
+                    .get(self.state.features_index)
+                    .cloned()
+                    .unwrap_or_default();
+                if repo_slug.is_empty() {
+                    self.state.status_message =
+                        Some("No repo slug for selected feature".to_string());
+                    return true;
+                }
+                let Some(ref tx) = self.bg_tx else {
+                    return true;
+                };
+                let tx = tx.clone();
+                let config = self.config.clone();
+                self.state.modal = Modal::Progress {
+                    message: format!("Running fan-out for \"{}\"…", feature_name),
+                };
+                std::thread::spawn(move || {
+                    use conductor_core::config::db_path;
+                    use conductor_core::db::open_database;
+                    use conductor_core::feature::FeatureManager;
+                    let result = (|| {
+                        let conn = open_database(&db_path()).map_err(|e| e.to_string())?;
+                        let mgr = FeatureManager::new(&conn, &config);
+                        #[cfg(unix)]
+                        return mgr
+                            .run(&repo_slug, &feature_name, None)
+                            .map_err(|e| e.to_string());
+                        #[cfg(not(unix))]
+                        return Err("Fan-out is only supported on Unix".to_string());
+                    })();
+                    let _ = tx.send(Action::FeatureRunFanOutComplete { result });
+                });
+            }
+
+            Action::FeatureRunFanOutComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(summary) => {
+                        self.state.status_message = Some(format!(
+                            "Fan-out complete: dispatched {}, failed {}",
+                            summary.dispatched, summary.failed
+                        ));
+                        self.state.status_message_at = Some(std::time::Instant::now());
+                        self.rebuild_detail_features();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error { message: e };
+                    }
+                }
+            }
+
+            Action::FeatureTransitionReady => {
+                let Some(feature_name) = self.state.selected_feature_name.clone() else {
+                    return true;
+                };
+                let repo_slug = self
+                    .state
+                    .detail_feature_repo_slugs
+                    .get(self.state.features_index)
+                    .cloned()
+                    .unwrap_or_default();
+                use conductor_core::feature::{FeatureManager, FeatureStatus};
+                let mgr = FeatureManager::new(&self.conn, &self.config);
+                match mgr.transition(&repo_slug, &feature_name, FeatureStatus::ReadyForReview) {
+                    Ok(_) => {
+                        self.state.status_message =
+                            Some("Feature transitioned to Ready for Review".to_string());
+                        self.state.status_message_at = Some(std::time::Instant::now());
+                        self.rebuild_detail_features();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: e.to_string(),
+                        };
+                    }
+                }
+            }
+
+            Action::FeatureTransitionApprove => {
+                let Some(feature_name) = self.state.selected_feature_name.clone() else {
+                    return true;
+                };
+                let repo_slug = self
+                    .state
+                    .detail_feature_repo_slugs
+                    .get(self.state.features_index)
+                    .cloned()
+                    .unwrap_or_default();
+                use conductor_core::feature::{FeatureManager, FeatureStatus};
+                let mgr = FeatureManager::new(&self.conn, &self.config);
+                match mgr.transition(&repo_slug, &feature_name, FeatureStatus::Approved) {
+                    Ok(_) => {
+                        self.state.status_message = Some("Feature approved".to_string());
+                        self.state.status_message_at = Some(std::time::Instant::now());
+                        self.rebuild_detail_features();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: e.to_string(),
+                        };
+                    }
+                }
+            }
+
+            Action::FeatureClose => {
+                let Some(feature_name) = self.state.selected_feature_name.clone() else {
+                    self.state.status_message = Some("No feature selected".to_string());
+                    return true;
+                };
+                let repo_slug = self
+                    .state
+                    .detail_feature_repo_slugs
+                    .get(self.state.features_index)
+                    .cloned()
+                    .unwrap_or_default();
+                if repo_slug.is_empty() {
+                    self.state.status_message =
+                        Some("No repo slug for selected feature".to_string());
+                    return true;
+                }
+                let Some(ref tx) = self.bg_tx else {
+                    return true;
+                };
+                let tx = tx.clone();
+                let config = self.config.clone();
+                self.state.modal = Modal::Progress {
+                    message: format!("Closing \"{}\"… (checking git merge status)", feature_name),
+                };
+                std::thread::spawn(move || {
+                    use conductor_core::config::db_path;
+                    use conductor_core::db::open_database;
+                    use conductor_core::feature::FeatureManager;
+                    let result = (|| {
+                        let conn = open_database(&db_path()).map_err(|e| e.to_string())?;
+                        let mgr = FeatureManager::new(&conn, &config);
+                        mgr.close(&repo_slug, &feature_name)
+                            .map_err(|e| e.to_string())
+                    })();
+                    let _ = tx.send(Action::FeatureCloseComplete { result });
+                });
+            }
+
+            Action::FeatureCloseComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(()) => {
+                        self.state.status_message = Some("Feature closed".to_string());
+                        self.state.status_message_at = Some(std::time::Instant::now());
+                        self.state.selected_feature_id = None;
+                        self.state.selected_feature_name = None;
+                        self.rebuild_detail_features();
+                        if self.state.view == View::FeatureDetail {
+                            self.state.view = View::Features;
+                        }
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error { message: e };
+                    }
+                }
+            }
         }
         true
+    }
+
+    /// Rebuild `detail_features` and the parallel `detail_feature_repo_slugs` vec
+    /// from the current data cache.  When a repo is selected, scopes to that repo;
+    /// otherwise flattens all repos.
+    fn rebuild_detail_features(&mut self) {
+        let mut features: Vec<conductor_core::feature::FeatureRow> = Vec::new();
+        let mut slugs: Vec<String> = Vec::new();
+
+        if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
+            if let Some(rows) = self.state.data.features_by_repo.get(repo_id) {
+                features.extend(rows.iter().cloned());
+                let slug = self
+                    .state
+                    .data
+                    .repos
+                    .iter()
+                    .find(|r| &r.id == repo_id)
+                    .map(|r| r.slug.clone())
+                    .unwrap_or_default();
+                for _ in rows {
+                    slugs.push(slug.clone());
+                }
+            }
+        } else {
+            // Global mode: iterate repos in order.
+            for repo in &self.state.data.repos.clone() {
+                if let Some(rows) = self.state.data.features_by_repo.get(&repo.id) {
+                    for row in rows {
+                        features.push(row.clone());
+                        slugs.push(repo.slug.clone());
+                    }
+                }
+            }
+        }
+
+        // Clamp features_index to new length.
+        if !features.is_empty() && self.state.features_index >= features.len() {
+            self.state.features_index = features.len() - 1;
+        }
+
+        self.state.detail_features = features;
+        self.state.detail_feature_repo_slugs = slugs;
+
+        // Update selected_feature_id/name from current features_index.
+        if let Some(f) = self.state.detail_features.get(self.state.features_index) {
+            self.state.selected_feature_id = Some(f.id.clone());
+            self.state.selected_feature_name = Some(f.name.clone());
+        }
     }
 
     /// Build and open the ticket dependency graph for the current repo.

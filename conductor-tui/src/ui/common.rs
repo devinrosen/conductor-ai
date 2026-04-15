@@ -94,10 +94,14 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
             View::WorktreeDetail => "Worktree Detail",
             View::WorkflowRunDetail => "Workflow Run",
             View::WorkflowDefDetail => "Workflow Definition",
+            View::Features => "Features",
+            View::FeatureDetail => "Feature Detail",
             View::Settings => "Settings",
         };
         if state.view == View::Settings {
             format!("[{view_name}]  Tab:pane  j/k:nav  Enter:edit  c:cycle  Esc:back")
+        } else if matches!(state.view, View::Features | View::FeatureDetail) {
+            format!("[{view_name}]  r=run  v=ready  a=approve  x=close  Enter=detail  Esc=back")
         } else {
             format!("[{view_name}]  Tab:panel  [/]:column  \\:workflows  [S]:settings  q:quit")
         }

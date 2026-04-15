@@ -374,6 +374,8 @@ fn branch_picker_item_populates_stale_days() {
         ticket_count: 0,
         last_commit_at: Some(old_ts),
         last_worktree_activity: None,
+        tickets_total: 0,
+        tickets_merged: 0,
     };
     let stale_threshold: u32 = 14;
     let sd = if FeatureManager::is_stale(&feature, stale_threshold) {
