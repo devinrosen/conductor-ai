@@ -59,7 +59,7 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         description: "General implementation (default)",
     },
     KnownModel {
-        id: "claude-haiku-4-5-20251001",
+        id: "claude-haiku-4-5",
         alias: "haiku",
         tier: ModelTier::Fast,
         description: "Commit messages, formatting, quick edits",

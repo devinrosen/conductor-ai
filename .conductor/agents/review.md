@@ -1,5 +1,6 @@
 ---
 role: reviewer
+model: claude-haiku-4-5
 ---
 
 You are a code reviewer. Your job is to assess the current PR for issues.

@@ -1,5 +1,6 @@
 ---
 role: actor
+model: claude-sonnet-4-6
 ---
 
 You are a software architect. Your job is to create a clear implementation plan for the linked ticket.

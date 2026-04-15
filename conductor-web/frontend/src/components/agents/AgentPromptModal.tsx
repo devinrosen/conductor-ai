@@ -20,7 +20,7 @@ const OPUS_KEYWORDS = [
 const FALLBACK_MODELS: KnownModel[] = [
   { id: "claude-opus-4-6",           alias: "opus",   tier: 3, tier_label: "Powerful", description: "Planning, architecture, complex analysis" },
   { id: "claude-sonnet-4-6",         alias: "sonnet", tier: 2, tier_label: "Balanced", description: "General implementation (default)" },
-  { id: "claude-haiku-4-5-20251001", alias: "haiku",  tier: 1, tier_label: "Fast",     description: "Commit messages, formatting, quick edits" },
+  { id: "claude-haiku-4-5", alias: "haiku",  tier: 1, tier_label: "Fast",     description: "Commit messages, formatting, quick edits" },
 ];
 
 function suggestModel(prompt: string): string {
