@@ -22,6 +22,9 @@ const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] = &[
 
 /// Terminal conductor statuses that are synced as closed tickets so that
 /// `close_missing_tickets` can reconcile stale DB rows.
+///
+/// Keep in sync with `VANTAGE_APPROVED_STATUSES` in
+/// `conductor-web/frontend/src/utils/ticketDeps.ts`.
 const TERMINAL_CONDUCTOR_STATUSES: &[&str] = &["merged", "pr_approved", "released"];
 
 /// Sync deliverables from a Vantage SDLC project, filtered to those whose
@@ -770,6 +773,40 @@ mod tests {
                 assert!(tickets[0].labels.contains(&"my-repo".to_string()));
                 assert!(tickets[0].labels.contains(&"feature".to_string()));
             });
+        }
+
+        #[test]
+        fn test_sync_terminal_conductor_status_synced_as_closed() {
+            // Regression: deliverables with terminal conductor.status (pr_approved,
+            // merged, released) must be returned with state="closed" so that
+            // close_missing_tickets can reconcile stale DB rows.
+            // Mirrors TERMINAL_CONDUCTOR_STATUSES and VANTAGE_APPROVED_STATUSES in
+            // conductor-web/frontend/src/utils/ticketDeps.ts.
+            for terminal_status in &["pr_approved", "merged", "released"] {
+                let list = serde_json::json!([
+                    {
+                        "id": "D-T01", "title": "Terminal", "status": "complete",
+                        "codebase": "my-repo",
+                        "execution_mode": "conductor",
+                        "conductor": { "status": terminal_status },
+                        "body": "some body",
+                    },
+                ]);
+                let dir = tempfile::tempdir().unwrap();
+                write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
+                with_sdlc_on_path(dir.path(), || {
+                    let tickets = sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                    assert_eq!(
+                        tickets.len(),
+                        1,
+                        "terminal status={terminal_status} should be included (as closed)"
+                    );
+                    assert_eq!(
+                        tickets[0].state, "closed",
+                        "terminal conductor.status={terminal_status} must produce state=closed"
+                    );
+                });
+            }
         }
 
         #[test]

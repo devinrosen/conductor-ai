@@ -143,6 +143,7 @@ export function buildTicketTree(
 
   // Build a set of ticket IDs whose Vantage conductor.status is terminal/approved
   const vantagePrApproved = new Set<string>();
+  // Keep in sync with TERMINAL_CONDUCTOR_STATUSES in conductor-core/src/vantage.rs
   const VANTAGE_APPROVED_STATUSES = ["pr_approved", "merged", "released"];
   for (const t of tickets) {
     if (t.source_type !== "vantage") continue;
