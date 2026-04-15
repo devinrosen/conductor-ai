@@ -3345,8 +3345,7 @@ mod tests {
     /// the worktree exists but has no workflow definitions on disk.
     #[tokio::test]
     async fn list_workflow_defs_returns_empty_for_valid_worktree() {
-        let (status, body) =
-            get_response("/api/worktrees/w1/workflows/defs", seeded_state()).await;
+        let (status, body) = get_response("/api/worktrees/w1/workflows/defs", seeded_state()).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, serde_json::json!([]));
     }
@@ -3367,8 +3366,11 @@ mod tests {
     /// name produces a `ConductorError::Workflow` (mapped to 500 by `error.rs`).
     #[tokio::test]
     async fn get_workflow_def_returns_error_for_unknown_name() {
-        let (status, _) =
-            get_response("/api/worktrees/w1/workflows/defs/no-such-workflow", seeded_state()).await;
+        let (status, _) = get_response(
+            "/api/worktrees/w1/workflows/defs/no-such-workflow",
+            seeded_state(),
+        )
+        .await;
         // ConductorError::Workflow is not in the 404 allowlist in error.rs, so
         // "not found" produces a 500. This is pre-existing behaviour for the
         // ok_or_else path; what we verify here is that the new `?` propagation
