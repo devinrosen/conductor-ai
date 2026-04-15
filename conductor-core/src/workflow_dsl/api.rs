@@ -12,6 +12,21 @@ use super::types::{collect_workflow_refs, WorkflowDef, WorkflowWarning};
 // Public API / loaders
 // ---------------------------------------------------------------------------
 
+/// Deduplicate warnings by file stem (workflow name), with later entries overwriting earlier ones.
+/// This ensures that worktree warnings override repo warnings for the same workflow name.
+fn deduplicate_warnings(warnings: Vec<WorkflowWarning>) -> HashMap<String, WorkflowWarning> {
+    let mut map: HashMap<String, WorkflowWarning> = HashMap::new();
+    for w in warnings {
+        let key = Path::new(&w.file)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&w.file)
+            .to_string();
+        map.insert(key, w);
+    }
+    map
+}
+
 /// Load all workflow definitions from `.conductor/workflows/*.wf`.
 ///
 /// Merges definitions from both `repo_path` and `worktree_path`. Worktree
@@ -38,14 +53,7 @@ pub fn load_workflow_defs(
             for def in defs {
                 map.insert(def.name.clone(), def);
             }
-            for w in warnings {
-                let key = Path::new(&w.file)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&w.file)
-                    .to_string();
-                warnings_map.insert(key, w);
-            }
+            warnings_map.extend(deduplicate_warnings(warnings));
         }
     }
 
@@ -60,14 +68,7 @@ pub fn load_workflow_defs(
             for def in defs {
                 map.insert(def.name.clone(), def);
             }
-            for w in warnings {
-                let key = Path::new(&w.file)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&w.file)
-                    .to_string();
-                warnings_map.insert(key, w);
-            }
+            warnings_map.extend(deduplicate_warnings(warnings));
         }
     }
 
@@ -355,5 +356,51 @@ mod tests {
         assert!(validate_workflow_name("my-workflow").is_ok());
         assert!(validate_workflow_name("build_release").is_ok());
         assert!(validate_workflow_name("ci-2024").is_ok());
+    }
+
+    #[test]
+    fn test_load_workflow_defs_deduplicates_warnings() {
+        // Create repo with a broken workflow
+        let repo = TempDir::new().unwrap();
+        fs::create_dir_all(repo.path().join(".conductor").join("workflows")).unwrap();
+        fs::write(
+            repo.path()
+                .join(".conductor")
+                .join("workflows")
+                .join("broken.wf"),
+            "invalid syntax {{{",
+        )
+        .unwrap();
+
+        // Create worktree with a different broken workflow
+        let worktree = TempDir::new().unwrap();
+        fs::create_dir_all(worktree.path().join(".conductor").join("workflows")).unwrap();
+        fs::write(
+            worktree
+                .path()
+                .join(".conductor")
+                .join("workflows")
+                .join("broken.wf"),
+            "more invalid syntax }}}",
+        )
+        .unwrap();
+
+        let (defs, warnings) = load_workflow_defs(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+
+        // No valid defs should be returned
+        assert_eq!(defs.len(), 0);
+
+        // Exactly one warning for "broken.wf" should exist
+        // (worktree version should overwrite repo version, not duplicate both)
+        assert_eq!(
+            warnings.len(),
+            1,
+            "Expected exactly one warning for broken.wf, got: {warnings:?}"
+        );
+        assert_eq!(warnings[0].file, "broken.wf");
     }
 }
