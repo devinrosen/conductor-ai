@@ -727,4 +727,11 @@ pub enum FeatureCommands {
         /// Feature name
         name: String,
     },
+    /// Sync tickets from the feature's configured GitHub milestone
+    Sync {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+    },
 }

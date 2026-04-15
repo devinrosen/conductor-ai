@@ -2131,3 +2131,260 @@ fn test_map_feature_row_negative_ticket_count_returns_error() {
         "expected error when tickets_total is negative, got: {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Milestone sync tests
+// ---------------------------------------------------------------------------
+
+/// Insert a feature with source_type=github_milestone for sync tests.
+fn insert_feature_with_milestone_source(
+    conn: &Connection,
+    repo_id: &str,
+    name: &str,
+    branch: &str,
+) -> String {
+    let id = crate::new_id();
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO features \
+         (id, repo_id, name, branch, base_branch, status, created_at, source_type, source_id) \
+         VALUES (?1, ?2, ?3, ?4, 'main', 'in_progress', ?5, \
+                 'github_milestone', 'github.com/test/repo/milestones/1')",
+        params![id, repo_id, name, branch, now],
+    )
+    .unwrap();
+    id
+}
+
+/// Build a minimal TicketInput for milestone sync tests.
+fn make_ticket_input(source_id: &str) -> crate::tickets::TicketInput {
+    crate::tickets::TicketInput {
+        source_type: "github".to_string(),
+        source_id: source_id.to_string(),
+        title: format!("Issue #{source_id}"),
+        body: String::new(),
+        state: "open".to_string(),
+        labels: vec![],
+        assignee: None,
+        priority: None,
+        url: format!("https://github.com/test/repo/issues/{source_id}"),
+        raw_json: None,
+        label_details: vec![],
+        blocked_by: vec![],
+        children: vec![],
+        parent: None,
+    }
+}
+
+#[test]
+fn test_parse_milestone_source_id_valid() {
+    let (owner, repo, number) =
+        super::manager::parse_milestone_source_id("github.com/myorg/myrepo/milestones/42").unwrap();
+    assert_eq!(owner, "myorg");
+    assert_eq!(repo, "myrepo");
+    assert_eq!(number, 42u64);
+}
+
+#[test]
+fn test_parse_milestone_source_id_invalid() {
+    // Bare number (old format)
+    assert!(super::manager::parse_milestone_source_id("42").is_err());
+    // Missing milestones segment
+    assert!(super::manager::parse_milestone_source_id("github.com/owner/repo/42").is_err());
+    // Non-numeric milestone number
+    assert!(
+        super::manager::parse_milestone_source_id("github.com/owner/repo/milestones/abc").is_err()
+    );
+}
+
+#[test]
+fn test_sync_from_milestone_invalid_source_type() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    // Feature with no source_type
+    insert_feature(&conn, &repo_id, "no-source", "feat/no-source");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let err = mgr
+        .sync_from_milestone("test-repo", "no-source")
+        .unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_apply_milestone_sync_adds_tickets() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-add", "feat/ms-add");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let inputs = vec![make_ticket_input("100"), make_ticket_input("101")];
+
+    let result = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(result.added, 2);
+    assert_eq!(result.removed, 0);
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+
+    let total: u32 = conn
+        .query_row(
+            "SELECT tickets_total FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 2);
+}
+
+#[test]
+fn test_apply_milestone_sync_removes_stale_links() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-rm", "feat/ms-rm");
+
+    // Pre-link a ticket that won't be in the (simulated) milestone anymore.
+    let old_ticket_id = insert_ticket(&conn, &repo_id, "999");
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, old_ticket_id],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    // Sync with ticket "200" only — ticket "999" should be unlinked.
+    let inputs = vec![make_ticket_input("200")];
+    let result = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(result.added, 1);
+    assert_eq!(result.removed, 1);
+
+    let linked_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(linked_count, 1);
+
+    // Ticket "999" still exists in tickets table (not deleted).
+    let ticket_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tickets WHERE source_id = '999'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ticket_exists, 1);
+}
+
+#[test]
+fn test_apply_milestone_sync_idempotent() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-idem", "feat/ms-idem");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let inputs = vec![make_ticket_input("300")];
+
+    let r1 = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(r1.added, 1);
+    assert_eq!(r1.removed, 0);
+
+    // Second sync with the same inputs should be a no-op.
+    let r2 = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(r2.added, 0);
+    assert_eq!(r2.removed, 0);
+}
+
+#[test]
+fn test_apply_milestone_sync_updates_tickets_total() {
+    // Verify that tickets_total on the feature row is updated correctly after
+    // sync, exercising the full apply_milestone_sync success path.
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-total", "feat/ms-total");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    // Add 3 tickets.
+    let inputs = vec![
+        make_ticket_input("10"),
+        make_ticket_input("11"),
+        make_ticket_input("12"),
+    ];
+    let result = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(result.added, 3);
+    assert_eq!(result.removed, 0);
+
+    let total: i64 = conn
+        .query_row(
+            "SELECT tickets_total FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 3);
+
+    // Now sync with only 2 tickets — one is removed.
+    let shrunk = vec![make_ticket_input("10"), make_ticket_input("11")];
+    let result2 = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &shrunk)
+        .unwrap();
+    assert_eq!(result2.added, 0);
+    assert_eq!(result2.removed, 1);
+
+    let total2: i64 = conn
+        .query_row(
+            "SELECT tickets_total FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total2, 2);
+}
+
+#[test]
+fn test_build_milestone_source_id_roundtrip() {
+    // build_milestone_source_id produces a string that parse_milestone_source_id
+    // can round-trip back to the original components.
+    let source_id = super::manager::build_milestone_source_id("myorg", "myrepo", 7);
+    assert_eq!(source_id, "github.com/myorg/myrepo/milestones/7");
+
+    let (owner, repo, number) = super::manager::parse_milestone_source_id(&source_id).unwrap();
+    assert_eq!(owner, "myorg");
+    assert_eq!(repo, "myrepo");
+    assert_eq!(number, 7u64);
+}
