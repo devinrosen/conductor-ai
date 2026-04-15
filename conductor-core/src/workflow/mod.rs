@@ -44,7 +44,7 @@ pub use engine::{
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
-pub use manager::{FanOutItemRow, WorkflowManager};
+pub use manager::{FanOutItemRow, InvalidWorkflowEntry, WorkflowManager};
 pub use output::{parse_conductor_output, ConductorOutput};
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::{
