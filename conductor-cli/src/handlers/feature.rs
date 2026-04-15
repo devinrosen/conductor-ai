@@ -23,17 +23,18 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
             // Derive source_type/source_id from --milestone if provided.
             // Store the full structured source_id so sync_from_milestone can parse it.
             let has_milestone = milestone.is_some();
-            let (source_type_opt, source_id_str): (Option<&str>, Option<String>) =
-                if let Some(ms) = milestone {
-                    let repo_rec = RepoManager::new(conn, config).get_by_slug(&repo)?;
-                    let full_source_id = match parse_github_remote(&repo_rec.remote_url) {
-                        Some((owner, repo_name)) => build_milestone_source_id(&owner, &repo_name, ms),
-                        None => ms.to_string(),
-                    };
-                    (Some("github_milestone"), Some(full_source_id))
-                } else {
-                    (None, None)
+            let (source_type_opt, source_id_str): (Option<&str>, Option<String>) = if let Some(ms) =
+                milestone
+            {
+                let repo_rec = RepoManager::new(conn, config).get_by_slug(&repo)?;
+                let full_source_id = match parse_github_remote(&repo_rec.remote_url) {
+                    Some((owner, repo_name)) => build_milestone_source_id(&owner, &repo_name, ms),
+                    None => ms.to_string(),
                 };
+                (Some("github_milestone"), Some(full_source_id))
+            } else {
+                (None, None)
+            };
 
             let mgr = FeatureManager::new(conn, config);
             let feature = mgr.create(

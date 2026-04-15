@@ -2331,12 +2331,8 @@ fn test_apply_milestone_sync_updates_tickets_total() {
     // sync, exercising the full apply_milestone_sync success path.
     let conn = setup_db();
     let repo_id = insert_repo(&conn);
-    let feature_id = insert_feature_with_milestone_source(
-        &conn,
-        &repo_id,
-        "ms-feat-total",
-        "feat/ms-total",
-    );
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-total", "feat/ms-total");
 
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
@@ -2387,8 +2383,7 @@ fn test_build_milestone_source_id_roundtrip() {
     let source_id = super::manager::build_milestone_source_id("myorg", "myrepo", 7);
     assert_eq!(source_id, "github.com/myorg/myrepo/milestones/7");
 
-    let (owner, repo, number) =
-        super::manager::parse_milestone_source_id(&source_id).unwrap();
+    let (owner, repo, number) = super::manager::parse_milestone_source_id(&source_id).unwrap();
     assert_eq!(owner, "myorg");
     assert_eq!(repo, "myrepo");
     assert_eq!(number, 7u64);

@@ -1238,9 +1238,11 @@ mod tests {
             make_issue_json(1, "Issue one", "https://github.com/owner/repo/issues/1"),
             make_issue_json(2, "Issue two", "https://github.com/owner/repo/issues/2"),
         ]);
-        let page2 = serde_json::json!([
-            make_issue_json(3, "Issue three", "https://github.com/owner/repo/issues/3"),
-        ]);
+        let page2 = serde_json::json!([make_issue_json(
+            3,
+            "Issue three",
+            "https://github.com/owner/repo/issues/3"
+        ),]);
         let raw = format!("{}\n{}\n", page1, page2);
 
         let mut all_issues: Vec<serde_json::Value> = Vec::new();
