@@ -402,5 +402,22 @@ mod tests {
             "Expected exactly one warning for broken.wf, got: {warnings:?}"
         );
         assert_eq!(warnings[0].file, "broken.wf");
+
+        // Verify that the warning comes from the worktree version, not the repo version.
+        // The error message includes the full file path, so we can check that it contains
+        // the worktree path (and not only the repo path).
+        let worktree_path_str = worktree.path().to_string_lossy();
+        let repo_path_str = repo.path().to_string_lossy();
+        assert!(
+            warnings[0].message.contains(worktree_path_str.as_ref()),
+            "Warning message should contain worktree path, but got: {}",
+            warnings[0].message
+        );
+        // Also verify that the worktree warning was preferred over the repo warning
+        assert!(
+            !warnings[0].message.contains(repo_path_str.as_ref()),
+            "Warning message should not contain repo path (worktree should override), but got: {}",
+            warnings[0].message
+        );
     }
 }
