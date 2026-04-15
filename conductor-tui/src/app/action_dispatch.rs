@@ -1381,12 +1381,7 @@ impl App {
                     self.state.status_message = Some("No feature selected".to_string());
                     return true;
                 };
-                let repo_slug = self
-                    .state
-                    .detail_feature_repo_slugs
-                    .get(self.state.features_index)
-                    .cloned()
-                    .unwrap_or_default();
+                let repo_slug = self.selected_feature_repo_slug();
                 if repo_slug.is_empty() {
                     self.state.status_message =
                         Some("No repo slug for selected feature".to_string());
@@ -1436,56 +1431,16 @@ impl App {
             }
 
             Action::FeatureTransitionReady => {
-                let Some(feature_name) = self.state.selected_feature_name.clone() else {
-                    return true;
-                };
-                let repo_slug = self
-                    .state
-                    .detail_feature_repo_slugs
-                    .get(self.state.features_index)
-                    .cloned()
-                    .unwrap_or_default();
-                use conductor_core::feature::{FeatureManager, FeatureStatus};
-                let mgr = FeatureManager::new(&self.conn, &self.config);
-                match mgr.transition(&repo_slug, &feature_name, FeatureStatus::ReadyForReview) {
-                    Ok(_) => {
-                        self.state.status_message =
-                            Some("Feature transitioned to Ready for Review".to_string());
-                        self.state.status_message_at = Some(std::time::Instant::now());
-                        self.rebuild_detail_features();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: e.to_string(),
-                        };
-                    }
-                }
+                use conductor_core::feature::FeatureStatus;
+                self.handle_feature_transition(
+                    FeatureStatus::ReadyForReview,
+                    "Feature transitioned to Ready for Review",
+                );
             }
 
             Action::FeatureTransitionApprove => {
-                let Some(feature_name) = self.state.selected_feature_name.clone() else {
-                    return true;
-                };
-                let repo_slug = self
-                    .state
-                    .detail_feature_repo_slugs
-                    .get(self.state.features_index)
-                    .cloned()
-                    .unwrap_or_default();
-                use conductor_core::feature::{FeatureManager, FeatureStatus};
-                let mgr = FeatureManager::new(&self.conn, &self.config);
-                match mgr.transition(&repo_slug, &feature_name, FeatureStatus::Approved) {
-                    Ok(_) => {
-                        self.state.status_message = Some("Feature approved".to_string());
-                        self.state.status_message_at = Some(std::time::Instant::now());
-                        self.rebuild_detail_features();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: e.to_string(),
-                        };
-                    }
-                }
+                use conductor_core::feature::FeatureStatus;
+                self.handle_feature_transition(FeatureStatus::Approved, "Feature approved");
             }
 
             Action::FeatureClose => {
@@ -1493,12 +1448,7 @@ impl App {
                     self.state.status_message = Some("No feature selected".to_string());
                     return true;
                 };
-                let repo_slug = self
-                    .state
-                    .detail_feature_repo_slugs
-                    .get(self.state.features_index)
-                    .cloned()
-                    .unwrap_or_default();
+                let repo_slug = self.selected_feature_repo_slug();
                 if repo_slug.is_empty() {
                     self.state.status_message =
                         Some("No repo slug for selected feature".to_string());
@@ -1548,36 +1498,22 @@ impl App {
         true
     }
 
-    /// Rebuild `detail_features` and the parallel `detail_feature_repo_slugs` vec
-    /// from the current data cache.  When a repo is selected, scopes to that repo;
-    /// otherwise flattens all repos.
+    /// Rebuild `detail_features` from the current data cache.
+    /// When a repo is selected, scopes to that repo; otherwise flattens all repos.
     fn rebuild_detail_features(&mut self) {
         let mut features: Vec<conductor_core::feature::FeatureRow> = Vec::new();
-        let mut slugs: Vec<String> = Vec::new();
 
         if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
             if let Some(rows) = self.state.data.features_by_repo.get(repo_id) {
                 features.extend(rows.iter().cloned());
-                let slug = self
-                    .state
-                    .data
-                    .repos
-                    .iter()
-                    .find(|r| &r.id == repo_id)
-                    .map(|r| r.slug.clone())
-                    .unwrap_or_default();
-                for _ in rows {
-                    slugs.push(slug.clone());
-                }
             }
         } else {
-            // Global mode: iterate repos in order.
-            for repo in &self.state.data.repos.clone() {
-                if let Some(rows) = self.state.data.features_by_repo.get(&repo.id) {
-                    for row in rows {
-                        features.push(row.clone());
-                        slugs.push(repo.slug.clone());
-                    }
+            // Global mode: iterate repos in order (avoid cloning the whole vec).
+            let repo_ids: Vec<String> =
+                self.state.data.repos.iter().map(|r| r.id.clone()).collect();
+            for repo_id in &repo_ids {
+                if let Some(rows) = self.state.data.features_by_repo.get(repo_id) {
+                    features.extend(rows.iter().cloned());
                 }
             }
         }
@@ -1588,12 +1524,56 @@ impl App {
         }
 
         self.state.detail_features = features;
-        self.state.detail_feature_repo_slugs = slugs;
 
         // Update selected_feature_id/name from current features_index.
         if let Some(f) = self.state.detail_features.get(self.state.features_index) {
             self.state.selected_feature_id = Some(f.id.clone());
             self.state.selected_feature_name = Some(f.name.clone());
+        } else {
+            self.state.selected_feature_id = None;
+            self.state.selected_feature_name = None;
+        }
+    }
+
+    /// Look up the repo slug for the feature at `features_index`.
+    fn selected_feature_repo_slug(&self) -> String {
+        self.state
+            .detail_features
+            .get(self.state.features_index)
+            .and_then(|f| {
+                self.state
+                    .data
+                    .repos
+                    .iter()
+                    .find(|r| r.id == f.repo_id)
+            })
+            .map(|r| r.slug.clone())
+            .unwrap_or_default()
+    }
+
+    /// Transition the selected feature to `target_status` and refresh the list.
+    fn handle_feature_transition(
+        &mut self,
+        target_status: conductor_core::feature::FeatureStatus,
+        success_msg: &str,
+    ) {
+        use conductor_core::feature::FeatureManager;
+        let Some(feature_name) = self.state.selected_feature_name.clone() else {
+            return;
+        };
+        let repo_slug = self.selected_feature_repo_slug();
+        let mgr = FeatureManager::new(&self.conn, &self.config);
+        match mgr.transition(&repo_slug, &feature_name, target_status) {
+            Ok(_) => {
+                self.state.status_message = Some(success_msg.to_string());
+                self.state.status_message_at = Some(std::time::Instant::now());
+                self.rebuild_detail_features();
+            }
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: e.to_string(),
+                };
+            }
         }
     }
 

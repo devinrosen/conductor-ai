@@ -37,7 +37,7 @@ fn is_dangling(f: &FeatureRow) -> bool {
     f.worktree_count == 0 && f.status == FeatureStatus::InProgress
 }
 
-fn status_color(status: &FeatureStatus, state: &AppState) -> ratatui::style::Color {
+pub(super) fn status_color(status: &FeatureStatus, state: &AppState) -> ratatui::style::Color {
     match status {
         FeatureStatus::InProgress => state.theme.label_warning,
         FeatureStatus::ReadyForReview => state.theme.label_info,

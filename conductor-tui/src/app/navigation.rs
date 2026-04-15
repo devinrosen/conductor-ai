@@ -1075,26 +1075,21 @@ impl App {
                     // Fetch linked tickets inline (fast indexed DB read).
                     use conductor_core::feature::FeatureManager;
                     let mgr = FeatureManager::new(&self.conn, &self.config);
-                    self.state.detail_feature_tickets =
-                        mgr.linked_tickets(&feature.id).unwrap_or_default();
-                    self.state.detail_feature_ticket_index = 0;
-                    // Rebuild worktrees for this feature's repo.
-                    if let Some(repo_id) = self
-                        .state
-                        .data
-                        .repos
-                        .iter()
-                        .find(|r| {
-                            self.state
-                                .detail_feature_repo_slugs
-                                .get(self.state.features_index)
-                                .map(|slug| slug == &r.slug)
-                                .unwrap_or(false)
-                        })
-                        .map(|r| r.id.clone())
-                    {
-                        self.state.rebuild_detail_worktree_tree(&repo_id);
+                    match mgr.linked_tickets(&feature.id) {
+                        Ok(tickets) => {
+                            self.state.detail_feature_tickets = tickets;
+                        }
+                        Err(e) => {
+                            self.state.modal = Modal::Error {
+                                message: format!("Failed to load linked tickets: {e}"),
+                            };
+                            return;
+                        }
                     }
+                    self.state.detail_feature_ticket_index = 0;
+                    // Rebuild worktrees for this feature's repo using repo_id from the row.
+                    let feature_repo_id = feature.repo_id.clone();
+                    self.state.rebuild_detail_worktree_tree(&feature_repo_id);
                     self.state.view = View::FeatureDetail;
                 }
             }

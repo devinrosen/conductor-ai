@@ -365,6 +365,7 @@ fn branch_picker_item_populates_stale_days() {
     let old_ts = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
     let feature = FeatureRow {
         id: "f1".to_string(),
+        repo_id: "r1".to_string(),
         name: "old-feature".to_string(),
         branch: "feat/old".to_string(),
         base_branch: "main".to_string(),

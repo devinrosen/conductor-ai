@@ -164,8 +164,6 @@ pub struct AppState {
     pub selected_feature_name: Option<String>,
     /// Scoped feature list for the current context (filtered by repo or global).
     pub detail_features: Vec<conductor_core::feature::FeatureRow>,
-    /// Parallel vec: repo slug for each entry in `detail_features`.
-    pub detail_feature_repo_slugs: Vec<String>,
     /// Linked tickets for the feature currently shown in FeatureDetail.
     pub detail_feature_tickets: Vec<Ticket>,
     /// Cursor index within the detail_feature_tickets list (FeatureDetail view).
@@ -280,7 +278,6 @@ impl AppState {
             selected_feature_id: None,
             selected_feature_name: None,
             detail_features: Vec::new(),
-            detail_feature_repo_slugs: Vec::new(),
             detail_feature_tickets: Vec::new(),
             detail_feature_ticket_index: 0,
             settings_focus: SettingsFocus::CategoryList,

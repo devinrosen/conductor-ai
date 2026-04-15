@@ -1,4 +1,3 @@
-use conductor_core::feature::FeatureStatus;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -57,12 +56,7 @@ fn render_metadata(
     feature: &conductor_core::feature::FeatureRow,
     state: &AppState,
 ) {
-    let status_color = match feature.status {
-        FeatureStatus::InProgress => state.theme.label_warning,
-        FeatureStatus::ReadyForReview => state.theme.label_info,
-        FeatureStatus::Approved => state.theme.status_completed,
-        FeatureStatus::Merged | FeatureStatus::Closed => state.theme.label_secondary,
-    };
+    let status_color = super::features::status_color(&feature.status, state);
 
     let progress = if feature.tickets_total > 0 {
         format!("{}/{}", feature.tickets_merged, feature.tickets_total)

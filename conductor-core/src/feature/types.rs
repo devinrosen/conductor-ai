@@ -66,6 +66,7 @@ crate::impl_sql_enum!(FeatureStatus);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureRow {
     pub id: String,
+    pub repo_id: String,
     pub name: String,
     pub branch: String,
     pub base_branch: String,
