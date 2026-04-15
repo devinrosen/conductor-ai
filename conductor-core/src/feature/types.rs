@@ -119,3 +119,12 @@ pub struct UnregisteredBranch {
     pub worktree_count: i64,
     pub base_branch: Option<String>,
 }
+
+/// Result returned by `FeatureManager::sync_from_milestone`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncResult {
+    /// Number of tickets newly linked to the feature.
+    pub added: usize,
+    /// Number of tickets unlinked from the feature (ticket records are preserved).
+    pub removed: usize,
+}

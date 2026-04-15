@@ -312,6 +312,72 @@ pub fn sync_github_issues(
     Ok(tickets)
 }
 
+/// Fetch open issues for a GitHub milestone via `gh api` (REST endpoint).
+///
+/// Returns a list of [`TicketInput`] values with `source_type = "github"` (each
+/// milestone issue is a standard GitHub issue) ready for upsert into the tickets
+/// table. Uses `--paginate` so milestones with more than 100 issues are fully
+/// fetched; each page response is a JSON array on its own line.
+///
+/// When `token` is `Some`, the request runs under that identity
+/// (e.g. a GitHub App installation). When `None`, falls back to the
+/// default `gh` CLI user.
+pub fn fetch_milestone_issues(
+    owner: &str,
+    repo: &str,
+    milestone_number: u64,
+    token: Option<&str>,
+) -> Result<Vec<TicketInput>> {
+    let endpoint = format!(
+        "/repos/{}/{}/issues?milestone={}&state=open&per_page=100",
+        owner, repo, milestone_number
+    );
+    let output = run_gh_with_token(&["api", "--paginate", &endpoint], token)?;
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+
+    // `gh api --paginate` prints each page response as a separate JSON array on
+    // its own line. Collect all issue objects across all pages.
+    let mut all_issues: Vec<serde_json::Value> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let page: Vec<serde_json::Value> = serde_json::from_str(line).map_err(|e| {
+            ConductorError::TicketSync(format!("failed to parse gh api milestone output: {e}"))
+        })?;
+        all_issues.extend(page);
+    }
+
+    let tickets = all_issues
+        .into_iter()
+        .map(|issue| {
+            let number = issue["number"].as_u64().unwrap_or(0);
+            let (label_details, assignee) = parse_issue_metadata(&issue);
+            let label_names: Vec<String> = label_details.iter().map(|l| l.name.clone()).collect();
+            TicketInput {
+                source_type: "github".to_string(),
+                source_id: number.to_string(),
+                title: issue["title"].as_str().unwrap_or("").to_string(),
+                body: issue["body"].as_str().unwrap_or("").to_string(),
+                state: "open".to_string(),
+                labels: label_names,
+                assignee,
+                priority: None,
+                url: issue["url"].as_str().unwrap_or("").to_string(),
+                raw_json: serde_json::to_string(&issue).ok(),
+                label_details,
+                blocked_by: vec![],
+                children: vec![],
+                parent: None,
+            }
+        })
+        .collect();
+
+    Ok(tickets)
+}
+
 /// Fetch a single GitHub issue by number and return its current state.
 ///
 /// Unlike [`sync_github_issues`] (which hardcodes `"open"`), this function

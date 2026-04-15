@@ -14,7 +14,36 @@ use crate::worktree::WorktreeManager;
 use super::helpers::{
     batch_branch_timestamps, derive_branch_name, last_commit_timestamp, map_feature_row,
 };
-use super::types::{Feature, FeatureRow, FeatureStatus, UnregisteredBranch};
+use super::types::{Feature, FeatureRow, FeatureStatus, SyncResult, UnregisteredBranch};
+
+/// Parse a milestone `source_id` in the format
+/// `github.com/{owner}/{repo}/milestones/{number}` into its components.
+///
+/// Returns `(owner, repo, milestone_number)` or `ConductorError::InvalidInput`
+/// for any malformed input (including the old bare-number format).
+pub(crate) fn parse_milestone_source_id(source_id: &str) -> Result<(String, String, u64)> {
+    // Expected: ["github.com", owner, repo, "milestones", number]
+    let parts: Vec<&str> = source_id.splitn(5, '/').collect();
+    if parts.len() != 5
+        || parts[0] != "github.com"
+        || parts[3] != "milestones"
+        || parts[1].is_empty()
+        || parts[2].is_empty()
+    {
+        return Err(ConductorError::InvalidInput(format!(
+            "Invalid milestone source_id '{}'. Expected \
+             'github.com/{{owner}}/{{repo}}/milestones/{{number}}'",
+            source_id
+        )));
+    }
+    let number: u64 = parts[4].parse().map_err(|_| {
+        ConductorError::InvalidInput(format!(
+            "Invalid milestone number '{}' in source_id '{}'",
+            parts[4], source_id
+        ))
+    })?;
+    Ok((parts[1].to_string(), parts[2].to_string(), number))
+}
 
 fn feature_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
     let id = id.into();
@@ -392,6 +421,120 @@ impl<'a> FeatureManager<'a> {
             )?;
         }
         Ok(())
+    }
+
+    /// Sync open issues from the feature's GitHub milestone into its ticket queue.
+    ///
+    /// Requires the feature to have `source_type = "github_milestone"` and a
+    /// `source_id` in the format `github.com/{owner}/{repo}/milestones/{number}`.
+    ///
+    /// 1. Fetches open issues from the milestone via `gh api`.
+    /// 2. Upserts them into `tickets` (idempotent on `(repo_id, source_type, source_id)`).
+    /// 3. Adds `feature_tickets` links for newly discovered issues.
+    /// 4. Removes links for issues no longer in the milestone (ticket records are kept).
+    /// 5. Updates `features.tickets_total` with the current linked count.
+    pub fn sync_from_milestone(&self, repo_slug: &str, name: &str) -> Result<SyncResult> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+        let feature = self.get_feature_by_repo_id(&repo.id, name)?;
+
+        match feature.source_type.as_deref() {
+            Some("github_milestone") => {}
+            _ => {
+                return Err(ConductorError::InvalidInput(format!(
+                    "Feature '{}' source_type is not 'github_milestone'",
+                    name
+                )));
+            }
+        }
+
+        let source_id = feature.source_id.as_deref().ok_or_else(|| {
+            ConductorError::InvalidInput(format!("Feature '{}' has no source_id configured", name))
+        })?;
+
+        let (owner, repo_name, milestone_number) = parse_milestone_source_id(source_id)?;
+
+        let inputs =
+            crate::github::fetch_milestone_issues(&owner, &repo_name, milestone_number, None)?;
+
+        self.apply_milestone_sync(&repo.id, &feature.id, &inputs)
+    }
+
+    /// Apply a set of milestone ticket inputs to a feature's ticket queue.
+    ///
+    /// Upserts tickets, computes the diff against currently linked tickets, adds new
+    /// links, removes stale ones, and updates `tickets_total`. Exposed as
+    /// `pub(super)` so tests can call it directly with pre-built inputs without
+    /// requiring a live `gh` CLI.
+    pub(super) fn apply_milestone_sync(
+        &self,
+        repo_id: &str,
+        feature_id: &str,
+        inputs: &[crate::tickets::TicketInput],
+    ) -> Result<SyncResult> {
+        use std::collections::HashSet;
+
+        // Upsert tickets into the tickets table.
+        let syncer = TicketSyncer::new(self.conn);
+        syncer.upsert_tickets(repo_id, inputs)?;
+
+        // Resolve just-upserted tickets to their internal IDs.
+        let fetched_source_ids: Vec<String> = inputs.iter().map(|i| i.source_id.clone()).collect();
+        let fetched_ids: Vec<String> = if fetched_source_ids.is_empty() {
+            Vec::new()
+        } else {
+            with_in_clause(
+                "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = 'github' AND source_id IN",
+                &[&repo_id as &dyn rusqlite::types::ToSql],
+                &fetched_source_ids,
+                |sql, params| -> Result<Vec<String>> {
+                    let mut stmt = self.conn.prepare(sql)?;
+                    let mut rows = stmt.query(params)?;
+                    let mut ids = Vec::new();
+                    while let Some(row) = rows.next()? {
+                        ids.push(row.get(0)?);
+                    }
+                    Ok(ids)
+                },
+            )?
+        };
+
+        // Get currently linked ticket IDs for this feature.
+        let linked_ids: Vec<String> = query_collect(
+            self.conn,
+            "SELECT ticket_id FROM feature_tickets WHERE feature_id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )?;
+
+        let fetched_set: HashSet<String> = fetched_ids.into_iter().collect();
+        let linked_set: HashSet<String> = linked_ids.into_iter().collect();
+
+        let to_add: Vec<String> = fetched_set.difference(&linked_set).cloned().collect();
+        let to_remove: Vec<String> = linked_set.difference(&fetched_set).cloned().collect();
+
+        let added = to_add.len();
+        self.link_tickets_internal(feature_id, &to_add)?;
+
+        let removed = to_remove.len();
+        if !to_remove.is_empty() {
+            with_in_clause(
+                "DELETE FROM feature_tickets WHERE feature_id = ?1 AND ticket_id IN",
+                &[&feature_id as &dyn rusqlite::types::ToSql],
+                &to_remove,
+                |sql, params| -> Result<()> {
+                    self.conn.prepare(sql)?.execute(params)?;
+                    Ok(())
+                },
+            )?;
+        }
+
+        // Recount linked tickets and update the denormalized total.
+        self.conn.execute(
+            "UPDATE features SET tickets_total = (SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1) WHERE id = ?1",
+            params![feature_id],
+        )?;
+
+        Ok(SyncResult { added, removed })
     }
 
     /// Create a PR for the feature branch via `gh pr create`.
