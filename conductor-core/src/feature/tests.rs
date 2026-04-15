@@ -1050,6 +1050,40 @@ fn test_create_feature_with_milestone_github_remote() {
 }
 
 #[test]
+fn test_create_feature_with_milestone_ssh_remote() {
+    // Verify that SSH remote format (git@github.com:owner/repo.git) is handled
+    // identically to HTTPS — both should produce the canonical milestone source_id.
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+
+    let id = crate::new_id();
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+         VALUES (?1, 'test-repo', ?2, 'git@github.com:test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+        params![id, work.path().to_str().unwrap()],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .create("test-repo", "ms-ssh-feature", None, Some(3), &[])
+        .unwrap();
+
+    assert_eq!(
+        feature.source_type.as_deref(),
+        Some("github_milestone"),
+        "source_type should be github_milestone for SSH remote"
+    );
+    assert_eq!(
+        feature.source_id.as_deref(),
+        Some("github.com/test/repo/milestones/3"),
+        "source_id should be canonical milestone URL for SSH remote"
+    );
+}
+
+#[test]
 fn test_create_feature_with_milestone_non_github_remote() {
     // Use a non-GitHub remote URL so parse_github_remote returns None and
     // create() falls back to the bare milestone number as a string.
