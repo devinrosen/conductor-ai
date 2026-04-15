@@ -511,6 +511,26 @@ pub fn poll_data() -> Option<PollResult> {
                     tracing::warn!("auto_resume_stuck_workflows failed: {e}");
                 }
             }
+            // reap_dangling_all() spawns one `gh pr list` subprocess per candidate —
+            // a network-bound call unlike the local reapers above. Throttle to at most
+            // once every 5 minutes to avoid hammering the GitHub API on each poll cycle.
+            {
+                static LAST_DANGLING_REAP: AtomicI64 = AtomicI64::new(0);
+                if now - LAST_DANGLING_REAP.load(Ordering::Relaxed) >= 300 {
+                    LAST_DANGLING_REAP.store(now, Ordering::Relaxed);
+                    let feat_mgr = conductor_core::feature::FeatureManager::new(&conn, &config);
+                    match feat_mgr.reap_dangling_all() {
+                        Ok(v) if !v.is_empty() => {
+                            tracing::warn!(
+                                "Dangling features detected: {:?}",
+                                v.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("reap_dangling_all failed: {e}"),
+                    }
+                }
+            }
         }
     }
 

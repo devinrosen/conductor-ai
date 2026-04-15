@@ -1852,6 +1852,176 @@ fn test_last_commit_at_in_feature_row_query() {
     assert_eq!(f.last_commit_at.as_deref(), Some(ts));
 }
 
+// -----------------------------------------------------------------------
+// eligible_tickets tests
+// -----------------------------------------------------------------------
+
+fn insert_worktree_for_ticket(
+    conn: &Connection,
+    repo_id: &str,
+    ticket_id: &str,
+    feature_branch: &str,
+    status: &str,
+) -> String {
+    let id = crate::new_id();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, ticket_id, status, created_at) \
+         VALUES (?1, ?2, ?3, 'feat/impl', ?4, '/tmp/wt', ?5, ?6, '2024-01-01T00:00:00Z')",
+        params![id, repo_id, format!("feat-{id}"), feature_branch, ticket_id, status],
+    ).unwrap();
+    id
+}
+
+#[test]
+fn test_eligible_tickets_skips_active_worktree() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feature", "feat/my-feature");
+    let ticket_id = insert_ticket(&conn, &repo_id, "100");
+
+    // Link ticket to feature
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    // Active worktree for the ticket → not eligible
+    insert_worktree_for_ticket(&conn, &repo_id, &ticket_id, "feat/my-feature", "active");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let eligible = mgr.eligible_tickets(&feature_id, &repo_id).unwrap();
+    assert!(
+        eligible.is_empty(),
+        "ticket with active worktree should not be eligible"
+    );
+}
+
+#[test]
+fn test_eligible_tickets_skips_merged_worktree() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feature", "feat/my-feature");
+    let ticket_id = insert_ticket(&conn, &repo_id, "101");
+
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    // Merged worktree → not eligible
+    insert_worktree_for_ticket(&conn, &repo_id, &ticket_id, "feat/my-feature", "merged");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let eligible = mgr.eligible_tickets(&feature_id, &repo_id).unwrap();
+    assert!(
+        eligible.is_empty(),
+        "ticket with merged worktree should not be eligible"
+    );
+}
+
+#[test]
+fn test_eligible_tickets_includes_abandoned_worktree() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feature", "feat/my-feature");
+    let ticket_id = insert_ticket(&conn, &repo_id, "102");
+
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    // Abandoned worktree → still eligible
+    insert_worktree_for_ticket(&conn, &repo_id, &ticket_id, "feat/my-feature", "abandoned");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let eligible = mgr.eligible_tickets(&feature_id, &repo_id).unwrap();
+    assert_eq!(
+        eligible.len(),
+        1,
+        "ticket with only abandoned worktree should be eligible"
+    );
+    assert_eq!(eligible[0], ticket_id);
+}
+
+#[test]
+fn test_eligible_tickets_no_worktree() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feature", "feat/my-feature");
+    let ticket_id = insert_ticket(&conn, &repo_id, "103");
+
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    // No worktree → eligible
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let eligible = mgr.eligible_tickets(&feature_id, &repo_id).unwrap();
+    assert_eq!(eligible.len(), 1);
+    assert_eq!(eligible[0], ticket_id);
+}
+
+#[test]
+fn test_reap_dangling_skips_features_with_active_worktrees() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "active-feat", "feat/active-feat");
+
+    // Insert an active worktree targeting the feature branch
+    let wt_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES (?1, ?2, 'wt-a', 'feat/active-feat-impl', 'feat/active-feat', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
+        params![wt_id, repo_id],
+    ).unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    // Feature has active worktrees → not dangling
+    let result = mgr.reap_dangling("test-repo").unwrap();
+    assert!(
+        result.is_empty(),
+        "feature with active worktree should not be dangling"
+    );
+}
+
+#[test]
+fn test_reap_dangling_all_skips_features_with_active_worktrees() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "active-feat2", "feat/active-feat2");
+
+    // Active worktree
+    let wt_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES (?1, ?2, 'wt-b', 'feat/active-feat2-impl', 'feat/active-feat2', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
+        params![wt_id, repo_id],
+    ).unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let result = mgr.reap_dangling_all().unwrap();
+    // All candidates (features with zero active worktrees) pass through the gh check;
+    // since the active worktree exists the candidate is filtered at the DB level.
+    assert!(
+        result.is_empty(),
+        "feature with active worktrees should not be a dangling candidate"
+    );
+}
+
 #[test]
 fn test_last_worktree_activity_in_feature_row_query() {
     let conn = setup_db();
@@ -2387,4 +2557,75 @@ fn test_build_milestone_source_id_roundtrip() {
     assert_eq!(owner, "myorg");
     assert_eq!(repo, "myrepo");
     assert_eq!(number, 7u64);
+}
+
+// ---------------------------------------------------------------------------
+// reap_dangling / has_open_pr path tests
+// ---------------------------------------------------------------------------
+
+/// A feature with no active worktrees becomes a candidate for the `has_open_pr`
+/// check inside `reap_dangling()`.  In the test environment `gh` is either not
+/// authenticated or targets a non-existent repo, so `has_open_pr` returns `false`
+/// and the feature is reported as dangling.  This exercises the code path that
+/// the existing tests (which filter candidates at the DB level) do not reach.
+#[test]
+fn test_reap_dangling_reports_feature_with_no_worktrees_as_dangling() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "orphan-feat", "feat/orphan-feat");
+    // No worktrees → passes the DB filter and reaches has_open_pr()
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling("test-repo").unwrap();
+    // gh pr list will fail (no auth / no real repo) → has_open_pr returns false
+    // → feature is dangling
+    assert_eq!(
+        dangling.len(),
+        1,
+        "feature with no worktrees should be dangling"
+    );
+    assert_eq!(dangling[0].name, "orphan-feat");
+}
+
+/// Same as above but via `reap_dangling_all()` which joins across all repos.
+#[test]
+fn test_reap_dangling_all_reports_feature_with_no_worktrees_as_dangling() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "orphan-all-feat", "feat/orphan-all-feat");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling_all().unwrap();
+    assert!(
+        dangling.iter().any(|f| f.name == "orphan-all-feat"),
+        "reap_dangling_all should include features with no worktrees"
+    );
+}
+
+/// Features with `status != 'in_progress'` are never dangling candidates.
+#[test]
+fn test_reap_dangling_ignores_non_in_progress_features() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "merged-feat", "feat/merged-feat");
+
+    // Mark as merged
+    conn.execute(
+        "UPDATE features SET status = 'merged' WHERE id = ?1",
+        params![feature_id],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling("test-repo").unwrap();
+    assert!(
+        dangling.is_empty(),
+        "merged feature should not be a dangling candidate"
+    );
 }

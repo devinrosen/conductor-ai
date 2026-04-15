@@ -14,7 +14,9 @@ use crate::worktree::WorktreeManager;
 use super::helpers::{
     batch_branch_timestamps, derive_branch_name, last_commit_timestamp, map_feature_row,
 };
-use super::types::{Feature, FeatureRow, FeatureStatus, SyncResult, UnregisteredBranch};
+use super::types::{
+    Feature, FeatureRow, FeatureStatus, RunSummary, SyncResult, UnregisteredBranch,
+};
 
 /// Build a milestone `source_id` from its components.
 ///
@@ -87,6 +89,10 @@ const FEATURE_COLS: &str =
 /// Same columns but table-aliased (`f.`) for use in joins.
 const FEATURE_COLS_ALIASED: &str =
     "f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at, f.source_type, f.source_id, f.tickets_total, f.tickets_merged";
+
+/// Number of columns selected by `FEATURE_COLS` / `FEATURE_COLS_ALIASED`.
+/// Used as a named offset when appending extra columns in a JOIN query.
+const FEATURE_COLS_COUNT: usize = 12;
 
 /// Map a rusqlite row to a `FeatureRow`, starting at the given column offset.
 fn map_feature_row_cols(
@@ -1178,5 +1184,373 @@ impl<'a> FeatureManager<'a> {
                 |row| row.get(0),
             )
             .optional()?)
+    }
+
+    /// Slugify a string for use in a worktree name: lowercase, replace non-alphanum with hyphens, deduplicate hyphens, trim.
+    fn slugify(s: &str) -> String {
+        let mut slug = s
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        // Collapse consecutive hyphens
+        while slug.contains("--") {
+            slug = slug.replace("--", "-");
+        }
+        slug.trim_matches('-').to_string()
+    }
+
+    /// Query eligible tickets for a feature: tickets linked via `feature_tickets` that do not
+    /// already have an `active` or `merged` worktree in the given repo.
+    /// Tickets with only `abandoned` worktrees are eligible (retry-able).
+    pub fn eligible_tickets(&self, feature_id: &str, repo_id: &str) -> Result<Vec<String>> {
+        query_collect(
+            self.conn,
+            "SELECT t.id FROM tickets t \
+             JOIN feature_tickets ft ON ft.ticket_id = t.id \
+             WHERE ft.feature_id = ?1 \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM worktrees w \
+                 WHERE w.ticket_id = t.id \
+                   AND w.repo_id = ?2 \
+                   AND w.status IN ('active', 'merged') \
+               )",
+            params![feature_id, repo_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Dispatch a single ticket: create a worktree, create an agent run, spawn a headless agent,
+    /// and notify `done_tx` when the drain thread finishes.
+    ///
+    /// Available on Unix only (headless spawning uses `#[cfg(unix)]` APIs).
+    #[cfg(unix)]
+    fn dispatch_ticket(
+        &self,
+        repo_slug: &str,
+        feature: &Feature,
+        ticket_id: &str,
+        done_tx: std::sync::mpsc::Sender<()>,
+    ) -> Result<()> {
+        use crate::agent::AgentManager;
+        use crate::agent_runtime::{self, SpawnHeadlessParams};
+        use crate::config::agent_log_path;
+        use crate::db::open_database_compat;
+        use crate::worktree::WorktreeCreateOptions;
+
+        // Fetch ticket details for prompt + slug
+        let ticket = crate::tickets::TicketSyncer::new(self.conn).get_by_id(ticket_id)?;
+
+        // Build a descriptive worktree name from the source_id + title slug
+        let title_slug = Self::slugify(&ticket.title);
+        let raw_name = format!("feat-{}-{}", ticket.source_id, title_slug);
+        // Cap at 60 chars to keep slugs manageable.
+        // Use char_indices to find a safe UTF-8 boundary (slugify passes non-ASCII
+        // alphanumerics through unchanged, so multi-byte codepoints are possible).
+        let wt_name = {
+            let end = raw_name
+                .char_indices()
+                .nth(60)
+                .map_or(raw_name.len(), |(i, _)| i);
+            raw_name[..end].trim_end_matches('-').to_string()
+        };
+
+        // Create worktree based off the feature branch
+        let wt_opts = WorktreeCreateOptions {
+            from_branch: Some(feature.branch.clone()),
+            ticket_id: Some(ticket_id.to_string()),
+            ..Default::default()
+        };
+        let (wt, _warnings) =
+            WorktreeManager::new(self.conn, self.config).create(repo_slug, &wt_name, wt_opts)?;
+
+        // Build agent prompt. Ticket bodies are user-supplied (GitHub issue content) and
+        // are not sanitized for prompt injection; truncate to a reasonable length to limit
+        // the blast radius of any adversarially crafted issue body.
+        const MAX_BODY_CHARS: usize = 4_000;
+        let prompt = if ticket.body.trim().is_empty() {
+            format!("Implement ticket #{}: {}", ticket.source_id, ticket.title)
+        } else {
+            let body_chars = ticket.body.chars().count();
+            let body: std::borrow::Cow<str> = if body_chars > MAX_BODY_CHARS {
+                let end = ticket
+                    .body
+                    .char_indices()
+                    .nth(MAX_BODY_CHARS)
+                    .map_or(ticket.body.len(), |(i, _)| i);
+                format!(
+                    "{}\n\n[body truncated at {MAX_BODY_CHARS} chars]",
+                    &ticket.body[..end]
+                )
+                .into()
+            } else {
+                ticket.body.as_str().into()
+            };
+            format!(
+                "Implement ticket #{}: {}\n\n---\n{}",
+                ticket.source_id, ticket.title, body
+            )
+        };
+
+        // Create agent run record (no tmux window — headless)
+        let run = AgentManager::new(self.conn).create_run(Some(&wt.id), &prompt, None, None)?;
+
+        eprintln!(
+            "[feature::run] Spawning agent run {} for ticket #{} ({})",
+            run.id, ticket.source_id, ticket.title
+        );
+
+        // Spawn headless subprocess
+        let params = SpawnHeadlessParams {
+            run_id: &run.id,
+            working_dir: &wt.path,
+            prompt: &prompt,
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: Some(&self.config.general.agent_permission_mode),
+            plugin_dirs: &[],
+        };
+        let (handle, prompt_file) =
+            agent_runtime::try_spawn_headless_run(&params).map_err(|e| {
+                ConductorError::Workflow(format!(
+                    "spawn failed for ticket {}: {}",
+                    ticket.source_id, e
+                ))
+            })?;
+
+        // Persist the subprocess PID. This is best-effort: if it fails the agent still
+        // runs and the orphan reaper will clean it up via log recovery. Intentionally
+        // fire-and-forget — do not propagate the error.
+        let pid = handle.pid();
+        let _ = AgentManager::new(self.conn).update_run_subprocess_pid(&run.id, pid);
+
+        // Spawn a drain thread with its own DB connection (Connection is not Send)
+        let run_id = run.id.clone();
+        let log_path = agent_log_path(&run.id);
+        std::thread::spawn(move || {
+            let (stdout, finish) = handle.into_drain_parts();
+            let conn = match open_database_compat(&crate::config::db_path()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("fan-out drain: failed to open DB for run {run_id}: {e}");
+                    let _ = std::fs::remove_file(&prompt_file);
+                    let _ = done_tx.send(());
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
+            agent_runtime::drain_stream_json(stdout, &run_id, &log_path, &mgr, |_| {});
+            let _ = std::fs::remove_file(&prompt_file);
+            finish();
+            let _ = done_tx.send(());
+        });
+
+        Ok(())
+    }
+
+    /// Fan-out: create worktrees and spawn headless agents for all eligible tickets in a feature.
+    ///
+    /// Respects `config.general.max_feature_parallelism` (default 3); `parallel_override`
+    /// takes precedence when `Some`.  Blocks until all agents finish.
+    ///
+    /// Returns a [`RunSummary`] with counts of dispatched and failed tickets.
+    ///
+    /// Available on Unix only (headless spawning uses `#[cfg(unix)]` APIs).
+    #[cfg(unix)]
+    pub fn run(
+        &self,
+        repo_slug: &str,
+        feature_name: &str,
+        parallel_override: Option<u32>,
+    ) -> Result<RunSummary> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+        let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
+
+        let parallelism = parallel_override
+            .unwrap_or(self.config.general.max_feature_parallelism)
+            .max(1) as usize;
+
+        let ticket_ids = self.eligible_tickets(&feature.id, &repo.id)?;
+        if ticket_ids.is_empty() {
+            eprintln!("[feature::run] No eligible tickets for feature '{feature_name}'");
+            return Ok(RunSummary {
+                dispatched: 0,
+                failed: 0,
+            });
+        }
+
+        eprintln!(
+            "[feature::run] {} eligible ticket(s), parallelism={}",
+            ticket_ids.len(),
+            parallelism
+        );
+
+        let mut queue: std::collections::VecDeque<String> = ticket_ids.into_iter().collect();
+        let mut in_flight: usize = 0;
+        let mut dispatched: u32 = 0;
+        let mut failed: u32 = 0;
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+
+        // Returns `(dispatched_ok, error_message)` for one dispatch attempt.
+        let try_dispatch = |tid: &str| -> (bool, Option<String>) {
+            let tx = done_tx.clone();
+            match self.dispatch_ticket(repo_slug, &feature, tid, tx) {
+                Ok(()) => (true, None),
+                Err(e) => (
+                    false,
+                    Some(format!(
+                        "[feature::run] Failed to dispatch ticket {tid}: {e}"
+                    )),
+                ),
+            }
+        };
+
+        // Spawn initial batch up to parallelism
+        while in_flight < parallelism {
+            let Some(tid) = queue.pop_front() else { break };
+            let (ok, err_msg) = try_dispatch(&tid);
+            if ok {
+                dispatched += 1;
+                in_flight += 1;
+            } else {
+                eprintln!("{}", err_msg.unwrap());
+                failed += 1;
+            }
+        }
+
+        // Wait for completions and dispatch queued tickets
+        while in_flight > 0 {
+            match done_rx.recv() {
+                Ok(()) => {
+                    in_flight -= 1;
+                    if let Some(tid) = queue.pop_front() {
+                        let (ok, err_msg) = try_dispatch(&tid);
+                        if ok {
+                            dispatched += 1;
+                            in_flight += 1;
+                        } else {
+                            eprintln!("{}", err_msg.unwrap());
+                            failed += 1;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Channel closed unexpectedly; count as in-flight completing
+                    in_flight -= 1;
+                }
+            }
+        }
+
+        eprintln!(
+            "[feature::run] Done — dispatched={}, failed={}",
+            dispatched, failed
+        );
+        Ok(RunSummary { dispatched, failed })
+    }
+
+    /// Non-Unix stub for `run()` — returns an error on unsupported platforms.
+    #[cfg(not(unix))]
+    pub fn run(
+        &self,
+        _repo_slug: &str,
+        _feature_name: &str,
+        _parallel_override: Option<u32>,
+    ) -> Result<RunSummary> {
+        Err(ConductorError::Workflow(
+            "feature run is not supported on this platform".to_string(),
+        ))
+    }
+
+    /// Scan features with `status = 'in_progress'` and zero active worktrees for `repo_slug`.
+    /// For each candidate, checks `gh pr list --base <branch>` for open PRs.
+    /// Returns features with no open PRs — these are "dangling" (abandoned without cleanup).
+    ///
+    /// `dangling` is a derived state — no DB column is written.
+    ///
+    /// Use this when you have a specific repo slug; for cross-repo checks use
+    /// [`reap_dangling_all`] instead (preferred by TUI, web, and CLI integration points).
+    pub fn reap_dangling(&self, repo_slug: &str) -> Result<Vec<Feature>> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+
+        let candidates: Vec<Feature> = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {FEATURE_COLS} FROM features f \
+                 WHERE f.repo_id = ?1 \
+                   AND f.status = 'in_progress' \
+                   AND (SELECT COUNT(*) FROM worktrees w \
+                        WHERE w.repo_id = f.repo_id \
+                          AND w.base_branch = f.branch \
+                          AND w.status = 'active') = 0"
+            ),
+            params![repo.id],
+            map_feature_row,
+        )?;
+
+        let mut dangling = Vec::new();
+        for feature in candidates {
+            if !self.has_open_pr(&repo.local_path, &feature.branch) {
+                dangling.push(feature);
+            }
+        }
+        Ok(dangling)
+    }
+
+    /// Scan features with `status = 'in_progress'` and zero active worktrees across all repos.
+    /// For each candidate, checks `gh pr list --base <branch>` for open PRs.
+    /// Returns features with no open PRs.
+    ///
+    /// `dangling` is a derived state — no DB column is written.
+    pub fn reap_dangling_all(&self) -> Result<Vec<Feature>> {
+        // Join features with repos to get local_path for gh pr list
+        let candidates: Vec<(Feature, String)> = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {FEATURE_COLS_ALIASED}, r.local_path \
+                 FROM features f \
+                 JOIN repos r ON r.id = f.repo_id \
+                 WHERE f.status = 'in_progress' \
+                   AND (SELECT COUNT(*) FROM worktrees w \
+                        WHERE w.repo_id = f.repo_id \
+                          AND w.base_branch = f.branch \
+                          AND w.status = 'active') = 0"
+            ),
+            params![],
+            |row| {
+                let feature = map_feature_row(row)?;
+                let local_path: String = row.get(FEATURE_COLS_COUNT)?;
+                Ok((feature, local_path))
+            },
+        )?;
+
+        let mut dangling = Vec::new();
+        for (feature, local_path) in candidates {
+            if !self.has_open_pr(&local_path, &feature.branch) {
+                dangling.push(feature);
+            }
+        }
+        Ok(dangling)
+    }
+
+    /// Returns `true` if there is at least one open PR targeting `branch` in the repo
+    /// at `repo_path`. Returns `false` on error or if no open PR exists.
+    fn has_open_pr(&self, repo_path: &str, branch: &str) -> bool {
+        let output = Command::new("gh")
+            .args([
+                "pr", "list", "--base", branch, "--state", "open", "--json", "number", "--jq",
+                "length",
+            ])
+            .current_dir(repo_path)
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let count_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                count_str.parse::<u64>().map(|n| n > 0).unwrap_or(false)
+            }
+            _ => false,
+        }
     }
 }

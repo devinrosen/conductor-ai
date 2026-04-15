@@ -734,4 +734,14 @@ pub enum FeatureCommands {
         /// Feature name
         name: String,
     },
+    /// Fan-out: create worktrees and launch agents for all eligible tickets in this feature
+    Run {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+        /// Override max_feature_parallelism from config
+        #[arg(long)]
+        parallel: Option<u32>,
+    },
 }
