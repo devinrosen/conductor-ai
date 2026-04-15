@@ -60,31 +60,28 @@ function WorkflowCard({
           {def.error}
         </div>
       )}
-      {def.valid && (
-        <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between">
+        {def.valid ? (
           <span className="text-xs text-gray-500">
             {def.node_count} step{def.node_count !== 1 ? "s" : ""}
             {def.inputs.length > 0 &&
               ` · ${def.inputs.length} input${def.inputs.length !== 1 ? "s" : ""}`}
           </span>
-          <button
-            onClick={() => onRun(def)}
-            className="px-3 py-1 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded"
-          >
-            Run
-          </button>
-        </div>
-      )}
-      {!def.valid && (
-        <div className="flex items-center justify-end">
-          <button
-            disabled
-            className="px-3 py-1 text-sm bg-gray-600 text-gray-400 rounded cursor-not-allowed"
-          >
-            Run
-          </button>
-        </div>
-      )}
+        ) : (
+          <span />
+        )}
+        <button
+          onClick={() => onRun(def)}
+          disabled={!def.valid}
+          className={`px-3 py-1 text-sm rounded ${
+            def.valid
+              ? "bg-cyan-600 hover:bg-cyan-500 text-white"
+              : "bg-gray-600 text-gray-400 cursor-not-allowed"
+          }`}
+        >
+          Run
+        </button>
+      </div>
     </div>
   );
 }
