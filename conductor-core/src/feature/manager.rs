@@ -90,6 +90,10 @@ const FEATURE_COLS: &str =
 const FEATURE_COLS_ALIASED: &str =
     "f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at, f.source_type, f.source_id, f.tickets_total, f.tickets_merged";
 
+/// Number of columns selected by `FEATURE_COLS` / `FEATURE_COLS_ALIASED`.
+/// Used as a named offset when appending extra columns in a JOIN query.
+const FEATURE_COLS_COUNT: usize = 12;
+
 /// Map a rusqlite row to a `FeatureRow`, starting at the given column offset.
 fn map_feature_row_cols(
     row: &rusqlite::Row<'_>,
@@ -1240,11 +1244,15 @@ impl<'a> FeatureManager<'a> {
         // Build a descriptive worktree name from the source_id + title slug
         let title_slug = Self::slugify(&ticket.title);
         let raw_name = format!("feat-{}-{}", ticket.source_id, title_slug);
-        // Cap at 60 chars to keep slugs manageable
-        let wt_name = if raw_name.len() > 60 {
-            raw_name[..60].trim_end_matches('-').to_string()
-        } else {
-            raw_name
+        // Cap at 60 chars to keep slugs manageable.
+        // Use char_indices to find a safe UTF-8 boundary (slugify passes non-ASCII
+        // alphanumerics through unchanged, so multi-byte codepoints are possible).
+        let wt_name = {
+            let end = raw_name
+                .char_indices()
+                .nth(60)
+                .map_or(raw_name.len(), |(i, _)| i);
+            raw_name[..end].trim_end_matches('-').to_string()
         };
 
         // Create worktree based off the feature branch
@@ -1256,13 +1264,28 @@ impl<'a> FeatureManager<'a> {
         let (wt, _warnings) =
             WorktreeManager::new(self.conn, self.config).create(repo_slug, &wt_name, wt_opts)?;
 
-        // Build agent prompt
+        // Build agent prompt. Ticket bodies are user-supplied (GitHub issue content) and
+        // are not sanitized for prompt injection; truncate to a reasonable length to limit
+        // the blast radius of any adversarially crafted issue body.
+        const MAX_BODY_CHARS: usize = 4_000;
         let prompt = if ticket.body.trim().is_empty() {
             format!("Implement ticket #{}: {}", ticket.source_id, ticket.title)
         } else {
+            let body_chars = ticket.body.chars().count();
+            let body: std::borrow::Cow<str> = if body_chars > MAX_BODY_CHARS {
+                let end = ticket
+                    .body
+                    .char_indices()
+                    .nth(MAX_BODY_CHARS)
+                    .map_or(ticket.body.len(), |(i, _)| i);
+                format!("{}\n\n[body truncated at {MAX_BODY_CHARS} chars]", &ticket.body[..end])
+                    .into()
+            } else {
+                ticket.body.as_str().into()
+            };
             format!(
-                "Implement ticket #{}: {}\n\n{}",
-                ticket.source_id, ticket.title, ticket.body
+                "Implement ticket #{}: {}\n\n---\n{}",
+                ticket.source_id, ticket.title, body
             )
         };
 
@@ -1293,7 +1316,9 @@ impl<'a> FeatureManager<'a> {
                 ))
             })?;
 
-        // Persist the subprocess PID
+        // Persist the subprocess PID. This is best-effort: if it fails the agent still
+        // runs and the orphan reaper will clean it up via log recovery. Intentionally
+        // fire-and-forget — do not propagate the error.
         let pid = handle.pid();
         let _ = AgentManager::new(self.conn).update_run_subprocess_pid(&run.id, pid);
 
@@ -1365,19 +1390,28 @@ impl<'a> FeatureManager<'a> {
 
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
 
+        // Returns `(dispatched_ok, error_message)` for one dispatch attempt.
+        let try_dispatch = |tid: &str| -> (bool, Option<String>) {
+            let tx = done_tx.clone();
+            match self.dispatch_ticket(repo_slug, &feature, tid, tx) {
+                Ok(()) => (true, None),
+                Err(e) => (
+                    false,
+                    Some(format!("[feature::run] Failed to dispatch ticket {tid}: {e}")),
+                ),
+            }
+        };
+
         // Spawn initial batch up to parallelism
         while in_flight < parallelism {
             let Some(tid) = queue.pop_front() else { break };
-            let tx = done_tx.clone();
-            match self.dispatch_ticket(repo_slug, &feature, &tid, tx) {
-                Ok(()) => {
-                    dispatched += 1;
-                    in_flight += 1;
-                }
-                Err(e) => {
-                    eprintln!("[feature::run] Failed to dispatch ticket {tid}: {e}");
-                    failed += 1;
-                }
+            let (ok, err_msg) = try_dispatch(&tid);
+            if ok {
+                dispatched += 1;
+                in_flight += 1;
+            } else {
+                eprintln!("{}", err_msg.unwrap());
+                failed += 1;
             }
         }
 
@@ -1387,16 +1421,13 @@ impl<'a> FeatureManager<'a> {
                 Ok(()) => {
                     in_flight -= 1;
                     if let Some(tid) = queue.pop_front() {
-                        let tx = done_tx.clone();
-                        match self.dispatch_ticket(repo_slug, &feature, &tid, tx) {
-                            Ok(()) => {
-                                dispatched += 1;
-                                in_flight += 1;
-                            }
-                            Err(e) => {
-                                eprintln!("[feature::run] Failed to dispatch ticket {tid}: {e}");
-                                failed += 1;
-                            }
+                        let (ok, err_msg) = try_dispatch(&tid);
+                        if ok {
+                            dispatched += 1;
+                            in_flight += 1;
+                        } else {
+                            eprintln!("{}", err_msg.unwrap());
+                            failed += 1;
                         }
                     }
                 }
@@ -1432,6 +1463,9 @@ impl<'a> FeatureManager<'a> {
     /// Returns features with no open PRs — these are "dangling" (abandoned without cleanup).
     ///
     /// `dangling` is a derived state — no DB column is written.
+    ///
+    /// Use this when you have a specific repo slug; for cross-repo checks use
+    /// [`reap_dangling_all`] instead (preferred by TUI, web, and CLI integration points).
     pub fn reap_dangling(&self, repo_slug: &str) -> Result<Vec<Feature>> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
 
@@ -1481,7 +1515,7 @@ impl<'a> FeatureManager<'a> {
             params![],
             |row| {
                 let feature = map_feature_row(row)?;
-                let local_path: String = row.get(12)?;
+                let local_path: String = row.get(FEATURE_COLS_COUNT)?;
                 Ok((feature, local_path))
             },
         )?;

@@ -2558,3 +2558,70 @@ fn test_build_milestone_source_id_roundtrip() {
     assert_eq!(repo, "myrepo");
     assert_eq!(number, 7u64);
 }
+
+// ---------------------------------------------------------------------------
+// reap_dangling / has_open_pr path tests
+// ---------------------------------------------------------------------------
+
+/// A feature with no active worktrees becomes a candidate for the `has_open_pr`
+/// check inside `reap_dangling()`.  In the test environment `gh` is either not
+/// authenticated or targets a non-existent repo, so `has_open_pr` returns `false`
+/// and the feature is reported as dangling.  This exercises the code path that
+/// the existing tests (which filter candidates at the DB level) do not reach.
+#[test]
+fn test_reap_dangling_reports_feature_with_no_worktrees_as_dangling() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "orphan-feat", "feat/orphan-feat");
+    // No worktrees → passes the DB filter and reaches has_open_pr()
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling("test-repo").unwrap();
+    // gh pr list will fail (no auth / no real repo) → has_open_pr returns false
+    // → feature is dangling
+    assert_eq!(dangling.len(), 1, "feature with no worktrees should be dangling");
+    assert_eq!(dangling[0].name, "orphan-feat");
+}
+
+/// Same as above but via `reap_dangling_all()` which joins across all repos.
+#[test]
+fn test_reap_dangling_all_reports_feature_with_no_worktrees_as_dangling() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "orphan-all-feat", "feat/orphan-all-feat");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling_all().unwrap();
+    assert!(
+        dangling.iter().any(|f| f.name == "orphan-all-feat"),
+        "reap_dangling_all should include features with no worktrees"
+    );
+}
+
+/// Features with `status != 'in_progress'` are never dangling candidates.
+#[test]
+fn test_reap_dangling_ignores_non_in_progress_features() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "merged-feat", "feat/merged-feat");
+
+    // Mark as merged
+    conn.execute(
+        "UPDATE features SET status = 'merged' WHERE id = ?1",
+        params![feature_id],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling("test-repo").unwrap();
+    assert!(
+        dangling.is_empty(),
+        "merged feature should not be a dangling candidate"
+    );
+}

@@ -18,6 +18,27 @@ use conductor_web::state::AppState;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+/// Check for dangling features and log a warning for each one found.
+/// `context` is appended to the log messages to indicate where the check ran
+/// (e.g. `" on startup"` or `""` for the periodic reaper).
+fn log_dangling_features(
+    conn: &rusqlite::Connection,
+    config: &conductor_core::config::Config,
+    context: &str,
+) {
+    match conductor_core::feature::FeatureManager::new(conn, config).reap_dangling_all() {
+        Ok(v) if !v.is_empty() => {
+            tracing::warn!(
+                "Dangling features detected{}: {:?}",
+                context,
+                v.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("reap_dangling_all failed{}: {e}", context),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -159,20 +180,7 @@ async fn main() -> Result<()> {
     }
 
     // Check for dangling features on startup.
-    {
-        use conductor_core::feature::FeatureManager;
-        let feat_mgr = FeatureManager::new(&conn, &config);
-        match feat_mgr.reap_dangling_all() {
-            Ok(v) if !v.is_empty() => {
-                tracing::warn!(
-                    "Dangling features detected on startup: {:?}",
-                    v.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
-                );
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("reap_dangling_all failed on startup: {e}"),
-        }
-    }
+    log_dangling_features(&conn, &config, " on startup");
 
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
@@ -519,17 +527,7 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                let feat_mgr = conductor_core::feature::FeatureManager::new(&conn, &cfg);
-                match feat_mgr.reap_dangling_all() {
-                    Ok(v) if !v.is_empty() => {
-                        tracing::warn!(
-                            "Dangling features: {:?}",
-                            v.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("reap_dangling_all failed: {e}"),
-                }
+                log_dangling_features(&conn, &cfg, "");
 
                 Ok::<_, conductor_core::error::ConductorError>((seen, init, wf_seen, wf_init))
             })
