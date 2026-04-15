@@ -3948,3 +3948,86 @@ fn test_spike_baseline_excludes_sub_workflow_runs() {
         "run_count should be 6 root runs only"
     );
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Tests for list_defs_with_validation
+// ────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_list_defs_with_validation_parse_failures_are_captured() {
+    // Parse failures should be captured in invalid entries, even without validation.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let wf_dir = tmp.path().join(".conductor").join("workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    // One valid (will fail validation but that's ok - we're testing parse capture)
+    std::fs::write(
+        wf_dir.join("good.wf"),
+        "workflow good { meta { targets = [\"worktree\"] } call build }",
+    )
+    .unwrap();
+    // One parse failure
+    std::fs::write(wf_dir.join("bad.wf"), "this is invalid !!!").unwrap();
+
+    let wt_path_str = tmp.path().to_str().unwrap();
+    let (_defs, invalid) = WorkflowManager::list_defs_with_validation(
+        wt_path_str,
+        "/nonexistent",
+        &std::collections::HashSet::new(),
+    )
+    .unwrap();
+
+    // The parse failure should appear in invalid entries
+    // "good" will also be invalid due to missing agent, so we expect at least 1 invalid (the parse failure)
+    assert!(
+        !invalid.is_empty(),
+        "Expected at least 1 invalid entry for the parse failure, got {}",
+        invalid.len()
+    );
+    // One should be the parse failure with name "bad"
+    assert!(
+        invalid.iter().any(|(name, _err)| name == "bad"),
+        "Expected to find 'bad' in invalid entries: {:?}",
+        invalid
+    );
+}
+
+#[test]
+fn test_list_defs_with_validation_filename_stem_extraction() {
+    // Parse errors should use the filename stem (.wf removed) as the name.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let wf_dir = tmp.path().join(".conductor").join("workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    // Just a parse failure with a specific filename
+    std::fs::write(wf_dir.join("my-workflow.wf"), "invalid syntax here !!!").unwrap();
+
+    let (defs, invalid) = WorkflowManager::list_defs_with_validation(
+        tmp.path().to_str().unwrap(),
+        "/nonexistent",
+        &std::collections::HashSet::new(),
+    )
+    .unwrap();
+
+    assert!(defs.is_empty());
+    assert_eq!(invalid.len(), 1);
+    // The invalid entry should use the filename stem, not the full filename
+    assert_eq!(invalid[0].0, "my-workflow");
+    assert!(!invalid[0].1.is_empty()); // Should have an error message
+}
+
+#[test]
+fn test_list_defs_with_validation_empty_directory() {
+    // Empty directory should return empty results with no errors.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let wf_dir = tmp.path().join(".conductor").join("workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+
+    let (defs, invalid) = WorkflowManager::list_defs_with_validation(
+        tmp.path().to_str().unwrap(),
+        "/nonexistent",
+        &std::collections::HashSet::new(),
+    )
+    .unwrap();
+
+    assert!(defs.is_empty());
+    assert!(invalid.is_empty());
+}

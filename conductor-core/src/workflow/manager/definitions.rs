@@ -6,7 +6,10 @@ use crate::workflow_dsl;
 use super::WorkflowManager;
 
 /// Invalid workflow entry: (name, error_message).
-type InvalidWorkflowEntry = (String, String);
+///
+/// Used by [`WorkflowManager::list_defs_with_validation`] to represent
+/// workflows that failed to parse or failed post-parse validation.
+pub type InvalidWorkflowEntry = (String, String);
 
 impl WorkflowManager<'_> {
     /// Load workflow definitions from the filesystem for a worktree.

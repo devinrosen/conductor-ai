@@ -15,7 +15,7 @@ use conductor_core::workflow::{
     WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowFailureRateTrendRow,
     WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResumeStandalone,
     WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow, WorkflowWarning, REGRESSION_MIN_RECENT_RUNS,
+    WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -207,33 +207,6 @@ impl From<&WorkflowDef> for WorkflowDefSummary {
             targets: def.targets.clone(),
             valid: true,
             error: None,
-        }
-    }
-}
-
-impl WorkflowDefSummary {
-    /// Build an invalid summary from a parse warning.
-    ///
-    /// Uses the filename stem as the display name since parsing may have failed
-    /// before a name could be extracted from the file contents.
-    #[allow(dead_code)]
-    fn from_parse_warning(w: &WorkflowWarning) -> Self {
-        let name = std::path::Path::new(&w.file)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&w.file)
-            .to_string();
-        Self {
-            name,
-            title: None,
-            description: String::new(),
-            trigger: String::new(),
-            inputs: Vec::new(),
-            node_count: 0,
-            group: None,
-            targets: Vec::new(),
-            valid: false,
-            error: Some(w.message.clone()),
         }
     }
 }
@@ -3197,36 +3170,6 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["log"], "deploy iteration 1 log");
-    }
-
-    #[test]
-    fn workflow_def_summary_from_parse_warning_uses_stem_as_name() {
-        let w = WorkflowWarning {
-            file: "doc-pipeline-full.wf".to_string(),
-            message: "Parse error: Expected RBrace, got Description".to_string(),
-        };
-        let summary = WorkflowDefSummary::from_parse_warning(&w);
-        assert_eq!(summary.name, "doc-pipeline-full");
-        assert!(!summary.valid);
-        assert_eq!(
-            summary.error.as_deref(),
-            Some("Parse error: Expected RBrace, got Description")
-        );
-        assert!(summary.title.is_none());
-        assert!(summary.inputs.is_empty());
-        assert_eq!(summary.node_count, 0);
-    }
-
-    #[test]
-    fn workflow_def_summary_from_parse_warning_no_extension() {
-        let w = WorkflowWarning {
-            file: "plain-name".to_string(),
-            message: "some error".to_string(),
-        };
-        let summary = WorkflowDefSummary::from_parse_warning(&w);
-        // With no extension, file_stem returns the whole name.
-        assert_eq!(summary.name, "plain-name");
-        assert!(!summary.valid);
     }
 
     #[test]
