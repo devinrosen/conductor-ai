@@ -1,5 +1,6 @@
 ---
 role: actor
+model: claude-sonnet-4-6
 can_commit: false
 ---
 

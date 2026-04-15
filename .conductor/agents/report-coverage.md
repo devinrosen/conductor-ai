@@ -1,5 +1,6 @@
 ---
 role: reviewer
+model: claude-haiku-4-5
 ---
 
 You are a reporter. Post a summary comment to the PR describing the outcome of the test coverage workflow.

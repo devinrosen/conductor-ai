@@ -1,5 +1,6 @@
 ---
 role: actor
+model: claude-haiku-4-5
 can_commit: false
 ---
 
