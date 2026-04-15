@@ -103,7 +103,7 @@ impl WorkflowManager<'_> {
         Vec<crate::workflow_dsl::WorkflowDef>,
         Vec<InvalidWorkflowEntry>,
     )> {
-        let (defs, warnings) = Self::list_defs(wt_path, repo_path).unwrap_or_default();
+        let (defs, warnings) = Self::list_defs(wt_path, repo_path)?;
 
         // Convert parse failures to invalid entries.
         let mut invalid_entries: Vec<InvalidWorkflowEntry> = warnings
