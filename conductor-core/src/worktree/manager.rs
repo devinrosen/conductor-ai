@@ -1056,6 +1056,9 @@ impl<'a> WorktreeManager<'a> {
         // Checked after all worktrees are marked merged so the active-count query sees the final state.
         let mut pending_ready_check: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
+        // Shared FeatureManager instance used both inside the loop (auto-close) and after it
+        // (auto-ready-for-review). The constructor only stores references so hoisting is safe.
+        let fm = crate::feature::FeatureManager::new(self.conn, self.config);
 
         for row in &rows {
             let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch] = row;
@@ -1084,7 +1087,6 @@ impl<'a> WorktreeManager<'a> {
             pruned_repos.insert(repo_path.as_str());
 
             // Auto-close orphaned features
-            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
             let base = if base_branch.is_empty() {
                 None
             } else {
@@ -1135,7 +1137,6 @@ impl<'a> WorktreeManager<'a> {
         // Auto-transition features to ready_for_review now that all worktrees are marked merged.
         // Deferred from the loop so the active-count query sees the final DB state.
         if !pending_ready_check.is_empty() {
-            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
             for (repo_id, base_branch) in &pending_ready_check {
                 if let Err(e) = fm.auto_ready_for_review_if_complete(repo_id, base_branch) {
                     tracing::warn!(error = %e, "failed to auto-transition feature to ready_for_review");
