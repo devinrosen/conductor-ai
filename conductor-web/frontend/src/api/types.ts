@@ -44,6 +44,7 @@ export interface Ticket {
   url: string;
   synced_at: string;
   raw_json: string;
+  workflow_completed?: boolean;
 }
 
 export interface TicketLabel {

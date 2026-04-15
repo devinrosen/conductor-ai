@@ -1,4 +1,4 @@
-import type { GithubPr, Ticket, TicketDependencies, Worktree } from "../api/types";
+import type { Ticket, TicketDependencies } from "../api/types";
 
 interface DepInfo {
   dependencies: string[];
@@ -38,13 +38,13 @@ export interface TicketTree {
  * - When `apiDeps` is provided (preferred), uses DB-backed dependency data for all
  *   source types. Falls back to Vantage `raw_json` parsing when `apiDeps` is absent.
  * - A ticket is "blocked" if any blocker in `blocked_by` is not closed.
- * - A blocked ticket is "unlocked" if every blocker has a PR with review_decision "APPROVED".
+ * - A blocked ticket is "unlocked" if every blocker has `workflow_completed === true`.
  * - Non-vantage tickets without apiDeps are always roots.
  */
 export function buildTicketTree(
   tickets: Ticket[],
-  worktrees?: Worktree[],
-  prs?: GithubPr[],
+  _worktrees?: unknown,
+  _prs?: unknown,
   apiDeps?: Record<string, TicketDependencies>,
 ): TicketTree {
   // Index tickets by source_id and by id for fast lookup
@@ -136,36 +136,20 @@ export function buildTicketTree(
   // Roots: tickets that have no parent in the list
   const roots = tickets.filter((t) => !hasParentInList.has(t.source_id));
 
-  // Compute unlocked set: blocked tickets whose blocking parents all have approved PRs
+  // Compute unlocked set: blocked tickets whose blocking parents all have
+  // completed ticket-to-pr workflows (determined by the backend).
   const unlocked = new Set<string>();
-  if (worktrees?.length && prs?.length) {
-    // ticket_id → worktree branch
-    const wtBranchByTicketId = new Map<string, string>();
-    for (const wt of worktrees) {
-      if (wt.ticket_id) {
-        wtBranchByTicketId.set(wt.ticket_id, wt.branch);
-      }
-    }
-    // branch → PR
-    const prByBranch = new Map<string, GithubPr>();
-    for (const pr of prs) {
-      prByBranch.set(pr.head_ref_name, pr);
-    }
+  for (const ticketId of blocked) {
+    const parentIds = blockingParentIds.get(ticketId);
+    if (!parentIds?.length) continue;
 
-    for (const ticketId of blocked) {
-      const parentIds = blockingParentIds.get(ticketId);
-      if (!parentIds?.length) continue;
+    const allCompleted = parentIds.every((parentId) => {
+      const parent = byId.get(parentId);
+      return parent?.workflow_completed === true;
+    });
 
-      const allApproved = parentIds.every((parentId) => {
-        const branch = wtBranchByTicketId.get(parentId);
-        if (!branch) return false;
-        const pr = prByBranch.get(branch);
-        return pr?.review_decision === "APPROVED";
-      });
-
-      if (allApproved) {
-        unlocked.add(ticketId);
-      }
+    if (allCompleted) {
+      unlocked.add(ticketId);
     }
   }
 

@@ -17,6 +17,13 @@ EOF
   exit 0
 fi
 
+# Rebase on top of any remote commits on this branch (e.g. from prior iterations)
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+if git ls-remote --exit-code --heads origin "$current_branch" >/dev/null 2>&1; then
+  git fetch origin "$current_branch" --quiet
+  git rebase "origin/$current_branch" --quiet
+fi
+
 SKIP_E2E=1 git push -u origin HEAD
 
 pr_create_err=$(mktemp)

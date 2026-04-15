@@ -300,6 +300,7 @@ mod tests {
             raw_json: String::new(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         }
     }
 

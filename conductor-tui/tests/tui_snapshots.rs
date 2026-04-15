@@ -109,6 +109,7 @@ fn make_tickets(repos: &[Repo]) -> Vec<Ticket> {
             raw_json: "{}".into(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         },
         Ticket {
             id: "01TKT0000000000000000000B1".into(),
@@ -126,6 +127,7 @@ fn make_tickets(repos: &[Repo]) -> Vec<Ticket> {
             raw_json: "{}".into(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         },
     ]
 }
@@ -506,6 +508,7 @@ fn snap_modal_ticket_info() {
             raw_json: "{}".into(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         }),
     };
     insta::assert_snapshot!(render_to_string(&state));
