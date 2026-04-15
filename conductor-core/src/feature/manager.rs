@@ -671,9 +671,9 @@ impl<'a> FeatureManager<'a> {
             None => return Ok(()),
         };
 
-        // Count worktrees that are still active (not merged/closed/deleted).
+        // Count worktrees that are still active on this feature branch.
         let active_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM worktrees WHERE repo_id = ?1 AND base_branch = ?2 AND status NOT IN ('merged', 'closed', 'deleted')",
+            "SELECT COUNT(*) FROM worktrees WHERE repo_id = ?1 AND base_branch = ?2 AND status = 'active'",
             params![repo_id, feature_branch],
             |row| row.get(0),
         )?;
