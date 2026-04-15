@@ -1173,7 +1173,10 @@ fn belongs_to_feature_none_base_branch() {
 }
 
 #[test]
-fn test_create_auto_registers_feature_for_non_default_base() {
+fn test_create_non_default_base_branch_does_not_register_feature() {
+    // Since RFC-018 explicit lifecycle, creating a worktree on a non-default
+    // branch should NOT auto-register a feature. Features must be created
+    // explicitly via `conductor feature create`.
     let (tmp, remote, local) = setup_repo_with_remote();
 
     // Create a feature branch in the repo to use as a non-default base
@@ -1214,85 +1217,18 @@ fn test_create_auto_registers_feature_for_non_default_base() {
     // Worktree should have feat/parent as its base branch
     assert_eq!(wt.base_branch.as_deref(), Some("feat/parent"));
 
-    // Auto-registration should have happened inside create()
+    // No feature should be auto-registered — explicit lifecycle enforced.
     let fm = crate::feature::FeatureManager::new(&conn, &config);
     let features = fm.list_active("myrepo").unwrap();
     assert!(
-        features.iter().any(|f| f.branch == "feat/parent"),
-        "expected a feature for 'feat/parent' to be auto-registered, got: {features:?}"
+        features.is_empty(),
+        "no feature should be auto-registered under explicit lifecycle, got: {features:?}"
     );
 }
 
 #[test]
-fn test_create_links_ticket_to_auto_registered_feature() {
-    let (tmp, remote, local) = setup_repo_with_remote();
-
-    // Create a feature branch in the repo to use as a non-default base
-    git(&["checkout", "-b", "feat/parent"], &local);
-    let file = local.join("feature.txt");
-    fs::write(&file, "feature work").unwrap();
-    git(&["add", "feature.txt"], &local);
-    git(&["commit", "-m", "feature commit"], &local);
-    git(&["push", "-u", "origin", "feat/parent"], &local);
-    git(&["checkout", "main"], &local);
-
-    let conn = crate::test_helpers::setup_db();
-    let mut config = Config::default();
-    config.general.workspace_root = tmp.path().to_path_buf();
-
-    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
-    repo_mgr
-        .register(
-            "myrepo",
-            local.to_str().unwrap(),
-            remote.to_str().unwrap(),
-            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
-        )
-        .unwrap();
-
-    // Insert a ticket so we can pass its ID to create()
-    conn.execute(
-        "INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-         VALUES ('t1', (SELECT id FROM repos LIMIT 1), 'github', '42', 'Test ticket', 'http://example.com', '2025-01-01T00:00:00Z')",
-        [],
-    )
-    .unwrap();
-
-    let mgr = WorktreeManager::new(&conn, &config);
-    let (_wt, _warnings) = mgr
-        .create(
-            "myrepo",
-            "feat-child",
-            WorktreeCreateOptions {
-                from_branch: Some("feat/parent".to_string()),
-                ticket_id: Some("t1".to_string()),
-                ..Default::default()
-            },
-        )
-        .expect("create should succeed");
-
-    // The auto-registered feature should be linked to the ticket
-    let fm = crate::feature::FeatureManager::new(&conn, &config);
-    let features = fm.list_active("myrepo").unwrap();
-    let feature = features
-        .iter()
-        .find(|f| f.branch == "feat/parent")
-        .expect("feature should be auto-registered");
-
-    let linked: bool = conn
-        .query_row(
-            "SELECT COUNT(*) > 0 FROM feature_tickets WHERE feature_id = ?1 AND ticket_id = ?2",
-            rusqlite::params![feature.id, "t1"],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert!(linked, "ticket should be linked to auto-registered feature");
-}
-
-#[test]
-fn test_create_skips_auto_registration_for_default_branch() {
-    // Creating a worktree from the default branch should not trigger
-    // auto-registration of a feature.
+fn test_create_default_branch_does_not_register_feature() {
+    // Creating a worktree from the default branch should not register a feature.
     let (tmp, remote, local) = setup_repo_with_remote();
 
     let conn = crate::test_helpers::setup_db();
@@ -1315,7 +1251,6 @@ fn test_create_skips_auto_registration_for_default_branch() {
         .create("myrepo", "feat-on-main", Default::default())
         .expect("create should succeed");
 
-    // base_branch should be "main" (default) — auto-registration should skip it
     assert!(
         wt.base_branch.is_none() || wt.base_branch.as_deref() == Some("main"),
         "expected no non-default base_branch"

@@ -91,6 +91,8 @@ impl<'a> FeatureManager<'a> {
         repo_slug: &str,
         name: &str,
         from_branch: Option<&str>,
+        source_type: Option<&str>,
+        source_id: Option<&str>,
         ticket_source_ids: &[String],
     ) -> Result<Feature> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
@@ -149,8 +151,8 @@ impl<'a> FeatureManager<'a> {
             status: FeatureStatus::InProgress,
             created_at: now,
             merged_at: None,
-            source_type: None,
-            source_id: None,
+            source_type: source_type.map(|s| s.to_string()),
+            source_id: source_id.map(|s| s.to_string()),
             tickets_total: 0,
             tickets_merged: 0,
         };
@@ -482,6 +484,66 @@ impl<'a> FeatureManager<'a> {
         Ok(())
     }
 
+    /// Transition a feature through the explicit state machine.
+    ///
+    /// Valid transitions:
+    /// - `in_progress → ready_for_review`
+    /// - `ready_for_review → approved`
+    /// - `approved → merged`
+    /// - `any → closed` (delegates to `close_with_merge_detection` so `merged_at` is set correctly)
+    ///
+    /// Returns `ConductorError::InvalidFeatureTransition` for all other pairs.
+    pub fn transition(
+        &self,
+        repo_slug: &str,
+        feature_name: &str,
+        to: FeatureStatus,
+    ) -> Result<Feature> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+        let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
+
+        // `closed` is always allowed — delegate to merge-detection close.
+        if to == FeatureStatus::Closed {
+            self.close_with_merge_detection(&repo.local_path, &feature)?;
+            return self.get_by_id(&feature.id);
+        }
+
+        let valid = matches!(
+            (&feature.status, &to),
+            (FeatureStatus::InProgress, FeatureStatus::ReadyForReview)
+                | (FeatureStatus::ReadyForReview, FeatureStatus::Approved)
+                | (FeatureStatus::Approved, FeatureStatus::Merged)
+        );
+
+        if !valid {
+            return Err(ConductorError::InvalidFeatureTransition {
+                name: feature_name.to_string(),
+                from: feature.status.to_string(),
+                to: to.to_string(),
+            });
+        }
+
+        self.conn.execute(
+            "UPDATE features SET status = ?1 WHERE id = ?2",
+            params![to, feature.id],
+        )?;
+
+        self.get_by_id(&feature.id)
+    }
+
+    /// Update a feature's status by ID without re-running state-machine guards.
+    ///
+    /// Used internally by callers that already know the current status (e.g.
+    /// `auto_ready_for_review_if_complete`). Kept `pub(crate)` to prevent
+    /// accidental bypass of the public `transition()` guard.
+    pub(crate) fn transition_by_id(&self, feature_id: &str, to: FeatureStatus) -> Result<()> {
+        self.conn.execute(
+            "UPDATE features SET status = ?1 WHERE id = ?2",
+            params![to, feature_id],
+        )?;
+        Ok(())
+    }
+
     /// Close a feature (set status to closed, or merged if the branch was merged).
     pub fn close(&self, repo_slug: &str, feature_name: &str) -> Result<()> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
@@ -581,6 +643,52 @@ impl<'a> FeatureManager<'a> {
             return self.auto_close_if_orphaned(&repo, base_branch);
         }
         Ok(())
+    }
+
+    /// Transition an `in_progress` feature to `ready_for_review` if all of its
+    /// worktrees have been merged.
+    ///
+    /// Called by `cleanup_merged_worktrees` after marking a worktree merged,
+    /// when `config.defaults.auto_ready_for_review` is `true`. Safe to call
+    /// even when no feature exists for the branch — returns `Ok(())` in that case.
+    pub(crate) fn auto_ready_for_review_if_complete(
+        &self,
+        repo_id: &str,
+        feature_branch: &str,
+    ) -> Result<()> {
+        // Find the in_progress feature for this branch.
+        let feature: Option<Feature> = self
+            .conn
+            .query_row(
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'in_progress'"),
+                params![repo_id, feature_branch],
+                map_feature_row,
+            )
+            .optional()?;
+
+        let feature = match feature {
+            Some(f) => f,
+            None => return Ok(()),
+        };
+
+        // Count worktrees that are still active (not merged/closed/deleted).
+        let active_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM worktrees WHERE repo_id = ?1 AND base_branch = ?2 AND status NOT IN ('merged', 'closed', 'deleted')",
+            params![repo_id, feature_branch],
+            |row| row.get(0),
+        )?;
+
+        if active_count > 0 {
+            return Ok(());
+        }
+
+        tracing::info!(
+            feature_id = %feature.id,
+            feature_name = %feature.name,
+            "auto-transitioning feature to ready_for_review (last worktree merged)"
+        );
+
+        self.transition_by_id(&feature.id, FeatureStatus::ReadyForReview)
     }
 
     /// Auto-register a feature for a branch if none exists yet.
