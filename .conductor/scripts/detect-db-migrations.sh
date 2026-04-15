@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Get changed files relative to main
-changed_files=$(git diff origin/main...HEAD --name-only 2>/dev/null || true)
+# Get the PR's actual base branch (falls back to main for non-PR contexts)
+base_branch=$(gh pr view --json baseRefName -q '.baseRefName' 2>/dev/null || echo "main")
+
+# Get changed files relative to the PR base branch
+changed_files=$(git diff "origin/${base_branch}...HEAD" --name-only 2>/dev/null || true)
 
 # Filter for migration files
 migration_files=()
