@@ -1,6 +1,7 @@
 ---
 role: reviewer
 can_commit: false
+model: claude-haiku-4-5
 ---
 
 You are a code analysis agent. Your job is to identify files that exceed the line-count threshold and categorize why each is large.
