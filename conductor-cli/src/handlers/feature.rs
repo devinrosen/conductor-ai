@@ -24,7 +24,14 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
             let source_id_opt = milestone_str.as_deref();
 
             let mgr = FeatureManager::new(conn, config);
-            let feature = mgr.create(&repo, &name, from.as_deref(), source_type_opt, source_id_opt, &ticket_ids)?;
+            let feature = mgr.create(
+                &repo,
+                &name,
+                from.as_deref(),
+                source_type_opt,
+                source_id_opt,
+                &ticket_ids,
+            )?;
             println!("Created feature: {} ({})", feature.name, feature.branch);
             println!("  Base: {}", feature.base_branch);
             if let Some(ms) = milestone {

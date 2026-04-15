@@ -437,7 +437,9 @@ fn test_create_feature_happy_path() {
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
 
-    let feature = mgr.create("test-repo", "my-feature", None, None, None, &[]).unwrap();
+    let feature = mgr
+        .create("test-repo", "my-feature", None, None, None, &[])
+        .unwrap();
 
     assert_eq!(feature.name, "my-feature");
     assert_eq!(feature.branch, "feat/my-feature");
@@ -982,7 +984,14 @@ fn insert_worktree_for_feature(
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, '/tmp/wt', ?6, '2024-01-01T00:00:00Z')",
-        rusqlite::params![id, repo_id, slug, format!("{slug}-branch"), base_branch, status],
+        rusqlite::params![
+            id,
+            repo_id,
+            slug,
+            format!("{slug}-branch"),
+            base_branch,
+            status
+        ],
     )
     .unwrap();
 }
