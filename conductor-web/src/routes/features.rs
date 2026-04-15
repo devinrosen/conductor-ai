@@ -3,7 +3,9 @@ use axum::Json;
 use serde::Serialize;
 
 use conductor_core::db::open_database;
-use conductor_core::feature::{Feature, FeatureManager, FeatureRow, FeatureStatus, RunSummary, SyncResult};
+use conductor_core::feature::{
+    Feature, FeatureManager, FeatureRow, FeatureStatus, RunSummary, SyncResult,
+};
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::Ticket;
 
@@ -198,8 +200,11 @@ pub async fn review_feature(
     let config = state.config.read().await;
 
     let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
-    let feature = FeatureManager::new(&db, &config)
-        .transition(&repo.slug, &name, FeatureStatus::ReadyForReview)?;
+    let feature = FeatureManager::new(&db, &config).transition(
+        &repo.slug,
+        &name,
+        FeatureStatus::ReadyForReview,
+    )?;
 
     Ok(Json(feature))
 }
@@ -226,8 +231,8 @@ pub async fn approve_feature(
     let config = state.config.read().await;
 
     let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
-    let feature = FeatureManager::new(&db, &config)
-        .transition(&repo.slug, &name, FeatureStatus::Approved)?;
+    let feature =
+        FeatureManager::new(&db, &config).transition(&repo.slug, &name, FeatureStatus::Approved)?;
 
     Ok(Json(feature))
 }
@@ -252,7 +257,9 @@ pub async fn close_feature(
     let repo_slug = {
         let db = state.db.lock().await;
         let config_guard = state.config.read().await;
-        RepoManager::new(&db, &config_guard).get_by_id(&repo_id)?.slug
+        RepoManager::new(&db, &config_guard)
+            .get_by_id(&repo_id)?
+            .slug
     };
 
     let db_path = state.db_path.clone();
