@@ -189,6 +189,14 @@ impl App {
                 self.state.column_focus = crate::state::ColumnFocus::Workflow;
                 self.state.workflows_focus = WorkflowsFocus::Defs;
             }
+            View::Features => {
+                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+            }
+            View::FeatureDetail => {
+                self.state.detail_feature_tickets = Vec::new();
+                self.state.detail_feature_ticket_index = 0;
+                self.state.view = View::Features;
+            }
         }
     }
 
@@ -218,6 +226,7 @@ impl App {
                     self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
                 }
                 View::WorkflowDefDetail => {} // single panel — Tab is a no-op
+                View::Features | View::FeatureDetail => {} // single panel — Tab is a no-op
             },
         }
     }
@@ -249,6 +258,7 @@ impl App {
                     self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
                 }
                 View::WorkflowDefDetail => {} // single panel — Tab is a no-op
+                View::Features | View::FeatureDetail => {} // single panel — Tab is a no-op
             },
         }
     }
@@ -615,6 +625,14 @@ impl App {
                 self.state.workflow_def_detail_scroll =
                     self.state.workflow_def_detail_scroll.saturating_sub(1);
             }
+            View::Features => {
+                self.state.features_index = self.state.features_index.saturating_sub(1);
+                self.sync_selected_feature();
+            }
+            View::FeatureDetail => {
+                self.state.detail_feature_ticket_index =
+                    self.state.detail_feature_ticket_index.saturating_sub(1);
+            }
             View::Settings => {
                 self.settings_move_up();
             }
@@ -812,6 +830,19 @@ impl App {
             View::WorkflowDefDetail => {
                 self.state.workflow_def_detail_scroll =
                     self.state.workflow_def_detail_scroll.saturating_add(1);
+            }
+            View::Features => {
+                clamp_increment(
+                    &mut self.state.features_index,
+                    self.state.detail_features.len(),
+                );
+                self.sync_selected_feature();
+            }
+            View::FeatureDetail => {
+                clamp_increment(
+                    &mut self.state.detail_feature_ticket_index,
+                    self.state.detail_feature_tickets.len(),
+                );
             }
             View::Settings => {
                 self.settings_move_down();
@@ -1031,6 +1062,49 @@ impl App {
             View::WorktreeDetail => {}
             View::WorkflowDefDetail => {}
             View::Settings => {}
+            View::Features => {
+                // Enter on a feature row: load its tickets and navigate to FeatureDetail.
+                if let Some(feature) = self
+                    .state
+                    .detail_features
+                    .get(self.state.features_index)
+                    .cloned()
+                {
+                    self.state.selected_feature_id = Some(feature.id.clone());
+                    self.state.selected_feature_name = Some(feature.name.clone());
+                    // Fetch linked tickets inline (fast indexed DB read).
+                    use conductor_core::feature::FeatureManager;
+                    let mgr = FeatureManager::new(&self.conn, &self.config);
+                    match mgr.linked_tickets(&feature.id) {
+                        Ok(tickets) => {
+                            self.state.detail_feature_tickets = tickets;
+                        }
+                        Err(e) => {
+                            self.state.modal = Modal::Error {
+                                message: format!("Failed to load linked tickets: {e}"),
+                            };
+                            return;
+                        }
+                    }
+                    self.state.detail_feature_ticket_index = 0;
+                    // Rebuild worktrees for this feature's repo using repo_id from the row.
+                    let feature_repo_id = feature.repo_id.clone();
+                    self.state.rebuild_detail_worktree_tree(&feature_repo_id);
+                    self.state.view = View::FeatureDetail;
+                }
+            }
+            View::FeatureDetail => {} // Enter on ticket row is a no-op for now
+        }
+    }
+
+    /// Sync `selected_feature_id`/`selected_feature_name` from the current `features_index`.
+    pub(super) fn sync_selected_feature(&mut self) {
+        if let Some(f) = self.state.detail_features.get(self.state.features_index) {
+            self.state.selected_feature_id = Some(f.id.clone());
+            self.state.selected_feature_name = Some(f.name.clone());
+        } else {
+            self.state.selected_feature_id = None;
+            self.state.selected_feature_name = None;
         }
     }
 }

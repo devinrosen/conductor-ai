@@ -66,6 +66,7 @@ crate::impl_sql_enum!(FeatureStatus);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureRow {
     pub id: String,
+    pub repo_id: String,
     pub name: String,
     pub branch: String,
     pub base_branch: String,
@@ -77,6 +78,10 @@ pub struct FeatureRow {
     pub last_commit_at: Option<String>,
     /// Most recent worktree creation time targeting this feature branch (computed via subquery).
     pub last_worktree_activity: Option<String>,
+    /// Denormalized total number of tickets linked to this feature (from the features table).
+    pub tickets_total: u32,
+    /// Denormalized number of merged tickets (from the features table).
+    pub tickets_merged: u32,
 }
 
 #[cfg(test)]

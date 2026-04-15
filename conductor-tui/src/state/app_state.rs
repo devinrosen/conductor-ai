@@ -13,8 +13,9 @@ use super::workflow_rows::{count_children_rows, count_steps_for_run, max_iterati
 use super::{
     build_ticket_tree_indices, build_worktree_tree, build_worktree_tree_indices,
     parse_target_label, push_children, push_steps_for_run, ColumnFocus, DashboardRow, DataCache,
-    FilterState, Modal, RepoDetailFocus, SettingsCategory, SettingsFocus, TargetType, TreePosition,
-    View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
+    FeaturesFocus, FilterState, Modal, RepoDetailFocus, SettingsCategory, SettingsFocus,
+    TargetType, TreePosition, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow,
+    WorkflowsFocus,
 };
 use crate::theme::Theme;
 
@@ -151,6 +152,23 @@ pub struct AppState {
     /// Cleared whenever `workflow_def_index` changes.
     pub workflow_def_expanded_calls: HashSet<String>,
 
+    // ── Features view ────────────────────────────────────────────────────────
+    /// Which panel of the Features list view has focus.
+    #[allow(dead_code)]
+    pub features_focus: FeaturesFocus,
+    /// Cursor index in the features list.
+    pub features_index: usize,
+    /// Internal ULID of the currently selected feature (used by off-thread closures).
+    pub selected_feature_id: Option<String>,
+    /// Display name of the currently selected feature.
+    pub selected_feature_name: Option<String>,
+    /// Scoped feature list for the current context (filtered by repo or global).
+    pub detail_features: Vec<conductor_core::feature::FeatureRow>,
+    /// Linked tickets for the feature currently shown in FeatureDetail.
+    pub detail_feature_tickets: Vec<Ticket>,
+    /// Cursor index within the detail_feature_tickets list (FeatureDetail view).
+    pub detail_feature_ticket_index: usize,
+
     // ── Settings view ────────────────────────────────────────────────────────
     /// Which pane of the Settings view has keyboard focus.
     pub settings_focus: SettingsFocus,
@@ -255,6 +273,13 @@ impl AppState {
             workflow_def_focus: WorkflowDefFocus::List,
             workflow_def_step_index: 0,
             workflow_def_expanded_calls: HashSet::new(),
+            features_focus: FeaturesFocus::default(),
+            features_index: 0,
+            selected_feature_id: None,
+            selected_feature_name: None,
+            detail_features: Vec::new(),
+            detail_feature_tickets: Vec::new(),
+            detail_feature_ticket_index: 0,
             settings_focus: SettingsFocus::CategoryList,
             settings_category: SettingsCategory::General,
             settings_category_index: 0,
@@ -485,6 +510,11 @@ impl AppState {
                 ),
             },
             View::WorkflowDefDetail => (self.workflow_def_detail_scroll, 0),
+            View::Features => (self.features_index, self.detail_features.len()),
+            View::FeatureDetail => (
+                self.detail_feature_ticket_index,
+                self.detail_feature_tickets.len(),
+            ),
             View::Settings => (self.settings_row_index, 0),
         }
     }
@@ -522,6 +552,12 @@ impl AppState {
             },
             View::WorkflowDefDetail => {
                 self.workflow_def_detail_scroll = index;
+            }
+            View::Features => {
+                self.features_index = index;
+            }
+            View::FeatureDetail => {
+                self.detail_feature_ticket_index = index;
             }
             View::Settings => {
                 self.settings_row_index = index;

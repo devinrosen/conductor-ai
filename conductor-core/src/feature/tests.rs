@@ -1762,6 +1762,7 @@ fn test_resolve_active_feature_rejects_closed() {
 fn make_feature_row(last_commit_at: Option<&str>, last_wt_activity: Option<&str>) -> FeatureRow {
     FeatureRow {
         id: "test-id".to_string(),
+        repo_id: "test-repo-id".to_string(),
         name: "test-feature".to_string(),
         branch: "feat/test".to_string(),
         base_branch: "main".to_string(),
@@ -1771,6 +1772,8 @@ fn make_feature_row(last_commit_at: Option<&str>, last_wt_activity: Option<&str>
         ticket_count: 0,
         last_commit_at: last_commit_at.map(|s| s.to_string()),
         last_worktree_activity: last_wt_activity.map(|s| s.to_string()),
+        tickets_total: 0,
+        tickets_merged: 0,
     }
 }
 
@@ -2603,6 +2606,55 @@ fn test_reap_dangling_all_reports_feature_with_no_worktrees_as_dangling() {
     assert!(
         dangling.iter().any(|f| f.name == "orphan-all-feat"),
         "reap_dangling_all should include features with no worktrees"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// linked_tickets tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_linked_tickets_returns_tickets_for_feature() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+    let ticket_a = insert_ticket(&conn, &repo_id, "10");
+    let ticket_b = insert_ticket(&conn, &repo_id, "20");
+    let _ticket_c = insert_ticket(&conn, &repo_id, "30"); // not linked
+
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_a],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_b],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let tickets = mgr.linked_tickets(&feature_id).unwrap();
+    assert_eq!(tickets.len(), 2);
+    // Results are ordered by CAST(source_id AS INTEGER) ASC
+    assert_eq!(tickets[0].source_id, "10");
+    assert_eq!(tickets[1].source_id, "20");
+}
+
+#[test]
+fn test_linked_tickets_returns_empty_for_feature_with_no_links() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "empty-feat", "feat/empty-feat");
+    insert_ticket(&conn, &repo_id, "99"); // exists but not linked
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let tickets = mgr.linked_tickets(&feature_id).unwrap();
+    assert!(
+        tickets.is_empty(),
+        "expected no tickets for unlinked feature"
     );
 }
 

@@ -68,15 +68,14 @@ fn feature_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> C
 // ---------------------------------------------------------------------------
 
 /// SQL fragment: column list through `FROM features f` (no leading `SELECT`,
-/// no `WHERE`/`ORDER`). When used in `list_all_active`, prefix with
-/// `f.repo_id, ` so the repo_id appears at column 0 and FeatureRow columns
-/// start at offset 1.
+/// no `WHERE`/`ORDER`).
 const FEATURE_ROW_FRAGMENT: &str = "\
-    f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
+    f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
     (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch AND w.status = 'active') AS wt_count, \
     (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count, \
     f.last_commit_at, \
-    (SELECT MAX(w2.created_at) FROM worktrees w2 WHERE w2.repo_id = f.repo_id AND w2.base_branch = f.branch AND w2.status = 'active') AS last_wt_activity \
+    (SELECT MAX(w2.created_at) FROM worktrees w2 WHERE w2.repo_id = f.repo_id AND w2.base_branch = f.branch AND w2.status = 'active') AS last_wt_activity, \
+    f.tickets_total, f.tickets_merged \
     FROM features f";
 
 const FEATURE_ROW_ORDER: &str = " ORDER BY f.created_at DESC";
@@ -101,15 +100,18 @@ fn map_feature_row_cols(
 ) -> std::result::Result<FeatureRow, rusqlite::Error> {
     Ok(FeatureRow {
         id: row.get(offset)?,
-        name: row.get(offset + 1)?,
-        branch: row.get(offset + 2)?,
-        base_branch: row.get(offset + 3)?,
-        status: row.get(offset + 4)?,
-        created_at: row.get(offset + 5)?,
-        worktree_count: row.get(offset + 6)?,
-        ticket_count: row.get(offset + 7)?,
-        last_commit_at: row.get(offset + 8)?,
-        last_worktree_activity: row.get(offset + 9)?,
+        repo_id: row.get(offset + 1)?,
+        name: row.get(offset + 2)?,
+        branch: row.get(offset + 3)?,
+        base_branch: row.get(offset + 4)?,
+        status: row.get(offset + 5)?,
+        created_at: row.get(offset + 6)?,
+        worktree_count: row.get(offset + 7)?,
+        ticket_count: row.get(offset + 8)?,
+        last_commit_at: row.get(offset + 9)?,
+        last_worktree_activity: row.get(offset + 10)?,
+        tickets_total: row.get(offset + 11)?,
+        tickets_merged: row.get(offset + 12)?,
     })
 }
 
@@ -231,19 +233,18 @@ impl<'a> FeatureManager<'a> {
 
     /// List active features for all repos in a single query, keyed by repo_id.
     pub fn list_all_active(&self) -> Result<std::collections::HashMap<String, Vec<FeatureRow>>> {
-        let sql = format!(
-            "SELECT f.repo_id, {FEATURE_ROW_FRAGMENT} WHERE f.status = ?1{FEATURE_ROW_ORDER}"
-        );
+        let sql = format!("SELECT {FEATURE_ROW_FRAGMENT} WHERE f.status = ?1{FEATURE_ROW_ORDER}");
 
-        let pairs: Vec<(String, FeatureRow)> = query_collect(
+        let rows: Vec<FeatureRow> = query_collect(
             self.conn,
             &sql,
             params![FeatureStatus::InProgress],
-            |row: &rusqlite::Row<'_>| Ok((row.get::<_, String>(0)?, map_feature_row_cols(row, 1)?)),
+            |row: &rusqlite::Row<'_>| map_feature_row_cols(row, 0),
         )?;
 
         let mut map = std::collections::HashMap::new();
-        for (repo_id, row) in pairs {
+        for row in rows {
+            let repo_id = row.repo_id.clone();
             map.entry(repo_id).or_insert_with(Vec::new).push(row);
         }
         Ok(map)
@@ -1131,6 +1132,40 @@ impl<'a> FeatureManager<'a> {
             }
         }
         Ok(ids)
+    }
+
+    /// Return all tickets linked to a feature (via the feature_tickets join table).
+    /// Intended for the TUI feature detail view; fast indexed read, acceptable on main thread.
+    pub fn linked_tickets(&self, feature_id: &str) -> Result<Vec<crate::tickets::Ticket>> {
+        query_collect(
+            self.conn,
+            "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, \
+             t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
+             FROM tickets t \
+             JOIN feature_tickets ft ON ft.ticket_id = t.id \
+             WHERE ft.feature_id = ?1 \
+             ORDER BY CAST(t.source_id AS INTEGER) ASC",
+            params![feature_id],
+            |row| {
+                Ok(crate::tickets::Ticket {
+                    id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    source_type: row.get(2)?,
+                    source_id: row.get(3)?,
+                    title: row.get(4)?,
+                    body: row.get(5)?,
+                    state: row.get(6)?,
+                    labels: row.get(7)?,
+                    assignee: row.get(8)?,
+                    priority: row.get(9)?,
+                    url: row.get(10)?,
+                    synced_at: row.get(11)?,
+                    raw_json: row.get(12)?,
+                    workflow: row.get(13)?,
+                    agent_map: row.get(14)?,
+                })
+            },
+        )
     }
 
     /// Link a single ticket to a feature (idempotent — uses INSERT OR IGNORE).
