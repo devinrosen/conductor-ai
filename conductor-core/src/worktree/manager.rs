@@ -1052,8 +1052,9 @@ impl<'a> WorktreeManager<'a> {
         // Track (repo_id, base_branch) pairs already pulled to avoid redundant subprocesses
         let mut pulled_bases: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
-        // Track (repo_id, base_branch) pairs already checked for auto-ready-for-review to avoid N+1
-        let mut checked_ready: std::collections::HashSet<(String, String)> =
+        // Collect (repo_id, base_branch) pairs to check for auto-ready-for-review after the loop.
+        // Checked after all worktrees are marked merged so the active-count query sees the final state.
+        let mut pending_ready_check: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
 
         for row in &rows {
@@ -1093,15 +1094,11 @@ impl<'a> WorktreeManager<'a> {
                 tracing::warn!(error = %e, "failed to auto-close orphaned feature during cleanup");
             }
 
-            // Auto-transition feature to ready_for_review when last worktree merges.
-            // Skip pairs already processed this loop iteration to avoid N+1 queries.
+            // Collect this (repo_id, base_branch) pair for post-loop auto-ready-for-review check.
+            // We defer until after the loop so all worktrees are marked merged before the
+            // active-count query fires — otherwise an early call sees sibling worktrees still active.
             if self.config.general.auto_ready_for_review && !base_branch.is_empty() {
-                let ready_key = (repo_id.clone(), base_branch.clone());
-                if checked_ready.insert(ready_key) {
-                    if let Err(e) = fm.auto_ready_for_review_if_complete(repo_id, base_branch) {
-                        tracing::warn!(error = %e, "failed to auto-transition feature to ready_for_review");
-                    }
-                }
+                pending_ready_check.insert((repo_id.clone(), base_branch.clone()));
             }
 
             // Auto-pull base branch worktree if tracked and active
@@ -1133,6 +1130,17 @@ impl<'a> WorktreeManager<'a> {
             }
 
             cleaned += 1;
+        }
+
+        // Auto-transition features to ready_for_review now that all worktrees are marked merged.
+        // Deferred from the loop so the active-count query sees the final DB state.
+        if !pending_ready_check.is_empty() {
+            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
+            for (repo_id, base_branch) in &pending_ready_check {
+                if let Err(e) = fm.auto_ready_for_review_if_complete(repo_id, base_branch) {
+                    tracing::warn!(error = %e, "failed to auto-transition feature to ready_for_review");
+                }
+            }
         }
 
         // Run git worktree prune once per unique repo path

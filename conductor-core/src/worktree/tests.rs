@@ -1502,6 +1502,65 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
     assert_eq!(s2, "merged");
 }
 
+/// When two sub-worktrees for the same feature branch both merge in a single
+/// cleanup run, auto_ready_for_review_if_complete must fire AFTER all worktrees
+/// are marked merged — otherwise it would see sibling worktrees as still active
+/// and skip the transition.
+#[test]
+fn test_cleanup_multi_worktrees_same_feature_triggers_ready_for_review() {
+    let conn = crate::test_helpers::setup_db();
+    // auto_ready_for_review defaults to true in Config::default()
+    let config = Config::default();
+
+    // Insert a feature tracked on branch "feat/epic"
+    conn.execute(
+        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
+         VALUES ('feat1', 'r1', 'epic', 'feat/epic', 'main', 'in_progress', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    // Two sub-worktrees whose base_branch = "feat/epic" (both active initially)
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES ('sub1', 'r1', 'sub-a', 'feat/sub-a', 'feat/epic', '/tmp/sub-a', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES ('sub2', 'r1', 'sub-b', 'feat/sub-b', 'feat/epic', '/tmp/sub-b', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    // Both sub-worktrees merge in the same cleanup run (w1 from setup_db is also "merged" here
+    // but it has no base_branch so it won't affect the feature check)
+    let count = mgr
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |_, branches| branches.iter().cloned().collect(),
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    // w1 + sub1 + sub2 all get cleaned up
+    assert_eq!(count, 3);
+
+    // Feature should have transitioned to ready_for_review because both sub-worktrees are merged
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = 'feat1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "ready_for_review",
+        "feature should transition to ready_for_review after all sub-worktrees merge in one run"
+    );
+}
+
 // -----------------------------------------------------------------------
 // label_to_branch_prefix tests
 // -----------------------------------------------------------------------

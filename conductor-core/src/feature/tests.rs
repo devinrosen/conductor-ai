@@ -1051,6 +1051,35 @@ fn test_auto_ready_for_review_no_active_worktrees_transitions() {
 }
 
 #[test]
+fn test_auto_ready_for_review_abandoned_worktrees_not_counted_as_active() {
+    // Abandoned worktrees must NOT block the auto-transition — only 'active' status counts.
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    // One merged and one abandoned worktree — no active ones remain
+    insert_worktree_for_feature(&conn, &repo_id, "wt-merged", "feat/my-feat", "merged");
+    insert_worktree_for_feature(&conn, &repo_id, "wt-abandoned", "feat/my-feat", "abandoned");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/my-feat")
+        .unwrap();
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "ready_for_review",
+        "abandoned worktrees should not block auto-transition to ready_for_review"
+    );
+}
+
+#[test]
 fn test_auto_ready_for_review_no_feature_is_noop() {
     let conn = setup_db();
     let repo_id = insert_repo(&conn);
