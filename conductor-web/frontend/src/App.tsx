@@ -10,6 +10,8 @@ import { WorkflowRunDetailPage } from "./pages/WorkflowRunDetailPage";
 import { WorkflowDefDetailPage } from "./pages/WorkflowDefDetailPage";
 import { WorkflowAnalyticsPage } from "./pages/WorkflowAnalyticsPage";
 import { TicketsPage } from "./pages/TicketsPage";
+import { FeaturesPage } from "./pages/FeaturesPage";
+import { FeatureDetailPage } from "./pages/FeatureDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HookMatrixPage } from "./pages/HookMatrixPage";
 import { GettingStartedPage } from "./pages/GettingStartedPage";
@@ -24,6 +26,11 @@ const router = createBrowserRouter([
       { path: "workflows", element: <WorkflowsPage /> },
       { path: "workflows/analytics", element: <WorkflowAnalyticsPage /> },
       { path: "tickets", element: <TicketsPage /> },
+      { path: "features", element: <FeaturesPage /> },
+      {
+        path: "repos/:repoId/features/:featureName",
+        element: <FeatureDetailPage />,
+      },
       { path: "repos/:repoId", element: <RepoDetailPage /> },
       {
         path: "repos/:repoId/worktrees/:worktreeId",
