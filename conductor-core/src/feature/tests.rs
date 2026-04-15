@@ -1889,26 +1889,7 @@ fn test_insert_feature_record_new_fields_round_trip() {
 
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
-    // insert_feature_record is private, so insert directly via raw SQL using
-    // the same statement that insert_feature_record uses.
-    conn.execute(
-        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at, source_type, source_id, tickets_total, tickets_merged)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![
-            feature.id,
-            feature.repo_id,
-            feature.name,
-            feature.branch,
-            feature.base_branch,
-            feature.status,
-            feature.created_at,
-            feature.source_type,
-            feature.source_id,
-            feature.tickets_total,
-            feature.tickets_merged,
-        ],
-    )
-    .unwrap();
+    mgr.insert_feature_record(&feature).unwrap();
 
     let fetched = mgr.get_by_id(&id).unwrap();
     assert_eq!(fetched.source_type, Some("github".to_string()));
@@ -1919,4 +1900,28 @@ fn test_insert_feature_record_new_fields_round_trip() {
     assert_eq!(fetched.tickets_total, 5);
     assert_eq!(fetched.tickets_merged, 3);
     assert_eq!(fetched.status, FeatureStatus::InProgress);
+}
+
+#[test]
+fn test_map_feature_row_negative_ticket_count_returns_error() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let now = Utc::now().to_rfc3339();
+    let id = crate::new_id();
+
+    // Insert a row with a negative tickets_total to simulate corrupt/unexpected DB data.
+    conn.execute(
+        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at, tickets_total, tickets_merged)
+         VALUES (?1, ?2, 'neg-feat', 'feat/neg-feat', 'main', 'in_progress', ?3, -1, 0)",
+        params![id, repo_id, now],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let result = mgr.get_by_id(&id);
+    assert!(
+        result.is_err(),
+        "expected error when tickets_total is negative, got: {result:?}"
+    );
 }

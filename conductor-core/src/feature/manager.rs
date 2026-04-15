@@ -875,7 +875,7 @@ impl<'a> FeatureManager<'a> {
         Ok(())
     }
 
-    fn insert_feature_record(&self, feature: &Feature) -> Result<()> {
+    pub(crate) fn insert_feature_record(&self, feature: &Feature) -> Result<()> {
         self.conn.execute(
             "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at, source_type, source_id, tickets_total, tickets_merged)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
