@@ -4069,3 +4069,46 @@ fn test_list_defs_with_validation_happy_path() {
         invalid
     );
 }
+
+/// Verify that I/O errors from `list_defs()` are propagated as `Err` rather than
+/// silently swallowed as `Ok(([], []))`.
+///
+/// Strategy: create the `.conductor/workflows` directory but strip all permissions
+/// so that `fs::read_dir` fails with "Permission denied".  `is_dir()` still returns
+/// `true` for a mode-000 directory because `stat(2)` does not require read/execute
+/// permission — only `getdents(2)` (called by `read_dir`) does.
+///
+/// Skipped on non-Unix platforms (permission model differs) and when running as
+/// root (root bypasses DAC permission checks).
+#[test]
+#[cfg(unix)]
+fn test_list_defs_with_validation_propagates_io_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Root bypasses file-permission checks — skip to avoid a false-negative.
+    // SAFETY: getuid() is always safe to call.
+    if unsafe { libc::getuid() } == 0 {
+        return;
+    }
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let wf_dir = tmp.path().join(".conductor").join("workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+
+    // Remove all permissions so fs::read_dir fails.
+    std::fs::set_permissions(&wf_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = WorkflowManager::list_defs_with_validation(
+        tmp.path().to_str().unwrap(),
+        "/nonexistent",
+        &std::collections::HashSet::new(),
+    );
+
+    // Restore permissions so TempDir can clean up regardless of assertion outcome.
+    let _ = std::fs::set_permissions(&wf_dir, std::fs::Permissions::from_mode(0o755));
+
+    assert!(
+        result.is_err(),
+        "Expected Err when workflows directory is unreadable, got Ok"
+    );
+}

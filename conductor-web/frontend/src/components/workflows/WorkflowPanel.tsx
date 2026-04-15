@@ -39,23 +39,45 @@ function WorkflowCard({
   onRun: (def: WorkflowDefSummary) => void;
 }) {
   return (
-    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+    <div className={`rounded-lg p-4 ${def.valid ? "bg-gray-800 border border-gray-700" : "bg-amber-950 border border-amber-800"}`}>
       <div className="flex items-center justify-between mb-2">
         <h4 className="font-medium text-gray-200">{def.title ?? def.name}</h4>
-        <span className="text-xs px-2 py-0.5 bg-gray-700 rounded text-gray-400">
-          {def.trigger}
-        </span>
+        {def.valid ? (
+          def.trigger && (
+            <span className="text-xs px-2 py-0.5 bg-gray-700 rounded text-gray-400">
+              {def.trigger}
+            </span>
+          )
+        ) : (
+          <span className="text-xs px-2 py-0.5 bg-red-700 rounded text-white font-medium">
+            Invalid
+          </span>
+        )}
       </div>
       <p className="text-sm text-gray-400 mb-3">{def.description || "No description"}</p>
+      {!def.valid && def.error && (
+        <div className="mb-3 p-2 bg-red-950 border border-red-800 rounded text-xs text-red-300 font-mono whitespace-pre-wrap break-words">
+          {def.error}
+        </div>
+      )}
       <div className="flex items-center justify-between">
-        <span className="text-xs text-gray-500">
-          {def.node_count} step{def.node_count !== 1 ? "s" : ""}
-          {def.inputs.length > 0 &&
-            ` · ${def.inputs.length} input${def.inputs.length !== 1 ? "s" : ""}`}
-        </span>
+        {def.valid ? (
+          <span className="text-xs text-gray-500">
+            {def.node_count} step{def.node_count !== 1 ? "s" : ""}
+            {def.inputs.length > 0 &&
+              ` · ${def.inputs.length} input${def.inputs.length !== 1 ? "s" : ""}`}
+          </span>
+        ) : (
+          <span />
+        )}
         <button
           onClick={() => onRun(def)}
-          className="px-3 py-1 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded"
+          disabled={!def.valid}
+          className={`px-3 py-1 text-sm rounded ${
+            def.valid
+              ? "bg-cyan-600 hover:bg-cyan-500 text-white"
+              : "bg-gray-600 text-gray-400 cursor-not-allowed"
+          }`}
         >
           Run
         </button>
