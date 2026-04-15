@@ -2652,7 +2652,10 @@ fn test_linked_tickets_returns_empty_for_feature_with_no_links() {
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
     let tickets = mgr.linked_tickets(&feature_id).unwrap();
-    assert!(tickets.is_empty(), "expected no tickets for unlinked feature");
+    assert!(
+        tickets.is_empty(),
+        "expected no tickets for unlinked feature"
+    );
 }
 
 /// Features with `status != 'in_progress'` are never dangling candidates.

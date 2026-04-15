@@ -233,9 +233,7 @@ impl<'a> FeatureManager<'a> {
 
     /// List active features for all repos in a single query, keyed by repo_id.
     pub fn list_all_active(&self) -> Result<std::collections::HashMap<String, Vec<FeatureRow>>> {
-        let sql = format!(
-            "SELECT {FEATURE_ROW_FRAGMENT} WHERE f.status = ?1{FEATURE_ROW_ORDER}"
-        );
+        let sql = format!("SELECT {FEATURE_ROW_FRAGMENT} WHERE f.status = ?1{FEATURE_ROW_ORDER}");
 
         let rows: Vec<FeatureRow> = query_collect(
             self.conn,

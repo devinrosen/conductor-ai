@@ -1540,13 +1540,7 @@ impl App {
         self.state
             .detail_features
             .get(self.state.features_index)
-            .and_then(|f| {
-                self.state
-                    .data
-                    .repos
-                    .iter()
-                    .find(|r| r.id == f.repo_id)
-            })
+            .and_then(|f| self.state.data.repos.iter().find(|r| r.id == f.repo_id))
             .map(|r| r.slug.clone())
             .unwrap_or_default()
     }
