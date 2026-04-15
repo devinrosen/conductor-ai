@@ -277,10 +277,10 @@ fn build_workflow_summaries(
     wt_path: &str,
     repo_path: &str,
     known_bots: &std::collections::HashSet<String>,
-) -> Vec<WorkflowDefSummary> {
+) -> Result<Vec<WorkflowDefSummary>, ApiError> {
     let (defs, invalid_entries) =
         WorkflowManager::list_defs_with_validation(wt_path, repo_path, known_bots)
-            .unwrap_or_default();
+            .map_err(ApiError::Core)?;
 
     let mut summaries: Vec<WorkflowDefSummary> = Vec::new();
 
@@ -308,7 +308,7 @@ fn build_workflow_summaries(
     // Sort alphabetically by name for a consistent ordering.
     summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
-    summaries
+    Ok(summaries)
 }
 
 #[utoipa::path(
@@ -336,7 +336,7 @@ pub async fn list_repo_workflow_defs(
 
     let known_bots: std::collections::HashSet<String> =
         config.github.apps.keys().cloned().collect();
-    let summaries = build_workflow_summaries("", &repo.local_path, &known_bots);
+    let summaries = build_workflow_summaries("", &repo.local_path, &known_bots)?;
 
     let result = match params.status.unwrap_or_default() {
         StatusFilter::All => summaries,
@@ -374,7 +374,7 @@ pub async fn list_workflow_defs(
 
     let known_bots: std::collections::HashSet<String> =
         config.github.apps.keys().cloned().collect();
-    let summaries = build_workflow_summaries(&wt.path, &repo.local_path, &known_bots);
+    let summaries = build_workflow_summaries(&wt.path, &repo.local_path, &known_bots)?;
 
     let result = match params.status.unwrap_or_default() {
         StatusFilter::All => summaries,
@@ -410,7 +410,7 @@ pub async fn get_workflow_def(
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
 
     let (defs, _warnings) =
-        WorkflowManager::list_defs(&wt.path, &repo.local_path).unwrap_or_default();
+        WorkflowManager::list_defs(&wt.path, &repo.local_path).map_err(ApiError::Core)?;
 
     let def = defs
         .into_iter()
