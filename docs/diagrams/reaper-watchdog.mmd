@@ -1,0 +1,53 @@
+flowchart TD
+    subgraph Triggers["Triggers"]
+        WS["Web: Startup"]
+        WP["Web: every 30s"]
+        TP["TUI: every 30s (throttled)"]
+        CC["CLI: before agent run cmd"]
+    end
+
+    subgraph AM["AgentManager · orphans.rs"]
+        ROA["reap_orphaned_runs()\n─────────────────────\nReads: agent_runs\nWHERE status IN (running, waiting_for_feedback)\nChecks: subprocess PID liveness + recycling\nCalls: try_recover_from_log()\nThen: update_run_failed()\nThen: ▼ fail_child_workflow_runs()"]
+        FCWF["fail_child_workflow_runs() [private]\n─────────────────────\nWrites: workflow_runs → failed\nerror = 'parent agent run was orphaned and reaped'"]
+        RWD["reap_workflow_runs_with_dead_parent()\n─────────────────────\nReads: workflow_runs WHERE status\nIN (running, waiting, pending)\nAND parent_run_id is terminal\nWrites: workflow_runs → failed\nerror = 'parent agent run reached\nterminal state without completing'"]
+    end
+
+    subgraph WM["WorkflowManager · recovery.rs"]
+        ROR["reap_orphaned_workflow_runs()\n─────────────────────\nReads: workflow_runs WHERE status=waiting\n(no parent workflow run)\nChecks: parent agent run terminal\nor gate timeout elapsed\nWrites: workflow_run_steps → timed_out\nworkflow_runs → cancelled"]
+        RSS["reap_orphaned_script_steps()\n─────────────────────\nReads: workflow_run_steps WHERE\nstatus=running, child_run_id IS NULL,\nsubprocess_pid IS NOT NULL\nChecks: PID liveness + recycling\nWrites: workflow_run_steps → failed"]
+        RCS["recover_stuck_steps()\n─────────────────────\nReads: workflow_run_steps WHERE\nstatus=running, child_run_id IS NOT NULL\nChecks: child agent_run terminal?\nWrites: workflow_run_steps\n→ completed / failed"]
+        RFS["reap_finalization_stuck_workflow_runs(60s)\n─────────────────────\nReads: workflow_runs WHERE status=running,\nno active steps, last step ended >60s ago\nWrites: workflow_runs → completed / failed\nagent_runs (parent) → completed / failed"]
+        RSW["reap_stale_workflow_runs(threshold_min)\n─────────────────────\nReads: workflow_runs WHERE running\nAND a step started > threshold ago\nChecks: child agent PID alive?\nWrites: agent_runs → failed\nworkflow_run_steps → failed\nworkflow_runs → failed\n[Web: startup only, if configured]"]
+        RHS["reap_heartbeat_stuck_runs(60s) [Web]\nauto_resume_stuck_workflows() [TUI]\n─────────────────────\nReads: workflow_runs WHERE status=running,\nno active steps, last_heartbeat stale >60s\nWrites: workflow_runs: running → failed (CAS)\nThen: spawns thread → resume_workflow_standalone()"]
+    end
+
+    subgraph DB["DB Tables Written"]
+        AR[("agent_runs\nrunning / waiting_for_feedback\n→ failed")]
+        WR[("workflow_runs\nrunning / waiting / pending\n→ failed / cancelled / completed")]
+        WRS[("workflow_run_steps\nrunning\n→ failed / timed_out / completed")]
+    end
+
+    WS -->|"1. reap_orphaned_runs\n2. reap_orphaned_workflow_runs\n3. reap_orphaned_script_steps\n4. reap_finalization_stuck\n5. reap_stale (if configured)\n6. reap_heartbeat_stuck"| AM
+    WS --> WM
+    WP -->|"same 6 methods"| AM
+    WP --> WM
+    TP -->|"reap_orphaned_runs\nrecover_stuck_steps\nreap_orphaned_workflow_runs\nreap_orphaned_script_steps\nreap_finalization_stuck\nauto_resume_stuck_workflows"| AM
+    TP --> WM
+    CC -->|"reap_orphaned_runs only"| AM
+
+    ROA --> FCWF
+    ROA --> RWD
+    ROA --> AR
+    FCWF --> WR
+    RWD --> WR
+    ROR --> WR
+    ROR --> WRS
+    RSS --> WRS
+    RCS --> WRS
+    RFS --> WR
+    RFS --> AR
+    RSW --> AR
+    RSW --> WR
+    RSW --> WRS
+    RHS -->|"CAS: running → failed\nthen spawns resume thread"| WR
+    RHS --> WRS
