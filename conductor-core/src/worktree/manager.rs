@@ -303,7 +303,7 @@ impl<'a> WorktreeManager<'a> {
         std::fs::create_dir_all(&repo.workspace_dir)?;
 
         // (branch_name, base_branch_for_db, warnings)
-        let (branch, base_for_db, mut warnings) = if let Some(pr_number) = from_pr {
+        let (branch, base_for_db, warnings) = if let Some(pr_number) = from_pr {
             // --from-pr path: fetch the PR branch and record the PR's base branch
             // so that create_pr can target the correct base.
             let (pr_branch, pr_base) = fetch_pr_branch(&repo.local_path, pr_number)?;
@@ -389,37 +389,6 @@ impl<'a> WorktreeManager<'a> {
                 worktree.base_branch,
             ],
         )?;
-
-        // Auto-register feature if targeting a non-default branch
-        if let Some(ref base_branch) = worktree.base_branch {
-            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
-            match fm.ensure_feature_for_branch(&repo, base_branch, None) {
-                Ok(Some(feature)) => {
-                    // Link the worktree's ticket to the feature so downstream
-                    // resolution (e.g. workflow engine) can derive the correct
-                    // base branch for PR targeting.
-                    if let Some(ref tid) = worktree.ticket_id {
-                        if let Err(e) = fm.link_ticket(&feature.id, tid) {
-                            warnings.push(format!(
-                                "Warning: failed to link ticket {} to feature '{}': {}",
-                                tid, feature.name, e
-                            ));
-                        }
-                    }
-                    warnings.push(format!(
-                        "Auto-registered feature '{}' for branch '{}'",
-                        feature.name, feature.branch
-                    ));
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    warnings.push(format!(
-                        "Warning: failed to auto-register feature for branch '{}': {}",
-                        base_branch, e
-                    ));
-                }
-            }
-        }
 
         Ok((worktree, warnings))
     }
@@ -852,18 +821,6 @@ impl<'a> WorktreeManager<'a> {
                 slug: name.to_string(),
             });
         }
-        // Auto-register feature if targeting a non-default branch
-        if let Some(branch) = base_branch {
-            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
-            if let Err(e) = fm.ensure_feature_for_branch(&repo, branch, None) {
-                tracing::warn!(
-                    repo_slug = repo_slug,
-                    branch = branch,
-                    error = %e,
-                    "failed to auto-register feature for base branch"
-                );
-            }
-        }
         Ok(())
     }
 
@@ -1095,6 +1052,13 @@ impl<'a> WorktreeManager<'a> {
         // Track (repo_id, base_branch) pairs already pulled to avoid redundant subprocesses
         let mut pulled_bases: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
+        // Collect (repo_id, base_branch) pairs to check for auto-ready-for-review after the loop.
+        // Checked after all worktrees are marked merged so the active-count query sees the final state.
+        let mut pending_ready_check: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        // Shared FeatureManager instance used both inside the loop (auto-close) and after it
+        // (auto-ready-for-review). The constructor only stores references so hoisting is safe.
+        let fm = crate::feature::FeatureManager::new(self.conn, self.config);
 
         for row in &rows {
             let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch] = row;
@@ -1123,7 +1087,6 @@ impl<'a> WorktreeManager<'a> {
             pruned_repos.insert(repo_path.as_str());
 
             // Auto-close orphaned features
-            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
             let base = if base_branch.is_empty() {
                 None
             } else {
@@ -1131,6 +1094,13 @@ impl<'a> WorktreeManager<'a> {
             };
             if let Err(e) = fm.auto_close_after_worktree_delete(repo_id, base) {
                 tracing::warn!(error = %e, "failed to auto-close orphaned feature during cleanup");
+            }
+
+            // Collect this (repo_id, base_branch) pair for post-loop auto-ready-for-review check.
+            // We defer until after the loop so all worktrees are marked merged before the
+            // active-count query fires — otherwise an early call sees sibling worktrees still active.
+            if self.config.general.auto_ready_for_review && !base_branch.is_empty() {
+                pending_ready_check.insert((repo_id.clone(), base_branch.clone()));
             }
 
             // Auto-pull base branch worktree if tracked and active
@@ -1162,6 +1132,16 @@ impl<'a> WorktreeManager<'a> {
             }
 
             cleaned += 1;
+        }
+
+        // Auto-transition features to ready_for_review now that all worktrees are marked merged.
+        // Deferred from the loop so the active-count query sees the final DB state.
+        if !pending_ready_check.is_empty() {
+            for (repo_id, base_branch) in &pending_ready_check {
+                if let Err(e) = fm.auto_ready_for_review_if_complete(repo_id, base_branch) {
+                    tracing::warn!(error = %e, "failed to auto-transition feature to ready_for_review");
+                }
+            }
         }
 
         // Run git worktree prune once per unique repo path

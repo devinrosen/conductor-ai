@@ -141,6 +141,13 @@ pub enum ConductorError {
     #[error("feature '{name}' is still active. Run `conductor feature close {repo} {name}` first")]
     FeatureStillActive { repo: String, name: String },
 
+    #[error("cannot transition feature '{name}' from {from} to {to}")]
+    InvalidFeatureTransition {
+        name: String,
+        from: String,
+        to: String,
+    },
+
     #[error("unknown ticket source type: {0}")]
     UnknownSourceType(String),
 
@@ -183,6 +190,7 @@ impl ConductorError {
             Self::FeatureNotFound { .. } => 28,
             Self::FeatureAlreadyExists { .. } => 29,
             Self::FeatureStillActive { .. } => 33,
+            Self::InvalidFeatureTransition { .. } => 34,
             Self::Git(_) => 30,
             Self::GhCli(_) => 31,
             Self::TicketSync(_) => 32,
@@ -236,6 +244,11 @@ mod tests {
             ConductorError::FeatureStillActive {
                 repo: "r".into(),
                 name: "f".into(),
+            },
+            ConductorError::InvalidFeatureTransition {
+                name: "f".into(),
+                from: "in_progress".into(),
+                to: "approved".into(),
             },
             ConductorError::Git(SubprocessFailure::from_message("git", "err".into())),
             ConductorError::GhCli(SubprocessFailure::from_message("gh", "err".into())),

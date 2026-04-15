@@ -58,13 +58,13 @@ fn test_create_feature_duplicate_via_manager() {
 
     // First create succeeds
     let feature = mgr
-        .create("test-repo", "notif-improvements", None, &[])
+        .create("test-repo", "notif-improvements", None, None, None, &[])
         .unwrap();
     assert_eq!(feature.name, "notif-improvements");
 
     // Second create with the same name should return FeatureAlreadyExists
     let err = mgr
-        .create("test-repo", "notif-improvements", None, &[])
+        .create("test-repo", "notif-improvements", None, None, None, &[])
         .unwrap_err();
     assert!(
         matches!(err, ConductorError::FeatureAlreadyExists { .. }),
@@ -437,7 +437,9 @@ fn test_create_feature_happy_path() {
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
 
-    let feature = mgr.create("test-repo", "my-feature", None, &[]).unwrap();
+    let feature = mgr
+        .create("test-repo", "my-feature", None, None, None, &[])
+        .unwrap();
 
     assert_eq!(feature.name, "my-feature");
     assert_eq!(feature.branch, "feat/my-feature");
@@ -485,7 +487,7 @@ fn test_create_feature_with_custom_base_branch() {
     let mgr = FeatureManager::new(&conn, &config);
 
     let feature = mgr
-        .create("test-repo", "custom-base", Some("develop"), &[])
+        .create("test-repo", "custom-base", Some("develop"), None, None, &[])
         .unwrap();
 
     assert_eq!(feature.name, "custom-base");
@@ -518,6 +520,8 @@ fn test_create_feature_with_ticket_source_ids() {
         .create(
             "test-repo",
             "with-tickets",
+            None,
+            None,
             None,
             &["42".into(), "43".into()],
         )
@@ -696,7 +700,7 @@ fn test_create_feature_cleans_up_branches_on_db_failure() {
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
 
-    let result = mgr.create("test-repo", "cleanup-test", None, &[]);
+    let result = mgr.create("test-repo", "cleanup-test", None, None, None, &[]);
     assert!(result.is_err(), "create should fail due to trigger");
 
     // Verify the local branch was cleaned up
@@ -883,6 +887,208 @@ fn test_resolve_feature_id_for_run_explicit_name() {
         .resolve_feature_id_for_run(Some("my-feat"), Some("test-repo"), None, None)
         .unwrap();
     assert_eq!(result, Some(feature_id));
+}
+
+// -----------------------------------------------------------------------
+// transition() tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_transition_in_progress_to_ready_for_review() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .transition("test-repo", "my-feat", FeatureStatus::ReadyForReview)
+        .unwrap();
+    assert_eq!(feature.status, FeatureStatus::ReadyForReview);
+}
+
+#[test]
+fn test_transition_ready_for_review_to_approved() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+    conn.execute(
+        "UPDATE features SET status = 'ready_for_review' WHERE id = ?1",
+        params![feature_id],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .transition("test-repo", "my-feat", FeatureStatus::Approved)
+        .unwrap();
+    assert_eq!(feature.status, FeatureStatus::Approved);
+}
+
+#[test]
+fn test_transition_invalid_in_progress_to_approved() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let err = mgr
+        .transition("test-repo", "my-feat", FeatureStatus::Approved)
+        .unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidFeatureTransition { .. }),
+        "expected InvalidFeatureTransition, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_transition_any_to_closed_succeeds() {
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let _repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+    // Create a feature via the manager (so the branch exists)
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.create("test-repo", "close-feat", None, None, None, &[])
+        .unwrap();
+
+    // Transition from in_progress → closed should be allowed
+    let feature = mgr
+        .transition("test-repo", "close-feat", FeatureStatus::Closed)
+        .unwrap();
+    assert!(
+        feature.status == FeatureStatus::Closed || feature.status == FeatureStatus::Merged,
+        "expected Closed or Merged, got: {:?}",
+        feature.status
+    );
+}
+
+// -----------------------------------------------------------------------
+// auto_ready_for_review_if_complete() tests
+// -----------------------------------------------------------------------
+
+fn insert_worktree_for_feature(
+    conn: &Connection,
+    repo_id: &str,
+    slug: &str,
+    base_branch: &str,
+    status: &str,
+) {
+    let id = crate::new_id();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, '/tmp/wt', ?6, '2024-01-01T00:00:00Z')",
+        rusqlite::params![
+            id,
+            repo_id,
+            slug,
+            format!("{slug}-branch"),
+            base_branch,
+            status
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_auto_ready_for_review_with_active_worktrees_no_transition() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    // One active worktree remains
+    insert_worktree_for_feature(&conn, &repo_id, "wt-active", "feat/my-feat", "active");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/my-feat")
+        .unwrap();
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "in_progress",
+        "feature should remain in_progress while worktrees are active"
+    );
+}
+
+#[test]
+fn test_auto_ready_for_review_no_active_worktrees_transitions() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    // Only merged worktree
+    insert_worktree_for_feature(&conn, &repo_id, "wt-merged", "feat/my-feat", "merged");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/my-feat")
+        .unwrap();
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "ready_for_review",
+        "feature should transition to ready_for_review when all worktrees merged"
+    );
+}
+
+#[test]
+fn test_auto_ready_for_review_abandoned_worktrees_not_counted_as_active() {
+    // Abandoned worktrees must NOT block the auto-transition — only 'active' status counts.
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    // One merged and one abandoned worktree — no active ones remain
+    insert_worktree_for_feature(&conn, &repo_id, "wt-merged", "feat/my-feat", "merged");
+    insert_worktree_for_feature(&conn, &repo_id, "wt-abandoned", "feat/my-feat", "abandoned");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/my-feat")
+        .unwrap();
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "ready_for_review",
+        "abandoned worktrees should not block auto-transition to ready_for_review"
+    );
+}
+
+#[test]
+fn test_auto_ready_for_review_no_feature_is_noop() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    // Should return Ok(()) even when no feature exists for this branch
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/nonexistent")
+        .unwrap();
 }
 
 #[test]

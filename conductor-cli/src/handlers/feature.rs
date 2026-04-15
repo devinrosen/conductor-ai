@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 use conductor_core::config::Config;
-use conductor_core::feature::FeatureManager;
+use conductor_core::feature::{FeatureManager, FeatureStatus};
 
 use crate::commands::FeatureCommands;
 use crate::helpers::parse_ticket_ids;
@@ -14,13 +14,29 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
             name,
             from,
             tickets,
+            milestone,
         } => {
             let ticket_ids = parse_ticket_ids(tickets.as_deref().unwrap_or(""));
 
+            // Derive source_type/source_id from --milestone if provided.
+            let milestone_str = milestone.map(|ms| ms.to_string());
+            let source_type_opt = milestone_str.as_deref().map(|_| "github_milestone");
+            let source_id_opt = milestone_str.as_deref();
+
             let mgr = FeatureManager::new(conn, config);
-            let feature = mgr.create(&repo, &name, from.as_deref(), &ticket_ids)?;
+            let feature = mgr.create(
+                &repo,
+                &name,
+                from.as_deref(),
+                source_type_opt,
+                source_id_opt,
+                &ticket_ids,
+            )?;
             println!("Created feature: {} ({})", feature.name, feature.branch);
             println!("  Base: {}", feature.base_branch);
+            if let Some(ms) = milestone {
+                println!("  Milestone: {ms}");
+            }
             if !ticket_ids.is_empty() {
                 println!("  Linked {} ticket(s)", ticket_ids.len());
             }
@@ -81,6 +97,16 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
             let mgr = FeatureManager::new(conn, config);
             let url = mgr.create_pr(&repo, &name, draft)?;
             println!("{url}");
+        }
+        FeatureCommands::Review { repo, name } => {
+            let mgr = FeatureManager::new(conn, config);
+            mgr.transition(&repo, &name, FeatureStatus::ReadyForReview)?;
+            println!("Feature '{name}' marked as ready_for_review.");
+        }
+        FeatureCommands::Approve { repo, name } => {
+            let mgr = FeatureManager::new(conn, config);
+            mgr.transition(&repo, &name, FeatureStatus::Approved)?;
+            println!("Feature '{name}' approved.");
         }
         FeatureCommands::Close { repo, name } => {
             let mgr = FeatureManager::new(conn, config);
