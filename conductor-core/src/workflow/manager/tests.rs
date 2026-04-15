@@ -3985,7 +3985,7 @@ fn test_list_defs_with_validation_parse_failures_are_captured() {
     );
     // One should be the parse failure with name "bad"
     assert!(
-        invalid.iter().any(|(name, _err)| name == "bad"),
+        invalid.iter().any(|e| e.name == "bad"),
         "Expected to find 'bad' in invalid entries: {:?}",
         invalid
     );
@@ -4010,8 +4010,8 @@ fn test_list_defs_with_validation_filename_stem_extraction() {
     assert!(defs.is_empty());
     assert_eq!(invalid.len(), 1);
     // The invalid entry should use the filename stem, not the full filename
-    assert_eq!(invalid[0].0, "my-workflow");
-    assert!(!invalid[0].1.is_empty()); // Should have an error message
+    assert_eq!(invalid[0].name, "my-workflow");
+    assert!(!invalid[0].error.is_empty()); // Should have an error message
 }
 
 #[test]
@@ -4030,4 +4030,42 @@ fn test_list_defs_with_validation_empty_directory() {
 
     assert!(defs.is_empty());
     assert!(invalid.is_empty());
+}
+
+#[test]
+fn test_list_defs_with_validation_happy_path() {
+    // A workflow that parses successfully and passes validation should appear
+    // in valid_defs and not in invalid_entries.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let wf_dir = tmp.path().join(".conductor").join("workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+
+    // Create a valid workflow with proper syntax.
+    // This has all required meta fields and no body, so it passes validation.
+    std::fs::write(
+        wf_dir.join("valid.wf"),
+        "workflow valid {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n}\n",
+    )
+    .unwrap();
+
+    let (defs, invalid) = WorkflowManager::list_defs_with_validation(
+        tmp.path().to_str().unwrap(),
+        "/nonexistent",
+        &std::collections::HashSet::new(),
+    )
+    .unwrap();
+
+    // The workflow should parse and pass validation (no body means no validation errors).
+    assert!(
+        defs.iter().any(|d| d.name == "valid"),
+        "Expected to find 'valid' workflow in valid_defs: {:?}",
+        defs
+    );
+
+    // Verify the invalid entry does NOT exist (happy path).
+    assert!(
+        !invalid.iter().any(|e| e.name == "valid"),
+        "Expected 'valid' workflow to NOT be in invalid_entries: {:?}",
+        invalid
+    );
 }

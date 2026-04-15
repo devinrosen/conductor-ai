@@ -290,9 +290,9 @@ fn build_workflow_summaries(
     }
 
     // Convert invalid entries to summaries.
-    for (name, error_msg) in &invalid_entries {
+    for entry in &invalid_entries {
         summaries.push(WorkflowDefSummary {
-            name: name.clone(),
+            name: entry.name.clone(),
             title: None,
             description: String::new(),
             trigger: String::new(),
@@ -301,7 +301,7 @@ fn build_workflow_summaries(
             group: None,
             targets: Vec::new(),
             valid: false,
-            error: Some(error_msg.clone()),
+            error: Some(entry.error.clone()),
         });
     }
 

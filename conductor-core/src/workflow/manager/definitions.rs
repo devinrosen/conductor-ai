@@ -5,11 +5,17 @@ use crate::workflow_dsl;
 
 use super::WorkflowManager;
 
-/// Invalid workflow entry: (name, error_message).
+/// Represents a workflow that failed to parse or failed post-parse validation.
 ///
-/// Used by [`WorkflowManager::list_defs_with_validation`] to represent
-/// workflows that failed to parse or failed post-parse validation.
-pub type InvalidWorkflowEntry = (String, String);
+/// Used by [`WorkflowManager::list_defs_with_validation`] to communicate
+/// invalid workflows with semantic field names.
+#[derive(Clone, Debug)]
+pub struct InvalidWorkflowEntry {
+    /// The workflow name (or filename stem for parse failures).
+    pub name: String,
+    /// The error message explaining why the workflow is invalid.
+    pub error: String,
+}
 
 impl WorkflowManager<'_> {
     /// Load workflow definitions from the filesystem for a worktree.
@@ -108,7 +114,10 @@ impl WorkflowManager<'_> {
                     .and_then(|s| s.to_str())
                     .unwrap_or(&w.file)
                     .to_string();
-                (name, w.message.clone())
+                InvalidWorkflowEntry {
+                    name,
+                    error: w.message.clone(),
+                }
             })
             .collect();
 
@@ -137,19 +146,25 @@ impl WorkflowManager<'_> {
                     .map(|v| v.message.as_str())
                     .collect::<Vec<_>>()
                     .join("; ");
-                invalid_entries.push((entry.name.clone(), msg));
+                invalid_entries.push(InvalidWorkflowEntry {
+                    name: entry.name.clone(),
+                    error: msg,
+                });
             }
         }
+
+        // Build a set of invalid workflow names for efficient O(N) lookup.
+        let invalid_names: HashSet<String> = validation
+            .entries
+            .iter()
+            .filter(|e| !e.errors.is_empty())
+            .map(|e| e.name.clone())
+            .collect();
 
         // Filter out defs that failed validation.
         let valid_defs: Vec<_> = defs
             .into_iter()
-            .filter(|d| {
-                !validation
-                    .entries
-                    .iter()
-                    .any(|e| e.name == d.name && !e.errors.is_empty())
-            })
+            .filter(|d| !invalid_names.contains(&d.name))
             .collect();
 
         Ok((valid_defs, invalid_entries))
