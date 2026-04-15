@@ -32,13 +32,7 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
             let ticket_ids = parse_ticket_ids(tickets.as_deref().unwrap_or(""));
 
             let mgr = FeatureManager::new(conn, config);
-            let feature = mgr.create(
-                &repo,
-                &name,
-                from.as_deref(),
-                milestone,
-                &ticket_ids,
-            )?;
+            let feature = mgr.create(&repo, &name, from.as_deref(), milestone, &ticket_ids)?;
             println!("Created feature: {} ({})", feature.name, feature.branch);
             println!("  Base: {}", feature.base_branch);
             if let Some(ref sid) = feature.source_id {
@@ -167,4 +161,3 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
     }
     Ok(())
 }
-
