@@ -3322,4 +3322,69 @@ mod tests {
         let json = serde_json::to_value(&summary).unwrap();
         assert_eq!(json["targets"], serde_json::json!([]));
     }
+
+    // ── build_workflow_summaries / callers ─────────────────────────────
+
+    /// GET /api/repos/{id}/workflows returns 200 with empty array when the
+    /// repo exists but has no workflow definitions on disk.
+    #[tokio::test]
+    async fn list_repo_workflow_defs_returns_empty_for_valid_repo() {
+        let (status, body) = get_response("/api/repos/r1/workflows", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, serde_json::json!([]));
+    }
+
+    /// GET /api/repos/{id}/workflows returns 404 when the repo does not exist.
+    #[tokio::test]
+    async fn list_repo_workflow_defs_returns_404_for_unknown_repo() {
+        let (status, _) = get_response("/api/repos/nonexistent/workflows", seeded_state()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// GET /api/worktrees/{id}/workflows/defs returns 200 with empty array when
+    /// the worktree exists but has no workflow definitions on disk.
+    #[tokio::test]
+    async fn list_workflow_defs_returns_empty_for_valid_worktree() {
+        let (status, body) =
+            get_response("/api/worktrees/w1/workflows/defs", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, serde_json::json!([]));
+    }
+
+    /// GET /api/worktrees/{id}/workflows/defs returns 404 when the worktree
+    /// does not exist.
+    #[tokio::test]
+    async fn list_workflow_defs_returns_404_for_unknown_worktree() {
+        let (status, _) =
+            get_response("/api/worktrees/nonexistent/workflows/defs", seeded_state()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// GET /api/worktrees/{id}/workflows/defs/{name} returns an error when the
+    /// named workflow does not exist. Exercises the new `map_err(ApiError::Core)?`
+    /// path in `get_workflow_def` — previously `unwrap_or_default()` silently
+    /// returned an empty list; now `list_defs` errors propagate and a missing
+    /// name produces a `ConductorError::Workflow` (mapped to 500 by `error.rs`).
+    #[tokio::test]
+    async fn get_workflow_def_returns_error_for_unknown_name() {
+        let (status, _) =
+            get_response("/api/worktrees/w1/workflows/defs/no-such-workflow", seeded_state()).await;
+        // ConductorError::Workflow is not in the 404 allowlist in error.rs, so
+        // "not found" produces a 500. This is pre-existing behaviour for the
+        // ok_or_else path; what we verify here is that the new `?` propagation
+        // does not swallow the error silently.
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    /// GET /api/worktrees/{id}/workflows/defs/{name} returns 404 when the
+    /// worktree itself does not exist.
+    #[tokio::test]
+    async fn get_workflow_def_returns_404_for_unknown_worktree() {
+        let (status, _) = get_response(
+            "/api/worktrees/nonexistent/workflows/defs/my-workflow",
+            seeded_state(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
 }
