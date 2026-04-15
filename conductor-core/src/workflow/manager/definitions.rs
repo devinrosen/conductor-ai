@@ -141,7 +141,12 @@ impl WorkflowManager<'_> {
         // Filter out defs that failed validation.
         let valid_defs: Vec<_> = defs
             .into_iter()
-            .filter(|d| !validation.entries.iter().any(|e| e.name == d.name && !e.errors.is_empty()))
+            .filter(|d| {
+                !validation
+                    .entries
+                    .iter()
+                    .any(|e| e.name == d.name && !e.errors.is_empty())
+            })
             .collect();
 
         Ok((valid_defs, invalid_entries))
