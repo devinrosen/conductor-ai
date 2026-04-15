@@ -226,6 +226,8 @@ export interface WorkflowDefSummary {
   node_count: number;
   group: string | null;
   targets: string[];
+  valid: boolean;
+  error: string | null;
 }
 
 export interface WorkflowRun {

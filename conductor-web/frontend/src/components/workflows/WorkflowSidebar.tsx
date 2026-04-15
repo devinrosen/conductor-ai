@@ -95,13 +95,19 @@ export function WorkflowSidebar({ repoId, worktreeId, ticketId }: WorkflowSideba
         ) : (
           <div className="space-y-1">
             {defs.map((def) => (
-              <div key={def.name} className="flex items-center justify-between gap-2 py-1">
-                <span className="text-sm text-gray-300 truncate" title={def.description || def.name}>
+              <div key={def.name} className="flex items-center justify-between gap-2 py-1" title={def.error ?? undefined}>
+                <span className={`text-sm truncate ${def.valid ? "text-gray-300" : "text-amber-400"}`}>
+                  {!def.valid && <span className="mr-1">⚠</span>}
                   {def.name}
                 </span>
                 <button
-                  onClick={() => setRunModalDef(def)}
-                  className="shrink-0 px-2 py-0.5 text-xs bg-cyan-700 hover:bg-cyan-600 text-white rounded active:scale-95 transition-transform"
+                  onClick={() => def.valid && setRunModalDef(def)}
+                  disabled={!def.valid}
+                  className={`shrink-0 px-2 py-0.5 text-xs rounded active:scale-95 transition-transform ${
+                    def.valid
+                      ? "bg-cyan-700 hover:bg-cyan-600 text-white"
+                      : "bg-gray-600 text-gray-400 cursor-not-allowed"
+                  }`}
                 >
                   Run
                 </button>
