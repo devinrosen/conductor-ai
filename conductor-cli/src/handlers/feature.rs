@@ -10,6 +10,19 @@ use crate::commands::FeatureCommands;
 use crate::helpers::parse_ticket_ids;
 
 pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Config) -> Result<()> {
+    // Check for dangling features before processing any command
+    {
+        let mgr = conductor_core::feature::FeatureManager::new(conn, config);
+        match mgr.reap_dangling_all() {
+            Ok(dangling) if !dangling.is_empty() => {
+                for f in &dangling {
+                    eprintln!("Warning: feature '{}' is dangling (in_progress with no active worktrees and no open PRs)", f.name);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("Warning: reap_dangling_all failed: {e}"),
+        }
+    }
     match command {
         FeatureCommands::Create {
             repo,
@@ -147,6 +160,28 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
                 "Synced feature '{}': +{} added, {} removed",
                 name, result.added, result.removed
             );
+        }
+        FeatureCommands::Run {
+            repo,
+            name,
+            parallel,
+        } => {
+            #[cfg(unix)]
+            {
+                let mgr = FeatureManager::new(conn, config);
+                let summary = mgr.run(&repo, &name, parallel)?;
+                println!(
+                    "Feature '{}' run complete — dispatched: {}, failed: {}",
+                    name, summary.dispatched, summary.failed
+                );
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = (repo, name, parallel);
+                return Err(anyhow::anyhow!(
+                    "feature run is not supported on this platform"
+                ));
+            }
         }
     }
     Ok(())

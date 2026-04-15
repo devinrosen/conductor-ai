@@ -511,6 +511,19 @@ pub fn poll_data() -> Option<PollResult> {
                     tracing::warn!("auto_resume_stuck_workflows failed: {e}");
                 }
             }
+            {
+                let feat_mgr = conductor_core::feature::FeatureManager::new(&conn, &config);
+                match feat_mgr.reap_dangling_all() {
+                    Ok(v) if !v.is_empty() => {
+                        tracing::warn!(
+                            "Dangling features detected: {:?}",
+                            v.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reap_dangling_all failed: {e}"),
+                }
+            }
         }
     }
 

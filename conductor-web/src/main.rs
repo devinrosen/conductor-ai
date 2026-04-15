@@ -158,6 +158,22 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Check for dangling features on startup.
+    {
+        use conductor_core::feature::FeatureManager;
+        let feat_mgr = FeatureManager::new(&conn, &config);
+        match feat_mgr.reap_dangling_all() {
+            Ok(v) if !v.is_empty() => {
+                tracing::warn!(
+                    "Dangling features detected on startup: {:?}",
+                    v.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
+                );
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("reap_dangling_all failed on startup: {e}"),
+        }
+    }
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(config)),
@@ -501,6 +517,18 @@ async fn main() -> Result<()> {
                             );
                         }
                     }
+                }
+
+                let feat_mgr = conductor_core::feature::FeatureManager::new(&conn, &cfg);
+                match feat_mgr.reap_dangling_all() {
+                    Ok(v) if !v.is_empty() => {
+                        tracing::warn!(
+                            "Dangling features: {:?}",
+                            v.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reap_dangling_all failed: {e}"),
                 }
 
                 Ok::<_, conductor_core::error::ConductorError>((seen, init, wf_seen, wf_init))

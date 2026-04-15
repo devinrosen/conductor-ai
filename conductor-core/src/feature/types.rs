@@ -128,3 +128,12 @@ pub struct SyncResult {
     /// Number of tickets unlinked from the feature (ticket records are preserved).
     pub removed: usize,
 }
+
+/// Result returned by `FeatureManager::run()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSummary {
+    /// Number of tickets for which worktrees + agents were dispatched.
+    pub dispatched: u32,
+    /// Number of tickets that failed to dispatch (worktree or agent spawn error).
+    pub failed: u32,
+}
