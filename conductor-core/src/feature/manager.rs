@@ -44,11 +44,12 @@ const FEATURE_ROW_ORDER: &str = " ORDER BY f.created_at DESC";
 
 /// Column list for a plain `SELECT … FROM features` (no join, no subquery).
 /// Used by `map_feature_row` — keep in sync with that function's column indices.
-const FEATURE_COLS: &str = "id, repo_id, name, branch, base_branch, status, created_at, merged_at";
+const FEATURE_COLS: &str =
+    "id, repo_id, name, branch, base_branch, status, created_at, merged_at, source_type, source_id, tickets_total, tickets_merged";
 
 /// Same columns but table-aliased (`f.`) for use in joins.
 const FEATURE_COLS_ALIASED: &str =
-    "f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at";
+    "f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at, f.source_type, f.source_id, f.tickets_total, f.tickets_merged";
 
 /// Map a rusqlite row to a `FeatureRow`, starting at the given column offset.
 fn map_feature_row_cols(
@@ -145,9 +146,13 @@ impl<'a> FeatureManager<'a> {
             name: name.to_string(),
             branch,
             base_branch: base,
-            status: FeatureStatus::Active,
+            status: FeatureStatus::InProgress,
             created_at: now,
             merged_at: None,
+            source_type: None,
+            source_id: None,
+            tickets_total: 0,
+            tickets_merged: 0,
         };
 
         if let Err(e) = self.insert_feature_record(&feature) {
@@ -176,7 +181,7 @@ impl<'a> FeatureManager<'a> {
 
     /// List only active features for a repo (with worktree and ticket counts).
     pub fn list_active(&self, repo_slug: &str) -> Result<Vec<FeatureRow>> {
-        self.list_with_status_filter(repo_slug, Some(FeatureStatus::Active))
+        self.list_with_status_filter(repo_slug, Some(FeatureStatus::InProgress))
     }
 
     /// List active features for all repos in a single query, keyed by repo_id.
@@ -188,7 +193,7 @@ impl<'a> FeatureManager<'a> {
         let pairs: Vec<(String, FeatureRow)> = query_collect(
             self.conn,
             &sql,
-            params![FeatureStatus::Active],
+            params![FeatureStatus::InProgress],
             |row: &rusqlite::Row<'_>| Ok((row.get::<_, String>(0)?, map_feature_row_cols(row, 1)?)),
         )?;
 
@@ -266,9 +271,9 @@ impl<'a> FeatureManager<'a> {
     /// Returns `ConductorError::Workflow` if the feature exists but is not active.
     pub fn resolve_active_feature(&self, repo_slug: &str, name: &str) -> Result<Feature> {
         let f = self.get_by_name(repo_slug, name)?;
-        if f.status != FeatureStatus::Active {
+        if f.status != FeatureStatus::InProgress {
             return Err(ConductorError::Workflow(format!(
-                "Feature '{}' is {} — only active features can be used.",
+                "Feature '{}' is {} — only in-progress features can be used.",
                 name, f.status
             )));
         }
@@ -286,7 +291,7 @@ impl<'a> FeatureManager<'a> {
             &format!(
                 "SELECT {FEATURE_COLS_ALIASED} FROM features f \
                  INNER JOIN feature_tickets ft ON ft.feature_id = f.id \
-                 WHERE ft.ticket_id = ?1 AND f.status = 'active'"
+                 WHERE ft.ticket_id = ?1 AND f.status = 'in_progress'"
             ),
             params![ticket_id],
             map_feature_row,
@@ -434,7 +439,7 @@ impl<'a> FeatureManager<'a> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
         let feature = self.get_feature_by_repo_id(&repo.id, name)?;
 
-        if feature.status == FeatureStatus::Active {
+        if feature.status == FeatureStatus::InProgress {
             return Err(ConductorError::FeatureStillActive {
                 repo: repo_slug.to_string(),
                 name: name.to_string(),
@@ -526,7 +531,7 @@ impl<'a> FeatureManager<'a> {
         let feature: Option<Feature> = self
             .conn
             .query_row(
-                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'"),
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'in_progress'"),
                 params![repo.id, feature_branch],
                 map_feature_row,
             )
@@ -599,7 +604,7 @@ impl<'a> FeatureManager<'a> {
 
         // Already registered?
         let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active')",
+            "SELECT EXISTS(SELECT 1 FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'in_progress')",
             params![repo.id, branch],
             |row| row.get(0),
         )?;
@@ -619,14 +624,14 @@ impl<'a> FeatureManager<'a> {
         let maybe_inactive: Option<(String, String, String)> = self
             .conn
             .query_row(
-                "SELECT id, status, created_at FROM features WHERE repo_id = ?1 AND name = ?2 AND status != 'active'",
+                "SELECT id, status, created_at FROM features WHERE repo_id = ?1 AND name = ?2 AND status != 'in_progress'",
                 params![repo.id, base_name],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         if let Some((inactive_id, _status, created_at)) = maybe_inactive {
             self.conn.execute(
-                "UPDATE features SET branch = ?1, base_branch = ?2, status = 'active', merged_at = NULL WHERE id = ?3",
+                "UPDATE features SET branch = ?1, base_branch = ?2, status = 'in_progress', merged_at = NULL WHERE id = ?3",
                 params![branch, resolved_base, inactive_id],
             )?;
             return Ok(Some(Feature {
@@ -635,9 +640,13 @@ impl<'a> FeatureManager<'a> {
                 name: base_name.to_string(),
                 branch: branch.to_string(),
                 base_branch: resolved_base,
-                status: FeatureStatus::Active,
+                status: FeatureStatus::InProgress,
                 created_at,
                 merged_at: None,
+                source_type: None,
+                source_id: None,
+                tickets_total: 0,
+                tickets_merged: 0,
             }));
         }
 
@@ -667,9 +676,13 @@ impl<'a> FeatureManager<'a> {
             name,
             branch: branch.to_string(),
             base_branch: resolved_base,
-            status: FeatureStatus::Active,
+            status: FeatureStatus::InProgress,
             created_at: now,
             merged_at: None,
+            source_type: None,
+            source_id: None,
+            tickets_total: 0,
+            tickets_merged: 0,
         };
 
         self.insert_feature_record(&feature)?;
@@ -691,7 +704,7 @@ impl<'a> FeatureManager<'a> {
              WHERE w.repo_id = ?1
                AND w.status = 'active'
                AND w.branch != ?2
-               AND w.branch NOT IN (SELECT f.branch FROM features f WHERE f.repo_id = ?1 AND f.status = 'active')
+               AND w.branch NOT IN (SELECT f.branch FROM features f WHERE f.repo_id = ?1 AND f.status = 'in_progress')
              GROUP BY w.branch",
             params![repo_id, default_branch],
             |row| {
@@ -731,7 +744,7 @@ impl<'a> FeatureManager<'a> {
 
         let features: Vec<(String, String)> = query_collect(
             self.conn,
-            "SELECT id, branch FROM features WHERE repo_id = ?1 AND status = 'active'",
+            "SELECT id, branch FROM features WHERE repo_id = ?1 AND status = 'in_progress'",
             params![repo.id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -761,7 +774,7 @@ impl<'a> FeatureManager<'a> {
         if threshold_days == 0 {
             return false;
         }
-        if feature.status != FeatureStatus::Active {
+        if feature.status != FeatureStatus::InProgress {
             return false;
         }
         let cutoff = Utc::now() - chrono::Duration::days(threshold_days as i64);
@@ -862,10 +875,10 @@ impl<'a> FeatureManager<'a> {
         Ok(())
     }
 
-    fn insert_feature_record(&self, feature: &Feature) -> Result<()> {
+    pub(super) fn insert_feature_record(&self, feature: &Feature) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at, source_type, source_id, tickets_total, tickets_merged)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 feature.id,
                 feature.repo_id,
@@ -874,6 +887,10 @@ impl<'a> FeatureManager<'a> {
                 feature.base_branch,
                 feature.status,
                 feature.created_at,
+                feature.source_type,
+                feature.source_id,
+                feature.tickets_total,
+                feature.tickets_merged,
             ],
         )?;
         Ok(())
@@ -889,7 +906,7 @@ impl<'a> FeatureManager<'a> {
         Ok(self
             .conn
             .query_row(
-                "SELECT id FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'",
+                "SELECT id FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'in_progress'",
                 params![repo_id, branch],
                 |row| row.get(0),
             )

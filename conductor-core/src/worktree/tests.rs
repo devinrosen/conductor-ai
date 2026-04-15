@@ -1407,7 +1407,7 @@ fn test_delete_then_auto_close_orphaned_feature() {
     let feature_id = crate::new_id();
     conn.execute(
         "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-         VALUES (?1, ?2, 'ephemeral', 'feat/ephemeral', 'main', 'active', '2024-01-01T00:00:00Z')",
+         VALUES (?1, ?2, 'ephemeral', 'feat/ephemeral', 'main', 'in_progress', '2024-01-01T00:00:00Z')",
         rusqlite::params![feature_id, repo_id],
     )
     .unwrap();

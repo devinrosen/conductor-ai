@@ -368,7 +368,7 @@ fn branch_picker_item_populates_stale_days() {
         name: "old-feature".to_string(),
         branch: "feat/old".to_string(),
         base_branch: "main".to_string(),
-        status: FeatureStatus::Active,
+        status: FeatureStatus::InProgress,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         worktree_count: 0,
         ticket_count: 0,

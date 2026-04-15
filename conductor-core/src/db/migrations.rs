@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 69;
+pub const LATEST_SCHEMA_VERSION: u32 = 70;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -960,6 +960,28 @@ pub fn run(conn: &Connection) -> Result<()> {
     if version < 69 {
         conn.execute_batch(include_str!("migrations/069_workflow_step_error.sql"))?;
         bump_version(conn, 69)?;
+    }
+
+    // Migration 070: RFC-018 features — source_type, source_id, tickets_total,
+    // tickets_merged; expanded status CHECK; data-migrate active → in_progress.
+    //
+    // Guarded: only runs when the features table exists AND has a `status` column
+    // (i.e. is the real schema from migration 042, not a minimal test stub).
+    // Also skips if `source_type` is already present (idempotent against partial failure).
+    if version < 70 {
+        let has_status_col = conn.prepare("SELECT status FROM features LIMIT 0").is_ok();
+        if has_status_col {
+            let has_source_type = conn
+                .prepare("SELECT source_type FROM features LIMIT 0")
+                .is_ok();
+            if !has_source_type {
+                with_foreign_keys_off(conn, || {
+                    conn.execute_batch(include_str!("migrations/070_features_rfc018.sql"))?;
+                    Ok(())
+                })?;
+            }
+        }
+        bump_version(conn, 70)?;
     }
 
     Ok(())
@@ -2368,6 +2390,104 @@ mod tests {
             result.is_ok(),
             "run_compat must tolerate a newer schema; got: {result:?}"
         );
+    }
+
+    /// Migration 070 idempotency: verify (a) the migration runs cleanly on a
+    /// real post-042 schema, (b) running it twice is a no-op, and (c) it is
+    /// skipped safely when the features table lacks a `status` column.
+    #[test]
+    fn test_migration_070_features_rfc018_idempotency() {
+        // (a) Runs cleanly on post-042 schema (features table has status col).
+        {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+            // Build a pre-070 features schema (matches migration 042).
+            conn.execute_batch(
+                "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE repos (
+                     id TEXT PRIMARY KEY,
+                     slug TEXT NOT NULL,
+                     local_path TEXT NOT NULL,
+                     remote_url TEXT,
+                     workspace_dir TEXT,
+                     created_at TEXT NOT NULL
+                 );
+                 CREATE TABLE features (
+                     id          TEXT PRIMARY KEY,
+                     repo_id     TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                     name        TEXT NOT NULL,
+                     branch      TEXT NOT NULL,
+                     base_branch TEXT NOT NULL,
+                     status      TEXT NOT NULL DEFAULT 'active'
+                                 CHECK (status IN ('active', 'merged', 'closed')),
+                     created_at  TEXT NOT NULL,
+                     merged_at   TEXT,
+                     last_commit_at TEXT,
+                     UNIQUE(repo_id, name)
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_features_repo ON features(repo_id);
+                 INSERT INTO repos (id, slug, local_path, created_at)
+                     VALUES ('r1', 'test', '/tmp/r', '2024-01-01T00:00:00Z');
+                 INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
+                     VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'active', '2024-01-01T00:00:00Z');
+                 INSERT INTO _conductor_meta VALUES ('schema_version', '69');",
+            )
+            .unwrap();
+
+            // First run — applies migration 070.
+            run(&conn).unwrap();
+
+            // New columns must exist.
+            assert!(
+                conn.prepare("SELECT source_type FROM features LIMIT 0")
+                    .is_ok(),
+                "source_type column must exist after migration 070"
+            );
+            assert!(
+                conn.prepare("SELECT tickets_total FROM features LIMIT 0")
+                    .is_ok(),
+                "tickets_total column must exist after migration 070"
+            );
+
+            // Data migration: 'active' must have become 'in_progress'.
+            let status: String = conn
+                .query_row("SELECT status FROM features WHERE id = 'f1'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                status, "in_progress",
+                "active rows must be migrated to in_progress"
+            );
+
+            // (b) Running run() a second time must be a no-op (idempotent).
+            run(&conn).unwrap();
+            let status2: String = conn
+                .query_row("SELECT status FROM features WHERE id = 'f1'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(status2, "in_progress", "second run must not corrupt data");
+        }
+
+        // (c) Skipped safely when features table has no `status` column.
+        {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(
+                "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE features (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+                 INSERT INTO _conductor_meta VALUES ('schema_version', '69');",
+            )
+            .unwrap();
+            // Must not error even though the features table is a minimal stub.
+            run(&conn).unwrap();
+            // The stub table must still be intact (migration was skipped).
+            assert!(
+                conn.prepare("SELECT source_type FROM features LIMIT 0")
+                    .is_err(),
+                "source_type must NOT be added when status column is absent"
+            );
+        }
     }
 
     /// `run` (strict) must return an error when the DB schema version is ahead
