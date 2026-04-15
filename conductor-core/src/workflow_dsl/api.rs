@@ -26,7 +26,9 @@ pub fn load_workflow_defs(
     repo_path: &str,
 ) -> Result<(Vec<WorkflowDef>, Vec<WorkflowWarning>)> {
     let mut map: HashMap<String, WorkflowDef> = HashMap::new();
-    let mut all_warnings: Vec<WorkflowWarning> = Vec::new();
+    // Keyed by file stem (workflow name) so worktree warnings overwrite repo
+    // warnings for the same workflow — mirroring how valid defs are deduplicated.
+    let mut warnings_map: HashMap<String, WorkflowWarning> = HashMap::new();
 
     // Load repo defs first (lower priority).
     if !repo_path.is_empty() {
@@ -36,7 +38,14 @@ pub fn load_workflow_defs(
             for def in defs {
                 map.insert(def.name.clone(), def);
             }
-            all_warnings.extend(warnings);
+            for w in warnings {
+                let key = Path::new(&w.file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&w.file)
+                    .to_string();
+                warnings_map.insert(key, w);
+            }
         }
     }
 
@@ -51,12 +60,22 @@ pub fn load_workflow_defs(
             for def in defs {
                 map.insert(def.name.clone(), def);
             }
-            all_warnings.extend(warnings);
+            for w in warnings {
+                let key = Path::new(&w.file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&w.file)
+                    .to_string();
+                warnings_map.insert(key, w);
+            }
         }
     }
 
     let mut defs: Vec<WorkflowDef> = map.into_values().collect();
     defs.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut all_warnings: Vec<WorkflowWarning> = warnings_map.into_values().collect();
+    all_warnings.sort_by(|a, b| a.file.cmp(&b.file));
 
     Ok((defs, all_warnings))
 }
