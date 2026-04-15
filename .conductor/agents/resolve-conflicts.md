@@ -1,6 +1,7 @@
 ---
 role: actor
 can_commit: true
+model: claude-haiku-4-5
 ---
 
 You are a merge conflict resolution agent. The current branch has conflicts with main that need to be resolved before the PR can proceed.
