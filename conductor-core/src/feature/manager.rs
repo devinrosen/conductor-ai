@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::db::{query_collect, with_in_clause};
 use crate::error::{ConductorError, Result, SubprocessFailure};
 use crate::git::{check_output, git_in};
+use crate::github::parse_github_remote;
 use crate::repo::RepoManager;
 use crate::tickets::TicketSyncer;
 use crate::worktree::WorktreeManager;
@@ -22,7 +23,7 @@ use super::types::{
 ///
 /// Produces the canonical format `github.com/{owner}/{repo}/milestones/{number}`
 /// consumed by [`parse_milestone_source_id`] and stored in `features.source_id`.
-pub fn build_milestone_source_id(owner: &str, repo: &str, number: u64) -> String {
+pub(crate) fn build_milestone_source_id(owner: &str, repo: &str, number: u64) -> String {
     format!("github.com/{}/{}/milestones/{}", owner, repo, number)
 }
 
@@ -136,11 +137,22 @@ impl<'a> FeatureManager<'a> {
         repo_slug: &str,
         name: &str,
         from_branch: Option<&str>,
-        source_type: Option<&str>,
-        source_id: Option<&str>,
+        milestone_number: Option<u64>,
         ticket_source_ids: &[String],
     ) -> Result<Feature> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+
+        // Derive source_type/source_id from milestone_number using the repo's remote URL.
+        let (source_type, source_id): (Option<String>, Option<String>) =
+            if let Some(ms) = milestone_number {
+                let full_source_id = match parse_github_remote(&repo.remote_url) {
+                    Some((owner, repo_name)) => build_milestone_source_id(&owner, &repo_name, ms),
+                    None => ms.to_string(),
+                };
+                (Some("github_milestone".to_string()), Some(full_source_id))
+            } else {
+                (None, None)
+            };
 
         // Check for duplicate
         let exists: bool = self.conn.query_row(
@@ -196,8 +208,8 @@ impl<'a> FeatureManager<'a> {
             status: FeatureStatus::InProgress,
             created_at: now,
             merged_at: None,
-            source_type: source_type.map(|s| s.to_string()),
-            source_id: source_id.map(|s| s.to_string()),
+            source_type,
+            source_id,
             tickets_total: 0,
             tickets_merged: 0,
         };

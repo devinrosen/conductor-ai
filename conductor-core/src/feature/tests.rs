@@ -58,13 +58,13 @@ fn test_create_feature_duplicate_via_manager() {
 
     // First create succeeds
     let feature = mgr
-        .create("test-repo", "notif-improvements", None, None, None, &[])
+        .create("test-repo", "notif-improvements", None, None, &[])
         .unwrap();
     assert_eq!(feature.name, "notif-improvements");
 
     // Second create with the same name should return FeatureAlreadyExists
     let err = mgr
-        .create("test-repo", "notif-improvements", None, None, None, &[])
+        .create("test-repo", "notif-improvements", None, None, &[])
         .unwrap_err();
     assert!(
         matches!(err, ConductorError::FeatureAlreadyExists { .. }),
@@ -438,7 +438,7 @@ fn test_create_feature_happy_path() {
     let mgr = FeatureManager::new(&conn, &config);
 
     let feature = mgr
-        .create("test-repo", "my-feature", None, None, None, &[])
+        .create("test-repo", "my-feature", None, None, &[])
         .unwrap();
 
     assert_eq!(feature.name, "my-feature");
@@ -487,7 +487,7 @@ fn test_create_feature_with_custom_base_branch() {
     let mgr = FeatureManager::new(&conn, &config);
 
     let feature = mgr
-        .create("test-repo", "custom-base", Some("develop"), None, None, &[])
+        .create("test-repo", "custom-base", Some("develop"), None, &[])
         .unwrap();
 
     assert_eq!(feature.name, "custom-base");
@@ -520,7 +520,6 @@ fn test_create_feature_with_ticket_source_ids() {
         .create(
             "test-repo",
             "with-tickets",
-            None,
             None,
             None,
             &["42".into(), "43".into()],
@@ -700,7 +699,7 @@ fn test_create_feature_cleans_up_branches_on_db_failure() {
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
 
-    let result = mgr.create("test-repo", "cleanup-test", None, None, None, &[]);
+    let result = mgr.create("test-repo", "cleanup-test", None, None, &[]);
     assert!(result.is_err(), "create should fail due to trigger");
 
     // Verify the local branch was cleaned up
@@ -955,7 +954,7 @@ fn test_transition_any_to_closed_succeeds() {
     // Create a feature via the manager (so the branch exists)
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
-    mgr.create("test-repo", "close-feat", None, None, None, &[])
+    mgr.create("test-repo", "close-feat", None, None, &[])
         .unwrap();
 
     // Transition from in_progress → closed should be allowed
@@ -1020,6 +1019,66 @@ fn test_auto_ready_for_review_with_active_worktrees_no_transition() {
     assert_eq!(
         status, "in_progress",
         "feature should remain in_progress while worktrees are active"
+    );
+}
+
+#[test]
+fn test_create_feature_with_milestone_github_remote() {
+    // insert_repo_at uses remote_url = 'https://github.com/test/repo.git'
+    // so parse_github_remote should produce ("test", "repo")
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let _repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .create("test-repo", "ms-feature", None, Some(5), &[])
+        .unwrap();
+
+    assert_eq!(
+        feature.source_type.as_deref(),
+        Some("github_milestone"),
+        "source_type should be github_milestone"
+    );
+    assert_eq!(
+        feature.source_id.as_deref(),
+        Some("github.com/test/repo/milestones/5"),
+        "source_id should be the canonical milestone URL"
+    );
+}
+
+#[test]
+fn test_create_feature_with_milestone_non_github_remote() {
+    // Use a non-GitHub remote URL so parse_github_remote returns None and
+    // create() falls back to the bare milestone number as a string.
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+
+    let id = crate::new_id();
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+         VALUES (?1, 'test-repo', ?2, 'https://gitlab.example.com/org/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+        params![id, work.path().to_str().unwrap()],
+    ).unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .create("test-repo", "ms-gitlab", None, Some(7), &[])
+        .unwrap();
+
+    assert_eq!(
+        feature.source_type.as_deref(),
+        Some("github_milestone"),
+        "source_type should be github_milestone even for non-GitHub remotes"
+    );
+    assert_eq!(
+        feature.source_id.as_deref(),
+        Some("7"),
+        "source_id should fall back to bare number for non-GitHub remote"
     );
 }
 
