@@ -307,12 +307,17 @@ fn setup_git_repo() -> (tempfile::TempDir, tempfile::TempDir) {
 }
 
 fn insert_repo_at(conn: &Connection, local_path: &str) -> String {
+    insert_repo_at_with_remote(conn, local_path, "https://github.com/test/repo.git")
+}
+
+fn insert_repo_at_with_remote(conn: &Connection, local_path: &str, remote_url: &str) -> String {
     let id = crate::new_id();
     conn.execute(
         "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-         VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-        params![id, local_path],
-    ).unwrap();
+         VALUES (?1, 'test-repo', ?2, ?3, '/tmp/ws', '2024-01-01T00:00:00Z')",
+        params![id, local_path, remote_url],
+    )
+    .unwrap();
     id
 }
 
@@ -1055,14 +1060,11 @@ fn test_create_feature_with_milestone_ssh_remote() {
     // identically to HTTPS — both should produce the canonical milestone source_id.
     let (work, _bare) = setup_git_repo();
     let conn = setup_db();
-
-    let id = crate::new_id();
-    conn.execute(
-        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-         VALUES (?1, 'test-repo', ?2, 'git@github.com:test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-        params![id, work.path().to_str().unwrap()],
-    )
-    .unwrap();
+    let _repo_id = insert_repo_at_with_remote(
+        &conn,
+        work.path().to_str().unwrap(),
+        "git@github.com:test/repo.git",
+    );
 
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
@@ -1089,13 +1091,11 @@ fn test_create_feature_with_milestone_non_github_remote() {
     // create() falls back to the bare milestone number as a string.
     let (work, _bare) = setup_git_repo();
     let conn = setup_db();
-
-    let id = crate::new_id();
-    conn.execute(
-        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-         VALUES (?1, 'test-repo', ?2, 'https://gitlab.example.com/org/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-        params![id, work.path().to_str().unwrap()],
-    ).unwrap();
+    let _repo_id = insert_repo_at_with_remote(
+        &conn,
+        work.path().to_str().unwrap(),
+        "https://gitlab.example.com/org/repo.git",
+    );
 
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
