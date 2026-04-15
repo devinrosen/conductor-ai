@@ -1,4 +1,4 @@
-%% Updated 2026-04-15 — Entity-relationship diagram for conductor.db (72 migrations)
+%% Updated 2026-04-15 — Entity-relationship diagram for conductor.db (73 migrations)
 erDiagram
 
     _conductor_meta {
@@ -88,6 +88,10 @@ erDiagram
         text created_at
         text merged_at
         text last_commit_at
+        text source_type
+        text source_id
+        int tickets_total
+        int tickets_merged
     }
 
     feedback_requests {
