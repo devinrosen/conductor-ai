@@ -11,8 +11,14 @@ use crate::tickets::TicketInput;
 /// Conductor pipeline statuses that should be synced into Conductor as open
 /// tickets. Pre-ready states (pending_audit, audited, enriching) are excluded —
 /// those deliverables aren't actionable yet.
-const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] =
-    &["ready", "dispatched", "running", "in_progress", "completed", "failed"];
+const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] = &[
+    "ready",
+    "dispatched",
+    "running",
+    "in_progress",
+    "completed",
+    "failed",
+];
 
 /// Terminal conductor statuses that are synced as closed tickets so that
 /// `close_missing_tickets` can reconcile stale DB rows.
