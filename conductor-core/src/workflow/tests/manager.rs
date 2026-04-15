@@ -3047,6 +3047,104 @@ fn test_reset_steps_from_position_clears_subprocess_pid() {
 }
 
 // ---------------------------------------------------------------------------
+// step_error cleared on reset tests
+// ---------------------------------------------------------------------------
+
+/// reset_failed_steps must clear step_error so stale error text doesn't persist
+/// after a successful resume.
+#[test]
+fn test_reset_failed_steps_clears_step_error() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
+         VALUES (?1, ?2, 'step-failed', 'script', 0, 'failed', 0, 'some error')",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    mgr.reset_failed_steps(&run_id).unwrap();
+
+    let err: Option<String> = conn
+        .query_row(
+            "SELECT step_error FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        err.is_none(),
+        "step_error must be NULL after reset_failed_steps"
+    );
+}
+
+/// reset_completed_steps must clear step_error.
+#[test]
+fn test_reset_completed_steps_clears_step_error() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
+         VALUES (?1, ?2, 'step-done', 'script', 0, 'completed', 0, 'some error')",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    mgr.reset_completed_steps(&run_id).unwrap();
+
+    let err: Option<String> = conn
+        .query_row(
+            "SELECT step_error FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        err.is_none(),
+        "step_error must be NULL after reset_completed_steps"
+    );
+}
+
+/// reset_steps_from_position must clear step_error.
+#[test]
+fn test_reset_steps_from_position_clears_step_error() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
+         VALUES (?1, ?2, 'step-pos', 'script', 2, 'failed', 0, 'some error')",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    mgr.reset_steps_from_position(&run_id, 2).unwrap();
+
+    let err: Option<String> = conn
+        .query_row(
+            "SELECT step_error FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        err.is_none(),
+        "step_error must be NULL after reset_steps_from_position"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // reap_heartbeat_stuck_runs tests
 // ---------------------------------------------------------------------------
 
