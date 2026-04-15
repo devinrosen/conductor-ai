@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 use conductor_core::config::Config;
-use conductor_core::feature::{FeatureManager, FeatureStatus};
+use conductor_core::feature::{build_milestone_source_id, FeatureManager, FeatureStatus};
 use conductor_core::github::parse_github_remote;
 use conductor_core::repo::RepoManager;
 
@@ -27,9 +27,7 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
                 if let Some(ms) = milestone {
                     let repo_rec = RepoManager::new(conn, config).get_by_slug(&repo)?;
                     let full_source_id = match parse_github_remote(&repo_rec.remote_url) {
-                        Some((owner, repo_name)) => {
-                            format!("github.com/{}/{}/milestones/{}", owner, repo_name, ms)
-                        }
+                        Some((owner, repo_name)) => build_milestone_source_id(&owner, &repo_name, ms),
                         None => ms.to_string(),
                     };
                     (Some("github_milestone"), Some(full_source_id))
@@ -151,4 +149,28 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use conductor_core::feature::build_milestone_source_id;
+    use conductor_core::github::parse_github_remote;
+
+    #[test]
+    fn test_milestone_source_id_built_from_github_remote() {
+        // Mirrors the logic in the Create handler: parse the remote URL to get
+        // owner/repo, then build the canonical source_id via build_milestone_source_id.
+        let remote = "git@github.com:myorg/myrepo.git";
+        let (owner, repo_name) = parse_github_remote(remote).unwrap();
+        let source_id = build_milestone_source_id(&owner, &repo_name, 5);
+        assert_eq!(source_id, "github.com/myorg/myrepo/milestones/5");
+    }
+
+    #[test]
+    fn test_milestone_source_id_https_remote() {
+        let remote = "https://github.com/acme/widget.git";
+        let (owner, repo_name) = parse_github_remote(remote).unwrap();
+        let source_id = build_milestone_source_id(&owner, &repo_name, 42);
+        assert_eq!(source_id, "github.com/acme/widget/milestones/42");
+    }
 }

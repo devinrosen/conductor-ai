@@ -6,5 +6,5 @@ pub(crate) mod types;
 mod tests;
 
 pub use helpers::branch_to_feature_name;
-pub use manager::FeatureManager;
+pub use manager::{build_milestone_source_id, FeatureManager};
 pub use types::*;

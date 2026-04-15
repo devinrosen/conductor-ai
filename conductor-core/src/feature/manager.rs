@@ -16,6 +16,14 @@ use super::helpers::{
 };
 use super::types::{Feature, FeatureRow, FeatureStatus, SyncResult, UnregisteredBranch};
 
+/// Build a milestone `source_id` from its components.
+///
+/// Produces the canonical format `github.com/{owner}/{repo}/milestones/{number}`
+/// consumed by [`parse_milestone_source_id`] and stored in `features.source_id`.
+pub fn build_milestone_source_id(owner: &str, repo: &str, number: u64) -> String {
+    format!("github.com/{}/{}/milestones/{}", owner, repo, number)
+}
+
 /// Parse a milestone `source_id` in the format
 /// `github.com/{owner}/{repo}/milestones/{number}` into its components.
 ///
@@ -473,7 +481,8 @@ impl<'a> FeatureManager<'a> {
     ) -> Result<SyncResult> {
         use std::collections::HashSet;
 
-        // Upsert tickets into the tickets table.
+        // Upsert tickets into the tickets table. TicketSyncer wraps this in
+        // its own transaction so it is already atomic.
         let syncer = TicketSyncer::new(self.conn);
         syncer.upsert_tickets(repo_id, inputs)?;
 
@@ -513,9 +522,14 @@ impl<'a> FeatureManager<'a> {
         let to_remove: Vec<String> = linked_set.difference(&fetched_set).cloned().collect();
 
         let added = to_add.len();
+        let removed = to_remove.len();
+
+        // Wrap the link/unlink/count-update steps in a single transaction so
+        // they land atomically and avoid N individual auto-commits.
+        let tx = self.conn.unchecked_transaction()?;
+
         self.link_tickets_internal(feature_id, &to_add)?;
 
-        let removed = to_remove.len();
         if !to_remove.is_empty() {
             with_in_clause(
                 "DELETE FROM feature_tickets WHERE feature_id = ?1 AND ticket_id IN",
@@ -533,6 +547,8 @@ impl<'a> FeatureManager<'a> {
             "UPDATE features SET tickets_total = (SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1) WHERE id = ?1",
             params![feature_id],
         )?;
+
+        tx.commit()?;
 
         Ok(SyncResult { added, removed })
     }

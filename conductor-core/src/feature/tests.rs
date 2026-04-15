@@ -2324,3 +2324,72 @@ fn test_apply_milestone_sync_idempotent() {
     assert_eq!(r2.added, 0);
     assert_eq!(r2.removed, 0);
 }
+
+#[test]
+fn test_apply_milestone_sync_updates_tickets_total() {
+    // Verify that tickets_total on the feature row is updated correctly after
+    // sync, exercising the full apply_milestone_sync success path.
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature_with_milestone_source(
+        &conn,
+        &repo_id,
+        "ms-feat-total",
+        "feat/ms-total",
+    );
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    // Add 3 tickets.
+    let inputs = vec![
+        make_ticket_input("10"),
+        make_ticket_input("11"),
+        make_ticket_input("12"),
+    ];
+    let result = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(result.added, 3);
+    assert_eq!(result.removed, 0);
+
+    let total: i64 = conn
+        .query_row(
+            "SELECT tickets_total FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 3);
+
+    // Now sync with only 2 tickets — one is removed.
+    let shrunk = vec![make_ticket_input("10"), make_ticket_input("11")];
+    let result2 = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &shrunk)
+        .unwrap();
+    assert_eq!(result2.added, 0);
+    assert_eq!(result2.removed, 1);
+
+    let total2: i64 = conn
+        .query_row(
+            "SELECT tickets_total FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total2, 2);
+}
+
+#[test]
+fn test_build_milestone_source_id_roundtrip() {
+    // build_milestone_source_id produces a string that parse_milestone_source_id
+    // can round-trip back to the original components.
+    let source_id = super::manager::build_milestone_source_id("myorg", "myrepo", 7);
+    assert_eq!(source_id, "github.com/myorg/myrepo/milestones/7");
+
+    let (owner, repo, number) =
+        super::manager::parse_milestone_source_id(&source_id).unwrap();
+    assert_eq!(owner, "myorg");
+    assert_eq!(repo, "myrepo");
+    assert_eq!(number, 7u64);
+}
