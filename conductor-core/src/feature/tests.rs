@@ -2581,7 +2581,11 @@ fn test_reap_dangling_reports_feature_with_no_worktrees_as_dangling() {
     let dangling = mgr.reap_dangling("test-repo").unwrap();
     // gh pr list will fail (no auth / no real repo) → has_open_pr returns false
     // → feature is dangling
-    assert_eq!(dangling.len(), 1, "feature with no worktrees should be dangling");
+    assert_eq!(
+        dangling.len(),
+        1,
+        "feature with no worktrees should be dangling"
+    );
     assert_eq!(dangling[0].name, "orphan-feat");
 }
 

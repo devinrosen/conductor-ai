@@ -1278,8 +1278,11 @@ impl<'a> FeatureManager<'a> {
                     .char_indices()
                     .nth(MAX_BODY_CHARS)
                     .map_or(ticket.body.len(), |(i, _)| i);
-                format!("{}\n\n[body truncated at {MAX_BODY_CHARS} chars]", &ticket.body[..end])
-                    .into()
+                format!(
+                    "{}\n\n[body truncated at {MAX_BODY_CHARS} chars]",
+                    &ticket.body[..end]
+                )
+                .into()
             } else {
                 ticket.body.as_str().into()
             };
@@ -1397,7 +1400,9 @@ impl<'a> FeatureManager<'a> {
                 Ok(()) => (true, None),
                 Err(e) => (
                     false,
-                    Some(format!("[feature::run] Failed to dispatch ticket {tid}: {e}")),
+                    Some(format!(
+                        "[feature::run] Failed to dispatch ticket {tid}: {e}"
+                    )),
                 ),
             }
         };
