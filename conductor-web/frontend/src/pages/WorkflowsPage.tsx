@@ -226,7 +226,7 @@ export function WorkflowsPage() {
       setActionError(err instanceof Error ? err.message : "Failed to load definitions");
     }
   };
-  const handleSelectDef = (def: WorkflowDefSummary) => { setPickerDef(def); setPickerStep("confirm"); };
+  const handleSelectDef = (def: WorkflowDefSummary) => { if (def.valid) { setPickerDef(def); setPickerStep("confirm"); } };
   const resetPicker = () => {
     setPickerStep(null); setPickerRepo(null); setPickerWorktree(null);
     setPickerDef(null); setPickerDefs([]); setPickerWorktrees([]);
@@ -333,10 +333,14 @@ export function WorkflowsPage() {
                 {pickerDefs.length === 0 ? (
                   <p className="text-sm text-gray-500">No timetable set. Add .wf files to schedule your first route.</p>
                 ) : pickerDefs.map((def) => (
-                  <button key={def.name} onClick={() => handleSelectDef(def)}
-                    className="w-full text-left px-3 py-2 text-sm rounded border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50">
-                    <span className="font-medium">{def.title ?? def.name}</span>
-                    {def.description && <span className="text-gray-500 ml-2 text-xs">{def.description}</span>}
+                  <button key={def.name} onClick={() => handleSelectDef(def)} disabled={!def.valid}
+                    className={`w-full text-left px-3 py-2 text-sm rounded border ${def.valid ? "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50" : "border-amber-200 bg-amber-50 cursor-not-allowed"}`}>
+                    <span className="font-medium">{!def.valid && "⚠ "}{def.title ?? def.name}</span>
+                    {def.valid ? (
+                      def.description && <span className="text-gray-500 ml-2 text-xs">{def.description}</span>
+                    ) : (
+                      def.error && <span className="text-red-600 ml-2 text-xs block truncate">{def.error}</span>
+                    )}
                   </button>
                 ))}
               </div>
