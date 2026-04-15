@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::db::{query_collect, with_in_clause};
 use crate::error::{ConductorError, Result, SubprocessFailure};
 use crate::git::{check_output, git_in};
+use crate::github::parse_github_remote;
 use crate::repo::RepoManager;
 use crate::tickets::TicketSyncer;
 use crate::worktree::WorktreeManager;
@@ -14,7 +15,46 @@ use crate::worktree::WorktreeManager;
 use super::helpers::{
     batch_branch_timestamps, derive_branch_name, last_commit_timestamp, map_feature_row,
 };
-use super::types::{Feature, FeatureRow, FeatureStatus, UnregisteredBranch};
+use super::types::{
+    Feature, FeatureRow, FeatureStatus, RunSummary, SyncResult, UnregisteredBranch,
+};
+
+/// Build a milestone `source_id` from its components.
+///
+/// Produces the canonical format `github.com/{owner}/{repo}/milestones/{number}`
+/// consumed by [`parse_milestone_source_id`] and stored in `features.source_id`.
+pub(crate) fn build_milestone_source_id(owner: &str, repo: &str, number: u64) -> String {
+    format!("github.com/{}/{}/milestones/{}", owner, repo, number)
+}
+
+/// Parse a milestone `source_id` in the format
+/// `github.com/{owner}/{repo}/milestones/{number}` into its components.
+///
+/// Returns `(owner, repo, milestone_number)` or `ConductorError::InvalidInput`
+/// for any malformed input (including the old bare-number format).
+pub(crate) fn parse_milestone_source_id(source_id: &str) -> Result<(String, String, u64)> {
+    // Expected: ["github.com", owner, repo, "milestones", number]
+    let parts: Vec<&str> = source_id.splitn(5, '/').collect();
+    if parts.len() != 5
+        || parts[0] != "github.com"
+        || parts[3] != "milestones"
+        || parts[1].is_empty()
+        || parts[2].is_empty()
+    {
+        return Err(ConductorError::InvalidInput(format!(
+            "Invalid milestone source_id '{}'. Expected \
+             'github.com/{{owner}}/{{repo}}/milestones/{{number}}'",
+            source_id
+        )));
+    }
+    let number: u64 = parts[4].parse().map_err(|_| {
+        ConductorError::InvalidInput(format!(
+            "Invalid milestone number '{}' in source_id '{}'",
+            parts[4], source_id
+        ))
+    })?;
+    Ok((parts[1].to_string(), parts[2].to_string(), number))
+}
 
 fn feature_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
     let id = id.into();
@@ -29,26 +69,30 @@ fn feature_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> C
 // ---------------------------------------------------------------------------
 
 /// SQL fragment: column list through `FROM features f` (no leading `SELECT`,
-/// no `WHERE`/`ORDER`). When used in `list_all_active`, prefix with
-/// `f.repo_id, ` so the repo_id appears at column 0 and FeatureRow columns
-/// start at offset 1.
+/// no `WHERE`/`ORDER`).
 const FEATURE_ROW_FRAGMENT: &str = "\
-    f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
+    f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
     (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch AND w.status = 'active') AS wt_count, \
     (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count, \
     f.last_commit_at, \
-    (SELECT MAX(w2.created_at) FROM worktrees w2 WHERE w2.repo_id = f.repo_id AND w2.base_branch = f.branch AND w2.status = 'active') AS last_wt_activity \
+    (SELECT MAX(w2.created_at) FROM worktrees w2 WHERE w2.repo_id = f.repo_id AND w2.base_branch = f.branch AND w2.status = 'active') AS last_wt_activity, \
+    f.tickets_total, f.tickets_merged \
     FROM features f";
 
 const FEATURE_ROW_ORDER: &str = " ORDER BY f.created_at DESC";
 
 /// Column list for a plain `SELECT … FROM features` (no join, no subquery).
 /// Used by `map_feature_row` — keep in sync with that function's column indices.
-const FEATURE_COLS: &str = "id, repo_id, name, branch, base_branch, status, created_at, merged_at";
+const FEATURE_COLS: &str =
+    "id, repo_id, name, branch, base_branch, status, created_at, merged_at, source_type, source_id, tickets_total, tickets_merged";
 
 /// Same columns but table-aliased (`f.`) for use in joins.
 const FEATURE_COLS_ALIASED: &str =
-    "f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at";
+    "f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at, f.source_type, f.source_id, f.tickets_total, f.tickets_merged";
+
+/// Number of columns selected by `FEATURE_COLS` / `FEATURE_COLS_ALIASED`.
+/// Used as a named offset when appending extra columns in a JOIN query.
+const FEATURE_COLS_COUNT: usize = 12;
 
 /// Map a rusqlite row to a `FeatureRow`, starting at the given column offset.
 fn map_feature_row_cols(
@@ -57,15 +101,18 @@ fn map_feature_row_cols(
 ) -> std::result::Result<FeatureRow, rusqlite::Error> {
     Ok(FeatureRow {
         id: row.get(offset)?,
-        name: row.get(offset + 1)?,
-        branch: row.get(offset + 2)?,
-        base_branch: row.get(offset + 3)?,
-        status: row.get(offset + 4)?,
-        created_at: row.get(offset + 5)?,
-        worktree_count: row.get(offset + 6)?,
-        ticket_count: row.get(offset + 7)?,
-        last_commit_at: row.get(offset + 8)?,
-        last_worktree_activity: row.get(offset + 9)?,
+        repo_id: row.get(offset + 1)?,
+        name: row.get(offset + 2)?,
+        branch: row.get(offset + 3)?,
+        base_branch: row.get(offset + 4)?,
+        status: row.get(offset + 5)?,
+        created_at: row.get(offset + 6)?,
+        worktree_count: row.get(offset + 7)?,
+        ticket_count: row.get(offset + 8)?,
+        last_commit_at: row.get(offset + 9)?,
+        last_worktree_activity: row.get(offset + 10)?,
+        tickets_total: row.get(offset + 11)?,
+        tickets_merged: row.get(offset + 12)?,
     })
 }
 
@@ -90,9 +137,22 @@ impl<'a> FeatureManager<'a> {
         repo_slug: &str,
         name: &str,
         from_branch: Option<&str>,
+        milestone_number: Option<u64>,
         ticket_source_ids: &[String],
     ) -> Result<Feature> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+
+        // Derive source_type/source_id from milestone_number using the repo's remote URL.
+        let (source_type, source_id): (Option<String>, Option<String>) =
+            if let Some(ms) = milestone_number {
+                let full_source_id = match parse_github_remote(&repo.remote_url) {
+                    Some((owner, repo_name)) => build_milestone_source_id(&owner, &repo_name, ms),
+                    None => ms.to_string(),
+                };
+                (Some("github_milestone".to_string()), Some(full_source_id))
+            } else {
+                (None, None)
+            };
 
         // Check for duplicate
         let exists: bool = self.conn.query_row(
@@ -145,9 +205,13 @@ impl<'a> FeatureManager<'a> {
             name: name.to_string(),
             branch,
             base_branch: base,
-            status: FeatureStatus::Active,
+            status: FeatureStatus::InProgress,
             created_at: now,
             merged_at: None,
+            source_type,
+            source_id,
+            tickets_total: 0,
+            tickets_merged: 0,
         };
 
         if let Err(e) = self.insert_feature_record(&feature) {
@@ -176,24 +240,23 @@ impl<'a> FeatureManager<'a> {
 
     /// List only active features for a repo (with worktree and ticket counts).
     pub fn list_active(&self, repo_slug: &str) -> Result<Vec<FeatureRow>> {
-        self.list_with_status_filter(repo_slug, Some(FeatureStatus::Active))
+        self.list_with_status_filter(repo_slug, Some(FeatureStatus::InProgress))
     }
 
     /// List active features for all repos in a single query, keyed by repo_id.
     pub fn list_all_active(&self) -> Result<std::collections::HashMap<String, Vec<FeatureRow>>> {
-        let sql = format!(
-            "SELECT f.repo_id, {FEATURE_ROW_FRAGMENT} WHERE f.status = ?1{FEATURE_ROW_ORDER}"
-        );
+        let sql = format!("SELECT {FEATURE_ROW_FRAGMENT} WHERE f.status = ?1{FEATURE_ROW_ORDER}");
 
-        let pairs: Vec<(String, FeatureRow)> = query_collect(
+        let rows: Vec<FeatureRow> = query_collect(
             self.conn,
             &sql,
-            params![FeatureStatus::Active],
-            |row: &rusqlite::Row<'_>| Ok((row.get::<_, String>(0)?, map_feature_row_cols(row, 1)?)),
+            params![FeatureStatus::InProgress],
+            |row: &rusqlite::Row<'_>| map_feature_row_cols(row, 0),
         )?;
 
         let mut map = std::collections::HashMap::new();
-        for (repo_id, row) in pairs {
+        for row in rows {
+            let repo_id = row.repo_id.clone();
             map.entry(repo_id).or_insert_with(Vec::new).push(row);
         }
         Ok(map)
@@ -266,9 +329,9 @@ impl<'a> FeatureManager<'a> {
     /// Returns `ConductorError::Workflow` if the feature exists but is not active.
     pub fn resolve_active_feature(&self, repo_slug: &str, name: &str) -> Result<Feature> {
         let f = self.get_by_name(repo_slug, name)?;
-        if f.status != FeatureStatus::Active {
+        if f.status != FeatureStatus::InProgress {
             return Err(ConductorError::Workflow(format!(
-                "Feature '{}' is {} — only active features can be used.",
+                "Feature '{}' is {} — only in-progress features can be used.",
                 name, f.status
             )));
         }
@@ -286,7 +349,7 @@ impl<'a> FeatureManager<'a> {
             &format!(
                 "SELECT {FEATURE_COLS_ALIASED} FROM features f \
                  INNER JOIN feature_tickets ft ON ft.feature_id = f.id \
-                 WHERE ft.ticket_id = ?1 AND f.status = 'active'"
+                 WHERE ft.ticket_id = ?1 AND f.status = 'in_progress'"
             ),
             params![ticket_id],
             map_feature_row,
@@ -387,6 +450,128 @@ impl<'a> FeatureManager<'a> {
         Ok(())
     }
 
+    /// Sync open issues from the feature's GitHub milestone into its ticket queue.
+    ///
+    /// Requires the feature to have `source_type = "github_milestone"` and a
+    /// `source_id` in the format `github.com/{owner}/{repo}/milestones/{number}`.
+    ///
+    /// 1. Fetches open issues from the milestone via `gh api`.
+    /// 2. Upserts them into `tickets` (idempotent on `(repo_id, source_type, source_id)`).
+    /// 3. Adds `feature_tickets` links for newly discovered issues.
+    /// 4. Removes links for issues no longer in the milestone (ticket records are kept).
+    /// 5. Updates `features.tickets_total` with the current linked count.
+    pub fn sync_from_milestone(&self, repo_slug: &str, name: &str) -> Result<SyncResult> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+        let feature = self.get_feature_by_repo_id(&repo.id, name)?;
+
+        match feature.source_type.as_deref() {
+            Some("github_milestone") => {}
+            _ => {
+                return Err(ConductorError::InvalidInput(format!(
+                    "Feature '{}' source_type is not 'github_milestone'",
+                    name
+                )));
+            }
+        }
+
+        let source_id = feature.source_id.as_deref().ok_or_else(|| {
+            ConductorError::InvalidInput(format!("Feature '{}' has no source_id configured", name))
+        })?;
+
+        let (owner, repo_name, milestone_number) = parse_milestone_source_id(source_id)?;
+
+        let inputs =
+            crate::github::fetch_milestone_issues(&owner, &repo_name, milestone_number, None)?;
+
+        self.apply_milestone_sync(&repo.id, &feature.id, &inputs)
+    }
+
+    /// Apply a set of milestone ticket inputs to a feature's ticket queue.
+    ///
+    /// Upserts tickets, computes the diff against currently linked tickets, adds new
+    /// links, removes stale ones, and updates `tickets_total`. Exposed as
+    /// `pub(super)` so tests can call it directly with pre-built inputs without
+    /// requiring a live `gh` CLI.
+    pub(super) fn apply_milestone_sync(
+        &self,
+        repo_id: &str,
+        feature_id: &str,
+        inputs: &[crate::tickets::TicketInput],
+    ) -> Result<SyncResult> {
+        use std::collections::HashSet;
+
+        // Upsert tickets into the tickets table. TicketSyncer wraps this in
+        // its own transaction so it is already atomic.
+        let syncer = TicketSyncer::new(self.conn);
+        syncer.upsert_tickets(repo_id, inputs)?;
+
+        // Resolve just-upserted tickets to their internal IDs.
+        let fetched_source_ids: Vec<String> = inputs.iter().map(|i| i.source_id.clone()).collect();
+        let fetched_ids: Vec<String> = if fetched_source_ids.is_empty() {
+            Vec::new()
+        } else {
+            with_in_clause(
+                "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = 'github' AND source_id IN",
+                &[&repo_id as &dyn rusqlite::types::ToSql],
+                &fetched_source_ids,
+                |sql, params| -> Result<Vec<String>> {
+                    let mut stmt = self.conn.prepare(sql)?;
+                    let mut rows = stmt.query(params)?;
+                    let mut ids = Vec::new();
+                    while let Some(row) = rows.next()? {
+                        ids.push(row.get(0)?);
+                    }
+                    Ok(ids)
+                },
+            )?
+        };
+
+        // Get currently linked ticket IDs for this feature.
+        let linked_ids: Vec<String> = query_collect(
+            self.conn,
+            "SELECT ticket_id FROM feature_tickets WHERE feature_id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )?;
+
+        let fetched_set: HashSet<String> = fetched_ids.into_iter().collect();
+        let linked_set: HashSet<String> = linked_ids.into_iter().collect();
+
+        let to_add: Vec<String> = fetched_set.difference(&linked_set).cloned().collect();
+        let to_remove: Vec<String> = linked_set.difference(&fetched_set).cloned().collect();
+
+        let added = to_add.len();
+        let removed = to_remove.len();
+
+        // Wrap the link/unlink/count-update steps in a single transaction so
+        // they land atomically and avoid N individual auto-commits.
+        let tx = self.conn.unchecked_transaction()?;
+
+        self.link_tickets_internal(feature_id, &to_add)?;
+
+        if !to_remove.is_empty() {
+            with_in_clause(
+                "DELETE FROM feature_tickets WHERE feature_id = ?1 AND ticket_id IN",
+                &[&feature_id as &dyn rusqlite::types::ToSql],
+                &to_remove,
+                |sql, params| -> Result<()> {
+                    self.conn.prepare(sql)?.execute(params)?;
+                    Ok(())
+                },
+            )?;
+        }
+
+        // Recount linked tickets and update the denormalized total.
+        self.conn.execute(
+            "UPDATE features SET tickets_total = (SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1) WHERE id = ?1",
+            params![feature_id],
+        )?;
+
+        tx.commit()?;
+
+        Ok(SyncResult { added, removed })
+    }
+
     /// Create a PR for the feature branch via `gh pr create`.
     pub fn create_pr(&self, repo_slug: &str, feature_name: &str, draft: bool) -> Result<String> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
@@ -434,7 +619,7 @@ impl<'a> FeatureManager<'a> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
         let feature = self.get_feature_by_repo_id(&repo.id, name)?;
 
-        if feature.status == FeatureStatus::Active {
+        if feature.status == FeatureStatus::InProgress {
             return Err(ConductorError::FeatureStillActive {
                 repo: repo_slug.to_string(),
                 name: name.to_string(),
@@ -474,6 +659,66 @@ impl<'a> FeatureManager<'a> {
         self.conn
             .execute("DELETE FROM features WHERE id = ?1", params![feature.id])?;
 
+        Ok(())
+    }
+
+    /// Transition a feature through the explicit state machine.
+    ///
+    /// Valid transitions:
+    /// - `in_progress → ready_for_review`
+    /// - `ready_for_review → approved`
+    /// - `approved → merged`
+    /// - `any → closed` (delegates to `close_with_merge_detection` so `merged_at` is set correctly)
+    ///
+    /// Returns `ConductorError::InvalidFeatureTransition` for all other pairs.
+    pub fn transition(
+        &self,
+        repo_slug: &str,
+        feature_name: &str,
+        to: FeatureStatus,
+    ) -> Result<Feature> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+        let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
+
+        // `closed` is always allowed — delegate to merge-detection close.
+        if to == FeatureStatus::Closed {
+            self.close_with_merge_detection(&repo.local_path, &feature)?;
+            return self.get_by_id(&feature.id);
+        }
+
+        let valid = matches!(
+            (&feature.status, &to),
+            (FeatureStatus::InProgress, FeatureStatus::ReadyForReview)
+                | (FeatureStatus::ReadyForReview, FeatureStatus::Approved)
+                | (FeatureStatus::Approved, FeatureStatus::Merged)
+        );
+
+        if !valid {
+            return Err(ConductorError::InvalidFeatureTransition {
+                name: feature_name.to_string(),
+                from: feature.status.to_string(),
+                to: to.to_string(),
+            });
+        }
+
+        self.conn.execute(
+            "UPDATE features SET status = ?1 WHERE id = ?2",
+            params![to, feature.id],
+        )?;
+
+        self.get_by_id(&feature.id)
+    }
+
+    /// Update a feature's status by ID without re-running state-machine guards.
+    ///
+    /// Used internally by callers that already know the current status (e.g.
+    /// `auto_ready_for_review_if_complete`). Kept `pub(crate)` to prevent
+    /// accidental bypass of the public `transition()` guard.
+    pub(crate) fn transition_by_id(&self, feature_id: &str, to: FeatureStatus) -> Result<()> {
+        self.conn.execute(
+            "UPDATE features SET status = ?1 WHERE id = ?2",
+            params![to, feature_id],
+        )?;
         Ok(())
     }
 
@@ -526,7 +771,7 @@ impl<'a> FeatureManager<'a> {
         let feature: Option<Feature> = self
             .conn
             .query_row(
-                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'"),
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'in_progress'"),
                 params![repo.id, feature_branch],
                 map_feature_row,
             )
@@ -578,6 +823,52 @@ impl<'a> FeatureManager<'a> {
         Ok(())
     }
 
+    /// Transition an `in_progress` feature to `ready_for_review` if all of its
+    /// worktrees have been merged.
+    ///
+    /// Called by `cleanup_merged_worktrees` after marking a worktree merged,
+    /// when `config.defaults.auto_ready_for_review` is `true`. Safe to call
+    /// even when no feature exists for the branch — returns `Ok(())` in that case.
+    pub(crate) fn auto_ready_for_review_if_complete(
+        &self,
+        repo_id: &str,
+        feature_branch: &str,
+    ) -> Result<()> {
+        // Find the in_progress feature for this branch.
+        let feature: Option<Feature> = self
+            .conn
+            .query_row(
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'in_progress'"),
+                params![repo_id, feature_branch],
+                map_feature_row,
+            )
+            .optional()?;
+
+        let feature = match feature {
+            Some(f) => f,
+            None => return Ok(()),
+        };
+
+        // Count worktrees that are still active on this feature branch.
+        let active_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM worktrees WHERE repo_id = ?1 AND base_branch = ?2 AND status = 'active'",
+            params![repo_id, feature_branch],
+            |row| row.get(0),
+        )?;
+
+        if active_count > 0 {
+            return Ok(());
+        }
+
+        tracing::info!(
+            feature_id = %feature.id,
+            feature_name = %feature.name,
+            "auto-transitioning feature to ready_for_review (last worktree merged)"
+        );
+
+        self.transition_by_id(&feature.id, FeatureStatus::ReadyForReview)
+    }
+
     /// Auto-register a feature for a branch if none exists yet.
     ///
     /// This is a **DB-only** operation — the branch already exists (the caller
@@ -599,7 +890,7 @@ impl<'a> FeatureManager<'a> {
 
         // Already registered?
         let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active')",
+            "SELECT EXISTS(SELECT 1 FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'in_progress')",
             params![repo.id, branch],
             |row| row.get(0),
         )?;
@@ -619,14 +910,14 @@ impl<'a> FeatureManager<'a> {
         let maybe_inactive: Option<(String, String, String)> = self
             .conn
             .query_row(
-                "SELECT id, status, created_at FROM features WHERE repo_id = ?1 AND name = ?2 AND status != 'active'",
+                "SELECT id, status, created_at FROM features WHERE repo_id = ?1 AND name = ?2 AND status != 'in_progress'",
                 params![repo.id, base_name],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         if let Some((inactive_id, _status, created_at)) = maybe_inactive {
             self.conn.execute(
-                "UPDATE features SET branch = ?1, base_branch = ?2, status = 'active', merged_at = NULL WHERE id = ?3",
+                "UPDATE features SET branch = ?1, base_branch = ?2, status = 'in_progress', merged_at = NULL WHERE id = ?3",
                 params![branch, resolved_base, inactive_id],
             )?;
             return Ok(Some(Feature {
@@ -635,9 +926,13 @@ impl<'a> FeatureManager<'a> {
                 name: base_name.to_string(),
                 branch: branch.to_string(),
                 base_branch: resolved_base,
-                status: FeatureStatus::Active,
+                status: FeatureStatus::InProgress,
                 created_at,
                 merged_at: None,
+                source_type: None,
+                source_id: None,
+                tickets_total: 0,
+                tickets_merged: 0,
             }));
         }
 
@@ -667,9 +962,13 @@ impl<'a> FeatureManager<'a> {
             name,
             branch: branch.to_string(),
             base_branch: resolved_base,
-            status: FeatureStatus::Active,
+            status: FeatureStatus::InProgress,
             created_at: now,
             merged_at: None,
+            source_type: None,
+            source_id: None,
+            tickets_total: 0,
+            tickets_merged: 0,
         };
 
         self.insert_feature_record(&feature)?;
@@ -691,7 +990,7 @@ impl<'a> FeatureManager<'a> {
              WHERE w.repo_id = ?1
                AND w.status = 'active'
                AND w.branch != ?2
-               AND w.branch NOT IN (SELECT f.branch FROM features f WHERE f.repo_id = ?1 AND f.status = 'active')
+               AND w.branch NOT IN (SELECT f.branch FROM features f WHERE f.repo_id = ?1 AND f.status = 'in_progress')
              GROUP BY w.branch",
             params![repo_id, default_branch],
             |row| {
@@ -731,7 +1030,7 @@ impl<'a> FeatureManager<'a> {
 
         let features: Vec<(String, String)> = query_collect(
             self.conn,
-            "SELECT id, branch FROM features WHERE repo_id = ?1 AND status = 'active'",
+            "SELECT id, branch FROM features WHERE repo_id = ?1 AND status = 'in_progress'",
             params![repo.id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -761,7 +1060,7 @@ impl<'a> FeatureManager<'a> {
         if threshold_days == 0 {
             return false;
         }
-        if feature.status != FeatureStatus::Active {
+        if feature.status != FeatureStatus::InProgress {
             return false;
         }
         let cutoff = Utc::now() - chrono::Duration::days(threshold_days as i64);
@@ -847,6 +1146,40 @@ impl<'a> FeatureManager<'a> {
         Ok(ids)
     }
 
+    /// Return all tickets linked to a feature (via the feature_tickets join table).
+    /// Intended for the TUI feature detail view; fast indexed read, acceptable on main thread.
+    pub fn linked_tickets(&self, feature_id: &str) -> Result<Vec<crate::tickets::Ticket>> {
+        query_collect(
+            self.conn,
+            "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, \
+             t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map \
+             FROM tickets t \
+             JOIN feature_tickets ft ON ft.ticket_id = t.id \
+             WHERE ft.feature_id = ?1 \
+             ORDER BY CAST(t.source_id AS INTEGER) ASC",
+            params![feature_id],
+            |row| {
+                Ok(crate::tickets::Ticket {
+                    id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    source_type: row.get(2)?,
+                    source_id: row.get(3)?,
+                    title: row.get(4)?,
+                    body: row.get(5)?,
+                    state: row.get(6)?,
+                    labels: row.get(7)?,
+                    assignee: row.get(8)?,
+                    priority: row.get(9)?,
+                    url: row.get(10)?,
+                    synced_at: row.get(11)?,
+                    raw_json: row.get(12)?,
+                    workflow: row.get(13)?,
+                    agent_map: row.get(14)?,
+                })
+            },
+        )
+    }
+
     /// Link a single ticket to a feature (idempotent — uses INSERT OR IGNORE).
     pub fn link_ticket(&self, feature_id: &str, ticket_id: &str) -> Result<()> {
         self.link_tickets_internal(feature_id, &[ticket_id.to_string()])
@@ -862,10 +1195,10 @@ impl<'a> FeatureManager<'a> {
         Ok(())
     }
 
-    fn insert_feature_record(&self, feature: &Feature) -> Result<()> {
+    pub(super) fn insert_feature_record(&self, feature: &Feature) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at, source_type, source_id, tickets_total, tickets_merged)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 feature.id,
                 feature.repo_id,
@@ -874,6 +1207,10 @@ impl<'a> FeatureManager<'a> {
                 feature.base_branch,
                 feature.status,
                 feature.created_at,
+                feature.source_type,
+                feature.source_id,
+                feature.tickets_total,
+                feature.tickets_merged,
             ],
         )?;
         Ok(())
@@ -889,10 +1226,378 @@ impl<'a> FeatureManager<'a> {
         Ok(self
             .conn
             .query_row(
-                "SELECT id FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'",
+                "SELECT id FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'in_progress'",
                 params![repo_id, branch],
                 |row| row.get(0),
             )
             .optional()?)
+    }
+
+    /// Slugify a string for use in a worktree name: lowercase, replace non-alphanum with hyphens, deduplicate hyphens, trim.
+    fn slugify(s: &str) -> String {
+        let mut slug = s
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        // Collapse consecutive hyphens
+        while slug.contains("--") {
+            slug = slug.replace("--", "-");
+        }
+        slug.trim_matches('-').to_string()
+    }
+
+    /// Query eligible tickets for a feature: tickets linked via `feature_tickets` that do not
+    /// already have an `active` or `merged` worktree in the given repo.
+    /// Tickets with only `abandoned` worktrees are eligible (retry-able).
+    pub fn eligible_tickets(&self, feature_id: &str, repo_id: &str) -> Result<Vec<String>> {
+        query_collect(
+            self.conn,
+            "SELECT t.id FROM tickets t \
+             JOIN feature_tickets ft ON ft.ticket_id = t.id \
+             WHERE ft.feature_id = ?1 \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM worktrees w \
+                 WHERE w.ticket_id = t.id \
+                   AND w.repo_id = ?2 \
+                   AND w.status IN ('active', 'merged') \
+               )",
+            params![feature_id, repo_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Dispatch a single ticket: create a worktree, create an agent run, spawn a headless agent,
+    /// and notify `done_tx` when the drain thread finishes.
+    ///
+    /// Available on Unix only (headless spawning uses `#[cfg(unix)]` APIs).
+    #[cfg(unix)]
+    fn dispatch_ticket(
+        &self,
+        repo_slug: &str,
+        feature: &Feature,
+        ticket_id: &str,
+        done_tx: std::sync::mpsc::Sender<()>,
+    ) -> Result<()> {
+        use crate::agent::AgentManager;
+        use crate::agent_runtime::{self, SpawnHeadlessParams};
+        use crate::config::agent_log_path;
+        use crate::db::open_database_compat;
+        use crate::worktree::WorktreeCreateOptions;
+
+        // Fetch ticket details for prompt + slug
+        let ticket = crate::tickets::TicketSyncer::new(self.conn).get_by_id(ticket_id)?;
+
+        // Build a descriptive worktree name from the source_id + title slug
+        let title_slug = Self::slugify(&ticket.title);
+        let raw_name = format!("feat-{}-{}", ticket.source_id, title_slug);
+        // Cap at 60 chars to keep slugs manageable.
+        // Use char_indices to find a safe UTF-8 boundary (slugify passes non-ASCII
+        // alphanumerics through unchanged, so multi-byte codepoints are possible).
+        let wt_name = {
+            let end = raw_name
+                .char_indices()
+                .nth(60)
+                .map_or(raw_name.len(), |(i, _)| i);
+            raw_name[..end].trim_end_matches('-').to_string()
+        };
+
+        // Create worktree based off the feature branch
+        let wt_opts = WorktreeCreateOptions {
+            from_branch: Some(feature.branch.clone()),
+            ticket_id: Some(ticket_id.to_string()),
+            ..Default::default()
+        };
+        let (wt, _warnings) =
+            WorktreeManager::new(self.conn, self.config).create(repo_slug, &wt_name, wt_opts)?;
+
+        // Build agent prompt. Ticket bodies are user-supplied (GitHub issue content) and
+        // are not sanitized for prompt injection; truncate to a reasonable length to limit
+        // the blast radius of any adversarially crafted issue body.
+        const MAX_BODY_CHARS: usize = 4_000;
+        let prompt = if ticket.body.trim().is_empty() {
+            format!("Implement ticket #{}: {}", ticket.source_id, ticket.title)
+        } else {
+            let body_chars = ticket.body.chars().count();
+            let body: std::borrow::Cow<str> = if body_chars > MAX_BODY_CHARS {
+                let end = ticket
+                    .body
+                    .char_indices()
+                    .nth(MAX_BODY_CHARS)
+                    .map_or(ticket.body.len(), |(i, _)| i);
+                format!(
+                    "{}\n\n[body truncated at {MAX_BODY_CHARS} chars]",
+                    &ticket.body[..end]
+                )
+                .into()
+            } else {
+                ticket.body.as_str().into()
+            };
+            format!(
+                "Implement ticket #{}: {}\n\n---\n{}",
+                ticket.source_id, ticket.title, body
+            )
+        };
+
+        // Create agent run record (no tmux window — headless)
+        let run = AgentManager::new(self.conn).create_run(Some(&wt.id), &prompt, None, None)?;
+
+        eprintln!(
+            "[feature::run] Spawning agent run {} for ticket #{} ({})",
+            run.id, ticket.source_id, ticket.title
+        );
+
+        // Spawn headless subprocess
+        let params = SpawnHeadlessParams {
+            run_id: &run.id,
+            working_dir: &wt.path,
+            prompt: &prompt,
+            resume_session_id: None,
+            model: None,
+            bot_name: None,
+            permission_mode: Some(&self.config.general.agent_permission_mode),
+            plugin_dirs: &[],
+        };
+        let (handle, prompt_file) =
+            agent_runtime::try_spawn_headless_run(&params).map_err(|e| {
+                ConductorError::Workflow(format!(
+                    "spawn failed for ticket {}: {}",
+                    ticket.source_id, e
+                ))
+            })?;
+
+        // Persist the subprocess PID. This is best-effort: if it fails the agent still
+        // runs and the orphan reaper will clean it up via log recovery. Intentionally
+        // fire-and-forget — do not propagate the error.
+        let pid = handle.pid();
+        let _ = AgentManager::new(self.conn).update_run_subprocess_pid(&run.id, pid);
+
+        // Spawn a drain thread with its own DB connection (Connection is not Send)
+        let run_id = run.id.clone();
+        let log_path = agent_log_path(&run.id);
+        std::thread::spawn(move || {
+            let (stdout, finish) = handle.into_drain_parts();
+            let conn = match open_database_compat(&crate::config::db_path()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("fan-out drain: failed to open DB for run {run_id}: {e}");
+                    let _ = std::fs::remove_file(&prompt_file);
+                    let _ = done_tx.send(());
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
+            agent_runtime::drain_stream_json(stdout, &run_id, &log_path, &mgr, |_| {});
+            let _ = std::fs::remove_file(&prompt_file);
+            finish();
+            let _ = done_tx.send(());
+        });
+
+        Ok(())
+    }
+
+    /// Fan-out: create worktrees and spawn headless agents for all eligible tickets in a feature.
+    ///
+    /// Respects `config.general.max_feature_parallelism` (default 3); `parallel_override`
+    /// takes precedence when `Some`.  Blocks until all agents finish.
+    ///
+    /// Returns a [`RunSummary`] with counts of dispatched and failed tickets.
+    ///
+    /// Available on Unix only (headless spawning uses `#[cfg(unix)]` APIs).
+    #[cfg(unix)]
+    pub fn run(
+        &self,
+        repo_slug: &str,
+        feature_name: &str,
+        parallel_override: Option<u32>,
+    ) -> Result<RunSummary> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+        let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
+
+        let parallelism = parallel_override
+            .unwrap_or(self.config.general.max_feature_parallelism)
+            .max(1) as usize;
+
+        let ticket_ids = self.eligible_tickets(&feature.id, &repo.id)?;
+        if ticket_ids.is_empty() {
+            eprintln!("[feature::run] No eligible tickets for feature '{feature_name}'");
+            return Ok(RunSummary {
+                dispatched: 0,
+                failed: 0,
+            });
+        }
+
+        eprintln!(
+            "[feature::run] {} eligible ticket(s), parallelism={}",
+            ticket_ids.len(),
+            parallelism
+        );
+
+        let mut queue: std::collections::VecDeque<String> = ticket_ids.into_iter().collect();
+        let mut in_flight: usize = 0;
+        let mut dispatched: u32 = 0;
+        let mut failed: u32 = 0;
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+
+        // Returns `(dispatched_ok, error_message)` for one dispatch attempt.
+        let try_dispatch = |tid: &str| -> (bool, Option<String>) {
+            let tx = done_tx.clone();
+            match self.dispatch_ticket(repo_slug, &feature, tid, tx) {
+                Ok(()) => (true, None),
+                Err(e) => (
+                    false,
+                    Some(format!(
+                        "[feature::run] Failed to dispatch ticket {tid}: {e}"
+                    )),
+                ),
+            }
+        };
+
+        // Spawn initial batch up to parallelism
+        while in_flight < parallelism {
+            let Some(tid) = queue.pop_front() else { break };
+            let (ok, err_msg) = try_dispatch(&tid);
+            if ok {
+                dispatched += 1;
+                in_flight += 1;
+            } else {
+                eprintln!("{}", err_msg.unwrap());
+                failed += 1;
+            }
+        }
+
+        // Wait for completions and dispatch queued tickets
+        while in_flight > 0 {
+            match done_rx.recv() {
+                Ok(()) => {
+                    in_flight -= 1;
+                    if let Some(tid) = queue.pop_front() {
+                        let (ok, err_msg) = try_dispatch(&tid);
+                        if ok {
+                            dispatched += 1;
+                            in_flight += 1;
+                        } else {
+                            eprintln!("{}", err_msg.unwrap());
+                            failed += 1;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Channel closed unexpectedly; count as in-flight completing
+                    in_flight -= 1;
+                }
+            }
+        }
+
+        eprintln!(
+            "[feature::run] Done — dispatched={}, failed={}",
+            dispatched, failed
+        );
+        Ok(RunSummary { dispatched, failed })
+    }
+
+    /// Non-Unix stub for `run()` — returns an error on unsupported platforms.
+    #[cfg(not(unix))]
+    pub fn run(
+        &self,
+        _repo_slug: &str,
+        _feature_name: &str,
+        _parallel_override: Option<u32>,
+    ) -> Result<RunSummary> {
+        Err(ConductorError::Workflow(
+            "feature run is not supported on this platform".to_string(),
+        ))
+    }
+
+    /// Scan features with `status = 'in_progress'` and zero active worktrees for `repo_slug`.
+    /// For each candidate, checks `gh pr list --base <branch>` for open PRs.
+    /// Returns features with no open PRs — these are "dangling" (abandoned without cleanup).
+    ///
+    /// `dangling` is a derived state — no DB column is written.
+    ///
+    /// Use this when you have a specific repo slug; for cross-repo checks use
+    /// [`reap_dangling_all`] instead (preferred by TUI, web, and CLI integration points).
+    pub fn reap_dangling(&self, repo_slug: &str) -> Result<Vec<Feature>> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+
+        let candidates: Vec<Feature> = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {FEATURE_COLS} FROM features f \
+                 WHERE f.repo_id = ?1 \
+                   AND f.status = 'in_progress' \
+                   AND (SELECT COUNT(*) FROM worktrees w \
+                        WHERE w.repo_id = f.repo_id \
+                          AND w.base_branch = f.branch \
+                          AND w.status = 'active') = 0"
+            ),
+            params![repo.id],
+            map_feature_row,
+        )?;
+
+        let mut dangling = Vec::new();
+        for feature in candidates {
+            if !self.has_open_pr(&repo.local_path, &feature.branch) {
+                dangling.push(feature);
+            }
+        }
+        Ok(dangling)
+    }
+
+    /// Scan features with `status = 'in_progress'` and zero active worktrees across all repos.
+    /// For each candidate, checks `gh pr list --base <branch>` for open PRs.
+    /// Returns features with no open PRs.
+    ///
+    /// `dangling` is a derived state — no DB column is written.
+    pub fn reap_dangling_all(&self) -> Result<Vec<Feature>> {
+        // Join features with repos to get local_path for gh pr list
+        let candidates: Vec<(Feature, String)> = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {FEATURE_COLS_ALIASED}, r.local_path \
+                 FROM features f \
+                 JOIN repos r ON r.id = f.repo_id \
+                 WHERE f.status = 'in_progress' \
+                   AND (SELECT COUNT(*) FROM worktrees w \
+                        WHERE w.repo_id = f.repo_id \
+                          AND w.base_branch = f.branch \
+                          AND w.status = 'active') = 0"
+            ),
+            params![],
+            |row| {
+                let feature = map_feature_row(row)?;
+                let local_path: String = row.get(FEATURE_COLS_COUNT)?;
+                Ok((feature, local_path))
+            },
+        )?;
+
+        let mut dangling = Vec::new();
+        for (feature, local_path) in candidates {
+            if !self.has_open_pr(&local_path, &feature.branch) {
+                dangling.push(feature);
+            }
+        }
+        Ok(dangling)
+    }
+
+    /// Returns `true` if there is at least one open PR targeting `branch` in the repo
+    /// at `repo_path`. Returns `false` on error or if no open PR exists.
+    fn has_open_pr(&self, repo_path: &str, branch: &str) -> bool {
+        let output = Command::new("gh")
+            .args([
+                "pr", "list", "--base", branch, "--state", "open", "--json", "number", "--jq",
+                "length",
+            ])
+            .current_dir(repo_path)
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let count_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                count_str.parse::<u64>().map(|n| n > 0).unwrap_or(false)
+            }
+            _ => false,
+        }
     }
 }

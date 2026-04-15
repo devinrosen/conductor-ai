@@ -89,6 +89,30 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/tickets/{id}", get(tickets::ticket_detail))
         // Features
         .route("/api/repos/{id}/features", get(features::list_features))
+        .route(
+            "/api/repos/{id}/features/{name}",
+            get(features::get_feature),
+        )
+        .route(
+            "/api/repos/{id}/features/{name}/sync",
+            post(features::sync_feature),
+        )
+        .route(
+            "/api/repos/{id}/features/{name}/run",
+            post(features::run_feature),
+        )
+        .route(
+            "/api/repos/{id}/features/{name}/review",
+            post(features::review_feature),
+        )
+        .route(
+            "/api/repos/{id}/features/{name}/approve",
+            post(features::approve_feature),
+        )
+        .route(
+            "/api/repos/{id}/features/{name}/close",
+            post(features::close_feature),
+        )
         // Agent stats (aggregates)
         .route(
             "/api/worktrees/{id}/agent-runs",

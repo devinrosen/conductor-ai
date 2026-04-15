@@ -461,6 +461,33 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         };
     }
 
+    // View-specific keybindings (Features list view)
+    if state.view == View::Features {
+        return match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => Action::Back,
+            KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+            KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+            KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+            KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+            KeyCode::Enter => Action::Select,
+            KeyCode::Char('r') => Action::FeatureRunFanOut,
+            KeyCode::Char('v') => Action::FeatureTransitionReady,
+            KeyCode::Char('a') => Action::FeatureTransitionApprove,
+            KeyCode::Char('x') => Action::FeatureClose,
+            _ => Action::None,
+        };
+    }
+
+    // View-specific keybindings (Feature detail view)
+    if state.view == View::FeatureDetail {
+        return match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => Action::Back,
+            KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+            KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+            _ => Action::None,
+        };
+    }
+
     // View-specific keybindings (Dashboard)
     if state.view == View::Dashboard {
         match key.code {
@@ -665,6 +692,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         if let KeyCode::Char('I') = key.code {
             return Action::ToggleAgentIssues;
         }
+        if let KeyCode::Char('f') = key.code {
+            return Action::OpenFeatures;
+        }
     }
 
     // Normal keybindings
@@ -699,6 +729,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         // Open notification list
         KeyCode::Char('N') => Action::ShowNotifications,
+
+        // Open Features view (global shortcut)
+        KeyCode::Char('F') => Action::OpenFeatures,
 
         // CRUD actions
         KeyCode::Char('a') => Action::RegisterRepo,

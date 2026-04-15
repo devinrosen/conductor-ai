@@ -365,15 +365,18 @@ fn branch_picker_item_populates_stale_days() {
     let old_ts = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
     let feature = FeatureRow {
         id: "f1".to_string(),
+        repo_id: "r1".to_string(),
         name: "old-feature".to_string(),
         branch: "feat/old".to_string(),
         base_branch: "main".to_string(),
-        status: FeatureStatus::Active,
+        status: FeatureStatus::InProgress,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         worktree_count: 0,
         ticket_count: 0,
         last_commit_at: Some(old_ts),
         last_worktree_activity: None,
+        tickets_total: 0,
+        tickets_merged: 0,
     };
     let stale_threshold: u32 = 14;
     let sd = if FeatureManager::is_stale(&feature, stale_threshold) {

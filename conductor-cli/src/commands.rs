@@ -649,7 +649,7 @@ pub enum TicketCommands {
 pub enum FeatureCommands {
     /// Create a new feature branch
     #[command(
-        after_help = "Examples:\n  conductor feature create my-repo notification-improvements\n  conductor feature create my-repo notification-improvements --from develop\n  conductor feature create my-repo notification-improvements --tickets 1262,1263"
+        after_help = "Examples:\n  conductor feature create my-repo notification-improvements\n  conductor feature create my-repo notification-improvements --from develop\n  conductor feature create my-repo notification-improvements --tickets 1262,1263\n  conductor feature create my-repo notification-improvements --milestone 42"
     )]
     Create {
         /// Repo slug
@@ -662,6 +662,9 @@ pub enum FeatureCommands {
         /// Comma-separated ticket source IDs to link
         #[arg(long)]
         tickets: Option<String>,
+        /// GitHub milestone number to link as source (sets source_type=github_milestone)
+        #[arg(long)]
+        milestone: Option<u64>,
     },
     /// List features for a repo
     List {
@@ -696,6 +699,20 @@ pub enum FeatureCommands {
         #[arg(long)]
         draft: bool,
     },
+    /// Transition a feature from in_progress → ready_for_review
+    Review {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+    },
+    /// Transition a feature from ready_for_review → approved
+    Approve {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+    },
     /// Close a feature (marks as merged if branch was merged, otherwise closed)
     Close {
         /// Repo slug
@@ -709,5 +726,22 @@ pub enum FeatureCommands {
         repo: String,
         /// Feature name
         name: String,
+    },
+    /// Sync tickets from the feature's configured GitHub milestone
+    Sync {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+    },
+    /// Fan-out: create worktrees and launch agents for all eligible tickets in this feature
+    Run {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+        /// Override max_feature_parallelism from config
+        #[arg(long)]
+        parallel: Option<u32>,
     },
 }

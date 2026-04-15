@@ -1173,7 +1173,10 @@ fn belongs_to_feature_none_base_branch() {
 }
 
 #[test]
-fn test_create_auto_registers_feature_for_non_default_base() {
+fn test_create_non_default_base_branch_does_not_register_feature() {
+    // Since RFC-018 explicit lifecycle, creating a worktree on a non-default
+    // branch should NOT auto-register a feature. Features must be created
+    // explicitly via `conductor feature create`.
     let (tmp, remote, local) = setup_repo_with_remote();
 
     // Create a feature branch in the repo to use as a non-default base
@@ -1214,85 +1217,18 @@ fn test_create_auto_registers_feature_for_non_default_base() {
     // Worktree should have feat/parent as its base branch
     assert_eq!(wt.base_branch.as_deref(), Some("feat/parent"));
 
-    // Auto-registration should have happened inside create()
+    // No feature should be auto-registered — explicit lifecycle enforced.
     let fm = crate::feature::FeatureManager::new(&conn, &config);
     let features = fm.list_active("myrepo").unwrap();
     assert!(
-        features.iter().any(|f| f.branch == "feat/parent"),
-        "expected a feature for 'feat/parent' to be auto-registered, got: {features:?}"
+        features.is_empty(),
+        "no feature should be auto-registered under explicit lifecycle, got: {features:?}"
     );
 }
 
 #[test]
-fn test_create_links_ticket_to_auto_registered_feature() {
-    let (tmp, remote, local) = setup_repo_with_remote();
-
-    // Create a feature branch in the repo to use as a non-default base
-    git(&["checkout", "-b", "feat/parent"], &local);
-    let file = local.join("feature.txt");
-    fs::write(&file, "feature work").unwrap();
-    git(&["add", "feature.txt"], &local);
-    git(&["commit", "-m", "feature commit"], &local);
-    git(&["push", "-u", "origin", "feat/parent"], &local);
-    git(&["checkout", "main"], &local);
-
-    let conn = crate::test_helpers::setup_db();
-    let mut config = Config::default();
-    config.general.workspace_root = tmp.path().to_path_buf();
-
-    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
-    repo_mgr
-        .register(
-            "myrepo",
-            local.to_str().unwrap(),
-            remote.to_str().unwrap(),
-            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
-        )
-        .unwrap();
-
-    // Insert a ticket so we can pass its ID to create()
-    conn.execute(
-        "INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
-         VALUES ('t1', (SELECT id FROM repos LIMIT 1), 'github', '42', 'Test ticket', 'http://example.com', '2025-01-01T00:00:00Z')",
-        [],
-    )
-    .unwrap();
-
-    let mgr = WorktreeManager::new(&conn, &config);
-    let (_wt, _warnings) = mgr
-        .create(
-            "myrepo",
-            "feat-child",
-            WorktreeCreateOptions {
-                from_branch: Some("feat/parent".to_string()),
-                ticket_id: Some("t1".to_string()),
-                ..Default::default()
-            },
-        )
-        .expect("create should succeed");
-
-    // The auto-registered feature should be linked to the ticket
-    let fm = crate::feature::FeatureManager::new(&conn, &config);
-    let features = fm.list_active("myrepo").unwrap();
-    let feature = features
-        .iter()
-        .find(|f| f.branch == "feat/parent")
-        .expect("feature should be auto-registered");
-
-    let linked: bool = conn
-        .query_row(
-            "SELECT COUNT(*) > 0 FROM feature_tickets WHERE feature_id = ?1 AND ticket_id = ?2",
-            rusqlite::params![feature.id, "t1"],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert!(linked, "ticket should be linked to auto-registered feature");
-}
-
-#[test]
-fn test_create_skips_auto_registration_for_default_branch() {
-    // Creating a worktree from the default branch should not trigger
-    // auto-registration of a feature.
+fn test_create_default_branch_does_not_register_feature() {
+    // Creating a worktree from the default branch should not register a feature.
     let (tmp, remote, local) = setup_repo_with_remote();
 
     let conn = crate::test_helpers::setup_db();
@@ -1315,7 +1251,6 @@ fn test_create_skips_auto_registration_for_default_branch() {
         .create("myrepo", "feat-on-main", Default::default())
         .expect("create should succeed");
 
-    // base_branch should be "main" (default) — auto-registration should skip it
     assert!(
         wt.base_branch.is_none() || wt.base_branch.as_deref() == Some("main"),
         "expected no non-default base_branch"
@@ -1407,7 +1342,7 @@ fn test_delete_then_auto_close_orphaned_feature() {
     let feature_id = crate::new_id();
     conn.execute(
         "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-         VALUES (?1, ?2, 'ephemeral', 'feat/ephemeral', 'main', 'active', '2024-01-01T00:00:00Z')",
+         VALUES (?1, ?2, 'ephemeral', 'feat/ephemeral', 'main', 'in_progress', '2024-01-01T00:00:00Z')",
         rusqlite::params![feature_id, repo_id],
     )
     .unwrap();
@@ -1565,6 +1500,65 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
         .unwrap();
     assert_eq!(s1, "merged");
     assert_eq!(s2, "merged");
+}
+
+/// When two sub-worktrees for the same feature branch both merge in a single
+/// cleanup run, auto_ready_for_review_if_complete must fire AFTER all worktrees
+/// are marked merged — otherwise it would see sibling worktrees as still active
+/// and skip the transition.
+#[test]
+fn test_cleanup_multi_worktrees_same_feature_triggers_ready_for_review() {
+    let conn = crate::test_helpers::setup_db();
+    // auto_ready_for_review defaults to true in Config::default()
+    let config = Config::default();
+
+    // Insert a feature tracked on branch "feat/epic"
+    conn.execute(
+        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
+         VALUES ('feat1', 'r1', 'epic', 'feat/epic', 'main', 'in_progress', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    // Two sub-worktrees whose base_branch = "feat/epic" (both active initially)
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES ('sub1', 'r1', 'sub-a', 'feat/sub-a', 'feat/epic', '/tmp/sub-a', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES ('sub2', 'r1', 'sub-b', 'feat/sub-b', 'feat/epic', '/tmp/sub-b', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    // Both sub-worktrees merge in the same cleanup run (w1 from setup_db is also "merged" here
+    // but it has no base_branch so it won't affect the feature check)
+    let count = mgr
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |_, branches| branches.iter().cloned().collect(),
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    // w1 + sub1 + sub2 all get cleaned up
+    assert_eq!(count, 3);
+
+    // Feature should have transitioned to ready_for_review because both sub-worktrees are merged
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = 'feat1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "ready_for_review",
+        "feature should transition to ready_for_review after all sub-worktrees merge in one run"
+    );
 }
 
 // -----------------------------------------------------------------------

@@ -30,7 +30,7 @@ fn insert_feature(conn: &Connection, repo_id: &str, name: &str, branch: &str) ->
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, 'main', 'active', ?5)",
+         VALUES (?1, ?2, ?3, ?4, 'main', 'in_progress', ?5)",
         params![id, repo_id, name, branch, now],
     )
     .unwrap();
@@ -58,13 +58,13 @@ fn test_create_feature_duplicate_via_manager() {
 
     // First create succeeds
     let feature = mgr
-        .create("test-repo", "notif-improvements", None, &[])
+        .create("test-repo", "notif-improvements", None, None, &[])
         .unwrap();
     assert_eq!(feature.name, "notif-improvements");
 
     // Second create with the same name should return FeatureAlreadyExists
     let err = mgr
-        .create("test-repo", "notif-improvements", None, &[])
+        .create("test-repo", "notif-improvements", None, None, &[])
         .unwrap_err();
     assert!(
         matches!(err, ConductorError::FeatureAlreadyExists { .. }),
@@ -133,7 +133,7 @@ fn test_list_active_filters_by_status() {
     let active = mgr.list_active("test-repo").unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].name, "active-feat");
-    assert_eq!(active[0].status, FeatureStatus::Active);
+    assert_eq!(active[0].status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -307,12 +307,17 @@ fn setup_git_repo() -> (tempfile::TempDir, tempfile::TempDir) {
 }
 
 fn insert_repo_at(conn: &Connection, local_path: &str) -> String {
+    insert_repo_at_with_remote(conn, local_path, "https://github.com/test/repo.git")
+}
+
+fn insert_repo_at_with_remote(conn: &Connection, local_path: &str, remote_url: &str) -> String {
     let id = crate::new_id();
     conn.execute(
         "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-         VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-        params![id, local_path],
-    ).unwrap();
+         VALUES (?1, 'test-repo', ?2, ?3, '/tmp/ws', '2024-01-01T00:00:00Z')",
+        params![id, local_path, remote_url],
+    )
+    .unwrap();
     id
 }
 
@@ -437,12 +442,14 @@ fn test_create_feature_happy_path() {
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
 
-    let feature = mgr.create("test-repo", "my-feature", None, &[]).unwrap();
+    let feature = mgr
+        .create("test-repo", "my-feature", None, None, &[])
+        .unwrap();
 
     assert_eq!(feature.name, "my-feature");
     assert_eq!(feature.branch, "feat/my-feature");
     assert_eq!(feature.base_branch, "main");
-    assert!(matches!(feature.status, FeatureStatus::Active));
+    assert!(matches!(feature.status, FeatureStatus::InProgress));
     assert!(feature.merged_at.is_none());
 
     // Verify the branch exists in git
@@ -485,7 +492,7 @@ fn test_create_feature_with_custom_base_branch() {
     let mgr = FeatureManager::new(&conn, &config);
 
     let feature = mgr
-        .create("test-repo", "custom-base", Some("develop"), &[])
+        .create("test-repo", "custom-base", Some("develop"), None, &[])
         .unwrap();
 
     assert_eq!(feature.name, "custom-base");
@@ -518,6 +525,7 @@ fn test_create_feature_with_ticket_source_ids() {
         .create(
             "test-repo",
             "with-tickets",
+            None,
             None,
             &["42".into(), "43".into()],
         )
@@ -696,7 +704,7 @@ fn test_create_feature_cleans_up_branches_on_db_failure() {
     let config = Config::default();
     let mgr = FeatureManager::new(&conn, &config);
 
-    let result = mgr.create("test-repo", "cleanup-test", None, &[]);
+    let result = mgr.create("test-repo", "cleanup-test", None, None, &[]);
     assert!(result.is_err(), "create should fail due to trigger");
 
     // Verify the local branch was cleaned up
@@ -850,7 +858,7 @@ fn test_resolve_active_feature_returns_active() {
     let mgr = FeatureManager::new(&conn, &config);
     let f = mgr.resolve_active_feature("test-repo", "my-feat").unwrap();
     assert_eq!(f.name, "my-feat");
-    assert_eq!(f.status, FeatureStatus::Active);
+    assert_eq!(f.status, FeatureStatus::InProgress);
 }
 
 // -----------------------------------------------------------------------
@@ -883,6 +891,297 @@ fn test_resolve_feature_id_for_run_explicit_name() {
         .resolve_feature_id_for_run(Some("my-feat"), Some("test-repo"), None, None)
         .unwrap();
     assert_eq!(result, Some(feature_id));
+}
+
+// -----------------------------------------------------------------------
+// transition() tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_transition_in_progress_to_ready_for_review() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .transition("test-repo", "my-feat", FeatureStatus::ReadyForReview)
+        .unwrap();
+    assert_eq!(feature.status, FeatureStatus::ReadyForReview);
+}
+
+#[test]
+fn test_transition_ready_for_review_to_approved() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+    conn.execute(
+        "UPDATE features SET status = 'ready_for_review' WHERE id = ?1",
+        params![feature_id],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .transition("test-repo", "my-feat", FeatureStatus::Approved)
+        .unwrap();
+    assert_eq!(feature.status, FeatureStatus::Approved);
+}
+
+#[test]
+fn test_transition_invalid_in_progress_to_approved() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let err = mgr
+        .transition("test-repo", "my-feat", FeatureStatus::Approved)
+        .unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidFeatureTransition { .. }),
+        "expected InvalidFeatureTransition, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_transition_any_to_closed_succeeds() {
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let _repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+    // Create a feature via the manager (so the branch exists)
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.create("test-repo", "close-feat", None, None, &[])
+        .unwrap();
+
+    // Transition from in_progress → closed should be allowed
+    let feature = mgr
+        .transition("test-repo", "close-feat", FeatureStatus::Closed)
+        .unwrap();
+    assert!(
+        feature.status == FeatureStatus::Closed || feature.status == FeatureStatus::Merged,
+        "expected Closed or Merged, got: {:?}",
+        feature.status
+    );
+}
+
+// -----------------------------------------------------------------------
+// auto_ready_for_review_if_complete() tests
+// -----------------------------------------------------------------------
+
+fn insert_worktree_for_feature(
+    conn: &Connection,
+    repo_id: &str,
+    slug: &str,
+    base_branch: &str,
+    status: &str,
+) {
+    let id = crate::new_id();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, '/tmp/wt', ?6, '2024-01-01T00:00:00Z')",
+        rusqlite::params![
+            id,
+            repo_id,
+            slug,
+            format!("{slug}-branch"),
+            base_branch,
+            status
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_auto_ready_for_review_with_active_worktrees_no_transition() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    // One active worktree remains
+    insert_worktree_for_feature(&conn, &repo_id, "wt-active", "feat/my-feat", "active");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/my-feat")
+        .unwrap();
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "in_progress",
+        "feature should remain in_progress while worktrees are active"
+    );
+}
+
+#[test]
+fn test_create_feature_with_milestone_github_remote() {
+    // insert_repo_at uses remote_url = 'https://github.com/test/repo.git'
+    // so parse_github_remote should produce ("test", "repo")
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let _repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .create("test-repo", "ms-feature", None, Some(5), &[])
+        .unwrap();
+
+    assert_eq!(
+        feature.source_type.as_deref(),
+        Some("github_milestone"),
+        "source_type should be github_milestone"
+    );
+    assert_eq!(
+        feature.source_id.as_deref(),
+        Some("github.com/test/repo/milestones/5"),
+        "source_id should be the canonical milestone URL"
+    );
+}
+
+#[test]
+fn test_create_feature_with_milestone_ssh_remote() {
+    // Verify that SSH remote format (git@github.com:owner/repo.git) is handled
+    // identically to HTTPS — both should produce the canonical milestone source_id.
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let _repo_id = insert_repo_at_with_remote(
+        &conn,
+        work.path().to_str().unwrap(),
+        "git@github.com:test/repo.git",
+    );
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .create("test-repo", "ms-ssh-feature", None, Some(3), &[])
+        .unwrap();
+
+    assert_eq!(
+        feature.source_type.as_deref(),
+        Some("github_milestone"),
+        "source_type should be github_milestone for SSH remote"
+    );
+    assert_eq!(
+        feature.source_id.as_deref(),
+        Some("github.com/test/repo/milestones/3"),
+        "source_id should be canonical milestone URL for SSH remote"
+    );
+}
+
+#[test]
+fn test_create_feature_with_milestone_non_github_remote() {
+    // Use a non-GitHub remote URL so parse_github_remote returns None and
+    // create() falls back to the bare milestone number as a string.
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let _repo_id = insert_repo_at_with_remote(
+        &conn,
+        work.path().to_str().unwrap(),
+        "https://gitlab.example.com/org/repo.git",
+    );
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let feature = mgr
+        .create("test-repo", "ms-gitlab", None, Some(7), &[])
+        .unwrap();
+
+    assert_eq!(
+        feature.source_type.as_deref(),
+        Some("github_milestone"),
+        "source_type should be github_milestone even for non-GitHub remotes"
+    );
+    assert_eq!(
+        feature.source_id.as_deref(),
+        Some("7"),
+        "source_id should fall back to bare number for non-GitHub remote"
+    );
+}
+
+#[test]
+fn test_auto_ready_for_review_no_active_worktrees_transitions() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    // Only merged worktree
+    insert_worktree_for_feature(&conn, &repo_id, "wt-merged", "feat/my-feat", "merged");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/my-feat")
+        .unwrap();
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "ready_for_review",
+        "feature should transition to ready_for_review when all worktrees merged"
+    );
+}
+
+#[test]
+fn test_auto_ready_for_review_abandoned_worktrees_not_counted_as_active() {
+    // Abandoned worktrees must NOT block the auto-transition — only 'active' status counts.
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    // One merged and one abandoned worktree — no active ones remain
+    insert_worktree_for_feature(&conn, &repo_id, "wt-merged", "feat/my-feat", "merged");
+    insert_worktree_for_feature(&conn, &repo_id, "wt-abandoned", "feat/my-feat", "abandoned");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/my-feat")
+        .unwrap();
+
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "ready_for_review",
+        "abandoned worktrees should not block auto-transition to ready_for_review"
+    );
+}
+
+#[test]
+fn test_auto_ready_for_review_no_feature_is_noop() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    // Should return Ok(()) even when no feature exists for this branch
+    mgr.auto_ready_for_review_if_complete(&repo_id, "feat/nonexistent")
+        .unwrap();
 }
 
 #[test]
@@ -1060,7 +1359,7 @@ fn test_ensure_feature_for_branch_creates_feature() {
     assert_eq!(feature.name, "notifications");
     assert_eq!(feature.branch, "feat/notifications");
     assert_eq!(feature.base_branch, "main"); // fallback to default
-    assert_eq!(feature.status, FeatureStatus::Active);
+    assert_eq!(feature.status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -1169,7 +1468,7 @@ fn test_ensure_feature_for_branch_reactivates_closed_feature() {
         "should reuse the name by reactivating the closed feature"
     );
     assert_eq!(feature.branch, "feat/notifications");
-    assert_eq!(feature.status, FeatureStatus::Active);
+    assert_eq!(feature.status, FeatureStatus::InProgress);
     assert_eq!(feature.id, feat_id, "should reactivate the same record");
 }
 
@@ -1348,7 +1647,7 @@ fn test_auto_close_skips_when_active_worktrees_remain() {
 
     // Feature should still be active
     let f = mgr.get_by_name("test-repo", "my-feat").unwrap();
-    assert_eq!(f.status, FeatureStatus::Active);
+    assert_eq!(f.status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -1428,7 +1727,7 @@ fn test_auto_close_skips_when_branch_still_exists() {
 
     // Feature should remain active because the branch still exists
     let f = mgr.get_by_name("test-repo", "still-here").unwrap();
-    assert_eq!(f.status, FeatureStatus::Active);
+    assert_eq!(f.status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -1485,7 +1784,7 @@ fn test_auto_close_after_worktree_delete_skips_default_branch() {
 
     // Feature should remain active
     let f = mgr.get_by_name("test-repo", "main-feat").unwrap();
-    assert_eq!(f.status, FeatureStatus::Active);
+    assert_eq!(f.status, FeatureStatus::InProgress);
 }
 
 /// Regression: FEATURE_ROW_FRAGMENT wt_count subquery must only count
@@ -1544,8 +1843,8 @@ fn test_resolve_active_feature_rejects_closed() {
         .resolve_active_feature("test-repo", "done-feat")
         .unwrap_err();
     assert!(
-        matches!(err, ConductorError::Workflow(ref msg) if msg.contains("only active features")),
-        "expected Workflow error about active features, got: {err:?}"
+        matches!(err, ConductorError::Workflow(ref msg) if msg.contains("only in-progress features")),
+        "expected Workflow error about in-progress features, got: {err:?}"
     );
 }
 
@@ -1556,15 +1855,18 @@ fn test_resolve_active_feature_rejects_closed() {
 fn make_feature_row(last_commit_at: Option<&str>, last_wt_activity: Option<&str>) -> FeatureRow {
     FeatureRow {
         id: "test-id".to_string(),
+        repo_id: "test-repo-id".to_string(),
         name: "test-feature".to_string(),
         branch: "feat/test".to_string(),
         base_branch: "main".to_string(),
-        status: FeatureStatus::Active,
+        status: FeatureStatus::InProgress,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         worktree_count: 0,
         ticket_count: 0,
         last_commit_at: last_commit_at.map(|s| s.to_string()),
         last_worktree_activity: last_wt_activity.map(|s| s.to_string()),
+        tickets_total: 0,
+        tickets_merged: 0,
     }
 }
 
@@ -1644,6 +1946,176 @@ fn test_last_commit_at_in_feature_row_query() {
     let features = mgr.list("test-repo").unwrap();
     let f = features.iter().find(|f| f.name == "stale-test").unwrap();
     assert_eq!(f.last_commit_at.as_deref(), Some(ts));
+}
+
+// -----------------------------------------------------------------------
+// eligible_tickets tests
+// -----------------------------------------------------------------------
+
+fn insert_worktree_for_ticket(
+    conn: &Connection,
+    repo_id: &str,
+    ticket_id: &str,
+    feature_branch: &str,
+    status: &str,
+) -> String {
+    let id = crate::new_id();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, ticket_id, status, created_at) \
+         VALUES (?1, ?2, ?3, 'feat/impl', ?4, '/tmp/wt', ?5, ?6, '2024-01-01T00:00:00Z')",
+        params![id, repo_id, format!("feat-{id}"), feature_branch, ticket_id, status],
+    ).unwrap();
+    id
+}
+
+#[test]
+fn test_eligible_tickets_skips_active_worktree() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feature", "feat/my-feature");
+    let ticket_id = insert_ticket(&conn, &repo_id, "100");
+
+    // Link ticket to feature
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    // Active worktree for the ticket → not eligible
+    insert_worktree_for_ticket(&conn, &repo_id, &ticket_id, "feat/my-feature", "active");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let eligible = mgr.eligible_tickets(&feature_id, &repo_id).unwrap();
+    assert!(
+        eligible.is_empty(),
+        "ticket with active worktree should not be eligible"
+    );
+}
+
+#[test]
+fn test_eligible_tickets_skips_merged_worktree() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feature", "feat/my-feature");
+    let ticket_id = insert_ticket(&conn, &repo_id, "101");
+
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    // Merged worktree → not eligible
+    insert_worktree_for_ticket(&conn, &repo_id, &ticket_id, "feat/my-feature", "merged");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let eligible = mgr.eligible_tickets(&feature_id, &repo_id).unwrap();
+    assert!(
+        eligible.is_empty(),
+        "ticket with merged worktree should not be eligible"
+    );
+}
+
+#[test]
+fn test_eligible_tickets_includes_abandoned_worktree() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feature", "feat/my-feature");
+    let ticket_id = insert_ticket(&conn, &repo_id, "102");
+
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    // Abandoned worktree → still eligible
+    insert_worktree_for_ticket(&conn, &repo_id, &ticket_id, "feat/my-feature", "abandoned");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let eligible = mgr.eligible_tickets(&feature_id, &repo_id).unwrap();
+    assert_eq!(
+        eligible.len(),
+        1,
+        "ticket with only abandoned worktree should be eligible"
+    );
+    assert_eq!(eligible[0], ticket_id);
+}
+
+#[test]
+fn test_eligible_tickets_no_worktree() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feature", "feat/my-feature");
+    let ticket_id = insert_ticket(&conn, &repo_id, "103");
+
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    // No worktree → eligible
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let eligible = mgr.eligible_tickets(&feature_id, &repo_id).unwrap();
+    assert_eq!(eligible.len(), 1);
+    assert_eq!(eligible[0], ticket_id);
+}
+
+#[test]
+fn test_reap_dangling_skips_features_with_active_worktrees() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "active-feat", "feat/active-feat");
+
+    // Insert an active worktree targeting the feature branch
+    let wt_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES (?1, ?2, 'wt-a', 'feat/active-feat-impl', 'feat/active-feat', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
+        params![wt_id, repo_id],
+    ).unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    // Feature has active worktrees → not dangling
+    let result = mgr.reap_dangling("test-repo").unwrap();
+    assert!(
+        result.is_empty(),
+        "feature with active worktree should not be dangling"
+    );
+}
+
+#[test]
+fn test_reap_dangling_all_skips_features_with_active_worktrees() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "active-feat2", "feat/active-feat2");
+
+    // Active worktree
+    let wt_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES (?1, ?2, 'wt-b', 'feat/active-feat2-impl', 'feat/active-feat2', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
+        params![wt_id, repo_id],
+    ).unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let result = mgr.reap_dangling_all().unwrap();
+    // All candidates (features with zero active worktrees) pass through the gh check;
+    // since the active worktree exists the candidate is filtered at the DB level.
+    assert!(
+        result.is_empty(),
+        "feature with active worktrees should not be a dangling candidate"
+    );
 }
 
 #[test]
@@ -1862,5 +2334,443 @@ fn test_delete_unmerged_branch_returns_git_error() {
     assert!(
         matches!(err, ConductorError::Git(_)),
         "expected ConductorError::Git for unmerged branch, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_insert_feature_record_new_fields_round_trip() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let now = Utc::now().to_rfc3339();
+
+    let id = crate::new_id();
+    let feature = Feature {
+        id: id.clone(),
+        repo_id: repo_id.clone(),
+        name: "milestone-feature".to_string(),
+        branch: "feat/milestone-feature".to_string(),
+        base_branch: "main".to_string(),
+        status: FeatureStatus::InProgress,
+        created_at: now.clone(),
+        merged_at: None,
+        source_type: Some("github".to_string()),
+        source_id: Some("github.com/owner/repo/milestones/1".to_string()),
+        tickets_total: 5,
+        tickets_merged: 3,
+    };
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.insert_feature_record(&feature).unwrap();
+
+    let fetched = mgr.get_by_id(&id).unwrap();
+    assert_eq!(fetched.source_type, Some("github".to_string()));
+    assert_eq!(
+        fetched.source_id,
+        Some("github.com/owner/repo/milestones/1".to_string())
+    );
+    assert_eq!(fetched.tickets_total, 5);
+    assert_eq!(fetched.tickets_merged, 3);
+    assert_eq!(fetched.status, FeatureStatus::InProgress);
+}
+
+#[test]
+fn test_map_feature_row_negative_ticket_count_returns_error() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let now = Utc::now().to_rfc3339();
+    let id = crate::new_id();
+
+    // Insert a row with a negative tickets_total to simulate corrupt/unexpected DB data.
+    conn.execute(
+        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at, tickets_total, tickets_merged)
+         VALUES (?1, ?2, 'neg-feat', 'feat/neg-feat', 'main', 'in_progress', ?3, -1, 0)",
+        params![id, repo_id, now],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let result = mgr.get_by_id(&id);
+    assert!(
+        result.is_err(),
+        "expected error when tickets_total is negative, got: {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Milestone sync tests
+// ---------------------------------------------------------------------------
+
+/// Insert a feature with source_type=github_milestone for sync tests.
+fn insert_feature_with_milestone_source(
+    conn: &Connection,
+    repo_id: &str,
+    name: &str,
+    branch: &str,
+) -> String {
+    let id = crate::new_id();
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO features \
+         (id, repo_id, name, branch, base_branch, status, created_at, source_type, source_id) \
+         VALUES (?1, ?2, ?3, ?4, 'main', 'in_progress', ?5, \
+                 'github_milestone', 'github.com/test/repo/milestones/1')",
+        params![id, repo_id, name, branch, now],
+    )
+    .unwrap();
+    id
+}
+
+/// Build a minimal TicketInput for milestone sync tests.
+fn make_ticket_input(source_id: &str) -> crate::tickets::TicketInput {
+    crate::tickets::TicketInput {
+        source_type: "github".to_string(),
+        source_id: source_id.to_string(),
+        title: format!("Issue #{source_id}"),
+        body: String::new(),
+        state: "open".to_string(),
+        labels: vec![],
+        assignee: None,
+        priority: None,
+        url: format!("https://github.com/test/repo/issues/{source_id}"),
+        raw_json: None,
+        label_details: vec![],
+        blocked_by: vec![],
+        children: vec![],
+        parent: None,
+    }
+}
+
+#[test]
+fn test_parse_milestone_source_id_valid() {
+    let (owner, repo, number) =
+        super::manager::parse_milestone_source_id("github.com/myorg/myrepo/milestones/42").unwrap();
+    assert_eq!(owner, "myorg");
+    assert_eq!(repo, "myrepo");
+    assert_eq!(number, 42u64);
+}
+
+#[test]
+fn test_parse_milestone_source_id_invalid() {
+    // Bare number (old format)
+    assert!(super::manager::parse_milestone_source_id("42").is_err());
+    // Missing milestones segment
+    assert!(super::manager::parse_milestone_source_id("github.com/owner/repo/42").is_err());
+    // Non-numeric milestone number
+    assert!(
+        super::manager::parse_milestone_source_id("github.com/owner/repo/milestones/abc").is_err()
+    );
+}
+
+#[test]
+fn test_sync_from_milestone_invalid_source_type() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    // Feature with no source_type
+    insert_feature(&conn, &repo_id, "no-source", "feat/no-source");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let err = mgr
+        .sync_from_milestone("test-repo", "no-source")
+        .unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_apply_milestone_sync_adds_tickets() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-add", "feat/ms-add");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let inputs = vec![make_ticket_input("100"), make_ticket_input("101")];
+
+    let result = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(result.added, 2);
+    assert_eq!(result.removed, 0);
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+
+    let total: u32 = conn
+        .query_row(
+            "SELECT tickets_total FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 2);
+}
+
+#[test]
+fn test_apply_milestone_sync_removes_stale_links() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-rm", "feat/ms-rm");
+
+    // Pre-link a ticket that won't be in the (simulated) milestone anymore.
+    let old_ticket_id = insert_ticket(&conn, &repo_id, "999");
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, old_ticket_id],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    // Sync with ticket "200" only — ticket "999" should be unlinked.
+    let inputs = vec![make_ticket_input("200")];
+    let result = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(result.added, 1);
+    assert_eq!(result.removed, 1);
+
+    let linked_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(linked_count, 1);
+
+    // Ticket "999" still exists in tickets table (not deleted).
+    let ticket_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tickets WHERE source_id = '999'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ticket_exists, 1);
+}
+
+#[test]
+fn test_apply_milestone_sync_idempotent() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-idem", "feat/ms-idem");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let inputs = vec![make_ticket_input("300")];
+
+    let r1 = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(r1.added, 1);
+    assert_eq!(r1.removed, 0);
+
+    // Second sync with the same inputs should be a no-op.
+    let r2 = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(r2.added, 0);
+    assert_eq!(r2.removed, 0);
+}
+
+#[test]
+fn test_apply_milestone_sync_updates_tickets_total() {
+    // Verify that tickets_total on the feature row is updated correctly after
+    // sync, exercising the full apply_milestone_sync success path.
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id =
+        insert_feature_with_milestone_source(&conn, &repo_id, "ms-feat-total", "feat/ms-total");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    // Add 3 tickets.
+    let inputs = vec![
+        make_ticket_input("10"),
+        make_ticket_input("11"),
+        make_ticket_input("12"),
+    ];
+    let result = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &inputs)
+        .unwrap();
+    assert_eq!(result.added, 3);
+    assert_eq!(result.removed, 0);
+
+    let total: i64 = conn
+        .query_row(
+            "SELECT tickets_total FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 3);
+
+    // Now sync with only 2 tickets — one is removed.
+    let shrunk = vec![make_ticket_input("10"), make_ticket_input("11")];
+    let result2 = mgr
+        .apply_milestone_sync(&repo_id, &feature_id, &shrunk)
+        .unwrap();
+    assert_eq!(result2.added, 0);
+    assert_eq!(result2.removed, 1);
+
+    let total2: i64 = conn
+        .query_row(
+            "SELECT tickets_total FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total2, 2);
+}
+
+#[test]
+fn test_build_milestone_source_id_roundtrip() {
+    // build_milestone_source_id produces a string that parse_milestone_source_id
+    // can round-trip back to the original components.
+    let source_id = super::manager::build_milestone_source_id("myorg", "myrepo", 7);
+    assert_eq!(source_id, "github.com/myorg/myrepo/milestones/7");
+
+    let (owner, repo, number) = super::manager::parse_milestone_source_id(&source_id).unwrap();
+    assert_eq!(owner, "myorg");
+    assert_eq!(repo, "myrepo");
+    assert_eq!(number, 7u64);
+}
+
+// ---------------------------------------------------------------------------
+// reap_dangling / has_open_pr path tests
+// ---------------------------------------------------------------------------
+
+/// A feature with no active worktrees becomes a candidate for the `has_open_pr`
+/// check inside `reap_dangling()`.  In the test environment `gh` is either not
+/// authenticated or targets a non-existent repo, so `has_open_pr` returns `false`
+/// and the feature is reported as dangling.  This exercises the code path that
+/// the existing tests (which filter candidates at the DB level) do not reach.
+#[test]
+fn test_reap_dangling_reports_feature_with_no_worktrees_as_dangling() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "orphan-feat", "feat/orphan-feat");
+    // No worktrees → passes the DB filter and reaches has_open_pr()
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling("test-repo").unwrap();
+    // gh pr list will fail (no auth / no real repo) → has_open_pr returns false
+    // → feature is dangling
+    assert_eq!(
+        dangling.len(),
+        1,
+        "feature with no worktrees should be dangling"
+    );
+    assert_eq!(dangling[0].name, "orphan-feat");
+}
+
+/// Same as above but via `reap_dangling_all()` which joins across all repos.
+#[test]
+fn test_reap_dangling_all_reports_feature_with_no_worktrees_as_dangling() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "orphan-all-feat", "feat/orphan-all-feat");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling_all().unwrap();
+    assert!(
+        dangling.iter().any(|f| f.name == "orphan-all-feat"),
+        "reap_dangling_all should include features with no worktrees"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// linked_tickets tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_linked_tickets_returns_tickets_for_feature() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+    let ticket_a = insert_ticket(&conn, &repo_id, "10");
+    let ticket_b = insert_ticket(&conn, &repo_id, "20");
+    let _ticket_c = insert_ticket(&conn, &repo_id, "30"); // not linked
+
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_a],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_b],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let tickets = mgr.linked_tickets(&feature_id).unwrap();
+    assert_eq!(tickets.len(), 2);
+    // Results are ordered by CAST(source_id AS INTEGER) ASC
+    assert_eq!(tickets[0].source_id, "10");
+    assert_eq!(tickets[1].source_id, "20");
+}
+
+#[test]
+fn test_linked_tickets_returns_empty_for_feature_with_no_links() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "empty-feat", "feat/empty-feat");
+    insert_ticket(&conn, &repo_id, "99"); // exists but not linked
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    let tickets = mgr.linked_tickets(&feature_id).unwrap();
+    assert!(
+        tickets.is_empty(),
+        "expected no tickets for unlinked feature"
+    );
+}
+
+/// Features with `status != 'in_progress'` are never dangling candidates.
+#[test]
+fn test_reap_dangling_ignores_non_in_progress_features() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    let feature_id = insert_feature(&conn, &repo_id, "merged-feat", "feat/merged-feat");
+
+    // Mark as merged
+    conn.execute(
+        "UPDATE features SET status = 'merged' WHERE id = ?1",
+        params![feature_id],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let dangling = mgr.reap_dangling("test-repo").unwrap();
+    assert!(
+        dangling.is_empty(),
+        "merged feature should not be a dangling candidate"
     );
 }

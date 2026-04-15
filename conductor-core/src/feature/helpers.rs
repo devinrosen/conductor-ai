@@ -53,6 +53,12 @@ pub(super) fn batch_branch_timestamps(
     map
 }
 
+/// Convert an i64 column value to u32, returning a typed rusqlite error on
+/// negative or out-of-range values.
+fn col_i64_to_u32(v: i64, col_idx: usize) -> rusqlite::Result<u32> {
+    u32::try_from(v).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(col_idx, v))
+}
+
 pub(super) fn map_feature_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
     Ok(Feature {
         id: row.get(0)?,
@@ -63,6 +69,10 @@ pub(super) fn map_feature_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> 
         status: row.get(5)?,
         created_at: row.get(6)?,
         merged_at: row.get(7)?,
+        source_type: row.get(8)?,
+        source_id: row.get(9)?,
+        tickets_total: row.get::<_, i64>(10).and_then(|v| col_i64_to_u32(v, 10))?,
+        tickets_merged: row.get::<_, i64>(11).and_then(|v| col_i64_to_u32(v, 11))?,
     })
 }
 

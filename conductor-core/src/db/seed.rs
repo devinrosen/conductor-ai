@@ -306,7 +306,7 @@ fn seed_features(conn: &Connection) -> Result<()> {
             "auth-overhaul",
             "feat/auth-overhaul",
             "main",
-            "active",
+            "in_progress",
             "2025-01-15T12:00:00+00:00",
         ],
     )?;

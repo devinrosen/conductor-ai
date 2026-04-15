@@ -251,6 +251,42 @@ fn parse_issue_metadata(issue: &serde_json::Value) -> (Vec<TicketLabelInput>, Op
     (label_details, assignee)
 }
 
+/// Build a [`TicketInput`] from a GitHub issue JSON value.
+///
+/// `url` is passed explicitly because the caller chooses which field to use:
+/// - `gh issue list --json` returns the HTML URL in `url`
+/// - `gh api /repos/.../issues` returns the HTML URL in `html_url`
+///
+/// Returns an error if the issue is missing a valid `number` field, which
+/// would otherwise produce a `source_id` of `"0"` and potentially collide
+/// with other malformed records.
+fn build_ticket_input(issue: &serde_json::Value, url: &str) -> Result<TicketInput> {
+    let number = issue["number"].as_u64().ok_or_else(|| {
+        ConductorError::TicketSync(format!(
+            "GitHub issue is missing a valid 'number' field: {}",
+            issue
+        ))
+    })?;
+    let (label_details, assignee) = parse_issue_metadata(issue);
+    let label_names: Vec<String> = label_details.iter().map(|l| l.name.clone()).collect();
+    Ok(TicketInput {
+        source_type: "github".to_string(),
+        source_id: number.to_string(),
+        title: issue["title"].as_str().unwrap_or("").to_string(),
+        body: issue["body"].as_str().unwrap_or("").to_string(),
+        state: "open".to_string(),
+        labels: label_names,
+        assignee,
+        priority: None,
+        url: url.to_string(),
+        raw_json: serde_json::to_string(&issue).ok(),
+        label_details,
+        blocked_by: vec![],
+        children: vec![],
+        parent: None,
+    })
+}
+
 /// Sync open GitHub issues for a repo using the `gh` CLI.
 /// Returns a list of normalized TicketInputs ready for upsert.
 ///
@@ -286,28 +322,62 @@ pub fn sync_github_issues(
     let tickets = issues
         .into_iter()
         .map(|issue| {
-            let number = issue["number"].as_u64().unwrap_or(0);
-            let (label_details, assignee) = parse_issue_metadata(&issue);
-            let label_names: Vec<String> = label_details.iter().map(|l| l.name.clone()).collect();
-
-            TicketInput {
-                source_type: "github".to_string(),
-                source_id: number.to_string(),
-                title: issue["title"].as_str().unwrap_or("").to_string(),
-                body: issue["body"].as_str().unwrap_or("").to_string(),
-                state: "open".to_string(),
-                labels: label_names,
-                assignee,
-                priority: None,
-                url: issue["url"].as_str().unwrap_or("").to_string(),
-                raw_json: serde_json::to_string(&issue).ok(),
-                label_details,
-                blocked_by: vec![],
-                children: vec![],
-                parent: None,
-            }
+            // `gh issue list --json url` returns the HTML URL directly.
+            let url = issue["url"].as_str().unwrap_or("").to_string();
+            build_ticket_input(&issue, &url)
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(tickets)
+}
+
+/// Fetch open issues for a GitHub milestone via `gh api` (REST endpoint).
+///
+/// Returns a list of [`TicketInput`] values with `source_type = "github"` (each
+/// milestone issue is a standard GitHub issue) ready for upsert into the tickets
+/// table. Uses `--paginate` so milestones with more than 100 issues are fully
+/// fetched; each page response is a JSON array on its own line.
+///
+/// When `token` is `Some`, the request runs under that identity
+/// (e.g. a GitHub App installation). When `None`, falls back to the
+/// default `gh` CLI user.
+pub fn fetch_milestone_issues(
+    owner: &str,
+    repo: &str,
+    milestone_number: u64,
+    token: Option<&str>,
+) -> Result<Vec<TicketInput>> {
+    let endpoint = format!(
+        "/repos/{}/{}/issues?milestone={}&state=open&per_page=100",
+        owner, repo, milestone_number
+    );
+    let output = run_gh_with_token(&["api", "--paginate", &endpoint], token)?;
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+
+    // `gh api --paginate` prints each page response as a separate JSON array on
+    // its own line. Collect all issue objects across all pages.
+    let mut all_issues: Vec<serde_json::Value> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let page: Vec<serde_json::Value> = serde_json::from_str(line).map_err(|e| {
+            ConductorError::TicketSync(format!("failed to parse gh api milestone output: {e}"))
+        })?;
+        all_issues.extend(page);
+    }
+
+    let tickets = all_issues
+        .into_iter()
+        .map(|issue| {
+            // `gh api /repos/.../issues` returns REST API JSON where `url` is
+            // the API endpoint URL. Use `html_url` for the human-facing URL.
+            let url = issue["html_url"].as_str().unwrap_or("").to_string();
+            build_ticket_input(&issue, &url)
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(tickets)
 }
@@ -1106,5 +1176,116 @@ mod tests {
         // Malformed JSON should silently yield an empty list (no panic).
         let prs = parse_prs_json("not json");
         assert!(prs.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // build_ticket_input / fetch_milestone_issues JSON parsing
+    // ---------------------------------------------------------------------------
+
+    fn make_issue_json(number: u64, title: &str, html_url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "number": number,
+            "title": title,
+            "body": "issue body",
+            "state": "open",
+            "html_url": html_url,
+            "url": format!("https://api.github.com/repos/owner/repo/issues/{}", number),
+            "labels": [{"name": "bug", "color": "d73a4a"}],
+            "assignees": [{"login": "alice"}]
+        })
+    }
+
+    #[test]
+    fn test_build_ticket_input_uses_provided_url() {
+        let issue = make_issue_json(42, "Fix the bug", "https://github.com/owner/repo/issues/42");
+        let ticket = build_ticket_input(&issue, "https://github.com/owner/repo/issues/42").unwrap();
+        assert_eq!(ticket.source_id, "42");
+        assert_eq!(ticket.title, "Fix the bug");
+        assert_eq!(ticket.url, "https://github.com/owner/repo/issues/42");
+        assert_eq!(ticket.source_type, "github");
+        assert_eq!(ticket.assignee, Some("alice".to_string()));
+        assert_eq!(ticket.labels, vec!["bug"]);
+    }
+
+    #[test]
+    fn test_build_ticket_input_missing_number_returns_error() {
+        let issue = serde_json::json!({
+            "title": "No number",
+            "body": "",
+            "html_url": "https://github.com/owner/repo/issues/99",
+            "labels": [],
+            "assignees": []
+        });
+        let result = build_ticket_input(&issue, "https://github.com/owner/repo/issues/99");
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("missing a valid 'number' field"),
+                    "unexpected error: {msg}"
+                );
+            }
+            Ok(_) => panic!("expected an error for missing number field"),
+        }
+    }
+
+    #[test]
+    fn test_fetch_milestone_issues_parses_paginated_output() {
+        // Simulate what `gh api --paginate` outputs: each page is a JSON array
+        // on its own line. Manually test the parsing logic used in
+        // fetch_milestone_issues by splitting lines and deserialising.
+        let page1 = serde_json::json!([
+            make_issue_json(1, "Issue one", "https://github.com/owner/repo/issues/1"),
+            make_issue_json(2, "Issue two", "https://github.com/owner/repo/issues/2"),
+        ]);
+        let page2 = serde_json::json!([make_issue_json(
+            3,
+            "Issue three",
+            "https://github.com/owner/repo/issues/3"
+        ),]);
+        let raw = format!("{}\n{}\n", page1, page2);
+
+        let mut all_issues: Vec<serde_json::Value> = Vec::new();
+        for line in raw.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let page: Vec<serde_json::Value> = serde_json::from_str(line).unwrap();
+            all_issues.extend(page);
+        }
+
+        let tickets: Vec<_> = all_issues
+            .into_iter()
+            .map(|issue| {
+                let url = issue["html_url"].as_str().unwrap_or("").to_string();
+                build_ticket_input(&issue, &url).unwrap()
+            })
+            .collect();
+
+        assert_eq!(tickets.len(), 3);
+        assert_eq!(tickets[0].source_id, "1");
+        assert_eq!(tickets[0].url, "https://github.com/owner/repo/issues/1");
+        assert_eq!(tickets[1].source_id, "2");
+        assert_eq!(tickets[2].source_id, "3");
+        // Verify html_url is used, not the api url
+        assert!(tickets[0].url.starts_with("https://github.com/"));
+        assert!(!tickets[0].url.contains("api.github.com"));
+    }
+
+    #[test]
+    fn test_fetch_milestone_issues_rejects_issue_with_missing_number() {
+        let bad_issue = serde_json::json!({
+            "title": "Malformed",
+            "body": "",
+            "html_url": "https://github.com/owner/repo/issues/0",
+            "url": "https://api.github.com/repos/owner/repo/issues/0",
+            "labels": [],
+            "assignees": []
+            // "number" field intentionally absent
+        });
+        let url = bad_issue["html_url"].as_str().unwrap_or("").to_string();
+        let result = build_ticket_input(&bad_issue, &url);
+        assert!(result.is_err());
     }
 }
