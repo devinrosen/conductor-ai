@@ -5,6 +5,9 @@ use crate::workflow_dsl;
 
 use super::WorkflowManager;
 
+/// Invalid workflow entry: (name, error_message).
+type InvalidWorkflowEntry = (String, String);
+
 impl WorkflowManager<'_> {
     /// Load workflow definitions from the filesystem for a worktree.
     ///
@@ -70,5 +73,77 @@ impl WorkflowManager<'_> {
                 warnings: vec![],
             }
         })
+    }
+
+    /// Load workflow definitions and run full validation (parse + post-parse).
+    ///
+    /// Returns `(valid_defs, invalid_entries)` where:
+    /// - `valid_defs` are successfully-parsed and validated definitions
+    /// - `invalid_entries` are invalid workflows with their error messages
+    ///
+    /// Invalid entries include both parse failures (from `WorkflowWarning`) and
+    /// validation errors from the batch validation pipeline.
+    ///
+    /// This is the authoritative method for loading and validating workflows
+    /// for UI display — it handles both parse and post-parse validation in one call.
+    pub fn list_defs_with_validation(
+        wt_path: &str,
+        repo_path: &str,
+        known_bots: &HashSet<String>,
+    ) -> Result<(
+        Vec<crate::workflow_dsl::WorkflowDef>,
+        Vec<InvalidWorkflowEntry>,
+    )> {
+        let (defs, warnings) = Self::list_defs(wt_path, repo_path).unwrap_or_default();
+
+        // Convert parse failures to invalid entries.
+        let mut invalid_entries: Vec<InvalidWorkflowEntry> = warnings
+            .iter()
+            .map(|w| {
+                let name = std::path::Path::new(&w.file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&w.file)
+                    .to_string();
+                (name, w.message.clone())
+            })
+            .collect();
+
+        // Run post-parse validation on successfully-parsed defs.
+        let wt = wt_path.to_string();
+        let rp = repo_path.to_string();
+        let loader = |name: &str| -> std::result::Result<crate::workflow_dsl::WorkflowDef, String> {
+            workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
+        };
+
+        let validation = crate::workflow::batch_validate::validate_workflows_batch(
+            &defs,
+            &[],
+            wt_path,
+            repo_path,
+            known_bots,
+            &loader,
+        );
+
+        // Add validation errors to invalid_entries.
+        for entry in &validation.entries {
+            if !entry.errors.is_empty() {
+                let msg = entry
+                    .errors
+                    .iter()
+                    .map(|v| v.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                invalid_entries.push((entry.name.clone(), msg));
+            }
+        }
+
+        // Filter out defs that failed validation.
+        let valid_defs: Vec<_> = defs
+            .into_iter()
+            .filter(|d| !validation.entries.iter().any(|e| e.name == d.name && !e.errors.is_empty()))
+            .collect();
+
+        Ok((valid_defs, invalid_entries))
     }
 }

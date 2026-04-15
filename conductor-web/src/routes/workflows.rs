@@ -10,7 +10,7 @@ use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, estimation, execute_workflow, validate_resume_preconditions,
-    validate_workflows_batch, FanOutItemRow, GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow,
+    FanOutItemRow, GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow,
     RunIdSlot, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
     WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowFailureRateTrendRow,
     WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResumeStandalone,
@@ -216,6 +216,7 @@ impl WorkflowDefSummary {
     ///
     /// Uses the filename stem as the display name since parsing may have failed
     /// before a name could be extracted from the file contents.
+    #[allow(dead_code)]
     fn from_parse_warning(w: &WorkflowWarning) -> Self {
         let name = std::path::Path::new(&w.file)
             .file_stem()
@@ -304,51 +305,31 @@ fn build_workflow_summaries(
     repo_path: &str,
     known_bots: &std::collections::HashSet<String>,
 ) -> Vec<WorkflowDefSummary> {
-    let (defs, warnings) = WorkflowManager::list_defs(wt_path, repo_path).unwrap_or_default();
+    let (defs, invalid_entries) =
+        WorkflowManager::list_defs_with_validation(wt_path, repo_path, known_bots)
+            .unwrap_or_default();
 
-    // Convert parse failures to invalid summaries.
-    let mut summaries: Vec<WorkflowDefSummary> = warnings
-        .iter()
-        .map(WorkflowDefSummary::from_parse_warning)
-        .collect();
+    let mut summaries: Vec<WorkflowDefSummary> = Vec::new();
 
-    // Build a name→def map for the batch-validate loader closure.
-    let def_map: std::collections::HashMap<String, WorkflowDef> =
-        defs.iter().map(|d| (d.name.clone(), d.clone())).collect();
-
-    // Run post-parse validation on successfully-parsed defs.
-    let validation =
-        validate_workflows_batch(&defs, &[], wt_path, repo_path, known_bots, &|name: &str| {
-            def_map
-                .get(name)
-                .cloned()
-                .ok_or_else(|| format!("workflow '{name}' not found"))
-        });
-
-    // Build a map of workflow name → joined validation error string.
-    let validation_errors: std::collections::HashMap<String, String> = validation
-        .entries
-        .iter()
-        .filter(|e| !e.errors.is_empty())
-        .map(|e| {
-            let msg = e
-                .errors
-                .iter()
-                .map(|v| v.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ");
-            (e.name.clone(), msg)
-        })
-        .collect();
-
-    // Convert parsed defs to summaries, marking validation failures.
+    // Convert valid defs to summaries.
     for def in &defs {
-        let mut summary = WorkflowDefSummary::from(def);
-        if let Some(err) = validation_errors.get(&def.name) {
-            summary.valid = false;
-            summary.error = Some(err.clone());
-        }
-        summaries.push(summary);
+        summaries.push(WorkflowDefSummary::from(def));
+    }
+
+    // Convert invalid entries to summaries.
+    for (name, error_msg) in &invalid_entries {
+        summaries.push(WorkflowDefSummary {
+            name: name.clone(),
+            title: None,
+            description: String::new(),
+            trigger: String::new(),
+            inputs: Vec::new(),
+            node_count: 0,
+            group: None,
+            targets: Vec::new(),
+            valid: false,
+            error: Some(error_msg.clone()),
+        });
     }
 
     // Sort alphabetically by name for a consistent ordering.
