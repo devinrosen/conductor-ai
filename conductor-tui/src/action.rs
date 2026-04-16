@@ -72,10 +72,14 @@ pub struct DataRefreshedPayload {
     pub unread_notification_count: usize,
     /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
     pub latest_repo_agent_runs: HashMap<String, AgentRun>,
-    /// All worktree-scoped agent events keyed by worktree_id (populated by background poller).
-    pub worktree_agent_events: HashMap<String, Vec<AgentRunEvent>>,
-    /// All repo-scoped agent events keyed by repo_id (populated by background poller).
-    pub repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
+    /// Agent events for the currently-selected worktree (populated by background poller).
+    pub worktree_agent_events: Vec<AgentRunEvent>,
+    /// The worktree_id these events belong to; used as a staleness guard on the main thread.
+    pub worktree_agent_events_id: Option<String>,
+    /// Agent events for the currently-selected repo's repo-scoped agent (populated by background poller).
+    pub repo_agent_events: Vec<AgentRunEvent>,
+    /// The repo_id these events belong to; used as a staleness guard on the main thread.
+    pub repo_agent_events_id: Option<String>,
     /// Estimated remaining time for active workflow runs, keyed by run_id.
     pub workflow_run_estimates: HashMap<String, LiveEstimate>,
     /// Cumulative completed token totals per worktree (worktree_id -> (input, output)).

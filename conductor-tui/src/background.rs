@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -27,7 +28,12 @@ pub(crate) struct PollResult {
 // Workflow terminal transition detection is now in conductor_core::notify::detect_workflow_terminal_transitions.
 
 /// Spawn the DB poller thread. Polls every `interval` and sends DataRefreshed events.
-pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
+pub fn spawn_db_poller(
+    tx: BackgroundSender,
+    interval: Duration,
+    selected_worktree_id: Arc<Mutex<Option<String>>>,
+    selected_repo_id: Arc<Mutex<Option<String>>>,
+) {
     use std::collections::{HashMap, HashSet};
 
     thread::spawn(move || {
@@ -50,11 +56,13 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
         let mut turn_state: HashMap<String, (u64, i64)> = HashMap::new();
         loop {
             thread::sleep(interval);
+            let sel_wt = selected_worktree_id.lock().unwrap().clone();
+            let sel_repo = selected_repo_id.lock().unwrap().clone();
             if let Some(PollResult {
                 mut action,
                 config,
                 conn,
-            }) = poll_data()
+            }) = poll_data(sel_wt, sel_repo)
             {
                 // Compute live turn counts incrementally, reusing byte offsets from
                 // the previous tick so only newly-appended log bytes are parsed.
@@ -437,7 +445,13 @@ fn build_fallback_events(
 /// Poll all data from the database. Returns a DataRefreshed action, the loaded config, and the
 /// open DB connection so the caller can reuse it (e.g. for notification claims) without opening
 /// a second connection on the same tick.
-pub fn poll_data() -> Option<PollResult> {
+///
+/// `selected_worktree_id` and `selected_repo_id` scope the agent-event queries to the
+/// currently-viewed worktree/repo only, preventing a full table scan on every tick.
+pub fn poll_data(
+    selected_worktree_id: Option<String>,
+    selected_repo_id: Option<String>,
+) -> Option<PollResult> {
     let db = db_path();
     let conn = open_database(&db).ok()?;
     let config = load_config().unwrap_or_else(|e| {
@@ -559,35 +573,35 @@ pub fn poll_data() -> Option<PollResult> {
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
     let completed_token_totals_by_worktree = agent_mgr.totals_by_worktree().unwrap_or_default();
 
-    // Fetch all worktree-scoped agent events in a single batch query; fall back to log-file
-    // parsing for worktrees whose runs pre-date DB-backed event storage.
-    let mut worktree_agent_events = agent_mgr.list_all_events_by_worktree().unwrap_or_default();
-    for wt_id in latest_agent_runs.keys() {
-        if worktree_agent_events
-            .get(wt_id)
-            .is_none_or(|v| v.is_empty())
-        {
-            let mut runs = agent_mgr.list_for_worktree(wt_id).unwrap_or_default();
-            runs.reverse();
-            let fallback = build_fallback_events(&runs);
-            if !fallback.is_empty() {
-                worktree_agent_events.insert(wt_id.clone(), fallback);
+    // Fetch agent events only for the currently-selected worktree (scoped query).
+    // Fall back to log-file parsing for pre-DB-event runs.
+    let (worktree_agent_events, worktree_agent_events_id) =
+        if let Some(ref wt_id) = selected_worktree_id {
+            let mut events = agent_mgr
+                .list_events_for_worktree(wt_id)
+                .unwrap_or_default();
+            if events.is_empty() {
+                let mut runs = agent_mgr.list_for_worktree(wt_id).unwrap_or_default();
+                runs.reverse();
+                events = build_fallback_events(&runs);
             }
-        }
-    }
+            (events, Some(wt_id.clone()))
+        } else {
+            (Vec::new(), None)
+        };
 
-    // Same pattern for repo-scoped events.
-    let mut repo_agent_events = agent_mgr.list_all_repo_events_by_repo().unwrap_or_default();
-    for repo_id in latest_repo_agent_runs.keys() {
-        if repo_agent_events.get(repo_id).is_none_or(|v| v.is_empty()) {
+    // Same pattern for repo-scoped events, scoped to the currently-selected repo.
+    let (repo_agent_events, repo_agent_events_id) = if let Some(ref repo_id) = selected_repo_id {
+        let mut events = agent_mgr.list_events_for_repo(repo_id).unwrap_or_default();
+        if events.is_empty() {
             let mut runs = agent_mgr.list_repo_scoped(repo_id).unwrap_or_default();
             runs.reverse();
-            let fallback = build_fallback_events(&runs);
-            if !fallback.is_empty() {
-                repo_agent_events.insert(repo_id.clone(), fallback);
-            }
+            events = build_fallback_events(&runs);
         }
-    }
+        (events, Some(repo_id.clone()))
+    } else {
+        (Vec::new(), None)
+    };
 
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     let wf_mgr = WorkflowManager::new(&conn);
@@ -768,7 +782,9 @@ pub fn poll_data() -> Option<PollResult> {
         unread_notification_count,
         latest_repo_agent_runs,
         worktree_agent_events,
+        worktree_agent_events_id,
         repo_agent_events,
+        repo_agent_events_id,
         workflow_run_estimates,
         completed_token_totals_by_worktree,
     }));
