@@ -374,8 +374,7 @@ impl App {
                             // Infer base branch from ticket milestone metadata (off-thread,
                             // since git ls-remote is a blocking network call).
                             let inferred = tid.as_deref().and_then(|ticket_id| {
-                                let ticket =
-                                    TicketSyncer::new(&conn).get_by_id(ticket_id).ok()?;
+                                let ticket = TicketSyncer::new(&conn).get_by_id(ticket_id).ok()?;
                                 conductor_core::infer::infer_base_branch(
                                     &ticket.raw_json,
                                     &repo.local_path,

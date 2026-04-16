@@ -76,8 +76,8 @@ mod tests {
     fn test_milestone_branch_absent_on_remote_returns_none() {
         // Use a real git repo path but a milestone title that won't match any remote branch.
         // Find the workspace root so git ls-remote works (but branch won't exist).
-        let repo_path = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let repo_path =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
         let raw = with_milestone("99.99.99-nonexistent");
         // git ls-remote may fail (no remote) or return empty — either way, None.
         let result = infer_base_branch(&raw, repo_path.to_str().unwrap_or("/tmp"));
