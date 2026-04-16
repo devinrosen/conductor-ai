@@ -696,6 +696,9 @@ pub fn render_branch_picker(
                     if let Some(days) = item.stale_days {
                         parts.push(format!("\u{26a0} stale {days}d"));
                     }
+                    if let Some(milestone) = &item.inferred_from {
+                        parts.push(format!("inferred from milestone: {milestone}"));
+                    }
                     let label = if parts.is_empty() {
                         branch.clone()
                     } else {

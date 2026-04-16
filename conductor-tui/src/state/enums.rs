@@ -335,6 +335,8 @@ pub struct BranchPickerItem {
     pub base_branch: Option<String>,
     /// Days since last activity (commit or worktree creation), if stale.
     pub stale_days: Option<u64>,
+    /// Milestone title when this item was inferred from ticket metadata (`None` otherwise).
+    pub inferred_from: Option<String>,
 }
 
 impl BranchPickerItem {
@@ -351,6 +353,7 @@ impl BranchPickerItem {
             ticket_count: 0,
             base_branch: None,
             stale_days: None,
+            inferred_from: None,
         }];
         for (f, sd) in features {
             items.push(Self {
@@ -359,6 +362,7 @@ impl BranchPickerItem {
                 ticket_count: f.ticket_count,
                 base_branch: Some(f.base_branch.clone()),
                 stale_days: *sd,
+                inferred_from: None,
             });
         }
         for orphan in orphans {
@@ -368,6 +372,7 @@ impl BranchPickerItem {
                 ticket_count: 0,
                 base_branch: orphan.base_branch.clone(),
                 stale_days: None,
+                inferred_from: None,
             });
         }
         items

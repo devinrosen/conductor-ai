@@ -39,6 +39,7 @@ pub(crate) mod git;
 pub mod github;
 pub mod github_app;
 pub mod hooks;
+pub mod infer;
 pub mod issue_source;
 pub mod jira_acli;
 pub mod models;

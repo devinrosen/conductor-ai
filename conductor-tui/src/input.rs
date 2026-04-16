@@ -899,6 +899,7 @@ mod tests {
                 ticket_count: 0,
                 base_branch: None,
                 stale_days: None,
+                inferred_from: None,
             });
         }
         for i in 1..item_count {
@@ -908,6 +909,7 @@ mod tests {
                 ticket_count: 0,
                 base_branch: Some("main".into()),
                 stale_days: None,
+                inferred_from: None,
             });
         }
         let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
