@@ -923,6 +923,38 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Delete orphaned `pending` step rows that were registered but never started.
+    ///
+    /// A step row is considered orphaned when `status = 'pending' AND started_at IS NULL`.
+    /// These rows are created by `insert_step` but left behind if the executor crashes
+    /// before the step actually begins. The resume path already handles them correctly
+    /// by re-inserting and re-running, but the phantom rows pollute step history.
+    ///
+    /// This method is called at the top of the resume path, before the skip set is
+    /// built, to remove the noise. Scoped to the given `workflow_run_id` so it cannot
+    /// affect other runs.
+    ///
+    /// Returns the number of deleted rows.
+    pub fn delete_orphaned_pending_steps(&self, workflow_run_id: &str) -> Result<usize> {
+        let deleted = self.conn.execute(
+            "DELETE FROM workflow_run_steps \
+             WHERE workflow_run_id = ?1 \
+               AND status = 'pending' \
+               AND started_at IS NULL",
+            params![workflow_run_id],
+        )?;
+
+        if deleted > 0 {
+            tracing::info!(
+                workflow_run_id = %workflow_run_id,
+                deleted,
+                "delete_orphaned_pending_steps: removed orphaned never-started step row(s)"
+            );
+        }
+
+        Ok(deleted)
+    }
+
     /// Build the purge where-clause and bind params, then pass them to a caller-provided
     /// closure.  Deduplicates the empty-check, where-clause build, and `params_ref`
     /// construction shared by `purge` and `purge_count`.

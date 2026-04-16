@@ -986,6 +986,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             (path.clone(), String::new(), path)
         };
 
+    // Remove orphaned pending steps (registered but never started) before building the
+    // skip set. These rows carry no useful state and would otherwise pollute step history.
+    wf_mgr.delete_orphaned_pending_steps(&wf_run.id)?;
+
     // Build the skip set
     let skip_completed = if input.restart {
         // Restart: clear all step results — skip nothing
