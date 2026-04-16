@@ -3747,3 +3747,119 @@ fn test_auto_resume_stuck_workflows_uses_min_threshold() {
 
     assert_eq!(get_run_status(&conn, "thresh-auto"), "failed");
 }
+
+// ---------------------------------------------------------------------------
+// delete_orphaned_pending_steps
+// ---------------------------------------------------------------------------
+
+/// A pending step with started_at IS NULL (never started) must be deleted.
+/// A completed step in the same run must be preserved.
+#[test]
+fn test_delete_orphaned_pending_steps_removes_never_started() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Insert an orphaned pending step (no started_at).
+    let orphan_id = mgr
+        .insert_step(&run.id, "orphan-step", "actor", false, 0, 0)
+        .unwrap();
+    // Confirm insert_step leaves started_at NULL and status = 'pending'.
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].status, WorkflowStepStatus::Pending);
+    assert!(steps[0].started_at.is_none());
+
+    // Insert a completed step that must survive.
+    let completed_id = mgr
+        .insert_step(&run.id, "done-step", "actor", false, 1, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &completed_id,
+        WorkflowStepStatus::Completed,
+        None,
+        Some("ok"),
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+
+    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    assert_eq!(deleted, 1, "exactly one orphaned row should be deleted");
+
+    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, completed_id, "completed step must survive");
+    assert!(
+        remaining.iter().all(|s| s.id != orphan_id),
+        "orphaned pending step must be gone"
+    );
+}
+
+/// A pending step that HAS a started_at value (was started, then reset) must NOT be deleted.
+#[test]
+fn test_delete_orphaned_pending_steps_ignores_started_pending() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Insert a step and then manually set it to pending WITH a started_at value
+    // (simulates a step that was reset after having started once).
+    let step_id = mgr
+        .insert_step(&run.id, "reset-step", "actor", false, 0, 0)
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_steps \
+         SET status = 'pending', started_at = '2025-01-01T00:00:00Z' \
+         WHERE id = ?1",
+        params![step_id],
+    )
+    .unwrap();
+
+    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    assert_eq!(
+        deleted, 0,
+        "pending step with started_at must not be deleted"
+    );
+
+    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, step_id);
+}
+
+/// Completed, failed, and running rows with started_at IS NULL are NOT deleted.
+#[test]
+fn test_delete_orphaned_pending_steps_only_targets_pending() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Insert steps with various non-pending statuses and no started_at.
+    for (name, status) in &[
+        ("comp", "completed"),
+        ("failed", "failed"),
+        ("running", "running"),
+    ] {
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, iteration) \
+             VALUES (?, ?, ?, 'actor', 0, ?, 0)",
+            params![crate::new_id(), run.id, name, status],
+        )
+        .unwrap();
+    }
+
+    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    assert_eq!(deleted, 0, "non-pending rows must not be deleted");
+
+    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(remaining.len(), 3, "all three rows must survive");
+}
+
+/// When there are no orphaned rows, the function is a no-op and returns 0.
+#[test]
+fn test_delete_orphaned_pending_steps_noop_when_none() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    assert_eq!(deleted, 0);
+}
