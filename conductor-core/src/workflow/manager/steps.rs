@@ -37,6 +37,45 @@ impl<'a> WorkflowManager<'a> {
         Ok(id)
     }
 
+    /// Insert a workflow step record already in `running` state.
+    ///
+    /// Combines what would otherwise be two separate calls (`insert_step` +
+    /// `update_step_status(Running)`) into a single atomic `INSERT`, eliminating
+    /// the window where a crash between the two statements leaves a row stuck in
+    /// `pending` forever.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_step_running(
+        &self,
+        workflow_run_id: &str,
+        step_name: &str,
+        role: &str,
+        can_commit: bool,
+        position: i64,
+        iteration: i64,
+        retry_count: i64,
+    ) -> Result<String> {
+        let id = crate::new_id();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, can_commit, status, position, iteration, \
+              started_at, retry_count) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                workflow_run_id,
+                step_name,
+                role,
+                can_commit as i64,
+                position,
+                iteration,
+                now,
+                retry_count,
+            ],
+        )?;
+        Ok(id)
+    }
+
     /// Update a step's status and associated fields.
     #[allow(clippy::too_many_arguments)]
     pub fn update_step_status(
