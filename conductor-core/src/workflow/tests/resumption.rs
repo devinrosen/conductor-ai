@@ -1133,3 +1133,98 @@ fn test_resume_workflow_preserves_feature_id() {
         "feature_id should be preserved across resume"
     );
 }
+
+/// Regression test for #2186: orphaned `pending` step rows (status = 'pending',
+/// started_at IS NULL) must be deleted before the skip set is built on resume.
+///
+/// These rows are created when `insert_step` succeeds but the executor crashes
+/// before `started_at` is written.  They are harmless to execution (the resume
+/// path re-inserts and re-runs the step), but they pollute step history.
+#[test]
+fn test_resume_deletes_orphaned_pending_steps() {
+    let conn = setup_db();
+    let config = make_resume_config();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
+    let run = wf_mgr
+        .create_workflow_run(
+            "test-wf",
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            Some(&snapshot),
+        )
+        .unwrap();
+
+    // Insert a completed step — must survive the orphan-deletion pass.
+    let s_completed = wf_mgr
+        .insert_step(&run.id, "step-done", "actor", false, 0, 0)
+        .unwrap();
+    wf_mgr
+        .update_step_status(
+            &s_completed,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("ok"),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+    // Insert an orphaned pending step: status = 'pending', started_at = NULL.
+    // `insert_step` inserts with status='pending' and no started_at, so this
+    // is the real scenario from #2186.
+    let _s_orphan = wf_mgr
+        .insert_step(&run.id, "step-orphan", "actor", false, 1, 0)
+        .unwrap();
+
+    // Confirm both rows are present before resume.
+    let steps_before = wf_mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(steps_before.len(), 2, "should have 2 step rows before resume");
+
+    // Mark the run as failed so resume is accepted.
+    wf_mgr
+        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("crash"), None)
+        .unwrap();
+
+    // resume_workflow calls delete_orphaned_pending_steps before building the
+    // skip set, so the orphaned row must be gone by the time execution starts.
+    let result = resume_workflow(&WorkflowResumeInput {
+        conn: &conn,
+        config,
+        workflow_run_id: &run.id,
+        model: None,
+        from_step: None,
+        restart: false,
+        conductor_bin_dir: None,
+    });
+    assert!(
+        result.is_ok(),
+        "resume_workflow must succeed; got: {:?}",
+        result.err()
+    );
+
+    // Only the completed step should remain — the orphaned pending row is gone.
+    let steps_after = wf_mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(
+        steps_after.len(),
+        1,
+        "orphaned pending step must be deleted during resume"
+    );
+    assert_eq!(
+        steps_after[0].step_name, "step-done",
+        "the surviving step must be the completed one"
+    );
+    assert_eq!(
+        steps_after[0].status,
+        WorkflowStepStatus::Completed,
+        "surviving step status must be Completed"
+    );
+}
