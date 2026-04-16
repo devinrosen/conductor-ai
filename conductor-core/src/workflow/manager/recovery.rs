@@ -1143,10 +1143,8 @@ impl<'a> WorkflowManager<'a> {
 mod tests {
     use rusqlite::params;
 
-    use crate::agent::AgentManager;
     use crate::config::Config;
     use crate::workflow::manager::WorkflowManager;
-    use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 
     /// Constant error string produced by the reaper — must match the classifier SQL.
     const ORPHAN_ERROR: &str =
