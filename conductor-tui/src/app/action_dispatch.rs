@@ -10,6 +10,14 @@ use super::helpers::{collapse_loop_iterations, max_scroll, workflow_parse_warnin
 use super::App;
 
 impl App {
+    /// Sync the selected worktree/repo IDs into the shared Arcs read by the background poller.
+    /// Call this whenever `state.selected_worktree_id` or `state.selected_repo_id` changes so
+    /// the next poll tick uses the correct scoped query.
+    pub(super) fn sync_selection_arcs(&self) {
+        *self.selected_worktree_id_shared.lock().unwrap() = self.state.selected_worktree_id.clone();
+        *self.selected_repo_id_shared.lock().unwrap() = self.state.selected_repo_id.clone();
+    }
+
     /// Find the key (id) in a map by searching for an item with a matching run_id.
     /// This eliminates the duplicated find_map closures.
     fn find_run_owner_id<T, F>(
@@ -1002,8 +1010,14 @@ impl App {
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
                 self.state.data.features_by_repo = payload.features_by_repo;
                 self.state.data.latest_repo_agent_runs = payload.latest_repo_agent_runs;
-                self.state.data.all_worktree_agent_events = payload.worktree_agent_events;
-                self.state.data.all_repo_agent_events = payload.repo_agent_events;
+                // Apply scoped event payloads only if they are still for the current selection
+                // (guards against a race where navigation changed between poll-fire and dispatch).
+                if payload.worktree_agent_events_id == self.state.selected_worktree_id {
+                    self.state.data.agent_events = payload.worktree_agent_events;
+                }
+                if payload.repo_agent_events_id == self.state.selected_repo_id {
+                    self.state.data.repo_agent_events = payload.repo_agent_events;
+                }
                 self.state.data.workflow_run_estimates = payload.workflow_run_estimates;
                 self.state.data.completed_token_totals_by_worktree =
                     payload.completed_token_totals_by_worktree;
@@ -1105,29 +1119,25 @@ impl App {
                     ended_at: None,
                     metadata: event.metadata,
                 };
-                // Find which worktree owns this run_id, then append to cache.
+                // Find which worktree owns this run_id, then append to the display vec
+                // only when the event's worktree is the currently-selected one.
                 let wt_id =
                     Self::find_run_owner_id(&self.state.data.latest_agent_runs, &run_id, |run| {
                         &run.id
                     });
                 if let Some(wt_id) = wt_id {
-                    self.state
-                        .data
-                        .all_worktree_agent_events
-                        .entry(wt_id)
-                        .or_default()
-                        .push(run_event);
-                    // Note: reload_agent_events() removed for performance - streaming events
-                    // only need in-memory cache updates, not expensive DB reloads
-                    let len = self.state.data.agent_activity_len();
-                    let cur = self.state.agent_list_state.borrow().selected();
-                    // Fix off-by-one: check if user was at bottom before the new event was added
-                    let at_bottom = cur.is_none_or(|idx| idx + 1 >= len - 1);
-                    if at_bottom && len > 0 {
-                        self.state
-                            .agent_list_state
-                            .borrow_mut()
-                            .select(Some(len - 1));
+                    if self.state.selected_worktree_id.as_deref() == Some(wt_id.as_str()) {
+                        self.state.data.agent_events.push(run_event);
+                        let len = self.state.data.agent_activity_len();
+                        let cur = self.state.agent_list_state.borrow().selected();
+                        // Fix off-by-one: check if user was at bottom before the new event was added
+                        let at_bottom = cur.is_none_or(|idx| idx + 1 >= len - 1);
+                        if at_bottom && len > 0 {
+                            self.state
+                                .agent_list_state
+                                .borrow_mut()
+                                .select(Some(len - 1));
+                        }
                     }
                 } else {
                     // Check repo-scoped runs
@@ -1137,14 +1147,9 @@ impl App {
                         |run| &run.id,
                     );
                     if let Some(repo_id) = repo_id {
-                        self.state
-                            .data
-                            .all_repo_agent_events
-                            .entry(repo_id)
-                            .or_default()
-                            .push(run_event);
-                        // Note: reload_repo_agent_events() removed for performance - streaming events
-                        // only need in-memory cache updates, not expensive DB reloads
+                        if self.state.selected_repo_id.as_deref() == Some(repo_id.as_str()) {
+                            self.state.data.repo_agent_events.push(run_event);
+                        }
                     }
                 }
                 return true;
@@ -1206,6 +1211,8 @@ impl App {
                             Some(format!("Worktree {} marked as {}", wt_slug, status));
                         self.state.view = View::Dashboard;
                         self.state.selected_worktree_id = None;
+                        self.state.data.agent_events = Vec::new();
+                        self.sync_selection_arcs();
                         self.refresh_data();
                     }
                     Err(e) => {
@@ -1269,6 +1276,8 @@ impl App {
                         self.state.status_message = Some(format!("Unregistered repo: {repo_slug}"));
                         self.state.view = View::Dashboard;
                         self.state.selected_repo_id = None;
+                        self.state.data.repo_agent_events = Vec::new();
+                        self.sync_selection_arcs();
                         self.refresh_data();
                     }
                     Err(e) => {

@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -49,6 +49,9 @@ pub struct App {
     workflow_threads: Vec<std::thread::JoinHandle<()>>,
     /// Shutdown signal sent to workflow executor threads on TUI exit.
     workflow_shutdown: Arc<AtomicBool>,
+    /// Shared selection state written by navigation, read by background poller to scope event queries.
+    selected_worktree_id_shared: Arc<Mutex<Option<String>>>,
+    selected_repo_id_shared: Arc<Mutex<Option<String>>>,
 }
 
 impl App {
@@ -63,6 +66,8 @@ impl App {
             workflow_poll_in_flight: Arc::new(AtomicBool::new(false)),
             workflow_threads: Vec::new(),
             workflow_shutdown: Arc::new(AtomicBool::new(false)),
+            selected_worktree_id_shared: Arc::new(Mutex::new(None)),
+            selected_repo_id_shared: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -76,7 +81,12 @@ impl App {
         // Spawn background workers
         let bg_tx = events.bg_sender();
         self.bg_tx = Some(bg_tx.clone());
-        background::spawn_db_poller(bg_tx.clone(), Duration::from_secs(5));
+        background::spawn_db_poller(
+            bg_tx.clone(),
+            Duration::from_secs(5),
+            Arc::clone(&self.selected_worktree_id_shared),
+            Arc::clone(&self.selected_repo_id_shared),
+        );
         let sync_mins = self.config.general.sync_interval_minutes as u64;
         background::spawn_ticket_sync(bg_tx, Duration::from_secs(sync_mins * 60));
 

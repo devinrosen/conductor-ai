@@ -98,16 +98,8 @@ impl App {
 
         self.state.data.agent_totals = totals;
 
-        // Load events from the background-polled cache (no I/O on the main thread).
-        let all_events = self
-            .state
-            .data
-            .all_worktree_agent_events
-            .get(wt_id.as_str())
-            .cloned()
-            .unwrap_or_default();
-
-        // Build run_id -> (run_number, model, started_at) map for boundary headers
+        // Build run_id -> (run_number, model, started_at) map for boundary headers.
+        // data.agent_events is populated by the DataRefreshed handler; we only rebuild metadata here.
         let mut run_info = std::collections::HashMap::new();
         for (i, run) in runs.iter().enumerate() {
             run_info.insert(
@@ -116,8 +108,6 @@ impl App {
             );
         }
         self.state.data.agent_run_info = run_info;
-
-        self.state.data.agent_events = all_events;
 
         // Load child runs for the latest root run (for run tree display)
         if let Some(latest) = runs.last() {
@@ -166,16 +156,8 @@ impl App {
         let mut runs = mgr.list_repo_scoped(repo_id).unwrap_or_default();
         runs.reverse();
 
-        // Load events from the background-polled cache (no I/O on the main thread).
-        let all_events = self
-            .state
-            .data
-            .all_repo_agent_events
-            .get(repo_id.as_str())
-            .cloned()
-            .unwrap_or_default();
-
-        // Build run_id -> (run_number, model, started_at) map for boundary headers
+        // Build run_id -> (run_number, model, started_at) map for boundary headers.
+        // data.repo_agent_events is populated by the DataRefreshed handler; we only rebuild metadata here.
         let mut run_info = std::collections::HashMap::new();
         for (i, run) in runs.iter().enumerate() {
             run_info.insert(
@@ -184,7 +166,6 @@ impl App {
             );
         }
         self.state.data.repo_agent_run_info = run_info;
-        self.state.data.repo_agent_events = all_events;
 
         // Clamp ListState selection to valid range
         let len = self.state.data.repo_agent_activity_len();
