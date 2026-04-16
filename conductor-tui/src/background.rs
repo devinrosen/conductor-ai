@@ -506,9 +506,24 @@ pub fn poll_data() -> Option<PollResult> {
                 if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
                     &config,
                     configurable_threshold,
-                    conductor_bin_dir,
+                    conductor_bin_dir.clone(),
                 ) {
                     tracing::warn!("auto_resume_stuck_workflows failed: {e}");
+                }
+                let auto_resume_limit = config.general.auto_resume_limit;
+                if auto_resume_limit > 0 {
+                    match wf_mgr.classify_resumable_workflows(auto_resume_limit) {
+                        Ok(n) if n > 0 => {
+                            tracing::info!("Classifier flagged {n} workflow run(s) for auto-resume")
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
+                    }
+                    if let Err(e) =
+                        wf_mgr.watchdog_needs_resume_workflows(&config, conductor_bin_dir)
+                    {
+                        tracing::warn!("watchdog_needs_resume_workflows failed: {e}");
+                    }
                 }
             }
             // reap_dangling_all() spawns one `gh pr list` subprocess per candidate —

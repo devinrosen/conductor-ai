@@ -27,10 +27,23 @@ pub fn handle_workflow(
         }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match wf_mgr.reap_heartbeat_stuck_runs(config, 60, conductor_bin_dir) {
+            match wf_mgr.reap_heartbeat_stuck_runs(config, 60, conductor_bin_dir.clone()) {
                 Ok(n) if n > 0 => eprintln!("Info: auto-resuming {n} stuck workflow run(s)"),
                 Ok(_) => {}
                 Err(e) => eprintln!("Warning: reap_heartbeat_stuck_runs failed: {e}"),
+            }
+            let auto_resume_limit = config.general.auto_resume_limit;
+            if auto_resume_limit > 0 {
+                match wf_mgr.classify_resumable_workflows(auto_resume_limit) {
+                    Ok(n) if n > 0 => {
+                        eprintln!("Info: classifier flagged {n} workflow run(s) for auto-resume")
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("Warning: classify_resumable_workflows failed: {e}"),
+                }
+                if let Err(e) = wf_mgr.watchdog_needs_resume_workflows(config, conductor_bin_dir) {
+                    eprintln!("Warning: watchdog_needs_resume_workflows failed: {e}");
+                }
             }
         }
     }

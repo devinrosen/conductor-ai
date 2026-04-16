@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 70;
+pub const LATEST_SCHEMA_VERSION: u32 = 71;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -982,6 +982,48 @@ pub fn run(conn: &Connection) -> Result<()> {
             }
         }
         bump_version(conn, 70)?;
+    }
+
+    // Migration 071: add 'needs_resume' to the workflow_runs.status CHECK constraint.
+    // Table-swap required (SQLite cannot ALTER CHECK constraints in-place).
+    // Skipped when needs_resume is already in the CHECK (idempotent guard via sqlite_master).
+    // Also skipped when workflow_runs is a stub table (migration tests create minimal schemas
+    // with nullable parent_run_id; the real table has `parent_run_id TEXT NOT NULL` from
+    // migration 047). Intermediate ALTER TABLE migrations add columns like last_heartbeat to
+    // stub tables, so column-presence checks are insufficient — we check the DDL directly.
+    if version < 71 {
+        // Guard: skip the table swap on stub DBs created by migration tests.
+        // Stub tables use nullable `parent_run_id TEXT`; the real schema (from
+        // migration 047) has `parent_run_id TEXT NOT NULL REFERENCES agent_runs`.
+        // We detect the real table by checking for "REFERENCES agent_runs" after
+        // "parent_run_id" in the sqlite_master DDL (stubs omit the FK clause).
+        // Multi-space alignment in the real DDL is handled by `%` wildcards.
+        let workflow_runs_has_full_schema: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_runs' \
+                 AND sql LIKE '%parent_run_id%REFERENCES agent_runs%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        let already_migrated: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_runs' AND sql LIKE '%needs_resume%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if workflow_runs_has_full_schema && !already_migrated {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!("migrations/071_workflow_run_needs_resume.sql"))?;
+                Ok(())
+            })?;
+        }
+        bump_version(conn, 71)?;
     }
 
     Ok(())
