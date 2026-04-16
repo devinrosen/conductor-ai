@@ -14,6 +14,23 @@ use crate::tickets::TicketInput;
 const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] =
     &["ready", "dispatched", "running", "completed", "failed"];
 
+/// Vantage conductor statuses that represent a terminal (done) state.
+/// A blocked ticket whose parent has one of these statuses is considered
+/// "approved" and can be unlocked in the dependency tree.
+///
+/// This is the single source of truth — expose it via the REST API
+/// (`GET /api/vantage/terminal-statuses`) so the frontend never needs a
+/// hardcoded duplicate.
+const TERMINAL_CONDUCTOR_STATUSES: &[&str] = &["merged", "pr_approved", "released"];
+
+/// Returns the list of terminal Vantage conductor statuses.
+///
+/// These statuses indicate that a deliverable has reached a final approved
+/// state. Use this instead of hardcoding the list in any other layer.
+pub fn terminal_conductor_statuses() -> &'static [&'static str] {
+    TERMINAL_CONDUCTOR_STATUSES
+}
+
 /// Sync deliverables from a Vantage SDLC project, filtered to those whose
 /// `codebase` field matches the given `repo_slug`.
 /// Returns a list of normalized TicketInputs ready for upsert.

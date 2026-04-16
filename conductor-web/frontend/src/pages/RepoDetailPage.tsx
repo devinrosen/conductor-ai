@@ -53,6 +53,11 @@ export function RepoDetailPage() {
 
   const { data: prs } = useApi(() => api.listPrs(repoId!), [repoId]);
 
+  const { data: vantageTerminalStatuses } = useApi(
+    () => api.getVantageTerminalStatuses(),
+    [],
+  );
+
   const { refetch: refetchRuns } = useApi(
     () => api.latestRunsByWorktreeForRepo(repoId!),
     [repoId],
@@ -285,9 +290,10 @@ export function RepoDetailPage() {
             worktrees ?? undefined,
             prs ?? undefined,
             Object.keys(ticketDependencies).length > 0 ? ticketDependencies : undefined,
+            vantageTerminalStatuses ?? undefined,
           )
         : null,
-    [tickets, worktrees, prs, ticketDependencies],
+    [tickets, worktrees, prs, ticketDependencies, vantageTerminalStatuses],
   );
 
   async function handleStartTicketToPr(ticket: Ticket) {

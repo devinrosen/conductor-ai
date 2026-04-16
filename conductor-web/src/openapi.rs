@@ -185,6 +185,8 @@ use crate::routes::worktrees::{
         crate::routes::notifications::unread_count,
         crate::routes::notifications::mark_all_read,
         crate::routes::notifications::mark_read,
+        // Vantage
+        crate::routes::vantage::get_terminal_statuses,
         // Stats
         crate::routes::stats::theme_unlock_stats,
         // Push Notifications

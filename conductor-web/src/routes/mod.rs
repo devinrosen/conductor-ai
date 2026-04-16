@@ -12,6 +12,7 @@ pub mod repos;
 pub mod slack;
 pub mod stats;
 pub mod tickets;
+pub mod vantage;
 pub mod workflows;
 pub mod worktrees;
 
@@ -358,6 +359,11 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/notifications/{id}/read",
             post(notifications::mark_read),
+        )
+        // Vantage
+        .route(
+            "/api/vantage/terminal-statuses",
+            get(vantage::get_terminal_statuses),
         )
         // Stats
         .route("/api/stats/theme-unlocks", get(stats::theme_unlock_stats))

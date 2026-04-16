@@ -50,6 +50,7 @@ import type {
   FeatureDetailResponse,
   FeatureSyncResult,
   FeatureRunSummary,
+  VantageTerminalStatuses,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -389,6 +390,10 @@ export const api = {
     request<Feature>(`/repos/${repoId}/features/${encodeURIComponent(name)}/approve`, { method: "POST" }),
   closeFeature: (repoId: string, name: string) =>
     request<{ status: string }>(`/repos/${repoId}/features/${encodeURIComponent(name)}/close`, { method: "POST" }),
+
+  // Vantage
+  getVantageTerminalStatuses: () =>
+    request<VantageTerminalStatuses>("/vantage/terminal-statuses"),
 
   // Notification Hooks
   listHooks: () => request<HookSummary[]>("/config/hooks"),

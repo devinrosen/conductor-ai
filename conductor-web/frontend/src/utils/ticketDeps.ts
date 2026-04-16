@@ -38,14 +38,18 @@ export interface TicketTree {
  * - When `apiDeps` is provided (preferred), uses DB-backed dependency data for all
  *   source types. Falls back to Vantage `raw_json` parsing when `apiDeps` is absent.
  * - A ticket is "blocked" if any blocker in `blocked_by` is not closed.
- * - A blocked ticket is "unlocked" if every blocker has a PR with review_decision "APPROVED".
+ * - A blocked ticket is "unlocked" if every blocker has a PR with review_decision "APPROVED",
+ *   OR if every blocker's Vantage conductor.status is in `terminalStatuses`.
  * - Non-vantage tickets without apiDeps are always roots.
+ * - `terminalStatuses` is fetched from GET /api/vantage/terminal-statuses; when absent
+ *   the Vantage conductor.status check is skipped (PR-approval-only fallback).
  */
 export function buildTicketTree(
   tickets: Ticket[],
   worktrees?: Worktree[],
   prs?: GithubPr[],
   apiDeps?: Record<string, TicketDependencies>,
+  terminalStatuses?: string[],
 ): TicketTree {
   // Index tickets by source_id and by id for fast lookup
   const bySourceId = new Map<string, Ticket>();
@@ -157,10 +161,28 @@ export function buildTicketTree(
       if (!parentIds?.length) continue;
 
       const allApproved = parentIds.every((parentId) => {
+        // Check PR approval
         const branch = wtBranchByTicketId.get(parentId);
-        if (!branch) return false;
-        const pr = prByBranch.get(branch);
-        return pr?.review_decision === "APPROVED";
+        if (branch) {
+          const pr = prByBranch.get(branch);
+          if (pr?.review_decision === "APPROVED") return true;
+        }
+        // Check Vantage conductor.status against the backend-provided terminal list
+        if (terminalStatuses?.length) {
+          const parent = byId.get(parentId);
+          if (parent?.source_type === "vantage") {
+            try {
+              const raw = JSON.parse(parent.raw_json);
+              const conductorStatus = raw?.conductor?.status as string | undefined;
+              if (conductorStatus && terminalStatuses.includes(conductorStatus)) {
+                return true;
+              }
+            } catch {
+              // malformed raw_json — fall through
+            }
+          }
+        }
+        return false;
       });
 
       if (allApproved) {

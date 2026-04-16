@@ -630,3 +630,6 @@ export interface FeatureRunSummary {
   dispatched: number;
   failed: number;
 }
+
+// Vantage terminal statuses — canonical list served by GET /api/vantage/terminal-statuses
+export type VantageTerminalStatuses = string[];

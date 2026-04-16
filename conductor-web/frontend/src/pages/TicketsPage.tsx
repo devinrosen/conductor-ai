@@ -28,6 +28,10 @@ export function TicketsPage() {
   const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
   const { data: allLabels } = useApi(() => api.ticketLabels(), []);
   const { data: allWorktrees } = useApi(() => api.listAllWorktrees(), []);
+  const { data: vantageTerminalStatuses } = useApi(
+    () => api.getVantageTerminalStatuses(),
+    [],
+  );
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<Ticket | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
@@ -129,8 +133,9 @@ export function TicketsPage() {
       allWorktrees ?? undefined,
       undefined,
       Object.keys(dependencies).length > 0 ? dependencies : undefined,
+      vantageTerminalStatuses ?? undefined,
     );
-  }, [tickets, filtered, sortColumn, allWorktrees, dependencies]);
+  }, [tickets, filtered, sortColumn, allWorktrees, dependencies, vantageTerminalStatuses]);
 
   const { selectedIndex, moveDown, moveUp, reset } = useListNav(filtered.length);
 
