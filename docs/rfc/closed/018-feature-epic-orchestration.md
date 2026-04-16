@@ -1,8 +1,13 @@
 # RFC 018: Feature Epic Orchestration
 
-**Status:** Accepted
+**Status:** Closed — superseded by [DIRECTION.md](../../DIRECTION.md); replacement plan in [IDEAS-feature-table-replacement.md](../../IDEAS-feature-table-replacement.md)
 **Date:** 2026-04-12
+**Closed:** 2026-04-16
 **Author:** Devin
+
+---
+
+> **Superseded 2026-04-16.** This RFC was accepted in April 2026 and partial schema changes landed (migration 070 — `source_type`, `source_id`, `tickets_total`, `tickets_merged`; expanded status CHECK). The remaining elevation — `conductor feature create`, fan-out orchestration, the feature status machine — is superseded by the compact-to-core direction in [DIRECTION.md](../../DIRECTION.md). The `features` table and `FeatureManager` are candidates for removal in favor of `foreach over = tickets` workflows; see [IDEAS-feature-table-replacement.md](../../IDEAS-feature-table-replacement.md). The landed schema columns stay in place to avoid a down-migration; they will be removed when the table itself is removed.
 
 ---
 
