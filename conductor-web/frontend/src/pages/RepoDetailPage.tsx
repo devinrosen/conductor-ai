@@ -28,6 +28,7 @@ import {
 import { useHotkeys } from "../hooks/useHotkeys";
 import { OnboardingHint, useOnboardingHighlight } from "../components/shared/OnboardingHint";
 import { useListNav } from "../hooks/useListNav";
+import { useVantageTerminalStatuses } from "../hooks/useVantageTerminalStatuses";
 
 export function RepoDetailPage() {
   const { repoId } = useParams<{ repoId: string }>();
@@ -53,10 +54,7 @@ export function RepoDetailPage() {
 
   const { data: prs } = useApi(() => api.listPrs(repoId!), [repoId]);
 
-  const { data: vantageTerminalStatuses } = useApi(
-    () => api.getVantageTerminalStatuses(),
-    [],
-  );
+  const { data: vantageTerminalStatuses } = useVantageTerminalStatuses();
 
   const { refetch: refetchRuns } = useApi(
     () => api.latestRunsByWorktreeForRepo(repoId!),

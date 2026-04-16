@@ -1796,3 +1796,17 @@ async fn test_delete_conversation_returns_409_when_active_run_exists() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+#[tokio::test]
+async fn test_get_vantage_terminal_statuses() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/vantage/terminal-statuses"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let statuses: Vec<String> = resp.json().await.unwrap();
+    assert!(!statuses.is_empty(), "terminal statuses list must not be empty");
+    assert!(statuses.contains(&"merged".to_string()));
+    assert!(statuses.contains(&"pr_approved".to_string()));
+    assert!(statuses.contains(&"released".to_string()));
+}

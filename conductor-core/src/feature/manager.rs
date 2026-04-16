@@ -1440,30 +1440,25 @@ impl<'a> FeatureManager<'a> {
 
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
 
-        // Returns `(dispatched_ok, error_message)` for one dispatch attempt.
-        let try_dispatch = |tid: &str| -> (bool, Option<String>) {
+        // Returns Ok(()) on successful dispatch or Err(message) on failure.
+        let try_dispatch = |tid: &str| -> std::result::Result<(), String> {
             let tx = done_tx.clone();
-            match self.dispatch_ticket(repo_slug, &feature, tid, tx) {
-                Ok(()) => (true, None),
-                Err(e) => (
-                    false,
-                    Some(format!(
-                        "[feature::run] Failed to dispatch ticket {tid}: {e}"
-                    )),
-                ),
-            }
+            self.dispatch_ticket(repo_slug, &feature, tid, tx)
+                .map_err(|e| format!("[feature::run] Failed to dispatch ticket {tid}: {e}"))
         };
 
         // Spawn initial batch up to parallelism
         while in_flight < parallelism {
             let Some(tid) = queue.pop_front() else { break };
-            let (ok, err_msg) = try_dispatch(&tid);
-            if ok {
-                dispatched += 1;
-                in_flight += 1;
-            } else {
-                eprintln!("{}", err_msg.unwrap());
-                failed += 1;
+            match try_dispatch(&tid) {
+                Ok(()) => {
+                    dispatched += 1;
+                    in_flight += 1;
+                }
+                Err(msg) => {
+                    eprintln!("{msg}");
+                    failed += 1;
+                }
             }
         }
 
@@ -1473,13 +1468,15 @@ impl<'a> FeatureManager<'a> {
                 Ok(()) => {
                     in_flight -= 1;
                     if let Some(tid) = queue.pop_front() {
-                        let (ok, err_msg) = try_dispatch(&tid);
-                        if ok {
-                            dispatched += 1;
-                            in_flight += 1;
-                        } else {
-                            eprintln!("{}", err_msg.unwrap());
-                            failed += 1;
+                        match try_dispatch(&tid) {
+                            Ok(()) => {
+                                dispatched += 1;
+                                in_flight += 1;
+                            }
+                            Err(msg) => {
+                                eprintln!("{msg}");
+                                failed += 1;
+                            }
                         }
                     }
                 }

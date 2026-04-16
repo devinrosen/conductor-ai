@@ -141,21 +141,40 @@ export function buildTicketTree(
   const roots = tickets.filter((t) => !hasParentInList.has(t.source_id));
 
   // Compute unlocked set: blocked tickets whose blocking parents all have approved PRs
+  // or a terminal Vantage conductor.status.
   const unlocked = new Set<string>();
-  if (worktrees?.length && prs?.length) {
-    // ticket_id → worktree branch
-    const wtBranchByTicketId = new Map<string, string>();
+
+  // Build lookup maps for PR approval (only useful when worktrees and prs are available)
+  const wtBranchByTicketId = new Map<string, string>();
+  if (worktrees?.length) {
     for (const wt of worktrees) {
       if (wt.ticket_id) {
         wtBranchByTicketId.set(wt.ticket_id, wt.branch);
       }
     }
-    // branch → PR
-    const prByBranch = new Map<string, GithubPr>();
+  }
+  const prByBranch = new Map<string, GithubPr>();
+  if (prs?.length) {
     for (const pr of prs) {
       prByBranch.set(pr.head_ref_name, pr);
     }
+  }
 
+  // Pre-parse raw_json once per ticket to avoid repeated JSON.parse in the inner loop
+  const parsedRawById = new Map<string, unknown>();
+  if (terminalStatuses?.length) {
+    for (const ticket of tickets) {
+      if (ticket.source_type === "vantage") {
+        try {
+          parsedRawById.set(ticket.id, JSON.parse(ticket.raw_json));
+        } catch {
+          // malformed raw_json — leave absent from map
+        }
+      }
+    }
+  }
+
+  if (blocked.size > 0 && (wtBranchByTicketId.size > 0 || terminalStatuses?.length)) {
     for (const ticketId of blocked) {
       const parentIds = blockingParentIds.get(ticketId);
       if (!parentIds?.length) continue;
@@ -171,14 +190,10 @@ export function buildTicketTree(
         if (terminalStatuses?.length) {
           const parent = byId.get(parentId);
           if (parent?.source_type === "vantage") {
-            try {
-              const raw = JSON.parse(parent.raw_json);
-              const conductorStatus = raw?.conductor?.status as string | undefined;
-              if (conductorStatus && terminalStatuses.includes(conductorStatus)) {
-                return true;
-              }
-            } catch {
-              // malformed raw_json — fall through
+            const raw = parsedRawById.get(parentId) as { conductor?: { status?: string } } | undefined;
+            const conductorStatus = raw?.conductor?.status;
+            if (conductorStatus && terminalStatuses.includes(conductorStatus)) {
+              return true;
             }
           }
         }

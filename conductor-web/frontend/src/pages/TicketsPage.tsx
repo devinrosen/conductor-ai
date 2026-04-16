@@ -13,6 +13,7 @@ import { parseLabels, buildLabelColorMap, getPipelineStatus, filterTicketsByColu
 import { buildTicketTree } from "../utils/ticketDeps";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { useListNav } from "../hooks/useListNav";
+import { useVantageTerminalStatuses } from "../hooks/useVantageTerminalStatuses";
 
 type SortColumn = "repo" | "source_id" | "title" | "state" | "assignee" | "pipeline" | null;
 
@@ -28,10 +29,7 @@ export function TicketsPage() {
   const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
   const { data: allLabels } = useApi(() => api.ticketLabels(), []);
   const { data: allWorktrees } = useApi(() => api.listAllWorktrees(), []);
-  const { data: vantageTerminalStatuses } = useApi(
-    () => api.getVantageTerminalStatuses(),
-    [],
-  );
+  const { data: vantageTerminalStatuses } = useVantageTerminalStatuses();
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<Ticket | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
