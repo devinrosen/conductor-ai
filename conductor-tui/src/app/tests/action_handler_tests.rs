@@ -1521,6 +1521,113 @@ fn toggle_foreach_step_expand_ignores_non_foreach_step() {
     );
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// sync_selection_arcs: clears stale events when selection changes
+// ═══════════════════════════════════════════════════════════════════════
+
+fn make_agent_event(id: &str) -> conductor_core::agent::AgentRunEvent {
+    conductor_core::agent::AgentRunEvent {
+        id: id.to_string(),
+        run_id: "run1".to_string(),
+        kind: "text".to_string(),
+        summary: "hello".to_string(),
+        started_at: "2024-01-01T00:00:00Z".to_string(),
+        ended_at: None,
+        metadata: None,
+    }
+}
+
+#[test]
+fn sync_selection_arcs_clears_worktree_events_on_change() {
+    let mut app = make_app();
+    // Seed some events and set the old Arc value to "w1"
+    app.state.data.agent_events = vec![make_agent_event("e1")];
+    *app.selected_worktree_id_shared.lock().unwrap() = Some("w1".into());
+
+    // Navigate to a different worktree
+    app.state.selected_worktree_id = Some("w2".into());
+    app.sync_selection_arcs();
+
+    assert!(
+        app.state.data.agent_events.is_empty(),
+        "events must be cleared when worktree selection changes"
+    );
+    assert_eq!(
+        *app.selected_worktree_id_shared.lock().unwrap(),
+        Some("w2".into()),
+        "shared Arc must reflect the new selection"
+    );
+}
+
+#[test]
+fn sync_selection_arcs_preserves_events_when_selection_unchanged() {
+    let mut app = make_app();
+    app.state.data.agent_events = vec![make_agent_event("e1")];
+    *app.selected_worktree_id_shared.lock().unwrap() = Some("w1".into());
+
+    // Same worktree — no change
+    app.state.selected_worktree_id = Some("w1".into());
+    app.sync_selection_arcs();
+
+    assert_eq!(
+        app.state.data.agent_events.len(),
+        1,
+        "events must NOT be cleared when worktree selection is unchanged"
+    );
+}
+
+#[test]
+fn sync_selection_arcs_clears_repo_events_on_change() {
+    let mut app = make_app();
+    app.state.data.repo_agent_events = vec![make_agent_event("e2")];
+    *app.selected_repo_id_shared.lock().unwrap() = Some("r1".into());
+
+    app.state.selected_repo_id = Some("r2".into());
+    app.sync_selection_arcs();
+
+    assert!(
+        app.state.data.repo_agent_events.is_empty(),
+        "repo events must be cleared when repo selection changes"
+    );
+    assert_eq!(
+        *app.selected_repo_id_shared.lock().unwrap(),
+        Some("r2".into())
+    );
+}
+
+#[test]
+fn sync_selection_arcs_clears_on_deselect() {
+    let mut app = make_app();
+    app.state.data.agent_events = vec![make_agent_event("e3")];
+    *app.selected_worktree_id_shared.lock().unwrap() = Some("w1".into());
+
+    // Deselect (None)
+    app.state.selected_worktree_id = None;
+    app.sync_selection_arcs();
+
+    assert!(
+        app.state.data.agent_events.is_empty(),
+        "events must be cleared when worktree is deselected"
+    );
+    assert_eq!(*app.selected_worktree_id_shared.lock().unwrap(), None);
+}
+
+#[test]
+fn sync_selection_arcs_no_clear_on_first_select() {
+    let mut app = make_app();
+    // Arc starts None, state moves to Some — this IS a change, so events clear.
+    // (Going from no selection to a selection means stale data should be dropped.)
+    app.state.data.agent_events = vec![make_agent_event("e4")];
+    // Arc already None (default), state transitions from None → Some
+    app.state.selected_worktree_id = Some("w1".into());
+    app.sync_selection_arcs();
+
+    assert!(
+        app.state.data.agent_events.is_empty(),
+        "events should be cleared on first selection (None → Some)"
+    );
+}
+
 // Confirming a standalone Worktree-targeted workflow with no inputs and no
 // active agent run should open the ModelPicker.
 #[test]
