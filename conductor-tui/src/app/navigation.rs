@@ -161,16 +161,13 @@ impl App {
             View::RepoDetail => {
                 self.state.view = View::Dashboard;
                 self.state.selected_repo_id = None;
-                self.state.data.repo_agent_events = Vec::new();
                 self.sync_selection_arcs();
             }
             View::WorktreeDetail => {
                 self.state.view = self.state.previous_view.take().unwrap_or(View::RepoDetail);
                 self.state.selected_worktree_id = None;
-                self.state.data.agent_events = Vec::new();
                 if self.state.view == View::Dashboard {
                     self.state.selected_repo_id = None;
-                    self.state.data.repo_agent_events = Vec::new();
                 }
                 self.sync_selection_arcs();
             }
@@ -178,7 +175,6 @@ impl App {
                 self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
                 if let Some(prev_wt_id) = self.state.previous_selected_worktree_id.take() {
                     self.state.selected_worktree_id = prev_wt_id;
-                    self.state.data.agent_events = Vec::new();
                     self.sync_selection_arcs();
                 }
                 self.state.selected_workflow_run_id = None;
@@ -863,7 +859,6 @@ impl App {
             let repo_id = repo.id.clone();
             let remote_url = repo.remote_url.clone();
             self.state.selected_repo_id = Some(repo_id.clone());
-            self.state.data.repo_agent_events = Vec::new();
             self.sync_selection_arcs();
             self.state.rebuild_detail_worktree_tree(&repo_id);
             self.state.detail_tickets = self
@@ -926,7 +921,6 @@ impl App {
                         if let Some(wt) = self.state.data.worktrees.get(wt_idx).cloned() {
                             self.state.selected_worktree_id = Some(wt.id.clone());
                             self.state.selected_repo_id = Some(wt.repo_id.clone());
-                            self.state.data.agent_events = Vec::new();
                             self.sync_selection_arcs();
                             self.state.previous_view = Some(View::Dashboard);
                             self.state.detail_prs = Vec::new();
@@ -961,7 +955,6 @@ impl App {
                     if let Some(wt) = self.state.detail_worktrees.get(self.state.detail_wt_index) {
                         let wt_id = wt.id.clone();
                         self.state.selected_worktree_id = Some(wt_id);
-                        self.state.data.agent_events = Vec::new();
                         self.sync_selection_arcs();
                         self.state.previous_view = Some(View::RepoDetail);
                         self.state.view = View::WorktreeDetail;

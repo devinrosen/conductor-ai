@@ -10,12 +10,24 @@ use super::helpers::{collapse_loop_iterations, max_scroll, workflow_parse_warnin
 use super::App;
 
 impl App {
-    /// Sync the selected worktree/repo IDs into the shared Arcs read by the background poller.
-    /// Call this whenever `state.selected_worktree_id` or `state.selected_repo_id` changes so
-    /// the next poll tick uses the correct scoped query.
-    pub(super) fn sync_selection_arcs(&self) {
+    /// Sync the selected worktree/repo IDs into the shared Arcs read by the background poller,
+    /// and clear any now-stale cached events when the selection changes.
+    ///
+    /// Call this once after mutating `state.selected_worktree_id` or `state.selected_repo_id`.
+    /// The clear + sync are bundled here so callers cannot accidentally omit either half.
+    pub(super) fn sync_selection_arcs(&mut self) {
+        let prev_wt = self.selected_worktree_id_shared.lock().unwrap().clone();
+        let prev_repo = self.selected_repo_id_shared.lock().unwrap().clone();
+
         *self.selected_worktree_id_shared.lock().unwrap() = self.state.selected_worktree_id.clone();
         *self.selected_repo_id_shared.lock().unwrap() = self.state.selected_repo_id.clone();
+
+        if prev_wt != self.state.selected_worktree_id {
+            self.state.data.agent_events.clear();
+        }
+        if prev_repo != self.state.selected_repo_id {
+            self.state.data.repo_agent_events.clear();
+        }
     }
 
     /// Find the key (id) in a map by searching for an item with a matching run_id.
@@ -1211,7 +1223,6 @@ impl App {
                             Some(format!("Worktree {} marked as {}", wt_slug, status));
                         self.state.view = View::Dashboard;
                         self.state.selected_worktree_id = None;
-                        self.state.data.agent_events = Vec::new();
                         self.sync_selection_arcs();
                         self.refresh_data();
                     }
@@ -1276,7 +1287,6 @@ impl App {
                         self.state.status_message = Some(format!("Unregistered repo: {repo_slug}"));
                         self.state.view = View::Dashboard;
                         self.state.selected_repo_id = None;
-                        self.state.data.repo_agent_events = Vec::new();
                         self.sync_selection_arcs();
                         self.refresh_data();
                     }
