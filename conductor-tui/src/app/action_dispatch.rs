@@ -1222,22 +1222,20 @@ impl App {
                     }
                 }
             }
-            Action::WorkflowDeleteComplete { result } => {
-                match result {
-                    Ok(()) => {
-                        if self.state.view == View::WorkflowRunDetail {
-                            self.go_back();
-                        }
-                        self.state.status_message = Some("Run deleted".to_string());
-                        self.reload_workflow_data();
+            Action::WorkflowDeleteComplete { result } => match result {
+                Ok(()) => {
+                    if self.state.view == View::WorkflowRunDetail {
+                        self.go_back();
                     }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("Delete failed: {e}"),
-                        };
-                    }
+                    self.state.status_message = Some("Run deleted".to_string());
+                    self.reload_workflow_data();
                 }
-            }
+                Err(e) => {
+                    self.state.modal = Modal::Error {
+                        message: format!("Delete failed: {e}"),
+                    };
+                }
+            },
             Action::ClearConversationComplete {
                 repo_slug,
                 wt_slug,

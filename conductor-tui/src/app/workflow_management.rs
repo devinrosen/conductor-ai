@@ -2160,8 +2160,8 @@ impl App {
         std::thread::spawn(move || {
             let result = (|| {
                 let db_path = conductor_core::config::db_path();
-                let conn = conductor_core::db::open_database(&db_path)
-                    .map_err(|e| e.to_string())?;
+                let conn =
+                    conductor_core::db::open_database(&db_path).map_err(|e| e.to_string())?;
                 WorkflowManager::new(&conn)
                     .delete_run(&run_id)
                     .map_err(|e| e.to_string())
