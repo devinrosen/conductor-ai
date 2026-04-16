@@ -1224,6 +1224,7 @@ impl App {
             }
             Action::WorkflowDeleteComplete { result } => match result {
                 Ok(()) => {
+                    self.state.modal = Modal::None;
                     if self.state.view == View::WorkflowRunDetail {
                         self.go_back();
                     }

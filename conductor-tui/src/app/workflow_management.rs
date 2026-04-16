@@ -2152,7 +2152,9 @@ impl App {
             return;
         }
 
-        self.state.status_message = Some("Deleting run…".to_string());
+        self.state.modal = Modal::Progress {
+            message: "Deleting run…".into(),
+        };
 
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
