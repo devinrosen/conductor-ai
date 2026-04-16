@@ -1074,7 +1074,10 @@ fn test_delete_run_cascade_deletes_steps() {
     mgr.delete_run(&run.id).unwrap();
 
     let steps = mgr.get_workflow_steps(&run.id).unwrap();
-    assert!(steps.is_empty(), "steps should be cascade-deleted with the run");
+    assert!(
+        steps.is_empty(),
+        "steps should be cascade-deleted with the run"
+    );
 }
 
 #[test]
@@ -1134,7 +1137,14 @@ fn test_delete_run_recursive_removes_child_runs() {
         .unwrap();
     let mgr = WorkflowManager::new(&conn);
     let parent_run = mgr
-        .create_workflow_run("parent-wf", Some("w1"), &parent_agent.id, false, "manual", None)
+        .create_workflow_run(
+            "parent-wf",
+            Some("w1"),
+            &parent_agent.id,
+            false,
+            "manual",
+            None,
+        )
         .unwrap();
 
     // Create a child run (parent_workflow_run_id points to parent_run)
@@ -1174,12 +1184,8 @@ fn test_delete_run_recursive_removes_child_runs() {
 fn test_delete_run_does_not_affect_sibling_runs() {
     let conn = setup_db();
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let a1 = agent_mgr
-        .create_run(Some("w1"), "wf", None, None)
-        .unwrap();
-    let a2 = agent_mgr
-        .create_run(Some("w1"), "wf", None, None)
-        .unwrap();
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run1 = mgr
