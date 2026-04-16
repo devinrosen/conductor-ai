@@ -342,8 +342,15 @@ impl App {
                 wt_name,
                 ticket_id,
                 items,
+                inferred_base_branch,
             } => {
-                self.handle_feature_branches_loaded(repo_slug, wt_name, ticket_id, items);
+                self.handle_feature_branches_loaded(
+                    repo_slug,
+                    wt_name,
+                    ticket_id,
+                    items,
+                    inferred_base_branch,
+                );
             }
             Action::FeatureBranchesFailed { error } => {
                 self.state.modal = Modal::Error {
