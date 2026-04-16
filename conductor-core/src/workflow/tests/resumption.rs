@@ -1187,7 +1187,11 @@ fn test_resume_deletes_orphaned_pending_steps() {
 
     // Confirm both rows are present before resume.
     let steps_before = wf_mgr.get_workflow_steps(&run.id).unwrap();
-    assert_eq!(steps_before.len(), 2, "should have 2 step rows before resume");
+    assert_eq!(
+        steps_before.len(),
+        2,
+        "should have 2 step rows before resume"
+    );
 
     // Mark the run as failed so resume is accepted.
     wf_mgr
