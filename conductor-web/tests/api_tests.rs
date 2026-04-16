@@ -1805,7 +1805,10 @@ async fn test_get_vantage_terminal_statuses() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let statuses: Vec<String> = resp.json().await.unwrap();
-    assert!(!statuses.is_empty(), "terminal statuses list must not be empty");
+    assert!(
+        !statuses.is_empty(),
+        "terminal statuses list must not be empty"
+    );
     assert!(statuses.contains(&"merged".to_string()));
     assert!(statuses.contains(&"pr_approved".to_string()));
     assert!(statuses.contains(&"released".to_string()));
