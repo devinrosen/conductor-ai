@@ -1662,6 +1662,21 @@ fn sync_selection_arcs_no_clear_on_first_select() {
     );
 }
 
+#[test]
+fn sync_selection_arcs_repo_no_clear_on_first_select() {
+    let mut app = make_app();
+    // Repo arc starts None, state moves to Some — IS a change, so repo events clear.
+    app.state.data.repo_agent_events = vec![make_agent_event("e7")];
+    // Arc already None (default), state transitions from None → Some
+    app.state.selected_repo_id = Some("r1".into());
+    app.sync_selection_arcs();
+
+    assert!(
+        app.state.data.repo_agent_events.is_empty(),
+        "repo events should be cleared on first repo selection (None → Some)"
+    );
+}
+
 // Confirming a standalone Worktree-targeted workflow with no inputs and no
 // active agent run should open the ModelPicker.
 #[test]
