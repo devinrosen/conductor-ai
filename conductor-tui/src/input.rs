@@ -387,6 +387,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('t') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
                 return Action::PickTemplate;
             }
+            KeyCode::Char('D') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
+                return Action::DeleteWorkflowRun;
+            }
             // Right / l: enter or exit the step tree pane when viewing defs.
             KeyCode::Right | KeyCode::Char('l')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>
@@ -615,6 +618,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,
+            KeyCode::Char('D') => return Action::DeleteWorkflowRun,
             KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Char('g') => return Action::OpenWorkflowStepGraphView,
             KeyCode::Enter => {

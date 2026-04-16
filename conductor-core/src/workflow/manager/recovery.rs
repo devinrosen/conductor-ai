@@ -864,6 +864,65 @@ impl<'a> WorkflowManager<'a> {
         Ok(crate::workflow::engine::completed_keys_from_steps(&steps))
     }
 
+    /// Delete a single workflow run by ID, along with all of its descendant runs
+    /// (child runs linked via `parent_workflow_run_id`).
+    ///
+    /// Validates that the run exists and is in a terminal state before deleting.
+    /// Returns `ConductorError::WorkflowRunNotFound` if the run does not exist, and
+    /// `ConductorError::InvalidInput` if the run is not in a terminal state.
+    ///
+    /// `workflow_run_steps` rows are removed automatically via `ON DELETE CASCADE`.
+    /// Child runs are deleted recursively before the parent to satisfy FK constraints
+    /// (the `parent_workflow_run_id` column has no `ON DELETE CASCADE`).
+    pub fn delete_run(&self, run_id: &str) -> Result<()> {
+        use crate::error::ConductorError;
+
+        // Validate the run exists and is terminal.
+        let run = self
+            .conn
+            .query_row(
+                &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = ?1"),
+                params![run_id],
+                row_to_workflow_run,
+            )
+            .optional()?
+            .ok_or_else(|| ConductorError::WorkflowRunNotFound {
+                id: run_id.to_string(),
+            })?;
+
+        if !run.status.is_terminal() {
+            return Err(ConductorError::InvalidInput(format!(
+                "cannot delete run '{run_id}': status is '{}' (must be terminal — cancel it first)",
+                run.status
+            )));
+        }
+
+        self.delete_run_recursive(run_id)
+    }
+
+    /// Recursively delete a workflow run and all of its descendants.
+    ///
+    /// Children are deleted before the parent to satisfy the FK constraint on
+    /// `parent_workflow_run_id`. No status check is performed on children — they
+    /// are expected to be terminal when the parent is.
+    fn delete_run_recursive(&self, run_id: &str) -> Result<()> {
+        let children: Vec<String> = query_collect(
+            self.conn,
+            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )?;
+
+        for child_id in children {
+            self.delete_run_recursive(&child_id)?;
+        }
+
+        self.conn
+            .execute("DELETE FROM workflow_runs WHERE id = ?1", params![run_id])?;
+
+        Ok(())
+    }
+
     /// Build the purge where-clause and bind params, then pass them to a caller-provided
     /// closure.  Deduplicates the empty-check, where-clause build, and `params_ref`
     /// construction shared by `purge` and `purge_count`.
