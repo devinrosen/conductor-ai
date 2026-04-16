@@ -3263,6 +3263,72 @@ fn test_reset_steps_from_position_clears_subprocess_pid() {
     );
 }
 
+/// reset_failed_steps must attempt to signal running subprocesses before
+/// nulling subprocess_pid, so orphaned child processes are cleaned up.
+/// Uses a non-existent PID (u32::MAX) — cancel_subprocess tolerates ESRCH.
+#[test]
+fn test_reset_failed_steps_kills_running_subprocesses() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-running', 'script', 0, 'running', 0, 4294967295)",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    // Must not error even though PID 4294967295 does not exist.
+    mgr.reset_failed_steps(&run_id).unwrap();
+
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid.is_none(),
+        "subprocess_pid must be NULL after reset_failed_steps"
+    );
+}
+
+/// reset_steps_from_position must attempt to signal running subprocesses
+/// before nulling subprocess_pid.
+#[test]
+fn test_reset_steps_from_position_kills_running_subprocesses() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-running', 'script', 2, 'running', 0, 4294967295)",
+        params![step_id, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    mgr.reset_steps_from_position(&run_id, 2).unwrap();
+
+    let pid: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid.is_none(),
+        "subprocess_pid must be NULL after reset_steps_from_position"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // step_error cleared on reset tests
 // ---------------------------------------------------------------------------

@@ -826,10 +826,58 @@ impl<'a> WorkflowManager<'a> {
     const SQL_RESET_FROM_POS: &'static str =
         reset_sql!("WHERE workflow_run_id = ?1 AND position >= ?2");
 
+    /// Signal any `running` steps in the given run whose `subprocess_pid` is
+    /// recorded.  Must be called before the SQL UPDATE zeroes the column so we
+    /// still have the PID to signal.
+    fn terminate_running_subprocesses(&self, workflow_run_id: &str) -> Result<()> {
+        #[cfg(unix)]
+        {
+            let pids: Vec<i64> = query_collect(
+                self.conn,
+                "SELECT subprocess_pid FROM workflow_run_steps \
+                 WHERE workflow_run_id = ?1 AND status = 'running' \
+                   AND subprocess_pid IS NOT NULL",
+                params![workflow_run_id],
+                |row| row.get(0),
+            )?;
+            for pid in pids {
+                crate::process_utils::cancel_subprocess(pid as u32);
+            }
+        }
+        Ok(())
+    }
+
+    /// Signal any `running` steps at or after `position` in the given run whose
+    /// `subprocess_pid` is recorded.  Must be called before the SQL UPDATE.
+    fn terminate_subprocesses_from_position(
+        &self,
+        workflow_run_id: &str,
+        position: i64,
+    ) -> Result<()> {
+        #[cfg(unix)]
+        {
+            let pids: Vec<i64> = query_collect(
+                self.conn,
+                "SELECT subprocess_pid FROM workflow_run_steps \
+                 WHERE workflow_run_id = ?1 AND position >= ?2 AND status = 'running' \
+                   AND subprocess_pid IS NOT NULL",
+                params![workflow_run_id, position],
+                |row| row.get(0),
+            )?;
+            for pid in pids {
+                crate::process_utils::cancel_subprocess(pid as u32);
+            }
+        }
+        Ok(())
+    }
+
     /// Reset all non-completed steps for a workflow run back to `pending`.
     ///
     /// Used before resuming so that failed/running/timed_out steps get re-executed.
+    /// Sends SIGTERM to any `running` steps with a recorded subprocess PID before
+    /// the column is nulled, preventing orphaned subprocesses.
     pub fn reset_failed_steps(&self, workflow_run_id: &str) -> Result<u64> {
+        self.terminate_running_subprocesses(workflow_run_id)?;
         let count = self
             .conn
             .execute(Self::SQL_RESET_FAILED, params![workflow_run_id])?;
@@ -849,7 +897,10 @@ impl<'a> WorkflowManager<'a> {
     /// Reset all steps at or after a given position back to `pending`.
     ///
     /// Used for --from-step to re-run from a specific step onwards.
+    /// Sends SIGTERM to any `running` steps with a recorded subprocess PID before
+    /// the column is nulled, preventing orphaned subprocesses.
     pub fn reset_steps_from_position(&self, workflow_run_id: &str, position: i64) -> Result<u64> {
+        self.terminate_subprocesses_from_position(workflow_run_id, position)?;
         let count = self
             .conn
             .execute(Self::SQL_RESET_FROM_POS, params![workflow_run_id, position])?;
