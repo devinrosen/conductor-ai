@@ -257,6 +257,38 @@ fn test_insert_step_with_iteration() {
 }
 
 #[test]
+fn test_insert_step_running_is_atomic() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let run = mgr
+        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    let step_id = mgr
+        .insert_step_running(&run.id, "build", "script", false, 0, 0, 2)
+        .unwrap();
+
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].id, step_id);
+    assert_eq!(steps[0].step_name, "build");
+    // The row was inserted directly as 'running' — no intermediate 'pending' state
+    assert_eq!(steps[0].status.to_string(), "running");
+    // started_at must be set (was part of the single INSERT)
+    assert!(
+        steps[0].started_at.is_some(),
+        "started_at should be set by insert_step_running"
+    );
+    // retry_count must reflect what was passed (2)
+    assert_eq!(steps[0].retry_count, 2);
+}
+
+#[test]
 fn test_update_step_with_markers() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
