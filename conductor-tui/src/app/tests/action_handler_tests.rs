@@ -1596,6 +1596,40 @@ fn sync_selection_arcs_clears_repo_events_on_change() {
 }
 
 #[test]
+fn sync_selection_arcs_preserves_repo_events_when_unchanged() {
+    let mut app = make_app();
+    app.state.data.repo_agent_events = vec![make_agent_event("e5")];
+    *app.selected_repo_id_shared.lock().unwrap() = Some("r1".into());
+
+    // Same repo — no change
+    app.state.selected_repo_id = Some("r1".into());
+    app.sync_selection_arcs();
+
+    assert_eq!(
+        app.state.data.repo_agent_events.len(),
+        1,
+        "repo events must NOT be cleared when repo selection is unchanged"
+    );
+}
+
+#[test]
+fn sync_selection_arcs_clears_repo_on_deselect() {
+    let mut app = make_app();
+    app.state.data.repo_agent_events = vec![make_agent_event("e6")];
+    *app.selected_repo_id_shared.lock().unwrap() = Some("r1".into());
+
+    // Deselect repo
+    app.state.selected_repo_id = None;
+    app.sync_selection_arcs();
+
+    assert!(
+        app.state.data.repo_agent_events.is_empty(),
+        "repo events must be cleared when repo is deselected"
+    );
+    assert_eq!(*app.selected_repo_id_shared.lock().unwrap(), None);
+}
+
+#[test]
 fn sync_selection_arcs_clears_on_deselect() {
     let mut app = make_app();
     app.state.data.agent_events = vec![make_agent_event("e3")];
