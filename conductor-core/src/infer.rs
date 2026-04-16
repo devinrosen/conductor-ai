@@ -7,6 +7,17 @@
 pub fn infer_base_branch(raw_json: &str, repo_path: &str) -> Option<(String, String)> {
     let value: serde_json::Value = serde_json::from_str(raw_json).ok()?;
     let title = value["milestone"]["title"].as_str()?;
+
+    // Validate that the milestone title contains only safe characters before
+    // constructing a branch name and passing it to a subprocess argument.
+    // Allowed: alphanumeric, dot, hyphen, underscore.
+    if !title
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_')
+    {
+        return None;
+    }
+
     let branch = format!("release/{title}");
 
     // Verify the branch exists on the remote via `git ls-remote --heads origin <branch>`.
@@ -82,5 +93,88 @@ mod tests {
         // git ls-remote may fail (no remote) or return empty — either way, None.
         let result = infer_base_branch(&raw, repo_path.to_str().unwrap_or("/tmp"));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_milestone_title_with_unsafe_chars_returns_none() {
+        // Titles containing path-traversal or shell-special characters must be rejected
+        // before reaching the subprocess call.
+        let traversal = with_milestone("../etc/passwd");
+        let result = infer_base_branch(&traversal, "/tmp");
+        assert!(result.is_none());
+
+        let newline = with_milestone("1.0\nmalicious");
+        let result = infer_base_branch(&newline, "/tmp");
+        assert!(result.is_none());
+
+        let space = with_milestone("1.0 rc1");
+        let result = infer_base_branch(&space, "/tmp");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_milestone_branch_exists_on_remote_returns_some() {
+        // Set up a minimal local bare repo acting as "origin" so git ls-remote works
+        // without any network access.
+        let tmp = std::env::temp_dir();
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        let remote_path = tmp.join(format!("conductor-test-remote-{id}"));
+        let clone_path = tmp.join(format!("conductor-test-clone-{id}"));
+
+        // Clean up on any previous failed run.
+        let _ = std::fs::remove_dir_all(&remote_path);
+        let _ = std::fs::remove_dir_all(&clone_path);
+
+        // Init bare remote.
+        let ok = std::process::Command::new("git")
+            .args(["init", "--bare", remote_path.to_str().unwrap()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            // git not available or failed — skip gracefully.
+            let _ = std::fs::remove_dir_all(&remote_path);
+            return;
+        }
+
+        // Init a working clone, configure identity, create an initial commit, then push
+        // a `release/1.2.3` branch to the bare remote.
+        let run = |args: &[&str], dir: &std::path::Path| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "test@test.com")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "test@test.com")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+
+        std::fs::create_dir_all(&clone_path).unwrap();
+        run(&["init"], &clone_path);
+        run(
+            &["remote", "add", "origin", remote_path.to_str().unwrap()],
+            &clone_path,
+        );
+        // Create an empty commit so we can push a branch.
+        run(&["commit", "--allow-empty", "-m", "init"], &clone_path);
+        run(&["push", "origin", "HEAD:release/1.2.3"], &clone_path);
+
+        let raw = with_milestone("1.2.3");
+        let result = infer_base_branch(&raw, clone_path.to_str().unwrap());
+
+        // Clean up before asserting so temp dirs are always removed.
+        let _ = std::fs::remove_dir_all(&remote_path);
+        let _ = std::fs::remove_dir_all(&clone_path);
+
+        assert_eq!(
+            result,
+            Some(("release/1.2.3".to_string(), "1.2.3".to_string()))
+        );
     }
 }

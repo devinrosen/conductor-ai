@@ -1383,4 +1383,77 @@ mod tests {
             other => panic!("expected BranchPicker modal, got {:?}", other),
         }
     }
+
+    #[test]
+    fn feature_branches_loaded_empty_items_with_inferred_branch_shows_picker() {
+        // When items is empty but an inferred branch is provided, we must NOT skip
+        // straight to the PR step — the inferred branch should be shown in the picker.
+        let mut app = make_app();
+        let inferred = Some(("release/0.5.0".to_string(), "0.5.0".to_string()));
+        app.handle_feature_branches_loaded(
+            "test-repo".to_string(),
+            "my-wt".to_string(),
+            None,
+            vec![],
+            inferred,
+        );
+        match &app.state.modal {
+            Modal::BranchPicker {
+                items, selected, ..
+            } => {
+                assert_eq!(*selected, 0);
+                // The inferred branch is prepended as index 0.
+                assert_eq!(items[0].branch.as_deref(), Some("release/0.5.0"));
+                assert_eq!(items[0].inferred_from.as_deref(), Some("0.5.0"));
+            }
+            other => panic!("expected BranchPicker modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn feature_branches_loaded_inferred_branch_prepended_at_index_zero() {
+        // When both regular items and an inferred branch are present, the inferred
+        // branch must appear at index 0 so it is pre-selected in the picker.
+        let mut app = make_app();
+        let items = vec![
+            BranchPickerItem {
+                branch: None,
+                worktree_count: 0,
+                ticket_count: 0,
+                base_branch: None,
+                stale_days: None,
+                inferred_from: None,
+            },
+            BranchPickerItem {
+                branch: Some("feat/other".to_string()),
+                worktree_count: 1,
+                ticket_count: 0,
+                base_branch: Some("main".to_string()),
+                stale_days: None,
+                inferred_from: None,
+            },
+        ];
+        let inferred = Some(("release/0.5.1".to_string(), "0.5.1".to_string()));
+        app.handle_feature_branches_loaded(
+            "test-repo".to_string(),
+            "my-wt".to_string(),
+            Some("t2".to_string()),
+            items,
+            inferred,
+        );
+        match &app.state.modal {
+            Modal::BranchPicker {
+                items, selected, ..
+            } => {
+                assert_eq!(*selected, 0);
+                // Inferred branch is at index 0.
+                assert_eq!(items[0].branch.as_deref(), Some("release/0.5.1"));
+                assert_eq!(items[0].inferred_from.as_deref(), Some("0.5.1"));
+                assert_eq!(items[0].worktree_count, 0);
+                // Remaining items follow.
+                assert!(items.len() > 1);
+            }
+            other => panic!("expected BranchPicker modal, got {:?}", other),
+        }
+    }
 }
