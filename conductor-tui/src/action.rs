@@ -424,6 +424,12 @@ pub enum Action {
     WorkflowCancelComplete {
         result: Result<(), String>,
     },
+    /// Delete a single terminal workflow run (D key).
+    DeleteWorkflowRun,
+    /// Background result: workflow run deletion completed.
+    WorkflowDeleteComplete {
+        result: Result<(), String>,
+    },
     ApproveGate,
     RejectGate,
     /// View the selected workflow definition's YAML source in a scrollable modal.

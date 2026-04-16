@@ -2104,6 +2104,71 @@ impl App {
         let repo = self.state.data.repos.iter().find(|r| r.id == *repo_id)?;
         Some((repo.slug.clone(), repo.local_path.clone()))
     }
+
+    /// Handle the `D` (DeleteWorkflowRun) action.
+    ///
+    /// Resolves the target run from either the detail view or the list view,
+    /// guards against deleting non-terminal runs, then spawns a background thread
+    /// to call `WorkflowManager::delete_run`. Sends `WorkflowDeleteComplete` when done.
+    pub(super) fn handle_delete_workflow_run(&mut self) {
+        use conductor_core::workflow::WorkflowManager;
+
+        // Resolve the run ID: in the detail view use the selected run; in the list
+        // view use the currently highlighted row.
+        let run_id = if self.state.view == View::WorkflowRunDetail {
+            self.state.selected_workflow_run_id.clone()
+        } else {
+            self.state
+                .visible_workflow_run_rows()
+                .get(self.state.workflow_run_index)
+                .and_then(|row| row.run_id())
+                .map(str::to_owned)
+        };
+
+        let Some(run_id) = run_id else {
+            self.state.status_message = Some("No workflow run selected".to_string());
+            return;
+        };
+
+        // Look up the run to check its status.
+        let run = match self
+            .state
+            .data
+            .workflow_runs
+            .iter()
+            .find(|r| r.id == run_id)
+        {
+            Some(r) => r.clone(),
+            None => {
+                self.state.status_message = Some("Workflow run not found".to_string());
+                return;
+            }
+        };
+
+        // Guard: only terminal runs may be deleted.
+        if !run.status.is_terminal() {
+            self.state.status_message =
+                Some("Cannot delete an active run — cancel it first (x)".to_string());
+            return;
+        }
+
+        self.state.status_message = Some("Deleting run…".to_string());
+
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+
+        std::thread::spawn(move || {
+            let result = (|| {
+                let db_path = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db_path)
+                    .map_err(|e| e.to_string())?;
+                WorkflowManager::new(&conn)
+                    .delete_run(&run_id)
+                    .map_err(|e| e.to_string())
+            })();
+            let _ = tx.send(Action::WorkflowDeleteComplete { result });
+        });
+    }
 }
 
 #[cfg(test)]

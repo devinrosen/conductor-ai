@@ -776,6 +776,7 @@ impl App {
             Action::ResumeWorkflow => self.handle_resume_workflow(),
             Action::ResumeWorktreeWorkflow => self.handle_resume_worktree_workflow(),
             Action::CancelWorkflow => self.handle_cancel_workflow(),
+            Action::DeleteWorkflowRun => self.handle_delete_workflow_run(),
             Action::ApproveGate => self.handle_approve_gate(),
             Action::RejectGate => self.handle_reject_gate(),
             Action::ViewWorkflowDef => self.handle_view_workflow_def(),
@@ -1217,6 +1218,22 @@ impl App {
                     Err(e) => {
                         self.state.modal = Modal::Error {
                             message: format!("Cancel failed: {e}"),
+                        };
+                    }
+                }
+            }
+            Action::WorkflowDeleteComplete { result } => {
+                match result {
+                    Ok(()) => {
+                        if self.state.view == View::WorkflowRunDetail {
+                            self.go_back();
+                        }
+                        self.state.status_message = Some("Run deleted".to_string());
+                        self.reload_workflow_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Delete failed: {e}"),
                         };
                     }
                 }
