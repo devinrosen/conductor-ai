@@ -325,6 +325,10 @@ pub struct GeneralConfig {
     /// worktree is marked merged. Set to false to require an explicit call.
     #[serde(default = "default_true")]
     pub auto_ready_for_review: bool,
+    /// Maximum number of times a workflow run will be automatically resumed
+    /// after orphan detection. Set to 0 to disable automatic resume. Defaults to 3.
+    #[serde(default = "default_auto_resume_limit")]
+    pub auto_resume_limit: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,6 +381,10 @@ fn default_max_feature_parallelism() -> u32 {
     3
 }
 
+fn default_auto_resume_limit() -> u32 {
+    3
+}
+
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
@@ -392,6 +400,7 @@ impl Default for GeneralConfig {
             claude_config_dir: None,
             max_feature_parallelism: default_max_feature_parallelism(),
             auto_ready_for_review: default_true(),
+            auto_resume_limit: default_auto_resume_limit(),
         }
     }
 }

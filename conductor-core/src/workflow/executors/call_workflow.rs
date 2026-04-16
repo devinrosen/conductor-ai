@@ -378,5 +378,12 @@ pub fn execute_call_workflow(
         );
     }
 
-    record_step_failure(state, step_key, &node.workflow, last_error, max_attempts)
+    record_step_failure(
+        state,
+        step_key,
+        &node.workflow,
+        last_error,
+        max_attempts,
+        true,
+    )
 }

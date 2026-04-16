@@ -864,6 +864,97 @@ impl<'a> WorkflowManager<'a> {
         Ok(crate::workflow::engine::completed_keys_from_steps(&steps))
     }
 
+    /// Delete a single workflow run by ID, along with all of its descendant runs
+    /// (child runs linked via `parent_workflow_run_id`).
+    ///
+    /// Validates that the run exists and is in a terminal state before deleting.
+    /// Returns `ConductorError::WorkflowRunNotFound` if the run does not exist, and
+    /// `ConductorError::InvalidInput` if the run is not in a terminal state.
+    ///
+    /// `workflow_run_steps` rows are removed automatically via `ON DELETE CASCADE`.
+    /// Child runs are deleted recursively before the parent to satisfy FK constraints
+    /// (the `parent_workflow_run_id` column has no `ON DELETE CASCADE`).
+    pub fn delete_run(&self, run_id: &str) -> Result<()> {
+        use crate::error::ConductorError;
+
+        // Validate the run exists and is terminal.
+        let run = self
+            .conn
+            .query_row(
+                &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = ?1"),
+                params![run_id],
+                row_to_workflow_run,
+            )
+            .optional()?
+            .ok_or_else(|| ConductorError::WorkflowRunNotFound {
+                id: run_id.to_string(),
+            })?;
+
+        if !run.status.is_terminal() {
+            return Err(ConductorError::InvalidInput(format!(
+                "cannot delete run '{run_id}': status is '{}' (must be terminal — cancel it first)",
+                run.status
+            )));
+        }
+
+        self.delete_run_recursive(run_id)
+    }
+
+    /// Recursively delete a workflow run and all of its descendants.
+    ///
+    /// Children are deleted before the parent to satisfy the FK constraint on
+    /// `parent_workflow_run_id`. No status check is performed on children — they
+    /// are expected to be terminal when the parent is.
+    fn delete_run_recursive(&self, run_id: &str) -> Result<()> {
+        let children: Vec<String> = query_collect(
+            self.conn,
+            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )?;
+
+        for child_id in children {
+            self.delete_run_recursive(&child_id)?;
+        }
+
+        self.conn
+            .execute("DELETE FROM workflow_runs WHERE id = ?1", params![run_id])?;
+
+        Ok(())
+    }
+
+    /// Delete orphaned `pending` step rows that were registered but never started.
+    ///
+    /// A step row is considered orphaned when `status = 'pending' AND started_at IS NULL`.
+    /// These rows are created by `insert_step` but left behind if the executor crashes
+    /// before the step actually begins. The resume path already handles them correctly
+    /// by re-inserting and re-running, but the phantom rows pollute step history.
+    ///
+    /// This method is called at the top of the resume path, before the skip set is
+    /// built, to remove the noise. Scoped to the given `workflow_run_id` so it cannot
+    /// affect other runs.
+    ///
+    /// Returns the number of deleted rows.
+    pub fn delete_orphaned_pending_steps(&self, workflow_run_id: &str) -> Result<usize> {
+        let deleted = self.conn.execute(
+            "DELETE FROM workflow_run_steps \
+             WHERE workflow_run_id = ?1 \
+               AND status = 'pending' \
+               AND started_at IS NULL",
+            params![workflow_run_id],
+        )?;
+
+        if deleted > 0 {
+            tracing::info!(
+                workflow_run_id = %workflow_run_id,
+                deleted,
+                "delete_orphaned_pending_steps: removed orphaned never-started step row(s)"
+            );
+        }
+
+        Ok(deleted)
+    }
+
     /// Build the purge where-clause and bind params, then pass them to a caller-provided
     /// closure.  Deduplicates the empty-check, where-clause build, and `params_ref`
     /// construction shared by `purge` and `purge_count`.
@@ -908,5 +999,400 @@ impl<'a> WorkflowManager<'a> {
             let count: i64 = self.conn.query_row(&sql, params_ref, |row| row.get(0))?;
             Ok(count as usize)
         })
+    }
+
+    /// Classify eligible `failed` workflow runs as `needs_resume`.
+    ///
+    /// A run is eligible when all three guards pass:
+    /// 1. `error = 'parent agent run reached terminal state without completing the workflow'`
+    ///    (the exact string set by `reap_workflow_runs_with_dead_parent`).
+    /// 2. No steps with `status IN ('failed', 'timed_out')` — avoids auto-resuming
+    ///    legitimately failed runs where a step itself errored out.
+    /// 3. `iteration < auto_resume_limit` — retry cap prevents infinite loops.
+    ///
+    /// Pure SQL, no threads, no execution. Returns the number of runs transitioned.
+    pub fn classify_resumable_workflows(&self, auto_resume_limit: u32) -> Result<usize> {
+        let count = self.conn.execute(
+            "UPDATE workflow_runs \
+             SET status = 'needs_resume' \
+             WHERE status = 'failed' \
+               AND error = 'parent agent run reached terminal state without completing the workflow' \
+               AND iteration < ?1 \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM workflow_run_steps \
+                 WHERE workflow_run_id = workflow_runs.id \
+                   AND status IN ('failed', 'timed_out') \
+               )",
+            params![auto_resume_limit],
+        )?;
+
+        if count > 0 {
+            tracing::info!(
+                "classify_resumable_workflows: flagged {count} workflow run(s) for auto-resume"
+            );
+        }
+
+        Ok(count)
+    }
+
+    /// Watchdog: consume `needs_resume` runs by CAS-flipping them to `failed` and
+    /// spawning a resume thread for each.
+    ///
+    /// The CAS flip (`WHERE status = 'needs_resume'`) is safe against concurrent
+    /// watchdog calls from TUI and web processes — only the first caller wins the
+    /// race; losers see `changes() == 0` and skip.
+    ///
+    /// Follows the `reap_heartbeat_stuck_runs` pattern exactly:
+    /// 1. Query all `needs_resume` root runs.
+    /// 2. CAS-flip each to `failed` with a watchdog error string.
+    /// 3. Spawn a `resume_workflow_standalone` thread for each successful flip.
+    /// 4. Fire a batch orphan-resumed notification.
+    ///
+    /// Returns the number of runs handed off to resume threads.
+    pub fn watchdog_needs_resume_workflows(
+        &self,
+        config: &Config,
+        conductor_bin_dir: Option<PathBuf>,
+    ) -> Result<usize> {
+        use crate::workflow::WorkflowResumeStandalone;
+
+        // Step 1: find all needs_resume root runs.
+        let candidates: Vec<(String, String, Option<String>)> = query_collect(
+            self.conn,
+            "SELECT id, workflow_name, target_label FROM workflow_runs \
+             WHERE status = 'needs_resume' \
+               AND parent_workflow_run_id IS NULL",
+            params![],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut resumed = 0usize;
+        let mut resumed_ids: Vec<String> = Vec::new();
+
+        for (run_id, _workflow_name, _target_label) in candidates {
+            // Step 2: CAS flip needs_resume → failed.
+            // If another watchdog already won the race, changes() == 0 and we skip.
+            let changed = self.conn.execute(
+                "UPDATE workflow_runs \
+                 SET status = 'failed', \
+                     error  = 'Orphaned: parent agent run died — auto-resumed by watchdog' \
+                 WHERE id = ?1 AND status = 'needs_resume'",
+                params![run_id],
+            )?;
+
+            if changed != 1 {
+                tracing::debug!(
+                    run_id = %run_id,
+                    "watchdog_needs_resume_workflows: CAS lost race (already claimed)"
+                );
+                continue;
+            }
+
+            tracing::info!(
+                run_id = %run_id,
+                "watchdog_needs_resume_workflows: resuming orphaned run"
+            );
+
+            // Step 3: spawn resume thread.
+            let config_clone = config.clone();
+            let bin_dir = conductor_bin_dir.clone();
+            let run_id_clone = run_id.clone();
+            std::thread::spawn(move || {
+                let params = WorkflowResumeStandalone {
+                    config: config_clone,
+                    workflow_run_id: run_id_clone.clone(),
+                    model: None,
+                    from_step: None,
+                    restart: false,
+                    db_path: None,
+                    conductor_bin_dir: bin_dir,
+                };
+                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
+                    tracing::warn!(
+                        run_id = %run_id_clone,
+                        "watchdog_needs_resume_workflows: auto-resume failed: {e}"
+                    );
+                }
+            });
+
+            resumed_ids.push(run_id);
+            resumed += 1;
+        }
+
+        // Step 4: batch notification for all runs handed off.
+        if !resumed_ids.is_empty() {
+            crate::notify::fire_orphan_resumed_notification(
+                self.conn,
+                &config.notifications,
+                &config.notify.hooks,
+                &resumed_ids,
+            );
+        }
+
+        Ok(resumed)
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::params;
+
+    use crate::config::Config;
+    use crate::workflow::manager::WorkflowManager;
+
+    /// Constant error string produced by the reaper — must match the classifier SQL.
+    const ORPHAN_ERROR: &str =
+        "parent agent run reached terminal state without completing the workflow";
+
+    /// Create a test DB with a repo, worktree, and parent agent run.
+    fn setup() -> (rusqlite::Connection, String) {
+        let conn = crate::test_helpers::setup_db_with_agent_run();
+        let parent_id: String = conn
+            .query_row(
+                "SELECT id FROM agent_runs WHERE worktree_id = 'w1' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (conn, parent_id)
+    }
+
+    /// Insert a workflow_run row with the given status, error, and iteration directly.
+    fn insert_run(
+        conn: &rusqlite::Connection,
+        id: &str,
+        parent_id: &str,
+        status: &str,
+        error: Option<&str>,
+        iteration: u32,
+    ) {
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, iteration, error) \
+             VALUES (?1, 'test-wf', 'w1', ?2, ?3, 0, 'manual', '2024-01-01T00:00:00Z', ?4, ?5)",
+            params![id, parent_id, status, iteration, error],
+        )
+        .unwrap();
+    }
+
+    /// Insert a workflow_run_step with the given status for the given run.
+    fn insert_step(conn: &rusqlite::Connection, run_id: &str, step_id: &str, status: &str) {
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status) \
+             VALUES (?1, ?2, 'step1', 'actor', 0, ?3)",
+            params![step_id, run_id, status],
+        )
+        .unwrap();
+    }
+
+    /// Read the `status` of a workflow_run by ID.
+    fn run_status(conn: &rusqlite::Connection, run_id: &str) -> String {
+        conn.query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    // ── classify_resumable_workflows ──────────────────────────────────────────
+
+    #[test]
+    fn test_classifier_eligible_run_transitions_to_needs_resume() {
+        let (conn, parent_id) = setup();
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
+        // Add a completed step (not failed/timed_out) — should not block classifier.
+        insert_step(&conn, "run1", "step1", "completed");
+
+        let mgr = WorkflowManager::new(&conn);
+        let count = mgr.classify_resumable_workflows(3).unwrap();
+
+        assert_eq!(count, 1, "eligible run should be classified");
+        assert_eq!(
+            run_status(&conn, "run1"),
+            "needs_resume",
+            "status should be needs_resume after classification"
+        );
+    }
+
+    #[test]
+    fn test_classifier_skips_run_with_failed_step() {
+        let (conn, parent_id) = setup();
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
+        insert_step(&conn, "run1", "step1", "failed");
+
+        let mgr = WorkflowManager::new(&conn);
+        let count = mgr.classify_resumable_workflows(3).unwrap();
+
+        assert_eq!(count, 0, "run with failed step must not be classified");
+        assert_eq!(
+            run_status(&conn, "run1"),
+            "failed",
+            "status should remain failed"
+        );
+    }
+
+    #[test]
+    fn test_classifier_skips_run_with_timed_out_step() {
+        let (conn, parent_id) = setup();
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
+        insert_step(&conn, "run1", "step1", "timed_out");
+
+        let mgr = WorkflowManager::new(&conn);
+        let count = mgr.classify_resumable_workflows(3).unwrap();
+
+        assert_eq!(count, 0, "run with timed_out step must not be classified");
+        assert_eq!(run_status(&conn, "run1"), "failed");
+    }
+
+    #[test]
+    fn test_classifier_respects_retry_cap() {
+        let (conn, parent_id) = setup();
+        // iteration == limit → should NOT be classified.
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 3);
+
+        let mgr = WorkflowManager::new(&conn);
+        let count = mgr.classify_resumable_workflows(3).unwrap();
+
+        assert_eq!(count, 0, "run at retry cap must not be classified");
+        assert_eq!(run_status(&conn, "run1"), "failed");
+    }
+
+    #[test]
+    fn test_classifier_wrong_error_message_stays_failed() {
+        let (conn, parent_id) = setup();
+        insert_run(
+            &conn,
+            "run1",
+            &parent_id,
+            "failed",
+            Some("some other error"),
+            0,
+        );
+
+        let mgr = WorkflowManager::new(&conn);
+        let count = mgr.classify_resumable_workflows(3).unwrap();
+
+        assert_eq!(
+            count, 0,
+            "run with wrong error string must not be classified"
+        );
+        assert_eq!(run_status(&conn, "run1"), "failed");
+    }
+
+    #[test]
+    fn test_classifier_skips_non_failed_statuses() {
+        let (conn, parent_id) = setup();
+        // A running run should not be touched even if the error string matches somehow.
+        insert_run(&conn, "run1", &parent_id, "running", Some(ORPHAN_ERROR), 0);
+
+        let mgr = WorkflowManager::new(&conn);
+        let count = mgr.classify_resumable_workflows(3).unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(run_status(&conn, "run1"), "running");
+    }
+
+    // ── watchdog_needs_resume_workflows ───────────────────────────────────────
+
+    #[test]
+    fn test_watchdog_cas_flip_needs_resume_to_failed() {
+        let (conn, parent_id) = setup();
+        // Seed a needs_resume run directly (as if the classifier already ran).
+        insert_run(
+            &conn,
+            "run1",
+            &parent_id,
+            "needs_resume",
+            Some(ORPHAN_ERROR),
+            0,
+        );
+
+        let mgr = WorkflowManager::new(&conn);
+        let config = Config::default();
+        let count = mgr.watchdog_needs_resume_workflows(&config, None).unwrap();
+
+        // Watchdog should have claimed the run (CAS flip to failed).
+        assert_eq!(count, 1, "watchdog should claim the needs_resume run");
+        // Status is flipped to 'failed' so resume_workflow_standalone can validate it.
+        assert_eq!(
+            run_status(&conn, "run1"),
+            "failed",
+            "status should be failed after watchdog CAS flip"
+        );
+    }
+
+    #[test]
+    fn test_watchdog_ignores_non_needs_resume_runs() {
+        let (conn, parent_id) = setup();
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
+
+        let mgr = WorkflowManager::new(&conn);
+        let config = Config::default();
+        let count = mgr.watchdog_needs_resume_workflows(&config, None).unwrap();
+
+        assert_eq!(count, 0, "watchdog should not touch non-needs_resume runs");
+        assert_eq!(run_status(&conn, "run1"), "failed");
+    }
+
+    #[test]
+    fn test_classifier_then_watchdog_pipeline() {
+        let (conn, parent_id) = setup();
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
+        // Add only a completed step (no failed/timed_out).
+        insert_step(&conn, "run1", "s1", "completed");
+
+        let mgr = WorkflowManager::new(&conn);
+        let config = Config::default();
+
+        // Phase 1: classifier transitions to needs_resume.
+        let classified = mgr.classify_resumable_workflows(3).unwrap();
+        assert_eq!(classified, 1);
+        assert_eq!(run_status(&conn, "run1"), "needs_resume");
+
+        // Phase 2: watchdog CAS-flips to failed and spawns resume.
+        let resumed = mgr.watchdog_needs_resume_workflows(&config, None).unwrap();
+        assert_eq!(resumed, 1);
+        assert_eq!(run_status(&conn, "run1"), "failed");
+    }
+
+    #[test]
+    fn test_classifier_zero_limit_disables_classification() {
+        let (conn, parent_id) = setup();
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
+
+        let mgr = WorkflowManager::new(&conn);
+        // limit=0 means no run passes the `iteration < 0` guard.
+        let count = mgr.classify_resumable_workflows(0).unwrap();
+        assert_eq!(count, 0, "limit=0 should classify nothing");
+        assert_eq!(run_status(&conn, "run1"), "failed");
+    }
+
+    #[test]
+    fn test_classifier_iteration_below_limit_qualifies() {
+        let (conn, parent_id) = setup();
+        // iteration=2, limit=3 → 2 < 3 → eligible.
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 2);
+
+        let mgr = WorkflowManager::new(&conn);
+        let count = mgr.classify_resumable_workflows(3).unwrap();
+        assert_eq!(count, 1, "run with iteration below limit should qualify");
+        assert_eq!(run_status(&conn, "run1"), "needs_resume");
+    }
+
+    // ── auto_resume_limit config default ──────────────────────────────────────
+
+    #[test]
+    fn test_auto_resume_limit_default_is_three() {
+        let config = Config::default();
+        assert_eq!(config.general.auto_resume_limit, 3);
     }
 }

@@ -342,8 +342,15 @@ impl App {
                 wt_name,
                 ticket_id,
                 items,
+                inferred_base_branch,
             } => {
-                self.handle_feature_branches_loaded(repo_slug, wt_name, ticket_id, items);
+                self.handle_feature_branches_loaded(
+                    repo_slug,
+                    wt_name,
+                    ticket_id,
+                    items,
+                    inferred_base_branch,
+                );
             }
             Action::FeatureBranchesFailed { error } => {
                 self.state.modal = Modal::Error {
@@ -776,6 +783,7 @@ impl App {
             Action::ResumeWorkflow => self.handle_resume_workflow(),
             Action::ResumeWorktreeWorkflow => self.handle_resume_worktree_workflow(),
             Action::CancelWorkflow => self.handle_cancel_workflow(),
+            Action::DeleteWorkflowRun => self.handle_delete_workflow_run(),
             Action::ApproveGate => self.handle_approve_gate(),
             Action::RejectGate => self.handle_reject_gate(),
             Action::ViewWorkflowDef => self.handle_view_workflow_def(),
@@ -1221,6 +1229,21 @@ impl App {
                     }
                 }
             }
+            Action::WorkflowDeleteComplete { result } => match result {
+                Ok(()) => {
+                    self.state.modal = Modal::None;
+                    if self.state.view == View::WorkflowRunDetail {
+                        self.go_back();
+                    }
+                    self.state.status_message = Some("Run deleted".to_string());
+                    self.reload_workflow_data();
+                }
+                Err(e) => {
+                    self.state.modal = Modal::Error {
+                        message: format!("Delete failed: {e}"),
+                    };
+                }
+            },
             Action::ClearConversationComplete {
                 repo_slug,
                 wt_slug,

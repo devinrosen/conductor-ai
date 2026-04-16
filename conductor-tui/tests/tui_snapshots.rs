@@ -525,6 +525,7 @@ fn snap_modal_branch_picker() {
                 ticket_count: 0,
                 base_branch: None,
                 stale_days: None,
+                inferred_from: None,
             },
             BranchPickerItem {
                 branch: Some("feat/auth-flow".into()),
@@ -532,6 +533,7 @@ fn snap_modal_branch_picker() {
                 ticket_count: 1,
                 base_branch: Some("main".into()),
                 stale_days: None,
+                inferred_from: None,
             },
             BranchPickerItem {
                 branch: Some("feat/dashboard".into()),
@@ -539,6 +541,7 @@ fn snap_modal_branch_picker() {
                 ticket_count: 0,
                 base_branch: Some("main".into()),
                 stale_days: None,
+                inferred_from: None,
             },
         ],
         tree_positions: vec![

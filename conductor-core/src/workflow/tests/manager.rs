@@ -257,6 +257,38 @@ fn test_insert_step_with_iteration() {
 }
 
 #[test]
+fn test_insert_step_running_is_atomic() {
+    let conn = setup_db();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let run = mgr
+        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    let step_id = mgr
+        .insert_step_running(&run.id, "build", "script", false, 0, 0, 2)
+        .unwrap();
+
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].id, step_id);
+    assert_eq!(steps[0].step_name, "build");
+    // The row was inserted directly as 'running' — no intermediate 'pending' state
+    assert_eq!(steps[0].status.to_string(), "running");
+    // started_at must be set (was part of the single INSERT)
+    assert!(
+        steps[0].started_at.is_some(),
+        "started_at should be set by insert_step_running"
+    );
+    // retry_count must reflect what was passed (2)
+    assert_eq!(steps[0].retry_count, 2);
+}
+
+#[test]
 fn test_update_step_with_markers() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
@@ -1022,6 +1054,191 @@ fn test_purge_repo_scoped_does_not_delete_global_runs() {
     assert!(mgr.get_workflow_run(&run_global.id).unwrap().is_some());
     // w1 run must be gone.
     assert!(mgr.get_workflow_run(&run_w1.id).unwrap().is_none());
+}
+
+// ---------- delete_run tests ----------
+
+#[test]
+fn test_delete_run_removes_completed_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run.id).unwrap();
+
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+}
+
+#[test]
+fn test_delete_run_removes_failed_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Failed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run.id).unwrap();
+
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+}
+
+#[test]
+fn test_delete_run_removes_cancelled_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Cancelled, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run.id).unwrap();
+
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+}
+
+#[test]
+fn test_delete_run_cascade_deletes_steps() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.insert_step(&run.id, "step1", "actor", false, 0, 0)
+        .unwrap();
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run.id).unwrap();
+
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    assert!(
+        steps.is_empty(),
+        "steps should be cascade-deleted with the run"
+    );
+}
+
+#[test]
+fn test_delete_run_not_found_returns_error() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let result = mgr.delete_run("nonexistent-id");
+    assert!(
+        result.is_err(),
+        "deleting a nonexistent run should return an error"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("nonexistent-id"),
+        "error should mention the missing run ID"
+    );
+}
+
+#[test]
+fn test_delete_run_rejects_running_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+        .unwrap();
+
+    let result = mgr.delete_run(&run.id);
+    assert!(
+        result.is_err(),
+        "deleting a running run should return an error"
+    );
+    // Run must still exist
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_some());
+}
+
+#[test]
+fn test_delete_run_rejects_pending_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // run starts as Pending
+
+    let result = mgr.delete_run(&run.id);
+    assert!(
+        result.is_err(),
+        "deleting a pending run should return an error"
+    );
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_some());
+}
+
+#[test]
+fn test_delete_run_recursive_removes_child_runs() {
+    let conn = setup_db();
+    // Create parent run
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent_agent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let mgr = WorkflowManager::new(&conn);
+    let parent_run = mgr
+        .create_workflow_run(
+            "parent-wf",
+            Some("w1"),
+            &parent_agent.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+
+    // Create a child run (parent_workflow_run_id points to parent_run)
+    let child_agent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let child_run = mgr
+        .create_workflow_run_with_targets(
+            "child-wf",
+            Some("w1"),
+            None,
+            None,
+            &child_agent.id,
+            false,
+            "manual",
+            None,
+            Some(&parent_run.id),
+            None,
+            None,
+        )
+        .unwrap();
+
+    // Mark both terminal
+    mgr.update_workflow_status(&child_run.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+    mgr.update_workflow_status(&parent_run.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&parent_run.id).unwrap();
+
+    // Both parent and child should be gone
+    assert!(mgr.get_workflow_run(&parent_run.id).unwrap().is_none());
+    assert!(mgr.get_workflow_run(&child_run.id).unwrap().is_none());
+}
+
+#[test]
+fn test_delete_run_does_not_affect_sibling_runs() {
+    let conn = setup_db();
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let run1 = mgr
+        .create_workflow_run("wf", Some("w1"), &a1.id, false, "manual", None)
+        .unwrap();
+    let run2 = mgr
+        .create_workflow_run("wf", Some("w1"), &a2.id, false, "manual", None)
+        .unwrap();
+
+    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run1.id).unwrap();
+
+    assert!(mgr.get_workflow_run(&run1.id).unwrap().is_none());
+    assert!(
+        mgr.get_workflow_run(&run2.id).unwrap().is_some(),
+        "sibling run should not be deleted"
+    );
 }
 
 #[test]
@@ -3529,4 +3746,120 @@ fn test_auto_resume_stuck_workflows_uses_min_threshold() {
     assert_eq!(count, 1);
 
     assert_eq!(get_run_status(&conn, "thresh-auto"), "failed");
+}
+
+// ---------------------------------------------------------------------------
+// delete_orphaned_pending_steps
+// ---------------------------------------------------------------------------
+
+/// A pending step with started_at IS NULL (never started) must be deleted.
+/// A completed step in the same run must be preserved.
+#[test]
+fn test_delete_orphaned_pending_steps_removes_never_started() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Insert an orphaned pending step (no started_at).
+    let orphan_id = mgr
+        .insert_step(&run.id, "orphan-step", "actor", false, 0, 0)
+        .unwrap();
+    // Confirm insert_step leaves started_at NULL and status = 'pending'.
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].status, WorkflowStepStatus::Pending);
+    assert!(steps[0].started_at.is_none());
+
+    // Insert a completed step that must survive.
+    let completed_id = mgr
+        .insert_step(&run.id, "done-step", "actor", false, 1, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &completed_id,
+        WorkflowStepStatus::Completed,
+        None,
+        Some("ok"),
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+
+    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    assert_eq!(deleted, 1, "exactly one orphaned row should be deleted");
+
+    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, completed_id, "completed step must survive");
+    assert!(
+        remaining.iter().all(|s| s.id != orphan_id),
+        "orphaned pending step must be gone"
+    );
+}
+
+/// A pending step that HAS a started_at value (was started, then reset) must NOT be deleted.
+#[test]
+fn test_delete_orphaned_pending_steps_ignores_started_pending() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Insert a step and then manually set it to pending WITH a started_at value
+    // (simulates a step that was reset after having started once).
+    let step_id = mgr
+        .insert_step(&run.id, "reset-step", "actor", false, 0, 0)
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_steps \
+         SET status = 'pending', started_at = '2025-01-01T00:00:00Z' \
+         WHERE id = ?1",
+        params![step_id],
+    )
+    .unwrap();
+
+    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    assert_eq!(
+        deleted, 0,
+        "pending step with started_at must not be deleted"
+    );
+
+    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, step_id);
+}
+
+/// Completed, failed, and running rows with started_at IS NULL are NOT deleted.
+#[test]
+fn test_delete_orphaned_pending_steps_only_targets_pending() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Insert steps with various non-pending statuses and no started_at.
+    for (name, status) in &[
+        ("comp", "completed"),
+        ("failed", "failed"),
+        ("running", "running"),
+    ] {
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, iteration) \
+             VALUES (?, ?, ?, 'actor', 0, ?, 0)",
+            params![crate::new_id(), run.id, name, status],
+        )
+        .unwrap();
+    }
+
+    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    assert_eq!(deleted, 0, "non-pending rows must not be deleted");
+
+    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    assert_eq!(remaining.len(), 3, "all three rows must survive");
+}
+
+/// When there are no orphaned rows, the function is a no-op and returns 0.
+#[test]
+fn test_delete_orphaned_pending_steps_noop_when_none() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    assert_eq!(deleted, 0);
 }

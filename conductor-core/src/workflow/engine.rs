@@ -986,6 +986,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             (path.clone(), String::new(), path)
         };
 
+    // Remove orphaned pending steps (registered but never started) before building the
+    // skip set. These rows carry no useful state and would otherwise pollute step history.
+    wf_mgr.delete_orphaned_pending_steps(&wf_run.id)?;
+
     // Build the skip set
     let skip_completed = if input.restart {
         // Restart: clear all step results — skip nothing
@@ -1194,6 +1198,7 @@ pub(super) fn record_step_failure(
     step_label: &str,
     last_error: String,
     max_attempts: u32,
+    started: bool,
 ) -> Result<()> {
     state.all_succeeded = false;
     let step_result = StepResult {
@@ -1212,10 +1217,15 @@ pub(super) fn record_step_failure(
     state.step_results.insert(step_key, step_result);
 
     if state.exec_config.fail_fast {
-        return Err(ConductorError::Workflow(format!(
-            "Step '{}' failed after {} attempts",
-            step_label, max_attempts
-        )));
+        let msg = if started {
+            format!(
+                "Step '{}' failed after {} attempts",
+                step_label, max_attempts
+            )
+        } else {
+            format!("Step '{}' failed to start (never executed)", step_label)
+        };
+        return Err(ConductorError::Workflow(msg));
     }
 
     Ok(())

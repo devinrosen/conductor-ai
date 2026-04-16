@@ -310,7 +310,7 @@ pub fn sync_github_issues(
             "--limit",
             "200",
             "--json",
-            "number,title,body,labels,assignees,state,url",
+            "number,title,body,labels,assignees,state,url,milestone",
         ],
         token,
     )?;
@@ -407,7 +407,7 @@ pub fn fetch_github_issue(
             "--repo",
             &repo_slug,
             "--json",
-            "number,title,body,labels,assignees,state,url",
+            "number,title,body,labels,assignees,state,url,milestone",
         ],
         token,
     )?;
@@ -1053,7 +1053,7 @@ mod tests {
                 "--limit",
                 "200",
                 "--json",
-                "number,title,body,labels,assignees,state,url",
+                "number,title,body,labels,assignees,state,url,milestone",
             ],
             Some("app-token"),
         );

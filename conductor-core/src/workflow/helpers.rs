@@ -46,7 +46,16 @@ pub(super) fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
         } else {
             String::new()
         };
-        lines.push(format!("  [{marker}] {}{iter_label}", step.step_name));
+        let never_executed = step.status == WorkflowStepStatus::Failed && step.started_at.is_none();
+        let step_note = if never_executed {
+            " (never executed)"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "  [{marker}] {}{iter_label}{step_note}",
+            step.step_name
+        ));
     }
 
     if state.all_succeeded {

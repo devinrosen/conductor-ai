@@ -11,6 +11,11 @@ pub enum WorkflowRunStatus {
     Failed,
     Cancelled,
     Waiting,
+    /// Transient staging state: the classifier has determined this run is
+    /// eligible for automatic resume. The watchdog picks it up on the next
+    /// tick, CAS-flips it back to `failed`, and spawns a resume thread.
+    /// Neither active nor terminal — consumed within one background tick.
+    NeedsResume,
 }
 
 impl std::fmt::Display for WorkflowRunStatus {
@@ -22,6 +27,7 @@ impl std::fmt::Display for WorkflowRunStatus {
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
             Self::Waiting => "waiting",
+            Self::NeedsResume => "needs_resume",
         };
         write!(f, "{s}")
     }
@@ -37,6 +43,7 @@ impl std::str::FromStr for WorkflowRunStatus {
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
             "waiting" => Ok(Self::Waiting),
+            "needs_resume" => Ok(Self::NeedsResume),
             _ => Err(format!("unknown WorkflowRunStatus: {s}")),
         }
     }
@@ -63,6 +70,9 @@ impl WorkflowRunStatus {
 
     /// Whether this status is active (run is in progress or waiting).
     /// Part of: fsm-state-specification-template@1.0.0
+    ///
+    /// Note: `NeedsResume` is neither active nor terminal — it is a transient
+    /// staging state consumed within one background tick by the watchdog.
     pub fn is_active(&self) -> bool {
         matches!(self, Self::Pending | Self::Running | Self::Waiting)
     }
@@ -156,6 +166,8 @@ mod tests {
         assert!(!WorkflowRunStatus::Pending.is_terminal());
         assert!(!WorkflowRunStatus::Running.is_terminal());
         assert!(!WorkflowRunStatus::Waiting.is_terminal());
+        // NeedsResume is a transient staging state — not terminal.
+        assert!(!WorkflowRunStatus::NeedsResume.is_terminal());
     }
 
     #[test]
@@ -166,6 +178,8 @@ mod tests {
         assert!(!WorkflowRunStatus::Completed.is_active());
         assert!(!WorkflowRunStatus::Failed.is_active());
         assert!(!WorkflowRunStatus::Cancelled.is_active());
+        // NeedsResume is a transient staging state — not active.
+        assert!(!WorkflowRunStatus::NeedsResume.is_active());
     }
 
     #[test]
@@ -181,7 +195,8 @@ mod tests {
 
     #[test]
     fn run_terminal_and_active_are_mutually_exclusive() {
-        let all = [
+        // These statuses must be exactly one of terminal or active.
+        let exactly_one = [
             WorkflowRunStatus::Pending,
             WorkflowRunStatus::Running,
             WorkflowRunStatus::Completed,
@@ -189,11 +204,18 @@ mod tests {
             WorkflowRunStatus::Cancelled,
             WorkflowRunStatus::Waiting,
         ];
-        for s in all {
+        for s in exactly_one {
             assert!(
                 s.is_terminal() != s.is_active(),
                 "{s} should be exactly one of terminal or active"
             );
         }
+        // NeedsResume is a transient staging state — neither terminal nor active.
+        // At most one of is_terminal / is_active may be true for any status.
+        assert!(
+            !(WorkflowRunStatus::NeedsResume.is_terminal()
+                && WorkflowRunStatus::NeedsResume.is_active()),
+            "NeedsResume must not be both terminal and active"
+        );
     }
 }

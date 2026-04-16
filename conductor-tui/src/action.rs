@@ -375,6 +375,8 @@ pub enum Action {
         wt_name: String,
         ticket_id: Option<String>,
         items: Vec<crate::state::BranchPickerItem>,
+        /// Inferred base branch from ticket milestone: (branch_name, milestone_title).
+        inferred_base_branch: Option<(String, String)>,
     },
     /// Background result: feature branch load failed.
     FeatureBranchesFailed {
@@ -422,6 +424,12 @@ pub enum Action {
     CancelWorkflow,
     /// Background result: workflow cancel completed.
     WorkflowCancelComplete {
+        result: Result<(), String>,
+    },
+    /// Delete a single terminal workflow run (D key).
+    DeleteWorkflowRun,
+    /// Background result: workflow run deletion completed.
+    WorkflowDeleteComplete {
         result: Result<(), String>,
     },
     ApproveGate,

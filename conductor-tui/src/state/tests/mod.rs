@@ -157,6 +157,7 @@ pub(crate) fn make_picker_item(
         ticket_count: 0,
         base_branch: base_branch.map(|s| s.to_string()),
         stale_days: None,
+        inferred_from: None,
     }
 }
 

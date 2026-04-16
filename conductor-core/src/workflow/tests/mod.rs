@@ -16,13 +16,13 @@ mod types;
 
 pub(super) use super::engine::{
     bubble_up_child_step_results, completed_keys_from_steps, execute_nodes,
-    fetch_child_final_output, resolve_child_inputs, restore_completed_step, ExecutionState,
-    ResumeContext,
+    fetch_child_final_output, record_step_failure, resolve_child_inputs, restore_completed_step,
+    ExecutionState, ResumeContext,
 };
 pub(super) use super::executors::{
     execute_call, execute_do, execute_do_while, execute_unless, execute_while, handle_gate_timeout,
 };
-pub(super) use super::helpers::find_max_completed_while_iteration;
+pub(super) use super::helpers::{build_workflow_summary, find_max_completed_while_iteration};
 pub(super) use super::manager::WorkflowManager;
 pub(super) use super::output::{interpret_agent_output, parse_conductor_output};
 pub(super) use super::prompt_builder::{build_variable_map, substitute_variables};

@@ -174,23 +174,14 @@ pub fn execute_script(
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
-        let step_id = state.wf_mgr.insert_step(
+        let step_id = state.wf_mgr.insert_step_running(
             &state.workflow_run_id,
             step_label,
             "script",
             false,
             pos,
             iteration as i64,
-        )?;
-
-        state.wf_mgr.update_step_status(
-            &step_id,
-            WorkflowStepStatus::Running,
-            None,
-            None,
-            None,
-            None,
-            Some(attempt as i64),
+            attempt as i64,
         )?;
 
         // Create a temp file for the script's stdout+stderr.
@@ -445,5 +436,5 @@ pub fn execute_script(
         );
     }
 
-    record_step_failure(state, step_key, step_label, last_error, max_attempts)
+    record_step_failure(state, step_key, step_label, last_error, max_attempts, true)
 }
