@@ -1024,6 +1024,185 @@ fn test_purge_repo_scoped_does_not_delete_global_runs() {
     assert!(mgr.get_workflow_run(&run_w1.id).unwrap().is_none());
 }
 
+// ---------- delete_run tests ----------
+
+#[test]
+fn test_delete_run_removes_completed_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run.id).unwrap();
+
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+}
+
+#[test]
+fn test_delete_run_removes_failed_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Failed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run.id).unwrap();
+
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+}
+
+#[test]
+fn test_delete_run_removes_cancelled_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Cancelled, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run.id).unwrap();
+
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+}
+
+#[test]
+fn test_delete_run_cascade_deletes_steps() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.insert_step(&run.id, "step1", "actor", false, 0, 0)
+        .unwrap();
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run.id).unwrap();
+
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    assert!(steps.is_empty(), "steps should be cascade-deleted with the run");
+}
+
+#[test]
+fn test_delete_run_not_found_returns_error() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let result = mgr.delete_run("nonexistent-id");
+    assert!(
+        result.is_err(),
+        "deleting a nonexistent run should return an error"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("nonexistent-id"),
+        "error should mention the missing run ID"
+    );
+}
+
+#[test]
+fn test_delete_run_rejects_running_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+        .unwrap();
+
+    let result = mgr.delete_run(&run.id);
+    assert!(
+        result.is_err(),
+        "deleting a running run should return an error"
+    );
+    // Run must still exist
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_some());
+}
+
+#[test]
+fn test_delete_run_rejects_pending_run() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // run starts as Pending
+
+    let result = mgr.delete_run(&run.id);
+    assert!(
+        result.is_err(),
+        "deleting a pending run should return an error"
+    );
+    assert!(mgr.get_workflow_run(&run.id).unwrap().is_some());
+}
+
+#[test]
+fn test_delete_run_recursive_removes_child_runs() {
+    let conn = setup_db();
+    // Create parent run
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent_agent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let mgr = WorkflowManager::new(&conn);
+    let parent_run = mgr
+        .create_workflow_run("parent-wf", Some("w1"), &parent_agent.id, false, "manual", None)
+        .unwrap();
+
+    // Create a child run (parent_workflow_run_id points to parent_run)
+    let child_agent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let child_run = mgr
+        .create_workflow_run_with_targets(
+            "child-wf",
+            Some("w1"),
+            None,
+            None,
+            &child_agent.id,
+            false,
+            "manual",
+            None,
+            Some(&parent_run.id),
+            None,
+            None,
+        )
+        .unwrap();
+
+    // Mark both terminal
+    mgr.update_workflow_status(&child_run.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+    mgr.update_workflow_status(&parent_run.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&parent_run.id).unwrap();
+
+    // Both parent and child should be gone
+    assert!(mgr.get_workflow_run(&parent_run.id).unwrap().is_none());
+    assert!(mgr.get_workflow_run(&child_run.id).unwrap().is_none());
+}
+
+#[test]
+fn test_delete_run_does_not_affect_sibling_runs() {
+    let conn = setup_db();
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let a1 = agent_mgr
+        .create_run(Some("w1"), "wf", None, None)
+        .unwrap();
+    let a2 = agent_mgr
+        .create_run(Some("w1"), "wf", None, None)
+        .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    let run1 = mgr
+        .create_workflow_run("wf", Some("w1"), &a1.id, false, "manual", None)
+        .unwrap();
+    let run2 = mgr
+        .create_workflow_run("wf", Some("w1"), &a2.id, false, "manual", None)
+        .unwrap();
+
+    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Completed, None, None)
+        .unwrap();
+
+    mgr.delete_run(&run1.id).unwrap();
+
+    assert!(mgr.get_workflow_run(&run1.id).unwrap().is_none());
+    assert!(
+        mgr.get_workflow_run(&run2.id).unwrap().is_some(),
+        "sibling run should not be deleted"
+    );
+}
+
 #[test]
 fn test_cancel_run_pending() {
     let conn = setup_db();
