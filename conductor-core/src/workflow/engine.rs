@@ -1198,6 +1198,7 @@ pub(super) fn record_step_failure(
     step_label: &str,
     last_error: String,
     max_attempts: u32,
+    started: bool,
 ) -> Result<()> {
     state.all_succeeded = false;
     let step_result = StepResult {
@@ -1216,10 +1217,15 @@ pub(super) fn record_step_failure(
     state.step_results.insert(step_key, step_result);
 
     if state.exec_config.fail_fast {
-        return Err(ConductorError::Workflow(format!(
-            "Step '{}' failed after {} attempts",
-            step_label, max_attempts
-        )));
+        let msg = if started {
+            format!(
+                "Step '{}' failed after {} attempts",
+                step_label, max_attempts
+            )
+        } else {
+            format!("Step '{}' failed to start (never executed)", step_label)
+        };
+        return Err(ConductorError::Workflow(msg));
     }
 
     Ok(())

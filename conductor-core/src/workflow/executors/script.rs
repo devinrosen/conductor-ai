@@ -436,5 +436,5 @@ pub fn execute_script(
         );
     }
 
-    record_step_failure(state, step_key, step_label, last_error, max_attempts)
+    record_step_failure(state, step_key, step_label, last_error, max_attempts, true)
 }
