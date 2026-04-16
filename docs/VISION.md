@@ -1,10 +1,13 @@
 # Conductor: Vision & Original Design
 
+> **Note:** The current product direction is [DIRECTION.md](./DIRECTION.md), which supersedes this document. The premises here about TUI being the primary interface and AI orchestration being a future phase have shifted. This document is preserved as the founding design and historical record.
+
 This document captures the founding motivation and original design for
 Conductor. It is preserved as-is to explain *why* the project exists and the
 reasoning behind early architectural decisions. For current implementation
 details, see:
 
+- [docs/DIRECTION.md](./DIRECTION.md) — current product direction
 - [docs/workflow/engine.md](./workflow/engine.md) — workflow engine design
 - [docs/workflow/agent-path-resolution.md](./workflow/agent-path-resolution.md) — agent resolution
 - [docs/ROADMAP.md](./ROADMAP.md) — current priorities
