@@ -235,7 +235,7 @@ pub fn execute_foreach(
             Some(0),
         )?;
 
-        return record_step_failure(state, step_key, &node.name, error_msg, 1);
+        return record_step_failure(state, step_key, &node.name, error_msg, 1, true);
     }
 
     Ok(())

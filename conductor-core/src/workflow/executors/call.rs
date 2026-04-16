@@ -599,5 +599,5 @@ fn execute_call_with_schema(
         );
     }
 
-    record_step_failure(state, step_key, agent_label, last_error, max_attempts)
+    record_step_failure(state, step_key, agent_label, last_error, max_attempts, true)
 }

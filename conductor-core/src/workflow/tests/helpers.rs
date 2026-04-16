@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 
 use super::*;
+use crate::error::ConductorError;
 use crate::workflow::helpers::{
     collect_leaf_step_keys, find_max_completed_while_iteration, sanitize_tmux_name,
 };
@@ -205,6 +206,166 @@ fn test_collect_leaf_nested() {
         ]))],
     });
     assert_eq!(collect_leaf_step_keys(&node), vec!["deep", "deep-gate"]);
+}
+
+// ---------------------------------------------------------------------------
+// build_workflow_summary — never-executed annotation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_summary_labels_never_executed_failed_step() {
+    let conn = setup_db();
+    let config = make_resume_config();
+
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    // Insert step in 'pending' state (started_at = NULL), then mark Failed
+    // without ever transitioning through Running — simulates a step that
+    // never executed.
+    let step_id = wf_mgr
+        .insert_step(&run.id, "push-and-pr", "actor", false, 0, 0)
+        .unwrap();
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Failed,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+    let state = ExecutionState {
+        workflow_run_id: run.id.clone(),
+        workflow_name: "test-wf".to_string(),
+        all_succeeded: false,
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let summary = build_workflow_summary(&state);
+    assert!(
+        summary.contains("(never executed)"),
+        "expected '(never executed)' in summary:\n{summary}"
+    );
+}
+
+#[test]
+fn test_summary_does_not_label_started_failed_step() {
+    let conn = setup_db();
+    let config = make_resume_config();
+
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    // Step goes through Running (sets started_at), then fails.
+    let step_id = wf_mgr
+        .insert_step(&run.id, "build", "actor", false, 0, 0)
+        .unwrap();
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Failed,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+    let state = ExecutionState {
+        workflow_run_id: run.id.clone(),
+        workflow_name: "test-wf".to_string(),
+        all_succeeded: false,
+        ..make_loop_test_state(&conn, config)
+    };
+
+    let summary = build_workflow_summary(&state);
+    assert!(
+        !summary.contains("(never executed)"),
+        "should not contain '(never executed)' for a step that ran:\n{summary}"
+    );
+}
+
+#[test]
+fn test_record_step_failure_never_started_message() {
+    let conn = setup_db();
+    let config = make_resume_config();
+    let mut state = make_loop_test_state(&conn, config);
+    // fail_fast defaults to true in WorkflowExecConfig::default()
+
+    let err = record_step_failure(
+        &mut state,
+        "push-and-pr".to_string(),
+        "push-and-pr",
+        "setup failed".to_string(),
+        1,
+        false,
+    )
+    .unwrap_err();
+
+    match err {
+        ConductorError::Workflow(msg) => {
+            assert!(
+                msg.contains("failed to start (never executed)"),
+                "unexpected message: {msg}"
+            );
+        }
+        other => panic!("expected ConductorError::Workflow, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_record_step_failure_started_message() {
+    let conn = setup_db();
+    let config = make_resume_config();
+    let mut state = make_loop_test_state(&conn, config);
+
+    let err = record_step_failure(
+        &mut state,
+        "build".to_string(),
+        "build",
+        "exit code 1".to_string(),
+        3,
+        true,
+    )
+    .unwrap_err();
+
+    match err {
+        ConductorError::Workflow(msg) => {
+            assert!(
+                msg.contains("failed after 3 attempts"),
+                "unexpected message: {msg}"
+            );
+        }
+        other => panic!("expected ConductorError::Workflow, got: {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
