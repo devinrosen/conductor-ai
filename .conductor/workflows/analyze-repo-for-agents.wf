@@ -13,7 +13,10 @@ workflow analyze-repo-for-agents {
     focus           default = ""
   }
 
-  call collect-file-sizes
+  script collect-file-sizes {
+    run = ".conductor/scripts/collect-file-sizes.sh"
+    env = { FOCUS = "{{focus}}" THRESHOLD_LINES = "{{threshold_lines}}" }
+  }
   call identify-large-files
 
   if identify-large-files.has_large_files {
