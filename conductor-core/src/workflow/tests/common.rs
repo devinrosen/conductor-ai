@@ -80,6 +80,7 @@ fn base_execution_state<'a>(
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         last_heartbeat_at: ExecutionState::new_heartbeat(),
+        between_cycle_hook: None,
     }
 }
 

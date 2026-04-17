@@ -127,6 +127,10 @@ pub(super) struct ExecutionState<'a> {
     /// a root run calls into a child workflow.  Initialized to 0 (forces an
     /// immediate first tick); updated by `execute_nodes` at most once per 5s.
     pub last_heartbeat_at: Arc<AtomicI64>,
+    /// Test-only hook called between dispatch-loop cycles (before the poll sleep).
+    /// Lets tests synchronize external DB mutations without relying on wall-clock timing.
+    #[cfg(test)]
+    pub between_cycle_hook: Option<Box<dyn FnMut() + Send>>,
 }
 
 impl ExecutionState<'_> {
@@ -552,6 +556,8 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         conductor_bin_dir: input.conductor_bin_dir.clone(),
         extra_plugin_dirs: input.extra_plugin_dirs.clone(),
         last_heartbeat_at: ExecutionState::new_heartbeat(),
+        #[cfg(test)]
+        between_cycle_hook: None,
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -1131,6 +1137,8 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         conductor_bin_dir: input.conductor_bin_dir.clone(),
         extra_plugin_dirs: vec![],
         last_heartbeat_at: ExecutionState::new_heartbeat(),
+        #[cfg(test)]
+        between_cycle_hook: None,
     };
 
     run_workflow_engine(&mut state, &workflow)

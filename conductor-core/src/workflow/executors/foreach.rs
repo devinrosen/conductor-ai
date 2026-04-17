@@ -687,6 +687,10 @@ fn run_dispatch_loop(
         }
 
         // Sleep poll interval before next tick.
+        #[cfg(test)]
+        if let Some(hook) = state.between_cycle_hook.as_mut() {
+            hook();
+        }
         std::thread::sleep(state.exec_config.poll_interval);
     }
 }
@@ -1250,6 +1254,7 @@ mod tests {
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],
             last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            between_cycle_hook: None,
         };
 
         let node = make_foreach_node_unlabeled();
@@ -1430,6 +1435,7 @@ mod tests {
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],
             last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            between_cycle_hook: None,
         }
     }
 
@@ -1843,10 +1849,12 @@ mod tests {
     /// before the second polling cycle, the item must end as 'completed'.
     ///
     /// Uses a file-based WAL DB so a background thread can update the child run status
-    /// between the two dispatch loop cycles.
+    /// between the two dispatch loop cycles. Channel-based synchronization via
+    /// `between_cycle_hook` replaces wall-clock timing to avoid flaky-test failures.
     #[test]
     fn test_foreach_does_not_fail_item_on_first_failed_observation() {
         use crate::workflow::status::WorkflowRunStatus;
+        use std::sync::mpsc;
         use std::time::Duration;
 
         let tmp_dir = tempfile::tempdir().unwrap();
@@ -1896,14 +1904,18 @@ mod tests {
             .update_fan_out_item_running(&item_id, &child_run_id)
             .unwrap();
 
-        // Background thread: after cycle 1 defers the failure (sleeping poll_interval),
-        // update the child run to 'completed' so cycle 2 sees the recovered state.
+        // Channels synchronize the between-cycle hook with the background update thread.
+        // trigger: hook → BG ("cycle 1 done, update now")
+        // done:    BG → hook ("update complete")
+        let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+
+        // Background thread: waits for the between-cycle hook to fire, then updates the
+        // child run to 'completed' so cycle 2 sees the recovered state.
         let db_path_bg = db_path.clone();
         let child_run_id_bg = child_run_id.clone();
         let bg = std::thread::spawn(move || {
-            // Cycle 1 runs instantly, then sleeps poll_interval (50ms). Fire at 10ms so
-            // the update is visible before cycle 2 reads the DB.
-            std::thread::sleep(Duration::from_millis(10));
+            trigger_rx.recv().unwrap();
             let bg_conn = crate::db::open_database(&db_path_bg).unwrap();
             let bg_wf_mgr = crate::workflow::manager::WorkflowManager::new(&bg_conn);
             bg_wf_mgr
@@ -1914,6 +1926,7 @@ mod tests {
                     None,
                 )
                 .unwrap();
+            done_tx.send(()).unwrap();
         });
 
         let node = make_foreach_node_continue();
@@ -1929,8 +1942,13 @@ mod tests {
             Some("r1".to_string()),
             None,
         );
-        // poll_interval must be long enough for the background thread to update the DB.
-        state.exec_config.poll_interval = Duration::from_millis(50);
+        // Zero poll interval: the between_cycle_hook provides all needed synchronization.
+        state.exec_config.poll_interval = Duration::from_millis(0);
+        // Hook fires between cycles: signals BG to update DB and waits for confirmation.
+        state.between_cycle_hook = Some(Box::new(move || {
+            trigger_tx.send(()).unwrap();
+            done_rx.recv().unwrap();
+        }));
 
         let result = run_dispatch_loop(&mut state, &node, &step_id, &child_def, 1);
         bg.join().unwrap();
