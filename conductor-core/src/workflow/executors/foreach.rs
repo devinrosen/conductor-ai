@@ -9,6 +9,7 @@ use crate::workflow::prompt_builder::build_variable_map;
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::WorkflowExecStandalone;
 use crate::workflow_dsl::{ForEachNode, ForeachOver, ForeachScope, OnChildFail};
+use crate::worktree::WorktreeManager;
 
 /// Execute a `foreach` step: fan out a child workflow over a collection of items.
 ///
@@ -449,19 +450,16 @@ fn collect_worktree_items(
         }
     };
 
-    let rows: Vec<(String, String)> = crate::db::query_collect(
-        state.conn,
-        "SELECT id, slug FROM worktrees \
-         WHERE repo_id = ?1 AND base_branch = ?2 AND status = 'active' \
-         ORDER BY created_at ASC",
-        rusqlite::params![repo_id, base_branch],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-    )?;
+    let wt_mgr = WorktreeManager::new(state.conn, state.config);
+    let active_worktrees = wt_mgr.list_by_repo_id(repo_id, true)?;
 
-    Ok(rows
+    Ok(active_worktrees
         .into_iter()
-        .filter(|(id, _)| !existing_set.contains(id))
-        .map(|(id, slug)| ("worktree".to_string(), id, slug))
+        .filter(|wt| {
+            wt.base_branch.as_deref() == Some(base_branch.as_str())
+                && !existing_set.contains(&wt.id)
+        })
+        .map(|wt| ("worktree".to_string(), wt.id, wt.slug))
         .collect())
 }
 
@@ -904,30 +902,21 @@ fn build_item_vars(
             vars.insert("item.workflow_name".to_string(), item.item_ref.clone());
         }
         ForeachOver::Worktrees => {
-            let result = state.conn.query_row(
-                "SELECT slug, branch, path, base_branch, ticket_id FROM worktrees WHERE id = ?1",
-                rusqlite::params![item.item_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                    ))
-                },
-            );
-            match result {
-                Ok((slug, branch, path, base_branch, ticket_id)) => {
-                    vars.insert("item.id".to_string(), item.item_id.clone());
-                    vars.insert("item.slug".to_string(), slug);
-                    vars.insert("item.branch".to_string(), branch);
-                    vars.insert("item.path".to_string(), path);
+            let wt_mgr = WorktreeManager::new(state.conn, state.config);
+            match wt_mgr.get_by_id(&item.item_id) {
+                Ok(wt) => {
+                    vars.insert("item.id".to_string(), wt.id);
+                    vars.insert("item.slug".to_string(), wt.slug);
+                    vars.insert("item.branch".to_string(), wt.branch);
+                    vars.insert("item.path".to_string(), wt.path);
                     vars.insert(
                         "item.base_branch".to_string(),
-                        base_branch.unwrap_or_default(),
+                        wt.base_branch.unwrap_or_default(),
                     );
-                    vars.insert("item.ticket_id".to_string(), ticket_id.unwrap_or_default());
+                    vars.insert(
+                        "item.ticket_id".to_string(),
+                        wt.ticket_id.unwrap_or_default(),
+                    );
                 }
                 Err(e) => {
                     tracing::warn!("foreach: could not load worktree '{}': {e}", item.item_id);

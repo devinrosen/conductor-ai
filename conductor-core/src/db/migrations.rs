@@ -1047,7 +1047,10 @@ pub fn run(conn: &Connection) -> Result<()> {
                     |row| row.get::<_, i64>(0),
                 )
                 .map(|n| n > 0)
-                .unwrap_or(false);
+                .unwrap_or_else(|e| {
+                    tracing::warn!("migration 72: idempotency check failed, re-running: {e}");
+                    false
+                });
             if !already_has_worktree {
                 with_foreign_keys_off(conn, || {
                     conn.execute_batch(include_str!(
