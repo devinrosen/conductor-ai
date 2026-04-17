@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::db::sql_placeholders;
 use crate::error::{ConductorError, Result};
 use crate::workflow::engine::{
     record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
@@ -978,32 +977,16 @@ fn load_worktree_dep_edges(
     let id_set: HashSet<&String> = item_ids.iter().collect();
 
     // Build worktree_id → ticket_id map for items that have a linked ticket.
-    // Use a single batched query to avoid N+1 per worktree.
-    let placeholders = sql_placeholders(item_ids.len());
-    let sql = format!(
-        "SELECT id, ticket_id FROM worktrees WHERE id IN ({placeholders}) AND ticket_id IS NOT NULL"
-    );
-    let params: Vec<&dyn rusqlite::ToSql> =
-        item_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-    let mut stmt = state.conn.prepare(&sql).map_err(|e| {
-        ConductorError::Workflow(format!("foreach: failed to prepare worktree query: {e}"))
-    })?;
+    // Use WorktreeManager.get_by_ids() to avoid raw SQL against the worktrees table.
+    let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+    let wt_mgr = WorktreeManager::new(state.conn, state.config);
+    let worktrees = wt_mgr
+        .get_by_ids(&id_refs)
+        .map_err(|e| ConductorError::Workflow(format!("foreach: worktree fetch failed: {e}")))?;
     let mut wt_ticket_map: HashMap<String, String> = HashMap::new();
-    let rows = stmt
-        .query_map(params.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|e| {
-            ConductorError::Workflow(format!("foreach: worktree ticket query failed: {e}"))
-        })?;
-    for row in rows {
-        match row {
-            Ok(pair) => {
-                wt_ticket_map.insert(pair.0, pair.1);
-            }
-            Err(e) => {
-                tracing::warn!("foreach: skipping unparseable worktree row: {e}");
-            }
+    for wt in worktrees {
+        if let Some(tid) = wt.ticket_id {
+            wt_ticket_map.insert(wt.id, tid);
         }
     }
 
@@ -1617,6 +1600,12 @@ mod tests {
              VALUES ('wt-c', 'r1', 'feat-c', 'feat/c', '/tmp/c', 'active', '2024-01-03T00:00:00Z', 'main')",
             [],
         ).unwrap();
+        // Insert one with matching base_branch but non-active status — should be excluded.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-d', 'r1', 'feat-d', 'feat/d', '/tmp/d', 'abandoned', '2024-01-04T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
 
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         let parent = agent_mgr
@@ -1658,11 +1647,12 @@ mod tests {
         assert_eq!(
             items.len(),
             2,
-            "should find 2 active worktrees on release/1.0"
+            "should find only the 2 active worktrees on release/1.0 (wt-c excluded by base_branch, wt-d excluded by non-active status)"
         );
         let ids: Vec<&str> = items.iter().map(|(_, id, _)| id.as_str()).collect();
         assert!(ids.contains(&"wt-a"));
         assert!(ids.contains(&"wt-b"));
+        assert!(!ids.contains(&"wt-d"), "completed worktree must not appear");
         for (item_type, _, _) in &items {
             assert_eq!(item_type, "worktree");
         }
