@@ -3519,6 +3519,48 @@ fn test_reset_steps_from_position_kills_agent_subprocesses() {
     );
 }
 
+/// reset_failed_steps with `from_position=None` must signal agent-step subprocesses
+/// (tracked via child_run_id) across the entire run.
+#[test]
+fn test_reset_failed_steps_kills_agent_subprocesses() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let agent_mgr = AgentManager::new(&conn);
+
+    // Agent run in running state — its subprocess must be signalled by reset_failed_steps.
+    let agent_run = agent_mgr
+        .create_run(Some("w1"), "running step", None, None)
+        .unwrap();
+    conn.execute(
+        "UPDATE agent_runs SET subprocess_pid = 4294967290 WHERE id = ?1",
+        params![agent_run.id],
+    )
+    .unwrap();
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, child_run_id) \
+         VALUES (?1, ?2, 'agent-step', 'actor', 1, 'running', 0, ?3)",
+        params![step_id, run_id, agent_run.id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    // Must not error even if the PID is not a real process.
+    mgr.reset_failed_steps(&run_id).unwrap();
+
+    // Step must be reset to pending.
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_run_steps WHERE id = ?1",
+            params![step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "pending", "agent step must be reset to pending");
+}
+
 // ---------------------------------------------------------------------------
 // step_error cleared on reset tests
 // ---------------------------------------------------------------------------
