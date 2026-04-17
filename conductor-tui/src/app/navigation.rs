@@ -415,6 +415,7 @@ impl App {
                             Some(self.state.selected_worktree_id.clone());
                         if self.state.selected_worktree_id.is_none() {
                             self.state.selected_worktree_id = worktree_id;
+                            self.sync_selection_arcs();
                         }
                         self.state.selected_workflow_run_id = Some(run_id);
                         self.state.previous_view = Some(self.state.view);
@@ -450,6 +451,7 @@ impl App {
                             Some(self.state.selected_worktree_id.clone());
                         if self.state.selected_worktree_id.is_none() {
                             self.state.selected_worktree_id = worktree_id;
+                            self.sync_selection_arcs();
                         }
                         self.state.selected_workflow_run_id = Some(run_id);
                         self.state.previous_view = Some(self.state.view);
@@ -1750,5 +1752,125 @@ mod tests {
         } else {
             panic!("expected WorkflowPicker modal");
         }
+    }
+
+    // ── WorkflowRunDetail navigation: sync_selection_arcs invariant ───
+
+    fn make_test_run_with_worktree(
+        id: &str,
+        worktree_id: &str,
+    ) -> conductor_core::workflow::WorkflowRun {
+        let mut run = crate::state::tests::make_wf_run_full(
+            id,
+            conductor_core::workflow::WorkflowRunStatus::Running,
+            None,
+        );
+        run.worktree_id = Some(worktree_id.into());
+        run.parent_run_id = String::new();
+        run
+    }
+
+    fn make_test_run_without_worktree(id: &str) -> conductor_core::workflow::WorkflowRun {
+        let mut run = crate::state::tests::make_wf_run_full(
+            id,
+            conductor_core::workflow::WorkflowRunStatus::Running,
+            None,
+        );
+        run.worktree_id = None;
+        run.parent_run_id = String::new();
+        run
+    }
+
+    #[test]
+    fn runs_navigation_syncs_arc_when_worktree_unset() {
+        let mut app = make_test_app();
+        app.state.selected_worktree_id = None;
+        // Set a repo so visible_workflow_run_rows uses non-global mode
+        // (no header rows), placing the run directly at index 0.
+        app.state.selected_repo_id = Some("r1".into());
+        app.state.data.workflow_runs = vec![make_test_run_with_worktree("run1", "wt1")];
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Runs;
+        app.state.workflow_run_index = 0;
+        app.workflow_column_select();
+        assert_eq!(
+            *app.selected_worktree_id_shared.lock().unwrap(),
+            Some("wt1".into()),
+            "shared Arc must reflect the worktree assigned during Runs navigation"
+        );
+        assert_eq!(app.state.view, View::WorkflowRunDetail);
+    }
+
+    #[test]
+    fn gates_navigation_syncs_arc_when_worktree_unset() {
+        let mut app = make_test_app();
+        app.state.selected_worktree_id = None;
+        let run = make_test_run_with_worktree("run1", "wt1");
+        app.state.data.workflow_runs = vec![run];
+        app.state.detail_gates = vec![make_gate("s1", "run1", "gate1")];
+        app.state.detail_gate_index = 0;
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Gates;
+        app.workflow_column_select();
+        assert_eq!(
+            *app.selected_worktree_id_shared.lock().unwrap(),
+            Some("wt1".into()),
+            "shared Arc must reflect the worktree assigned during Gates navigation"
+        );
+        assert_eq!(app.state.view, View::WorkflowRunDetail);
+    }
+
+    #[test]
+    fn runs_navigation_skips_arc_sync_when_worktree_already_set() {
+        let mut app = make_test_app();
+        app.state.selected_worktree_id = Some("existing".into());
+        *app.selected_worktree_id_shared.lock().unwrap() = Some("existing".into());
+        app.state.data.workflow_runs = vec![make_test_run_with_worktree("run1", "wt1")];
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Runs;
+        app.state.workflow_run_index = 0;
+        app.workflow_column_select();
+        assert_eq!(
+            *app.selected_worktree_id_shared.lock().unwrap(),
+            Some("existing".into()),
+            "Arc must not change when selected_worktree_id was already set"
+        );
+    }
+
+    #[test]
+    fn runs_navigation_syncs_arc_when_run_worktree_id_is_none() {
+        let mut app = make_test_app();
+        app.state.selected_worktree_id = None;
+        app.state.selected_repo_id = Some("r1".into());
+        app.state.data.workflow_runs = vec![make_test_run_without_worktree("run1")];
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Runs;
+        app.state.workflow_run_index = 0;
+        app.workflow_column_select();
+        assert_eq!(
+            *app.selected_worktree_id_shared.lock().unwrap(),
+            None,
+            "Arc must be synced to None when run has no worktree_id"
+        );
+        assert_eq!(app.state.view, View::WorkflowRunDetail);
+    }
+
+    #[test]
+    fn gates_navigation_syncs_arc_when_run_worktree_id_is_none() {
+        let mut app = make_test_app();
+        app.state.selected_worktree_id = None;
+        let run = make_test_run_without_worktree("run1");
+        app.state.data.workflow_runs = vec![run];
+        app.state.detail_gates = vec![make_gate("s1", "run1", "gate1")];
+        app.state.detail_gate_index = 0;
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Gates;
+        app.workflow_column_select();
+        assert_eq!(
+            *app.selected_worktree_id_shared.lock().unwrap(),
+            None,
+            "Arc must be synced to None when run has no worktree_id"
+        );
+        assert_eq!(app.state.view, View::WorkflowRunDetail);
     }
 }

@@ -7,7 +7,8 @@ You are participating in a structured roundtable review. Multiple specialist rev
 Get the diff for this PR:
 
 ```bash
-git diff origin/main...HEAD
+BASE_BRANCH=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || echo main)
+git diff origin/${BASE_BRANCH}...HEAD
 ```
 
 If the diff exceeds ~50KB, focus on files most relevant to your review specialty.

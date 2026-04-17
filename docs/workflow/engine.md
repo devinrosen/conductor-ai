@@ -1005,6 +1005,341 @@ behavior, and design tradeoffs — see
 
 ---
 
+## Engine internals
+
+> Source files: `conductor-core/src/workflow/engine.rs`,
+> `conductor-core/src/workflow/executors/`
+
+These diagrams show the runtime behaviour of the workflow engine — the parts
+not captured by the status-transition diagrams in `docs/state-machines.mmd`.
+A comment in each block names the source file(s) to consult when the engine
+changes.
+
+### Step-type dispatch
+
+<!-- Source: engine.rs::execute_nodes, engine.rs::execute_single_node -->
+
+`execute_workflow()` validates agents and snippets, creates the `workflow_run`
+row, and builds an `ExecutionState`. `run_workflow_engine()` then calls
+`execute_nodes()` for the main body and again for the `always` block.
+
+`execute_nodes()` walks nodes sequentially. On each iteration it checks the
+cancellation flag and writes a heartbeat every 5 seconds. `execute_single_node()`
+dispatches to the appropriate executor by node type. A failed `call` step runs
+its `on_fail` agent (non-fatal) before marking `all_succeeded = false`.
+
+```mermaid
+flowchart TD
+    A([execute_workflow]) -->|"validate · create run · build ExecutionState"| B([run_workflow_engine])
+    B --> C[execute_nodes - body]
+    C -->|each node| D{"fail_fast and\nnot all_succeeded?"}
+    D -->|yes| E[break]
+    D -->|no| F{cancelled?}
+    F -->|yes| G([return Cancelled])
+    F -->|no| H[write heartbeat every 5 s]
+    H --> I[execute_single_node]
+    I --> J{node type}
+    J -->|Call| K[execute_call]
+    J -->|CallWorkflow| L[execute_call_workflow]
+    J -->|If / Unless| M[execute_if / execute_unless]
+    J -->|While / DoWhile| N[execute_while / execute_do_while]
+    J -->|Do| O[execute_do]
+    J -->|Parallel| P[execute_parallel]
+    J -->|Gate| Q[execute_gate]
+    J -->|Script| R[execute_script]
+    J -->|ForEach| S[execute_foreach]
+    K -->|retry available| K
+    K -->|success| T[update step_results]
+    K -->|retries exhausted| U{on_fail set?}
+    U -->|yes| V["run_on_fail_agent (non-fatal)"]
+    U -->|no| W[all_succeeded = false]
+    V --> W
+    T --> C
+    W --> C
+    E --> X[execute_nodes - always block]
+    C -->|nodes exhausted| X
+    X --> Y([finalize: Completed or Failed])
+```
+
+### `foreach` fan-out / fan-in lifecycle
+
+<!-- Source: executors/foreach.rs::execute_foreach -->
+
+Fan-out runs in three phases. On resume, Phase 1 is skipped: the queue is
+rebuilt from `workflow_run_step_fan_out_items` rows by their current `status`
+(`pending` → re-queue, `running` → check for orphaned child runs, terminal →
+skip).
+
+```mermaid
+flowchart TD
+    subgraph P1["Phase 1 - Item Collection (step start)"]
+        direction TB
+        A1["resolve item set\ntickets / repos / workflow_runs"] --> A2{ordered tickets?}
+        A2 -->|yes| A3["load dep edges\nDFS cycle detection"]
+        A3 -->|"on_cycle = fail"| A4([error: cycle detected])
+        A3 -->|"on_cycle = warn"| A5["drop back-edge\ncontinue with DAG"]
+        A2 -->|no| A6["write pending rows to fan_out_items\n(idempotent: skip existing)"]
+        A5 --> A6
+    end
+
+    subgraph P2["Phase 2 - Dispatch Loop (each poll tick)"]
+        direction TB
+        B1["poll: check running child run statuses"] --> B2{"child run\nterminal?"}
+        B2 -->|"failed + halt"| B3["cancel in-flight items\nmark step failed"]
+        B2 -->|"failed + skip_dependents"| B4["mark transitive\ndependents skipped"]
+        B2 -->|"failed + continue"| B5["log failure\nkeep dispatching"]
+        B2 -->|completed| B6["fan_out_completed++\nupdate item row"]
+        B4 --> B7
+        B5 --> B7
+        B6 --> B7["build eligible list\n(ordered: all blockers completed?)"]
+        B7 --> B8{"stall?\npending non-empty\nno eligible\nin_flight = 0"}
+        B8 -->|yes| B9(["emit foreach_stalled marker\nstep Completed with warning"])
+        B8 -->|no| B10{"available slots?\nmax_parallel - in_flight"}
+        B10 -->|yes| B11["create child workflow_run\nset item status = running"]
+        B10 -->|no| B12[sleep poll_interval]
+        B11 --> B12
+        B12 --> B1
+    end
+
+    subgraph P3["Phase 3 - Join"]
+        direction TB
+        C1{any failures?} -->|no| C2(["step Completed\nsummary written to context_out"])
+        C1 -->|yes| C3([step Failed])
+    end
+
+    A6 --> B1
+    B2 -->|"queue empty\nin_flight = 0"| C1
+    B3 --> C3
+```
+
+### Parallel group execution and join
+
+<!-- Source: executors/parallel.rs::execute_parallel -->
+
+All calls in a `parallel` block are spawned concurrently in a single batch. A
+drain thread per agent reads stdout and signals completion on a channel. The
+block does not proceed until all drain threads have reported.
+
+```mermaid
+flowchart TD
+    A([execute_parallel]) --> B[for each call in block]
+    B --> C{"resume:\nalready completed?"}
+    C -->|yes| D["restore from DB\nskipped_count++"]
+    C -->|no| E{"call_if condition\nmet or absent?"}
+    E -->|"condition false"| F["record step Skipped\ncounts as effective success"]
+    E -->|"no condition, or true"| G["build prompt\ncreate agent_run\nspawn subprocess\nspawn drain thread"]
+    D --> H[poll drain channel]
+    F --> H
+    G --> H
+    H --> I{drain event}
+    I -->|timeout| J[cancel all agents]
+    I -->|agent done| K{status?}
+    K -->|Completed| L["parse output\naccumulate markers\nupdate metrics"]
+    K -->|"Failed / Cancelled"| M{fail_fast?}
+    M -->|yes| N[cancel remaining agents]
+    M -->|no| O[failures++]
+    L --> P{"all agents\ndone?"}
+    N --> P
+    O --> P
+    J --> P
+    P -->|no| H
+    P -->|yes| Q{"successes + skipped\n>= min_success?"}
+    Q -->|yes| R["merge all markers into\ngroup_id step result"]
+    Q -->|no| S[all_succeeded = false]
+    R --> T([return Ok])
+    S --> T
+```
+
+### Condition evaluation paths
+
+<!-- Source: executors/control_flow.rs, workflow_dsl/types.rs::Condition -->
+
+`eval_condition()` is shared by all three condition sites. For a `StepMarker`
+condition it checks the `markers` vec in `step_results`; for a `BoolInput`
+condition it does a case-insensitive `"true"` match against `state.inputs`.
+
+```mermaid
+flowchart TD
+    subgraph EVAL[eval_condition]
+        E1{condition type} -->|"StepMarker - step.marker"| E2["look up step_results\ncheck markers vec"]
+        E1 -->|"BoolInput - bare identifier"| E3["look up state.inputs\ncase-insensitive 'true'?"]
+    end
+
+    subgraph IFUN["if / unless"]
+        I1[eval_condition] --> I2{result}
+        I2 -->|"if: true"| I3["execute_nodes(body)"]
+        I2 -->|"if: false"| I4[skip body]
+        I2 -->|"unless: false"| I3
+        I2 -->|"unless: true"| I4
+    end
+
+    subgraph LOOP["while / do_while"]
+        W1["while: eval before body\ndo_while: eval after body"] --> W2{condition true?}
+        W2 -->|false| W3[exit loop]
+        W2 -->|true| W4["execute_nodes(body)"]
+        W4 --> W5{"stuck_after:\nidentical markers\nfor N iterations?"}
+        W5 -->|yes| W6([error: loop stuck])
+        W5 -->|no| W7{"iteration >= max_iterations?"}
+        W7 -->|"yes, on_max_iter = fail"| W8([error: max iterations reached])
+        W7 -->|"yes, on_max_iter = continue"| W3
+        W7 -->|no| W1
+    end
+
+    subgraph PAR["parallel call_if"]
+        P1["for each call\ncheck call_if map"] -->|no entry| P2[spawn agent normally]
+        P1 -->|"entry: step.marker"| P3[eval_condition]
+        P3 -->|true| P2
+        P3 -->|false| P4["record Skipped\ncounts as effective success"]
+    end
+
+    EVAL -. "used by" .-> IFUN
+    EVAL -. "used by" .-> LOOP
+    EVAL -. "used by" .-> PAR
+```
+
+### Nested workflow spawning and output bubble-up
+
+<!-- Source: executors/call_workflow.rs::execute_call_workflow -->
+
+`execute_call_workflow()` performs a static circular-reference check, enforces a
+depth limit of 5, resolves child inputs (parent var substitution → child
+defaults → required validation), then drives the child run to completion via the
+same engine. On success, `fetch_child_completion_data()` bubbles the child's
+final markers and context into the parent's `step_results`.
+
+```mermaid
+sequenceDiagram
+    participant P as Parent Engine
+    participant DB as Database
+    participant C as Child Engine
+
+    P->>P: depth <= MAX_WORKFLOW_DEPTH (5)?
+    P->>P: static circular-reference check
+    P->>P: resolve child inputs<br/>(substitute parent vars → apply defaults → validate required)
+
+    loop 0 .. retries
+        P->>DB: INSERT workflow_runs<br/>parent_workflow_run_id = parent run id
+        P->>C: execute_workflow(child_def, inputs, depth + 1)
+        C-->>DB: execute all child steps (full engine recursion)
+        C-->>P: ExecutionResult { all_succeeded }
+        alt all_succeeded = true
+            P->>DB: fetch_child_completion_data()<br/>final step markers + context_out
+            P->>P: bubble markers and context into parent step_results
+            P-->>P: return Ok
+        else all_succeeded = false
+            P->>P: last_error = failure reason
+            note over P: continue to next retry attempt
+        end
+    end
+
+    opt on_fail set and all retries exhausted
+        P->>P: run_on_fail_agent()<br/>injects failed_step, failure_reason, retry_count
+    end
+    P->>DB: record_step_failure()
+    P->>P: all_succeeded = false
+```
+
+### Resume skip-set construction
+
+<!-- Source: engine.rs::resume_workflow, manager/recovery.rs -->
+
+`resume_workflow()` builds a `ResumeContext` that tells `execute_nodes()` which
+steps have already completed (skip and restore from DB) and which must
+re-execute. Three modes control the initial skip set.
+
+```mermaid
+flowchart TD
+    A([resume_workflow]) --> B["load definition_snapshot\nfrom workflow_run"]
+    B --> C{resume mode}
+
+    C -->|normal resume| D["completed_keys_from_steps\nskip_set = all Completed steps\nas (step_name, iteration) pairs"]
+    C -->|"--from-step NAME"| E["completed_keys_from_steps\nthen prune keys at or after NAME"]
+    E --> F["reset_steps_from_position\nNAME and later steps -> pending"]
+    C -->|"--restart"| G[empty skip_set]
+    G --> H["reset_failed_steps\nreset_completed_steps -> pending"]
+
+    D --> I["terminate_subprocesses\nSIGTERM all running PIDs"]
+    F --> I
+    H --> I
+    I --> J["delete_orphaned_pending_steps\nclean stale queue entries"]
+    J --> K["build step_map\n(step_name, iteration) -> WorkflowRunStep row"]
+    K --> L["batch-prefetch child agent runs\navoid N+1 queries"]
+    L --> M(["ResumeContext constructed\nskip_completed, step_map, child_runs"])
+    M --> N[re-enter execute_nodes]
+
+    N --> O{"should_skip?\n(step_name, iteration)\nin skip_set"}
+    O -->|yes| P["restore_completed_step\nrebuild markers, context, cost\ngate_feedback, child_run_id"]
+    O -->|no| Q[execute step normally]
+    P --> R[update step_results\naccumulate metrics]
+    Q --> R
+```
+
+---
+
+## Variable and context propagation
+
+<!-- Source: engine.rs::ExecutionState, engine.rs::ENGINE_INJECTED_KEYS -->
+
+Every agent prompt receives a flat map of `{{variable}}` substitutions built by
+the engine before each step executes. Understanding the merge order helps
+diagnose unexpected variable values.
+
+### Injected keys
+
+`ENGINE_INJECTED_KEYS` is a fixed set of variables the engine always injects,
+regardless of workflow inputs. These have the lowest precedence and can be
+overridden by explicit workflow inputs:
+
+| Key | Source |
+|---|---|
+| `ticket_id` · `ticket_title` · `ticket_url` · `ticket_body` · `ticket_source_id` · `ticket_source_type` | Target ticket for the run |
+| `repo_slug` · `repo_local_path` · `repo_remote_url` | Registered repo |
+| `feature_base_branch` | Default branch of the repo |
+| `workflow_run_id` | ULID of the current `workflow_runs` row |
+| `dry_run` | `"true"` or `"false"` |
+
+### Merge order (highest wins)
+
+```
+state.inputs = ENGINE_INJECTED_KEYS
+            <- workflow inputs (from CLI, parent workflow, or foreach dispatch)
+            <- parent context_out keys (nested workflow child steps only)
+```
+
+Workflow-level inputs override injected keys. For nested workflows, the parent
+passes explicit input values; the child's `inputs` block defaults fill any gaps.
+`{{item.*}}` variables in `foreach` are substituted at dispatch time, not at
+parse time.
+
+### Context vec
+
+`ExecutionState.contexts` is a `Vec<ContextEntry>` that grows as steps complete:
+
+- `{{prior_context}}` — the `context` string from the **last** entry in the vec
+- `{{prior_contexts}}` — full JSON array of all entries (including all loop
+  iterations, so agents can detect repeated failures on the same issue)
+
+### Gate feedback
+
+`{{gate_feedback}}` is stored in `workflow_run_steps.gate_feedback`. On fresh
+runs it is injected as an empty string. On resume, `restore_completed_step()`
+reads the stored value from the DB so the next step after a `human_review` gate
+still receives the feedback text even after a process restart.
+
+### Block scoping (`do {}`)
+
+`do {}` blocks push and pop two fields on `ExecutionState`:
+
+- `block_output` — inherited as the `output` schema for every `call` inside
+  the block that does not specify its own; cleared on block exit
+- `block_with` — prepended to each call's snippet list; per-call `with`
+  snippets are appended after block-level ones
+
+Nested `do` blocks compose correctly because `execute_do()` saves and restores
+both fields around its body before returning.
+
+---
+
 ## DB schema
 
 ### `workflow_runs`

@@ -13,5 +13,12 @@ workflow qualify-ticket-comment {
 
   call fetch-ticket-context
   call assess-ticket-readiness
-  call comment-ticket-assessment
+  script comment-ticket-assessment {
+    run = ".conductor/scripts/comment-ticket-assessment.sh"
+    env = {
+      PRIOR_OUTPUT     = "{{prior_output}}"
+      TICKET_URL       = "{{ticket_url}}"
+      TICKET_SOURCE_ID = "{{ticket_source_id}}"
+    }
+  }
 }
