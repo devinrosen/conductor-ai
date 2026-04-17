@@ -195,7 +195,9 @@ pub fn handle_worktree(
             tickets,
         } => {
             if tickets.is_empty() {
-                return Err(anyhow::anyhow!("--tickets must specify at least one ticket ID."));
+                return Err(anyhow::anyhow!(
+                    "--tickets must specify at least one ticket ID."
+                ));
             }
             let mgr = WorktreeManager::new(conn, config);
             let results = mgr.create_from_dep_graph(&repo, &root_branch, &tickets)?;

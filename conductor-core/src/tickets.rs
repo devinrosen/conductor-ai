@@ -635,9 +635,7 @@ impl<'a> TicketSyncer<'a> {
 
         // Query 1: batch-fetch by internal id.
         let ph = sql_placeholders(raw_ids.len());
-        let sql = format!(
-            "SELECT {TICKET_COLS_BARE} FROM tickets WHERE id IN ({ph})"
-        );
+        let sql = format!("SELECT {TICKET_COLS_BARE} FROM tickets WHERE id IN ({ph})");
         let params_vec: Vec<&dyn rusqlite::ToSql> =
             raw_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let rows = query_collect(self.conn, &sql, params_vec.as_slice(), map_ticket_row)?;
