@@ -1586,6 +1586,91 @@ mod tests {
         );
     }
 
+    /// Regression test for fix(workflow): when a Worktrees fan-out item cannot be
+    /// found by get_by_id(), build_child_dispatch_params must fall back to the
+    /// parent's working_dir rather than propagating the error.
+    #[test]
+    fn test_dispatch_params_worktrees_missing_worktree_falls_back_to_parent_dir() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        // state.working_dir is "/tmp/test" (set by make_execution_state_with_worktree).
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Worktrees);
+        // item_id "wt-nonexistent" has no row in the DB — get_by_id() will error.
+        let item = make_minimal_item("wt-nonexistent", "feat-missing", "worktree");
+        let child_def = make_minimal_child_def();
+
+        let params = build_child_dispatch_params(&mut state, &node, &item, &child_def).unwrap();
+        assert_eq!(
+            params.working_dir, "/tmp/test",
+            "Worktrees fan-out must fall back to parent working_dir when worktree lookup fails"
+        );
+    }
+
+    /// When the worktree exists in the DB, build_child_dispatch_params must use the
+    /// stored path as the child's working_dir, not the parent's CWD.
+    #[test]
+    fn test_dispatch_params_worktrees_uses_child_worktree_path() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-child', 'r1', 'feat-child', 'feat/child', '/tmp/child-wt', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Worktrees);
+        let item = make_minimal_item("wt-child", "feat-child", "worktree");
+        let child_def = make_minimal_child_def();
+
+        let params = build_child_dispatch_params(&mut state, &node, &item, &child_def).unwrap();
+        assert_eq!(
+            params.working_dir, "/tmp/child-wt",
+            "Worktrees fan-out must use the child worktree's stored path as working_dir"
+        );
+    }
+
     #[test]
     fn test_resolve_child_context_ids_worktrees_sets_worktree_id() {
         let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
