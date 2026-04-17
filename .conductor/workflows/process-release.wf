@@ -1,0 +1,25 @@
+workflow process-release {
+  meta {
+    title       = "Process Release"
+    description = "Run ticket-to-pr on all child worktrees of a branch, in dep order"
+    trigger     = "manual"
+    targets     = ["worktree"]
+    group       = "Development"
+  }
+
+  inputs {
+    auto_merge boolean
+  }
+
+  foreach release-worktrees {
+    over          = worktrees
+    scope         = { base_branch = "{{feature_base_branch}}" }
+    ordered       = true
+    max_parallel  = 1
+    workflow      = "ticket-to-pr"
+    inputs        = { ticket_id = "{{item.ticket_id}}" auto_merge = "{{auto_merge}}" }
+    on_child_fail = skip_dependents
+  }
+
+  call create-feature-pr
+}

@@ -1,0 +1,26 @@
+workflow process-feature {
+  meta {
+    title       = "Process Feature"
+    description = "Fan out ticket-to-pr over all tickets in a label group"
+    trigger     = "manual"
+    targets     = ["worktree"]
+    group       = "Development"
+  }
+
+  inputs {
+    label      required
+    auto_merge boolean
+  }
+
+  foreach feature-tickets {
+    over          = tickets
+    scope         = { label = "{{label}}" }
+    ordered       = true
+    max_parallel  = 3
+    workflow      = "ticket-to-pr"
+    inputs        = { ticket_id = "{{item.id}}" auto_merge = "{{auto_merge}}" }
+    on_child_fail = skip_dependents
+  }
+
+  call create-feature-pr
+}

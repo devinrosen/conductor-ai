@@ -21,6 +21,8 @@ workflow ticket-to-pr {
     }
   }
 
+  call workflow rebase-worktree
+
   call plan { output = "task-plan" }
 
   call implement {
