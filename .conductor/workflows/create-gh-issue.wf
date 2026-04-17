@@ -21,8 +21,9 @@ workflow create-gh-issue {
 
   script create-gh-issue {
     run = ".conductor/scripts/create-gh-issue.sh"
-    env {
-      REPO     = "{{repo}}"
+    env = {
+      PRIOR_OUTPUT = "{{prior_output}}"
+      REPO         = "{{repo}}"
     }
   }
 }
