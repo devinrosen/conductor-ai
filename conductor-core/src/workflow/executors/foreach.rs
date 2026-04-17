@@ -980,9 +980,13 @@ fn load_worktree_dep_edges(
     // Use WorktreeManager.get_by_ids() to avoid raw SQL against the worktrees table.
     let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
     let wt_mgr = WorktreeManager::new(state.conn, state.config);
-    let worktrees = wt_mgr
-        .get_by_ids(&id_refs)
-        .map_err(|e| ConductorError::Workflow(format!("foreach: worktree fetch failed: {e}")))?;
+    let worktrees = match wt_mgr.get_by_ids(&id_refs) {
+        Ok(wts) => wts,
+        Err(e) => {
+            tracing::warn!("foreach: could not fetch worktrees for dep edges: {e}; skipping ordering");
+            return Ok(vec![]);
+        }
+    };
     let mut wt_ticket_map: HashMap<String, String> = HashMap::new();
     for wt in worktrees {
         if let Some(tid) = wt.ticket_id {
