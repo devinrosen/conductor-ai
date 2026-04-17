@@ -1430,7 +1430,12 @@ fn test_cleanup_merged_worktrees_marks_merged() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, branches| branches.iter().map(|b| (b.clone(), String::new())).collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1493,7 +1498,12 @@ fn test_cleanup_merged_worktrees_skips_already_merged() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, branches| branches.iter().map(|b| (b.clone(), String::new())).collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1522,7 +1532,12 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, branches| branches.iter().map(|b| (b.clone(), String::new())).collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1581,7 +1596,12 @@ fn test_cleanup_multi_worktrees_same_feature_triggers_ready_for_review() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, branches| branches.iter().map(|b| (b.clone(), String::new())).collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1625,7 +1645,10 @@ fn test_cleanup_merged_worktrees_skips_branch_reuse_after_old_merge() {
         )
         .unwrap();
 
-    assert_eq!(count, 0, "worktree created after old merge should not be cleaned up");
+    assert_eq!(
+        count, 0,
+        "worktree created after old merge should not be cleaned up"
+    );
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
@@ -1988,7 +2011,12 @@ fn test_cleanup_merged_worktrees_filters_by_repo() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             Some("other-repo"),
-            |_, branches| branches.iter().map(|b| (b.clone(), String::new())).collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
