@@ -455,6 +455,16 @@ fn collect_workflow_run_items(
         .collect())
 }
 
+pub(super) fn filter_worktrees_by_open_pr(
+    mut candidates: Vec<crate::worktree::Worktree>,
+    want_open_pr: bool,
+    open_prs: Vec<crate::github::GithubPr>,
+) -> Vec<crate::worktree::Worktree> {
+    let open_branches: HashSet<String> = open_prs.into_iter().map(|pr| pr.head_ref_name).collect();
+    candidates.retain(|wt| open_branches.contains(&wt.branch) == want_open_pr);
+    candidates
+}
+
 fn collect_worktree_items(
     state: &mut ExecutionState<'_>,
     node: &ForEachNode,
@@ -500,9 +510,7 @@ fn collect_worktree_items(
     if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
         let repo = crate::repo::RepoManager::new(state.conn, state.config).get_by_id(repo_id)?;
         let open_prs = crate::github::list_open_prs(&repo.remote_url)?;
-        let open_branches: HashSet<String> =
-            open_prs.into_iter().map(|pr| pr.head_ref_name).collect();
-        candidates.retain(|wt| open_branches.contains(&wt.branch) == want_open_pr);
+        candidates = filter_worktrees_by_open_pr(candidates, want_open_pr, open_prs);
     }
 
     Ok(candidates
@@ -1948,6 +1956,73 @@ mod tests {
             items.len(),
             0,
             "has_open_pr=true with empty PR list: no worktrees should pass"
+        );
+    }
+
+    fn make_pr(branch: &str) -> crate::github::GithubPr {
+        crate::github::GithubPr {
+            number: 1,
+            title: "test PR".to_string(),
+            url: "https://github.com/test/repo/pull/1".to_string(),
+            author: "user".to_string(),
+            state: "OPEN".to_string(),
+            head_ref_name: branch.to_string(),
+            is_draft: false,
+            review_decision: None,
+            ci_status: "SUCCESS".to_string(),
+        }
+    }
+
+    fn make_wt(id: &str, branch: &str) -> crate::worktree::Worktree {
+        crate::worktree::Worktree {
+            id: id.to_string(),
+            repo_id: "r1".to_string(),
+            slug: id.to_string(),
+            branch: branch.to_string(),
+            path: format!("/tmp/{id}"),
+            ticket_id: None,
+            status: crate::worktree::WorktreeStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            completed_at: None,
+            model: None,
+            base_branch: Some("release/1.0".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_has_open_pr_filter_true_with_matching_pr() {
+        let candidates = vec![make_wt("wt-p1", "feat/p1"), make_wt("wt-p2", "feat/p2")];
+        let open_prs = vec![make_pr("feat/p1")];
+        let result = filter_worktrees_by_open_pr(candidates, true, open_prs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "wt-p1");
+    }
+
+    #[test]
+    fn test_has_open_pr_filter_false_with_matching_pr() {
+        let candidates = vec![make_wt("wt-p1", "feat/p1"), make_wt("wt-p2", "feat/p2")];
+        let open_prs = vec![make_pr("feat/p1")];
+        let result = filter_worktrees_by_open_pr(candidates, false, open_prs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "wt-p2");
+    }
+
+    #[test]
+    fn test_has_open_pr_filter_true_all_have_prs() {
+        let candidates = vec![make_wt("wt-p1", "feat/p1"), make_wt("wt-p2", "feat/p2")];
+        let open_prs = vec![make_pr("feat/p1"), make_pr("feat/p2")];
+        let result = filter_worktrees_by_open_pr(candidates, true, open_prs);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_has_open_pr_filter_false_no_prs() {
+        let candidates = vec![make_wt("wt-p1", "feat/p1"), make_wt("wt-p2", "feat/p2")];
+        let result = filter_worktrees_by_open_pr(candidates, false, vec![]);
+        assert_eq!(
+            result.len(),
+            2,
+            "no open PRs means all worktrees have no PR"
         );
     }
 
