@@ -99,6 +99,8 @@ Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Cl
 
 ## TUI Threading Rule
 
+> Visual reference: [docs/tui-threading.md](docs/tui-threading.md)
+
 **Never call blocking operations on the TUI main thread.** The TUI renders on a single thread — any synchronous blocking call (git, network, file I/O, subprocess) freezes the UI completely.
 
 **What counts as blocking:** anything in `conductor-core` that calls `std::process::Command` (all git ops, `gh` CLI, dep installs), large file reads (agent logs), or slow DB queries.

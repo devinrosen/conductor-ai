@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use crate::agent::status::AgentRunStatus;
-use crate::agent::AgentManager;
 use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::Result;
@@ -856,10 +855,21 @@ impl<'a> WorkflowManager<'a> {
                 |row| row.get(0),
             )?;
 
-            // Agent-step PIDs tracked in agent_runs via child_run_id.
-            // Delegated to AgentManager to avoid coupling workflow domain to agent schema.
-            let agent_pids = AgentManager::new(self.conn)
-                .collect_agent_pids_for_workflow_steps(workflow_run_id, from_position)?;
+            // Agent-step PIDs: running steps where the PID lives in agent_runs
+            // (wrs.subprocess_pid IS NULL) rather than on the step row itself.
+            let agent_pids: Vec<i64> = query_collect(
+                self.conn,
+                "SELECT ar.subprocess_pid \
+                 FROM workflow_run_steps wrs \
+                 JOIN agent_runs ar ON ar.id = wrs.child_run_id \
+                 WHERE wrs.workflow_run_id = ?1 \
+                   AND wrs.status = 'running' \
+                   AND wrs.subprocess_pid IS NULL \
+                   AND ar.subprocess_pid IS NOT NULL \
+                   AND (?2 IS NULL OR wrs.position >= ?2)",
+                params![workflow_run_id, from_position],
+                |row| row.get(0),
+            )?;
 
             let handles: Vec<_> = script_pids
                 .into_iter()
@@ -877,7 +887,7 @@ impl<'a> WorkflowManager<'a> {
     /// Count running steps for `workflow_run_id` that have a live subprocess,
     /// checking both `wrs.subprocess_pid` and `agent_runs.subprocess_pid` via
     /// `child_run_id`.  Used for diagnostic logging in the resume path.
-    pub fn count_live_subprocess_steps(&self, workflow_run_id: &str) -> Result<usize> {
+    pub(crate) fn count_live_subprocess_steps(&self, workflow_run_id: &str) -> Result<usize> {
         #[cfg(unix)]
         {
             let pids: Vec<i64> = query_collect(
