@@ -38,6 +38,7 @@ pub mod feature;
 pub(crate) mod git;
 pub mod github;
 pub mod github_app;
+pub mod graph;
 pub mod hooks;
 pub mod infer;
 pub mod issue_source;

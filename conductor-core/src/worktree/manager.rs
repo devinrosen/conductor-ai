@@ -1,5 +1,6 @@
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -32,6 +33,18 @@ pub fn label_to_branch_prefix(labels: &[&str]) -> &'static str {
         }
     }
     "feat"
+}
+
+fn slugify(s: &str) -> String {
+    let mut slug = s
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug.trim_matches('-').to_string()
 }
 
 fn worktree_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
@@ -391,6 +404,181 @@ impl<'a> WorktreeManager<'a> {
         )?;
 
         Ok((worktree, warnings))
+    }
+
+    /// Create a set of worktrees from a ticket dependency graph.
+    ///
+    /// Tickets are topologically sorted by their `blocks` relationships so each
+    /// worktree is branched from its blocker's branch rather than `root_branch`.
+    /// Fails fast if a cycle is detected or a ticket ID cannot be resolved.
+    pub fn create_from_dep_graph(
+        &self,
+        repo_slug: &str,
+        root_branch: &str,
+        ticket_ids: &[String],
+    ) -> Result<Vec<(Worktree, Vec<String>)>> {
+        if ticket_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_slug(repo_slug)?;
+
+        // Resolve each caller-supplied ID to a full Ticket record.
+        // Try ULID lookup first, then fall back to source_id within the repo.
+        let syncer = TicketSyncer::new(self.conn);
+        let mut tickets = Vec::with_capacity(ticket_ids.len());
+        for raw_id in ticket_ids {
+            let ticket = match syncer.get_by_id(raw_id) {
+                Ok(t) if t.repo_id == repo.id => t,
+                Ok(_) | Err(ConductorError::TicketNotFound { .. }) => {
+                    // Not found by ULID (or belongs to a different repo) — try source_id
+                    syncer
+                        .get_by_source_id(&repo.id, raw_id)
+                        .map_err(|_| ConductorError::TicketNotFound { id: raw_id.clone() })?
+                }
+                Err(e) => return Err(e),
+            };
+            tickets.push(ticket);
+        }
+
+        // Build the set of internal ULIDs for intra-set edge filtering.
+        let ulid_set: Vec<String> = tickets.iter().map(|t| t.id.clone()).collect();
+
+        // Query ticket_dependencies for edges where both endpoints are in the set.
+        // Edge (from, to) means from_ticket BLOCKS to_ticket → from must come first.
+        // Use separate numbered-placeholder ranges for each IN clause so SQLite
+        // treats them as distinct parameters (?1..?n for from, ?(n+1)..?2n for to).
+        let edges: Vec<(String, String)> = {
+            let n = ulid_set.len();
+            let from_placeholders = crate::db::sql_placeholders(n);
+            let to_placeholders = crate::db::sql_placeholders_from(n, n + 1);
+            let sql = format!(
+                "SELECT from_ticket_id, to_ticket_id \
+                 FROM ticket_dependencies \
+                 WHERE from_ticket_id IN ({from_placeholders}) \
+                   AND to_ticket_id IN ({to_placeholders}) \
+                   AND dep_type = 'blocks'"
+            );
+            let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(n * 2);
+            for id in &ulid_set {
+                params_vec.push(id);
+            }
+            for id in &ulid_set {
+                params_vec.push(id);
+            }
+            query_collect(self.conn, &sql, params_vec.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+        };
+
+        // Cycle detection — fail early with a clear message.
+        if let Some(cycle) = crate::graph::detect_cycles(&ulid_set, &edges) {
+            // Map ULIDs back to source_ids for a human-readable error.
+            let id_map: HashMap<&str, &str> = tickets
+                .iter()
+                .map(|t| (t.id.as_str(), t.source_id.as_str()))
+                .collect();
+            let cycle_display: Vec<&str> = cycle
+                .iter()
+                .map(|id| id_map.get(id.as_str()).copied().unwrap_or(id.as_str()))
+                .collect();
+            return Err(ConductorError::InvalidInput(format!(
+                "ticket dependency cycle detected: {}",
+                cycle_display.join(" → ")
+            )));
+        }
+
+        // Topological sort — dependencies first.
+        let sorted_ids = crate::graph::topological_sort(&ulid_set, &edges);
+
+        // Build a lookup map: ticket ULID → Ticket.
+        let ticket_map: HashMap<&str, &crate::tickets::Ticket> =
+            tickets.iter().map(|t| (t.id.as_str(), t)).collect();
+
+        // Build blocker map: ticket ULID → Vec<blocker ULIDs in set>
+        // edge = (blocker, dependent), so for each edge (from, to): to's blocker is from.
+        let mut blockers_map: HashMap<&str, Vec<&str>> = HashMap::new();
+        for id in &ulid_set {
+            blockers_map.entry(id.as_str()).or_default();
+        }
+        for (from, to) in &edges {
+            blockers_map
+                .entry(to.as_str())
+                .or_default()
+                .push(from.as_str());
+        }
+
+        // Pre-validate: fail before any git I/O if any ticket has multiple in-set blockers.
+        for (ticket_ulid, blockers) in &blockers_map {
+            if blockers.len() > 1 {
+                let ticket_src = ticket_map
+                    .get(*ticket_ulid)
+                    .map(|t| t.source_id.as_str())
+                    .unwrap_or(*ticket_ulid);
+                let blocker_src: Vec<&str> = blockers
+                    .iter()
+                    .filter_map(|id| ticket_map.get(*id).map(|t| t.source_id.as_str()))
+                    .collect();
+                return Err(ConductorError::InvalidInput(format!(
+                    "ticket {} has multiple in-set blockers ({}); ambiguous branch stacking",
+                    ticket_src,
+                    blocker_src.join(", ")
+                )));
+            }
+        }
+
+        // Create worktrees in topo order, tracking created branches by ticket ULID.
+        let mut created_branches: HashMap<String, String> = HashMap::new();
+        let mut results: Vec<(Worktree, Vec<String>)> = Vec::with_capacity(sorted_ids.len());
+
+        for ticket_ulid in &sorted_ids {
+            let ticket = match ticket_map.get(ticket_ulid.as_str()) {
+                Some(t) => t,
+                None => continue, // shouldn't happen
+            };
+
+            // Derive worktree name: same pattern as FeatureManager::dispatch_ticket.
+            let title_slug = slugify(&ticket.title);
+            let raw_name = format!("feat-{}-{}", ticket.source_id, title_slug);
+            let wt_name = {
+                let end = raw_name
+                    .char_indices()
+                    .nth(60)
+                    .map_or(raw_name.len(), |(i, _)| i);
+                raw_name[..end].trim_end_matches('-').to_string()
+            };
+
+            // Determine from_branch: single in-set blocker → its branch; no blocker → root_branch.
+            let in_set_blockers = blockers_map
+                .get(ticket_ulid.as_str())
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let from_branch = match in_set_blockers {
+                [] => root_branch.to_string(),
+                [blocker_id] => match created_branches.get(*blocker_id) {
+                    Some(branch) => branch.clone(),
+                    None => {
+                        return Err(ConductorError::InvalidInput(format!(
+                            "ticket {}: blocker {} has no created worktree (topo sort error)",
+                            ticket.source_id, blocker_id
+                        )));
+                    }
+                },
+                _ => unreachable!("pre-validation above ensures at most one in-set blocker"),
+            };
+
+            let opts = WorktreeCreateOptions {
+                from_branch: Some(from_branch),
+                ticket_id: Some(ticket.id.clone()),
+                ..Default::default()
+            };
+            let (wt, warnings) = self.create(repo_slug, &wt_name, opts)?;
+            created_branches.insert(ticket_ulid.clone(), wt.branch.clone());
+            results.push((wt, warnings));
+        }
+
+        Ok(results)
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Worktree> {
@@ -1555,5 +1743,113 @@ mod tests {
 
         // pull_fn must never have been called — base worktree is not active
         assert!(pulled.lock().unwrap().is_empty());
+    }
+
+    // ── create_from_dep_graph unit tests ───────────────────────────────────
+
+    fn insert_ticket_full(
+        conn: &Connection,
+        id: &str,
+        repo_id: &str,
+        source_id: &str,
+        title: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES (?1, ?2, 'github', ?3, ?4, '', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            rusqlite::params![id, repo_id, source_id, title],
+        ).unwrap();
+    }
+
+    fn insert_dep(conn: &Connection, from_id: &str, to_id: &str) {
+        conn.execute(
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
+            rusqlite::params![from_id, to_id],
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_create_from_dep_graph_ticket_not_found() {
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        let result =
+            mgr.create_from_dep_graph("test-repo", "main", &["nonexistent-ticket-id".to_string()]);
+        assert!(matches!(result, Err(ConductorError::TicketNotFound { .. })));
+    }
+
+    #[test]
+    fn test_create_from_dep_graph_cycle_detected() {
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_ticket_full(&conn, "t1", "r1", "101", "feat: ticket 101");
+        insert_ticket_full(&conn, "t2", "r1", "102", "feat: ticket 102");
+        insert_dep(&conn, "t1", "t2"); // t1 blocks t2
+        insert_dep(&conn, "t2", "t1"); // t2 blocks t1 → cycle
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        let result =
+            mgr.create_from_dep_graph("test-repo", "main", &["t1".to_string(), "t2".to_string()]);
+        assert!(
+            matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("cycle")),
+            "expected cycle error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_create_from_dep_graph_ambiguous_parent() {
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        // t3 is blocked by both t1 and t2 → ambiguous stacking
+        insert_ticket_full(&conn, "t1", "r1", "101", "feat: ticket 101");
+        insert_ticket_full(&conn, "t2", "r1", "102", "feat: ticket 102");
+        insert_ticket_full(&conn, "t3", "r1", "103", "feat: ticket 103");
+        insert_dep(&conn, "t1", "t3");
+        insert_dep(&conn, "t2", "t3");
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        let result = mgr.create_from_dep_graph(
+            "test-repo",
+            "main",
+            &["t1".to_string(), "t2".to_string(), "t3".to_string()],
+        );
+        assert!(
+            matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("ambiguous")),
+            "expected ambiguous error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_create_from_dep_graph_empty_ticket_ids() {
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        let result = mgr.create_from_dep_graph("test-repo", "main", &[]);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_create_from_dep_graph_source_id_fallback() {
+        // Passing a source_id ("101") instead of ULID should resolve correctly.
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_ticket_full(&conn, "t1", "r1", "101", "feat: ticket 101");
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        // Will fail at git execution, but the ticket lookup must succeed first.
+        let result = mgr.create_from_dep_graph("test-repo", "main", &["101".to_string()]);
+        // Expect a git error (not a TicketNotFound), confirming lookup succeeded.
+        assert!(
+            !matches!(result, Err(ConductorError::TicketNotFound { .. })),
+            "source_id fallback should resolve ticket 101"
+        );
     }
 }
