@@ -412,28 +412,9 @@ impl<'a> WorktreeManager<'a> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
-        // Resolve each caller-supplied ID to a full Ticket record.
-        // Try ULID lookup first, then fall back to source_id within the repo.
+        // Resolve all caller-supplied IDs in 2 DB queries (batch ULID + batch source_id).
         let syncer = TicketSyncer::new(self.conn);
-        let mut tickets = Vec::with_capacity(ticket_ids.len());
-        for raw_id in ticket_ids {
-            let ticket = match syncer.get_by_id(raw_id) {
-                Ok(t) if t.repo_id == repo.id => t,
-                Ok(_) | Err(ConductorError::TicketNotFound { .. }) => {
-                    // Not found by ULID (or belongs to a different repo) — try source_id
-                    syncer
-                        .get_by_source_id(&repo.id, raw_id)
-                        .map_err(|e| match e {
-                            ConductorError::TicketNotFound { .. } => {
-                                ConductorError::TicketNotFound { id: raw_id.clone() }
-                            }
-                            other => other,
-                        })?
-                }
-                Err(e) => return Err(e),
-            };
-            tickets.push(ticket);
-        }
+        let tickets = syncer.resolve_tickets_in_repo(&repo.id, ticket_ids)?;
 
         // Build the set of internal ULIDs for intra-set edge filtering.
         let ulid_set: Vec<String> = tickets.iter().map(|t| t.id.clone()).collect();

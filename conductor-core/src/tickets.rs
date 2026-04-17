@@ -614,6 +614,75 @@ impl<'a> TicketSyncer<'a> {
             .map_err(ticket_not_found(ticket_id))
     }
 
+    /// Resolve a mixed list of IDs (internal IDs or source_ids) within a single repo
+    /// using at most 2 DB queries regardless of how many IDs are provided.
+    ///
+    /// First, all inputs are attempted as internal ticket IDs in a single IN-clause
+    /// query.  Any IDs not found that way (or belonging to a different repo) are
+    /// retried as `source_id`s in a second IN-clause query.
+    /// Returns tickets in the same order as `raw_ids`.
+    /// Returns `ConductorError::TicketNotFound` for the first unresolvable ID.
+    pub fn resolve_tickets_in_repo(
+        &self,
+        repo_id: &str,
+        raw_ids: &[String],
+    ) -> Result<Vec<Ticket>> {
+        if raw_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Query 1: batch-fetch by internal id.
+        let ph = sql_placeholders(raw_ids.len());
+        let sql = format!(
+            "SELECT id, repo_id, source_type, source_id, title, body, state, labels, \
+             assignee, priority, url, synced_at, raw_json, workflow, agent_map \
+             FROM tickets WHERE id IN ({ph})"
+        );
+        let params_vec: Vec<&dyn rusqlite::ToSql> =
+            raw_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = query_collect(self.conn, &sql, params_vec.as_slice(), map_ticket_row)?;
+        let mut by_id: HashMap<String, Ticket> = HashMap::with_capacity(rows.len());
+        for t in rows {
+            by_id.insert(t.id.clone(), t);
+        }
+
+        // Collect IDs that were not found or belong to a different repo.
+        let fallback_ids: Vec<&str> = raw_ids
+            .iter()
+            .filter(|raw| by_id.get(raw.as_str()).is_none_or(|t| t.repo_id != repo_id))
+            .map(String::as_str)
+            .collect();
+
+        // Query 2: batch-fetch misses by source_id (scoped to the repo).
+        let mut by_source_id: HashMap<String, Ticket> = HashMap::new();
+        if !fallback_ids.is_empty() {
+            let ph2 = crate::db::sql_placeholders_from(fallback_ids.len(), 2);
+            let sql2 = format!(
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, \
+                 assignee, priority, url, synced_at, raw_json, workflow, agent_map \
+                 FROM tickets WHERE repo_id = ?1 AND source_id IN ({ph2})"
+            );
+            let mut p2: Vec<&dyn rusqlite::ToSql> = vec![&repo_id];
+            p2.extend(fallback_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
+            let rows2 = query_collect(self.conn, &sql2, p2.as_slice(), map_ticket_row)?;
+            for t in rows2 {
+                by_source_id.insert(t.source_id.clone(), t);
+            }
+        }
+
+        // Reconstruct in original order: internal-id hit first, then source_id hit.
+        let mut resolved = Vec::with_capacity(raw_ids.len());
+        for raw in raw_ids {
+            let ticket = by_id
+                .get(raw)
+                .filter(|t| t.repo_id == repo_id)
+                .or_else(|| by_source_id.get(raw))
+                .ok_or_else(|| ConductorError::TicketNotFound { id: raw.clone() })?;
+            resolved.push(ticket.clone());
+        }
+        Ok(resolved)
+    }
+
     /// Update the `state`, `workflow`, and/or `agent_map` columns on a ticket.
     ///
     /// For `workflow` and `agent_map`:
