@@ -2,7 +2,11 @@
 
 Get the diff for this PR using the appropriate command for the review scope:
 
-- If the scope is **full** (default): run `git diff origin/main...HEAD` to see the entire PR diff.
+- If the scope is **full** (default): detect the PR base branch and run the diff against it:
+  ```bash
+  BASE_BRANCH=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || echo main)
+  git diff origin/${BASE_BRANCH}...HEAD
+  ```
 - If the scope is **incremental**: run `git diff HEAD~1` to see only the latest commit.
 
 **Review scope: {{scope}}**
