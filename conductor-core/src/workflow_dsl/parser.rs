@@ -991,11 +991,21 @@ impl Parser {
             match s {
                 KvValue::Map(m) => match over {
                     ForeachOver::Worktrees => {
-                        let base_branch = m
-                            .get("base_branch")
-                            .cloned()
-                            .ok_or_else(|| format!("foreach '{name}': scope must contain base_branch for over = worktrees"))?;
-                        Some(ForeachScope::Worktree(WorktreeScope { base_branch }))
+                        let base_branch = m.get("base_branch").cloned();
+                        let has_open_pr = match m.get("has_open_pr").map(|s| s.as_str()) {
+                            None => None,
+                            Some("true") => Some(true),
+                            Some("false") => Some(false),
+                            Some(v) => {
+                                return Err(format!(
+                                    "foreach '{name}': scope.has_open_pr must be true or false, got '{v}'"
+                                ))
+                            }
+                        };
+                        Some(ForeachScope::Worktree(WorktreeScope {
+                            base_branch,
+                            has_open_pr,
+                        }))
                     }
                     ForeachOver::Tickets => {
                         if let Some(ticket_id) = m.get("ticket_id") {

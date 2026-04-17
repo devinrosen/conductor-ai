@@ -279,7 +279,10 @@ pub enum TicketScope {
 /// Scope selector for worktree fan-outs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeScope {
-    pub base_branch: String,
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    #[serde(default)]
+    pub has_open_pr: Option<bool>,
 }
 
 /// What to do when a child workflow fails.
