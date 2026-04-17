@@ -96,6 +96,7 @@ Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Cl
 - **Autonomous SDLC vision:** [docs/AUTONOMOUS-SDLC.md](docs/AUTONOMOUS-SDLC.md)
 - **Current priorities:** https://github.com/devinrosen/conductor-ai/issues?q=is%3Aopen+label%3Aroadmap
 - **Workflow engine design:** [docs/workflow/engine.md](docs/workflow/engine.md)
+- **Notification hooks reference:** [docs/notification-hooks.md](docs/notification-hooks.md)
 
 ## TUI Threading Rule
 
