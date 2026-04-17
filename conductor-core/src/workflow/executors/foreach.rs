@@ -2479,7 +2479,10 @@ mod tests {
         );
 
         let edges = load_ticket_dep_edges(&mut state, &step_id).unwrap();
-        assert!(edges.is_empty(), "expected no edges for independent tickets");
+        assert!(
+            edges.is_empty(),
+            "expected no edges for independent tickets"
+        );
     }
 
     /// t-ext (external blocker, not in fan-out) blocks t-a. t-b is unrelated.
@@ -2499,18 +2502,14 @@ mod tests {
         syncer.upsert_tickets("r1", &[t_ext, t_a, t_b]).unwrap();
 
         let ticket_a_id: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE source_id = 'ta'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE source_id = 'ta'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         let ticket_b_id: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE source_id = 'tb'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE source_id = 'tb'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
 
         let agent_mgr = crate::agent::AgentManager::new(&conn);
