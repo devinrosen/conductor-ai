@@ -1,5 +1,29 @@
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+thread_local! {
+    static BETWEEN_CYCLE_HOOK: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_between_cycle_hook(hook: impl FnMut() + 'static) {
+    BETWEEN_CYCLE_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn call_between_cycle_hook() {
+    BETWEEN_CYCLE_HOOK.with(|h| {
+        if let Some(hook) = h.borrow_mut().as_mut() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn call_between_cycle_hook() {}
+
 use crate::error::{ConductorError, Result};
 use crate::workflow::engine::{
     record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
@@ -687,10 +711,7 @@ fn run_dispatch_loop(
         }
 
         // Sleep poll interval before next tick.
-        #[cfg(test)]
-        if let Some(hook) = state.between_cycle_hook.as_mut() {
-            hook();
-        }
+        call_between_cycle_hook();
         std::thread::sleep(state.exec_config.poll_interval);
     }
 }
@@ -1254,7 +1275,6 @@ mod tests {
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],
             last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            between_cycle_hook: None,
         };
 
         let node = make_foreach_node_unlabeled();
@@ -1435,7 +1455,6 @@ mod tests {
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],
             last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            between_cycle_hook: None,
         }
     }
 
@@ -1942,13 +1961,13 @@ mod tests {
             Some("r1".to_string()),
             None,
         );
-        // Zero poll interval: the between_cycle_hook provides all needed synchronization.
+        // Zero poll interval: the between-cycle hook provides all needed synchronization.
         state.exec_config.poll_interval = Duration::from_millis(0);
         // Hook fires between cycles: signals BG to update DB and waits for confirmation.
-        state.between_cycle_hook = Some(Box::new(move || {
+        set_between_cycle_hook(move || {
             trigger_tx.send(()).unwrap();
             done_rx.recv().unwrap();
-        }));
+        });
 
         let result = run_dispatch_loop(&mut state, &node, &step_id, &child_def, 1);
         bg.join().unwrap();
