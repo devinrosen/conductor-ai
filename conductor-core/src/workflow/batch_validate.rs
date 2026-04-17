@@ -422,8 +422,7 @@ mod tests {
         );
 
         let known_bots = HashSet::new();
-        let result =
-            validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
 
         assert_eq!(result.entries.len(), 1);
         let warnings = &result.entries[0].warnings;
