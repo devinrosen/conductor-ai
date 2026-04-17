@@ -505,6 +505,22 @@ impl<'a> WorktreeManager<'a> {
         query_collect(self.conn, &query, params![repo_id], map_worktree_row)
     }
 
+    pub fn list_by_repo_id_and_base_branch(
+        &self,
+        repo_id: &str,
+        base_branch: &str,
+    ) -> Result<Vec<Worktree>> {
+        let query = format!(
+            "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND base_branch = ?2 AND status = 'active' ORDER BY created_at"
+        );
+        query_collect(
+            self.conn,
+            &query,
+            params![repo_id, base_branch],
+            map_worktree_row,
+        )
+    }
+
     /// Shared query builder for [`list`] and [`list_paginated`].
     ///
     /// `pagination` is `Some((limit, offset))` to add `LIMIT ?N OFFSET ?M`; `None` for unbounded.

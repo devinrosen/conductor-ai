@@ -278,28 +278,40 @@ fn validate_foreach_node<F>(
         }
     }
 
-    // Check 5: scope required for over = tickets
-    if n.over == ForeachOver::Tickets && n.scope.is_none() {
+    // Check 5: scope required for over = tickets or over = worktrees
+    let scope_required_hint: Option<(&str, &str)> = match n.over {
+        ForeachOver::Tickets => Some((
+            "tickets",
+            "Add `scope = { ticket_id = \"...\" }`, `scope = { label = \"...\" }`, or `scope = { unlabeled = true }`",
+        )),
+        ForeachOver::Worktrees => Some((
+            "worktrees",
+            "Add `scope = { base_branch = \"release/x.y.z\" }` to restrict to a specific base branch",
+        )),
+        _ => None,
+    };
+    if let Some((over_name, hint)) = scope_required_hint {
+        if n.scope.is_none() {
+            errors.push(ValidationError {
+                message: format!(
+                    "foreach '{}': `scope` is required when over = {}",
+                    n.name, over_name
+                ),
+                hint: Some(hint.to_string()),
+            });
+        }
+    }
+
+    // Check 6: ordered only valid for tickets or worktrees
+    if n.ordered && n.over != ForeachOver::Tickets && n.over != ForeachOver::Worktrees {
         errors.push(ValidationError {
             message: format!(
-                "foreach '{}': `scope` is required when over = tickets",
+                "foreach '{}': ordered = true is only valid when over = tickets or over = worktrees",
                 n.name
             ),
             hint: Some(
-                "Add `scope = { ticket_id = \"...\" }`, `scope = { label = \"...\" }`, or `scope = { unlabeled = true }`"
-                    .to_string(),
+                "Remove `ordered = true` or change `over` to `tickets` or `worktrees`".to_string(),
             ),
-        });
-    }
-
-    // Check 6: ordered rejected for non-ticket over
-    if n.ordered && n.over != ForeachOver::Tickets {
-        errors.push(ValidationError {
-            message: format!(
-                "foreach '{}': ordered = true is only valid when over = tickets",
-                n.name
-            ),
-            hint: Some("Remove `ordered = true` or change `over` to `tickets`".to_string()),
         });
     }
 
@@ -355,6 +367,17 @@ fn validate_foreach_node<F>(
                 n.name
             ),
             hint: Some("Remove the `filter` block for repo fan-outs".to_string()),
+        });
+    }
+
+    // Warn if filter provided for worktrees (scope = base_branch is the filter mechanism)
+    if n.over == ForeachOver::Worktrees && !n.filter.is_empty() {
+        errors.push(ValidationError {
+            message: format!(
+                "foreach '{}': filter has no effect when over = worktrees (use scope = {{ base_branch = \"...\" }} instead)",
+                n.name
+            ),
+            hint: Some("Remove the `filter` block for worktree fan-outs".to_string()),
         });
     }
 }
@@ -575,6 +598,195 @@ mod tests {
             hint: Some("fix it".into()),
         };
         assert_eq!(err.to_string(), "msg (hint: fix it)");
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_foreach_node tests
+    // -----------------------------------------------------------------------
+
+    fn make_bare_foreach_node(over: ForeachOver) -> super::super::types::ForEachNode {
+        use super::super::types::{ForEachNode, OnChildFail, OnCycle};
+        ForEachNode {
+            name: "test-foreach".to_string(),
+            over,
+            scope: None,
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 3,
+            workflow: "child-wf".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        }
+    }
+
+    fn no_op_loader(_: &str) -> std::result::Result<WorkflowDef, String> {
+        Ok(WorkflowDef {
+            name: "child-wf".to_string(),
+            title: None,
+            description: String::new(),
+            trigger: super::super::types::WorkflowTrigger::Manual,
+            targets: vec![],
+            group: None,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        })
+    }
+
+    #[test]
+    fn test_validate_foreach_worktrees_scope_required() {
+        let node = make_bare_foreach_node(ForeachOver::Worktrees);
+        let mut errors = Vec::new();
+        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("scope") && e.message.contains("worktrees")),
+            "expected scope-required error for worktrees, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_validate_foreach_tickets_scope_required() {
+        let node = make_bare_foreach_node(ForeachOver::Tickets);
+        let mut errors = Vec::new();
+        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("scope") && e.message.contains("tickets")),
+            "expected scope-required error for tickets, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_validate_foreach_ordered_invalid_for_repos() {
+        use super::super::types::ForEachNode;
+        let node = ForEachNode {
+            ordered: true,
+            ..make_bare_foreach_node(ForeachOver::Repos)
+        };
+        let mut errors = Vec::new();
+        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        assert!(
+            errors.iter().any(|e| e.message.contains("ordered")
+                && e.message.contains("tickets or over = worktrees")),
+            "expected ordered-invalid error for repos, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_validate_foreach_skip_dependents_without_ordered() {
+        use super::super::types::{ForEachNode, OnChildFail};
+        let node = ForEachNode {
+            on_child_fail: OnChildFail::SkipDependents,
+            ordered: false,
+            ..make_bare_foreach_node(ForeachOver::Tickets)
+        };
+        let mut errors = Vec::new();
+        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("skip_dependents") && e.message.contains("ordered")),
+            "expected skip_dependents-without-ordered error, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_validate_foreach_workflow_runs_filter_required() {
+        let node = make_bare_foreach_node(ForeachOver::WorkflowRuns);
+        let mut errors = Vec::new();
+        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("filter") && e.message.contains("workflow_runs")),
+            "expected filter-required error for workflow_runs, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_validate_foreach_workflow_runs_non_terminal_status() {
+        use super::super::types::ForEachNode;
+        let mut filter = std::collections::HashMap::new();
+        filter.insert("status".to_string(), "running".to_string());
+        let node = ForEachNode {
+            filter,
+            ..make_bare_foreach_node(ForeachOver::WorkflowRuns)
+        };
+        let mut errors = Vec::new();
+        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("running") && e.message.contains("terminal")),
+            "expected non-terminal-status error, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_validate_foreach_worktrees_filter_warns() {
+        use super::super::types::{ForEachNode, ForeachScope, WorktreeScope};
+        let mut filter = std::collections::HashMap::new();
+        filter.insert("status".to_string(), "active".to_string());
+        let node = ForEachNode {
+            filter,
+            scope: Some(ForeachScope::Worktree(WorktreeScope {
+                base_branch: "main".to_string(),
+            })),
+            ..make_bare_foreach_node(ForeachOver::Worktrees)
+        };
+        let mut errors = Vec::new();
+        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("filter") && e.message.contains("worktrees")),
+            "expected filter-no-effect warning for worktrees, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_validate_foreach_missing_required_child_input() {
+        use super::super::types::{InputDecl, WorkflowTrigger};
+        let loader = |_: &str| -> std::result::Result<WorkflowDef, String> {
+            Ok(WorkflowDef {
+                name: "child-wf".to_string(),
+                title: None,
+                description: String::new(),
+                trigger: WorkflowTrigger::Manual,
+                targets: vec![],
+                group: None,
+                inputs: vec![InputDecl {
+                    name: "required-input".to_string(),
+                    required: true,
+                    input_type: InputType::String,
+                    default: None,
+                    description: None,
+                }],
+                body: vec![],
+                always: vec![],
+                source_path: String::new(),
+            })
+        };
+        let node = make_bare_foreach_node(ForeachOver::Repos);
+        let mut errors = Vec::new();
+        validate_foreach_node(&node, &mut errors, &loader);
+        assert!(
+            errors.iter().any(|e| e.message.contains("required-input")),
+            "expected error for missing required child input, got: {:?}",
+            errors
+        );
     }
 
     #[cfg(unix)]
