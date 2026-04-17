@@ -2196,11 +2196,11 @@ mod tests {
         let config: &'static crate::config::Config =
             Box::leak(Box::new(crate::config::Config::default()));
 
-        // "w1" has no base_branch (NULL); effective_base falls back to repo default_branch "main".
-        // Insert a second active worktree on "main" to verify it is returned.
+        // "w1" has branch "feat/test"; the new inference uses wt.branch as the base_branch filter,
+        // so we look for worktrees whose base_branch = "feat/test" (children of w1).
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
-             VALUES ('wt-infer', 'r1', 'feat-infer', 'feat/infer', '/tmp/infer', 'active', '2024-01-05T00:00:00Z', 'main')",
+             VALUES ('wt-infer', 'r1', 'feat-infer', 'feat/infer', '/tmp/infer', 'active', '2024-01-05T00:00:00Z', 'feat/test')",
             [],
         ).unwrap();
 
@@ -2244,8 +2244,8 @@ mod tests {
             result
         );
         let items = result.unwrap();
-        // "wt-infer" is on "main"; "w1" has NULL base_branch (not "main" explicitly) so it won't
-        // show up via list_by_repo_id_and_base_branch("main"). Only "wt-infer" should match.
+        // "wt-infer" has base_branch = "feat/test" (w1's branch); "w1" itself is excluded because
+        // its base_branch is NULL, not "feat/test". Only "wt-infer" should match.
         let ids: Vec<&str> = items.iter().map(|(_, id, _)| id.as_str()).collect();
         assert!(
             ids.contains(&"wt-infer"),
