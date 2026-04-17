@@ -146,8 +146,9 @@ fn test_ensure_base_up_to_date_clean_fast_forward() {
 fn test_ensure_base_up_to_date_dirty_working_tree() {
     let (_tmp, _, local) = setup_repo_with_remote();
 
-    // Make the working tree dirty
-    fs::write(local.join("dirty.txt"), "uncommitted").unwrap();
+    // Make the working tree dirty by modifying a tracked file (untracked files are
+    // intentionally ignored — see `check_main_health`).
+    fs::write(local.join("README.md"), "modified").unwrap();
 
     let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false);
     assert!(result.is_err());
@@ -155,6 +156,23 @@ fn test_ensure_base_up_to_date_dirty_working_tree() {
     assert!(
         err.contains("uncommitted changes"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_ensure_base_up_to_date_allows_untracked_files() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Untracked files don't affect `git worktree add` and must not block creation.
+    fs::write(local.join("untracked.txt"), "untracked").unwrap();
+    fs::create_dir_all(local.join("untracked_dir")).unwrap();
+    fs::write(local.join("untracked_dir").join("file"), "x").unwrap();
+
+    let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false);
+    assert!(
+        result.is_ok(),
+        "untracked files should not block worktree creation; got: {:?}",
+        result.err()
     );
 }
 
@@ -200,14 +218,36 @@ fn test_check_main_health_clean_repo() {
 fn test_check_main_health_dirty_repo() {
     let (_tmp, _, local) = setup_repo_with_remote();
 
-    // Make the working tree dirty
-    fs::write(local.join("dirty_health.txt"), "uncommitted").unwrap();
+    // Modify a tracked file — that's real uncommitted work.
+    fs::write(local.join("README.md"), "modified").unwrap();
 
     let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
-    assert!(health.is_dirty, "repo with untracked file should be dirty");
+    assert!(
+        health.is_dirty,
+        "repo with modified tracked file should be dirty"
+    );
     assert!(
         !health.dirty_files.is_empty(),
         "dirty_files should be non-empty"
+    );
+}
+
+#[test]
+fn test_check_main_health_untracked_files_not_dirty() {
+    let (_tmp, _, local) = setup_repo_with_remote();
+
+    // Untracked files and directories don't affect `git worktree add`. Flagging them
+    // as dirty produces false positives that block ticket starts (e.g. test-helper
+    // submodule directories that exist locally but aren't committed).
+    fs::write(local.join("untracked.txt"), "untracked").unwrap();
+    fs::create_dir_all(local.join("untracked_dir")).unwrap();
+    fs::write(local.join("untracked_dir").join("file"), "x").unwrap();
+
+    let health = git_helpers::check_main_health(local.to_str().unwrap(), "main");
+    assert!(
+        !health.is_dirty,
+        "untracked files must not be reported as dirty; got dirty_files: {:?}",
+        health.dirty_files
     );
 }
 
@@ -250,8 +290,8 @@ fn test_check_main_health_commits_behind_positive() {
 fn test_ensure_base_up_to_date_force_dirty_skips_check() {
     let (_tmp, _, local) = setup_repo_with_remote();
 
-    // Make the working tree dirty
-    fs::write(local.join("dirty_force.txt"), "uncommitted").unwrap();
+    // Make the working tree dirty via a tracked-file modification.
+    fs::write(local.join("README.md"), "modified").unwrap();
 
     // With force_dirty=true, the dirty check is skipped — should succeed
     let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", true, false);
@@ -266,8 +306,9 @@ fn test_ensure_base_up_to_date_force_dirty_skips_check() {
 fn test_ensure_base_up_to_date_skips_status_when_pre_verified_clean() {
     let (_tmp, _, local) = setup_repo_with_remote();
 
-    // Make the working tree dirty — would normally cause an error
-    fs::write(local.join("dirty_pre_verified.txt"), "uncommitted").unwrap();
+    // Make the working tree dirty via a tracked-file modification — would normally
+    // cause an error.
+    fs::write(local.join("README.md"), "modified").unwrap();
 
     // With pre_verified_clean=true, the git status check is skipped
     // (the fetch may fail too since there's no network, but that's a soft warning)
