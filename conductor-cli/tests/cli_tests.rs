@@ -74,6 +74,40 @@ fn invalid_subcommand_nonzero() {
 // manually or via dedicated repo fixtures in the future.
 
 #[test]
+fn worktree_create_stack_rejects_empty_tickets() {
+    let dir = tempfile::tempdir().unwrap();
+    // Omitting --tickets produces an empty vec and triggers the "at least one ticket" guard
+    conductor_cmd(dir.path())
+        .args([
+            "worktree",
+            "create-stack",
+            "some-repo",
+            "--root-branch",
+            "main",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("at least one ticket"));
+}
+
+#[test]
+fn worktree_create_stack_fails_on_unknown_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    conductor_cmd(dir.path())
+        .args([
+            "worktree",
+            "create-stack",
+            "nonexistent-repo",
+            "--root-branch",
+            "main",
+            "--tickets",
+            "123",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn workflow_validate_requires_name_or_all() {
     let dir = tempfile::tempdir().unwrap();
     conductor_cmd(dir.path())

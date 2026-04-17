@@ -3966,6 +3966,92 @@ mod tests {
         assert_eq!(result[0], ("child-a".to_string(), "blocker-1".to_string()));
     }
 
+    // --- get_blocks_edges_within_set tests ---
+
+    #[test]
+    fn test_get_blocks_edges_within_set_empty_input() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.get_blocks_edges_within_set(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_blocks_edges_within_set_no_edges() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "t-a", "r1");
+        insert_test_ticket(&conn, "t-b", "r1");
+        let result = syncer
+            .get_blocks_edges_within_set(&["t-a".to_string(), "t-b".to_string()])
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_blocks_edges_within_set_returns_intra_set_edges() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "ta", "r1");
+        insert_test_ticket(&conn, "tb", "r1");
+        insert_test_ticket(&conn, "tc", "r1");
+        insert_blocks_dep(&conn, "ta", "tb");
+        insert_blocks_dep(&conn, "tb", "tc");
+
+        let mut result = syncer
+            .get_blocks_edges_within_set(&[
+                "ta".to_string(),
+                "tb".to_string(),
+                "tc".to_string(),
+            ])
+            .unwrap();
+        result.sort();
+        assert_eq!(
+            result,
+            vec![
+                ("ta".to_string(), "tb".to_string()),
+                ("tb".to_string(), "tc".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_get_blocks_edges_within_set_excludes_edges_outside_set() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "in-a", "r1");
+        insert_test_ticket(&conn, "in-b", "r1");
+        insert_test_ticket(&conn, "out-c", "r1");
+        // Edge where the blocker is outside the queried set
+        insert_blocks_dep(&conn, "out-c", "in-a");
+        // Edge fully within the set
+        insert_blocks_dep(&conn, "in-a", "in-b");
+
+        let result = syncer
+            .get_blocks_edges_within_set(&["in-a".to_string(), "in-b".to_string()])
+            .unwrap();
+        assert_eq!(result, vec![("in-a".to_string(), "in-b".to_string())]);
+    }
+
+    #[test]
+    fn test_get_blocks_edges_within_set_excludes_parent_of_dep_type() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "p1", "r1");
+        insert_test_ticket(&conn, "c1", "r1");
+        conn.execute(
+            "INSERT OR IGNORE INTO ticket_dependencies \
+             (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+            rusqlite::params!["p1", "c1"],
+        )
+        .unwrap();
+
+        let result = syncer
+            .get_blocks_edges_within_set(&["p1".to_string(), "c1".to_string()])
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
     // --- resolve_tickets_in_repo tests ---
 
     fn insert_ticket_with_source(conn: &Connection, id: &str, repo_id: &str, source_id: &str) {
