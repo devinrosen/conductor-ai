@@ -811,10 +811,16 @@ fn build_child_dispatch_params(
     // For worktree fan-outs, run the child in the child worktree's directory,
     // not the parent's CWD (which may be a different worktree entirely).
     let child_working_dir = if node.over == ForeachOver::Worktrees {
-        WorktreeManager::new(state.conn, state.config)
-            .get_by_id(&item.item_id)
-            .map(|wt| wt.path)
-            .unwrap_or_else(|_| state.working_dir.clone())
+        match WorktreeManager::new(state.conn, state.config).get_by_id(&item.item_id) {
+            Ok(wt) => wt.path,
+            Err(e) => {
+                tracing::warn!(
+                    "foreach: failed to look up worktree '{}', falling back to parent working dir: {e}",
+                    item.item_id
+                );
+                state.working_dir.clone()
+            }
+        }
     } else {
         state.working_dir.clone()
     };
