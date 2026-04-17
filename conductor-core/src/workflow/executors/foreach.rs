@@ -451,14 +451,11 @@ fn collect_worktree_items(
     };
 
     let wt_mgr = WorktreeManager::new(state.conn, state.config);
-    let active_worktrees = wt_mgr.list_by_repo_id(repo_id, true)?;
+    let active_worktrees = wt_mgr.list_by_repo_id_and_base_branch(repo_id, base_branch)?;
 
     Ok(active_worktrees
         .into_iter()
-        .filter(|wt| {
-            wt.base_branch.as_deref() == Some(base_branch.as_str())
-                && !existing_set.contains(&wt.id)
-        })
+        .filter(|wt| !existing_set.contains(&wt.id))
         .map(|wt| ("worktree".to_string(), wt.id, wt.slug))
         .collect())
 }
@@ -2109,5 +2106,69 @@ mod tests {
             Some(""),
             "NULL ticket_id should become empty string"
         );
+    }
+
+    /// build_item_vars for a worktree with a linked ticket_id should populate
+    /// vars["item.ticket_id"] with the ticket ULID.
+    #[test]
+    fn test_build_item_vars_worktrees_with_ticket_id() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // setup_db() inserts repo "r1" — upsert a ticket against it to get a valid ULID.
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[make_ticket("t-linked-1", "Linked ticket")])
+            .unwrap();
+        let ticket_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 't-linked-1' AND repo_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // Insert a worktree linked to the real ticket.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch, ticket_id) \
+             VALUES ('wt-linked', 'r1', 'feat-linked', 'feat/linked', '/tmp/linked', 'active', '2024-01-01T00:00:00Z', 'release/1.0', ?1)",
+            rusqlite::params![ticket_id],
+        )
+        .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Worktrees);
+        let item = make_minimal_item("wt-linked", "feat-linked", "worktree");
+
+        let vars = build_item_vars(&mut state, &node, &item).unwrap();
+        assert_eq!(
+            vars.get("item.ticket_id").map(|s| s.as_str()),
+            Some(ticket_id.as_str()),
+            "ticket_id should be populated from the linked ticket"
+        );
+        assert_eq!(
+            vars.get("item.base_branch").map(|s| s.as_str()),
+            Some("release/1.0")
+        );
+        assert_eq!(vars.get("item.slug").map(|s| s.as_str()), Some("feat-linked"));
     }
 }
