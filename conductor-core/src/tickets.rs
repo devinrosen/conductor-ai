@@ -900,6 +900,38 @@ impl<'a> TicketSyncer<'a> {
         rows.map(|r| r.map_err(ConductorError::Database)).collect()
     }
 
+    /// Returns `(from_ticket_id, to_ticket_id)` pairs for `blocks` edges where
+    /// **both** endpoints are within `ticket_ids`. Used by `WorktreeManager` to
+    /// build the intra-set dependency graph for stacked-worktree creation.
+    pub fn get_blocks_edges_within_set(
+        &self,
+        ticket_ids: &[String],
+    ) -> Result<Vec<(String, String)>> {
+        if ticket_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let n = ticket_ids.len();
+        let from_ph = sql_placeholders(n);
+        let to_ph = crate::db::sql_placeholders_from(n, n + 1);
+        let sql = format!(
+            "SELECT from_ticket_id, to_ticket_id \
+             FROM ticket_dependencies \
+             WHERE from_ticket_id IN ({from_ph}) \
+               AND to_ticket_id IN ({to_ph}) \
+               AND dep_type = 'blocks'"
+        );
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(n * 2);
+        for id in ticket_ids {
+            params_vec.push(id);
+        }
+        for id in ticket_ids {
+            params_vec.push(id);
+        }
+        query_collect(self.conn, &sql, params_vec.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+    }
+
     /// After syncing tickets, mark any linked worktrees whose ticket is now
     /// closed by setting their status to `'merged'`. Also removes the git
     /// worktree directory and branch for each affected worktree (best-effort).

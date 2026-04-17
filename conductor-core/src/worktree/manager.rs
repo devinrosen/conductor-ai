@@ -35,18 +35,6 @@ pub fn label_to_branch_prefix(labels: &[&str]) -> &'static str {
     "feat"
 }
 
-fn slugify(s: &str) -> String {
-    let mut slug = s
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>();
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
-    }
-    slug.trim_matches('-').to_string()
-}
-
 fn worktree_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
     let slug = slug.into();
     move |e| match e {
@@ -435,7 +423,12 @@ impl<'a> WorktreeManager<'a> {
                     // Not found by ULID (or belongs to a different repo) — try source_id
                     syncer
                         .get_by_source_id(&repo.id, raw_id)
-                        .map_err(|_| ConductorError::TicketNotFound { id: raw_id.clone() })?
+                        .map_err(|e| match e {
+                            ConductorError::TicketNotFound { .. } => {
+                                ConductorError::TicketNotFound { id: raw_id.clone() }
+                            }
+                            other => other,
+                        })?
                 }
                 Err(e) => return Err(e),
             };
@@ -445,32 +438,10 @@ impl<'a> WorktreeManager<'a> {
         // Build the set of internal ULIDs for intra-set edge filtering.
         let ulid_set: Vec<String> = tickets.iter().map(|t| t.id.clone()).collect();
 
-        // Query ticket_dependencies for edges where both endpoints are in the set.
-        // Edge (from, to) means from_ticket BLOCKS to_ticket → from must come first.
-        // Use separate numbered-placeholder ranges for each IN clause so SQLite
-        // treats them as distinct parameters (?1..?n for from, ?(n+1)..?2n for to).
-        let edges: Vec<(String, String)> = {
-            let n = ulid_set.len();
-            let from_placeholders = crate::db::sql_placeholders(n);
-            let to_placeholders = crate::db::sql_placeholders_from(n, n + 1);
-            let sql = format!(
-                "SELECT from_ticket_id, to_ticket_id \
-                 FROM ticket_dependencies \
-                 WHERE from_ticket_id IN ({from_placeholders}) \
-                   AND to_ticket_id IN ({to_placeholders}) \
-                   AND dep_type = 'blocks'"
-            );
-            let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(n * 2);
-            for id in &ulid_set {
-                params_vec.push(id);
-            }
-            for id in &ulid_set {
-                params_vec.push(id);
-            }
-            query_collect(self.conn, &sql, params_vec.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-        };
+        // Delegate to TicketSyncer which owns the ticket_dependencies table.
+        // Returns (from_ticket_id, to_ticket_id) pairs where both endpoints are
+        // in the set and dep_type = 'blocks'.
+        let edges = syncer.get_blocks_edges_within_set(&ulid_set)?;
 
         // Cycle detection — fail early with a clear message.
         if let Some(cycle) = crate::graph::detect_cycles(&ulid_set, &edges) {
@@ -538,16 +509,8 @@ impl<'a> WorktreeManager<'a> {
                 None => continue, // shouldn't happen
             };
 
-            // Derive worktree name: same pattern as FeatureManager::dispatch_ticket.
-            let title_slug = slugify(&ticket.title);
-            let raw_name = format!("feat-{}-{}", ticket.source_id, title_slug);
-            let wt_name = {
-                let end = raw_name
-                    .char_indices()
-                    .nth(60)
-                    .map_or(raw_name.len(), |(i, _)| i);
-                raw_name[..end].trim_end_matches('-').to_string()
-            };
+            let wt_name =
+                crate::text_util::worktree_name_for_ticket(&ticket.source_id, &ticket.title);
 
             // Determine from_branch: single in-set blocker → its branch; no blocker → root_branch.
             let in_set_blockers = blockers_map
@@ -1850,6 +1813,83 @@ mod tests {
         assert!(
             !matches!(result, Err(ConductorError::TicketNotFound { .. })),
             "source_id fallback should resolve ticket 101"
+        );
+    }
+
+    /// Happy-path integration test: verifies that `create_from_dep_graph` creates
+    /// worktrees with the correct branch hierarchy when dependencies are present.
+    ///
+    /// t1 has no deps → branches from root_branch ("main")
+    /// t2 depends on (is blocked by) t1 → branches from t1's worktree branch
+    #[test]
+    fn test_create_from_dep_graph_happy_path() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        // Set up a real git repo so git branch / worktree commands succeed.
+        let repo_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+        let repo_path = repo_dir.path().to_str().unwrap().to_string();
+        let ws_path = ws_dir.path().to_str().unwrap().to_string();
+
+        // Init repo with an initial commit so "main" branch exists.
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("initial commit");
+
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('repo-hp','hp-repo',?1,'',?2,'2024-01-01T00:00:00Z')",
+            rusqlite::params![repo_path, ws_path],
+        )
+        .unwrap();
+
+        insert_ticket_full(&conn, "tp1", "repo-hp", "201", "feat: first ticket");
+        insert_ticket_full(&conn, "tp2", "repo-hp", "202", "feat: second ticket");
+        insert_dep(&conn, "tp1", "tp2"); // t1 blocks t2
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let results = mgr
+            .create_from_dep_graph("hp-repo", "main", &["tp1".to_string(), "tp2".to_string()])
+            .expect("create_from_dep_graph should succeed");
+
+        assert_eq!(results.len(), 2, "should create two worktrees");
+
+        let (wt1, _) = results.iter().find(|(w, _)| w.branch.contains("201")).unwrap();
+        let (wt2, _) = results.iter().find(|(w, _)| w.branch.contains("202")).unwrap();
+
+        // t1 has no in-set blockers → base_branch must be root_branch "main"
+        assert_eq!(
+            wt1.base_branch.as_deref(),
+            Some("main"),
+            "ticket with no deps should base off root_branch"
+        );
+
+        // t2 is blocked by t1 → base_branch must be t1's branch
+        assert_eq!(
+            wt2.base_branch.as_deref(),
+            Some(wt1.branch.as_str()),
+            "dependent ticket should base off its blocker's branch"
         );
     }
 }

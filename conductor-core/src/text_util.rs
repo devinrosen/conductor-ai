@@ -1,5 +1,32 @@
 use std::path::{Path, PathBuf};
 
+/// Slugify a string: lowercase, replace non-alphanumeric chars with hyphens,
+/// collapse consecutive hyphens, trim leading/trailing hyphens.
+pub(crate) fn slugify(s: &str) -> String {
+    let mut slug = s
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug.trim_matches('-').to_string()
+}
+
+/// Derive a worktree name from a ticket's source_id and title.
+/// Format: `feat-{source_id}-{slug}`, capped at 60 chars on a char boundary,
+/// trailing hyphens stripped.
+pub(crate) fn worktree_name_for_ticket(source_id: &str, title: &str) -> String {
+    let title_slug = slugify(title);
+    let raw = format!("feat-{source_id}-{title_slug}");
+    let end = raw
+        .char_indices()
+        .nth(60)
+        .map_or(raw.len(), |(i, _)| i);
+    raw[..end].trim_end_matches('-').to_string()
+}
+
 /// Expand a leading `~` in a path string to the user's home directory.
 ///
 /// Returns `Err` with a descriptive message if `~` is present but the home
