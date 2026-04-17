@@ -471,8 +471,7 @@ fn collect_worktree_items(
         .collect();
 
     if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
-        let repo =
-            crate::repo::RepoManager::new(state.conn, state.config).get_by_id(repo_id)?;
+        let repo = crate::repo::RepoManager::new(state.conn, state.config).get_by_id(repo_id)?;
         let open_prs = crate::github::list_open_prs(&repo.remote_url).unwrap_or_default();
         let open_branches: HashSet<String> =
             open_prs.into_iter().map(|pr| pr.head_ref_name).collect();
