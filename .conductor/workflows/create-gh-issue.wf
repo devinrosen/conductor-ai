@@ -19,5 +19,10 @@ workflow create-gh-issue {
     on_timeout = fail
   }
 
-  call create-gh-issue
+  script create-gh-issue {
+    run = ".conductor/scripts/create-gh-issue.sh"
+    env {
+      REPO     = "{{repo}}"
+    }
+  }
 }
