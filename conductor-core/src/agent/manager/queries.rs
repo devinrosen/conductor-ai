@@ -378,7 +378,6 @@ impl<'a> AgentManager<'a> {
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
-
 }
 
 #[cfg(test)]
