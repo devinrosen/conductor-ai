@@ -440,9 +440,13 @@ fn collect_worktree_items(
 
     // Extract base_branch from scope, or infer from the execution context worktree.
     let base_branch_owned: String;
-    let base_branch: &str = match &node.scope {
-        Some(ForeachScope::Worktree(wt_scope)) => &wt_scope.base_branch,
-        _ => {
+    let wt_scope_opt = match &node.scope {
+        Some(ForeachScope::Worktree(s)) => Some(s),
+        _ => None,
+    };
+    let base_branch: &str = match wt_scope_opt.and_then(|s| s.base_branch.as_deref()) {
+        Some(b) => b,
+        None => {
             let wt_id = state.worktree_id.as_deref().ok_or_else(|| {
                 ConductorError::Workflow(format!(
                     "foreach '{}': over = worktrees requires either \
@@ -461,9 +465,21 @@ fn collect_worktree_items(
     let wt_mgr = WorktreeManager::new(state.conn, state.config);
     let active_worktrees = wt_mgr.list_by_repo_id_and_base_branch(repo_id, base_branch)?;
 
-    Ok(active_worktrees
+    let mut candidates: Vec<_> = active_worktrees
         .into_iter()
         .filter(|wt| !existing_set.contains(&wt.id))
+        .collect();
+
+    if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
+        let repo = crate::repo::RepoManager::new(state.conn, state.config).get_by_id(repo_id)?;
+        let open_prs = crate::github::list_open_prs(&repo.remote_url)?;
+        let open_branches: HashSet<String> =
+            open_prs.into_iter().map(|pr| pr.head_ref_name).collect();
+        candidates.retain(|wt| open_branches.contains(&wt.branch) == want_open_pr);
+    }
+
+    Ok(candidates
+        .into_iter()
         .map(|wt| ("worktree".to_string(), wt.id, wt.slug))
         .collect())
 }
@@ -1645,7 +1661,8 @@ mod tests {
             name: "test-wt-foreach".to_string(),
             over: ForeachOver::Worktrees,
             scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
-                base_branch: "release/1.0".to_string(),
+                base_branch: Some("release/1.0".to_string()),
+                has_open_pr: None,
             })),
             filter: std::collections::HashMap::new(),
             ordered: false,
@@ -1671,6 +1688,95 @@ mod tests {
         for (item_type, _, _) in &items {
             assert_eq!(item_type, "worktree");
         }
+    }
+
+    #[test]
+    fn test_collect_worktree_items_has_open_pr_filter() {
+        // setup_db() inserts repo r1 with remote_url = 'https://github.com/test/repo.git'.
+        // list_open_prs will fail in CI (no gh auth) and unwrap_or_default to [].
+        // So: has_open_pr=false → all pass (no open PRs found); has_open_pr=true → none pass.
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-p1', 'r1', 'feat-p1', 'feat/p1', '/tmp/p1', 'active', '2024-01-01T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-p2', 'r1', 'feat-p2', 'feat/p2', '/tmp/p2', 'active', '2024-01-02T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id.clone(),
+            parent.id.clone(),
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        // has_open_pr = Some(false): list_open_prs returns [] → all worktrees pass.
+        let node_no_pr = ForEachNode {
+            name: "wt-no-pr".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+                base_branch: Some("release/1.0".to_string()),
+                has_open_pr: Some(false),
+            })),
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 2,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let existing_set = HashSet::new();
+        let items = collect_worktree_items(&mut state, &node_no_pr, &existing_set).unwrap();
+        assert_eq!(
+            items.len(),
+            2,
+            "has_open_pr=false with empty PR list: both worktrees should pass (no PRs found)"
+        );
+
+        // has_open_pr = Some(true): list_open_prs returns [] → no worktrees pass.
+        let node_has_pr = ForEachNode {
+            name: "wt-has-pr".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+                base_branch: Some("release/1.0".to_string()),
+                has_open_pr: Some(true),
+            })),
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 2,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let items = collect_worktree_items(&mut state, &node_has_pr, &existing_set).unwrap();
+        assert_eq!(
+            items.len(),
+            0,
+            "has_open_pr=true with empty PR list: no worktrees should pass"
+        );
     }
 
     #[test]
@@ -1985,7 +2091,8 @@ mod tests {
             name: "wt-foreach".to_string(),
             over: ForeachOver::Worktrees,
             scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
-                base_branch: "release/1.0".to_string(),
+                base_branch: Some("release/1.0".to_string()),
+                has_open_pr: None,
             })),
             filter: std::collections::HashMap::new(),
             ordered: false,

@@ -693,7 +693,8 @@ mod tests {
         use super::super::types::{ForEachNode, ForeachScope, WorktreeScope};
         let node = ForEachNode {
             scope: Some(ForeachScope::Worktree(WorktreeScope {
-                base_branch: "main".to_string(),
+                base_branch: Some("main".to_string()),
+                has_open_pr: None,
             })),
             ..make_bare_foreach_node(ForeachOver::Worktrees)
         };
@@ -805,7 +806,8 @@ mod tests {
         let node = ForEachNode {
             filter,
             scope: Some(ForeachScope::Worktree(WorktreeScope {
-                base_branch: "main".to_string(),
+                base_branch: Some("main".to_string()),
+                has_open_pr: None,
             })),
             ..make_bare_foreach_node(ForeachOver::Worktrees)
         };
