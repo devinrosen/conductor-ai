@@ -488,6 +488,9 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         merged_inputs
             .entry("feature_base_branch".to_string())
             .or_insert_with(|| base.to_string());
+        merged_inputs
+            .entry("worktree_branch".to_string())
+            .or_insert_with(|| wt.branch.clone());
     }
     if let Some(ref f) = feature {
         inject_feature_variables(f, &mut merged_inputs);

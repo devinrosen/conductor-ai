@@ -350,6 +350,19 @@ impl<'a> WorktreeManager<'a> {
             &branch,
         ]))?;
 
+        // Set upstream tracking config so bare `git push` targets the correct remote branch.
+        // This is the non-network equivalent of `git push -u origin <branch>`.
+        check_output(git_in(&wt_path).args([
+            "config",
+            &format!("branch.{branch}.remote"),
+            "origin",
+        ]))?;
+        check_output(git_in(&wt_path).args([
+            "config",
+            &format!("branch.{branch}.merge"),
+            &format!("refs/heads/{branch}"),
+        ]))?;
+
         // Detect and install deps
         install_deps(&wt_path);
 
