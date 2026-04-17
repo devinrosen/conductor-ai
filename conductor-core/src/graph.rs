@@ -1,10 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-/// DFS cycle detection on a directed graph.
-///
-/// `ids` is the full node set; `edges` is `(from, to)` where `from` must precede `to`.
-/// Returns `Some(cycle_path)` if a cycle is found, `None` otherwise.
-pub fn detect_cycles(ids: &[String], edges: &[(String, String)]) -> Option<Vec<String>> {
+fn build_adj<'a>(
+    ids: &'a [String],
+    edges: &'a [(String, String)],
+) -> HashMap<&'a str, Vec<&'a str>> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for id in ids {
         adj.entry(id.as_str()).or_default();
@@ -12,6 +11,15 @@ pub fn detect_cycles(ids: &[String], edges: &[(String, String)]) -> Option<Vec<S
     for (from, to) in edges {
         adj.entry(from.as_str()).or_default().push(to.as_str());
     }
+    adj
+}
+
+/// DFS cycle detection on a directed graph.
+///
+/// `ids` is the full node set; `edges` is `(from, to)` where `from` must precede `to`.
+/// Returns `Some(cycle_path)` if a cycle is found, `None` otherwise.
+pub fn detect_cycles(ids: &[String], edges: &[(String, String)]) -> Option<Vec<String>> {
+    let adj = build_adj(ids, edges);
 
     let mut visited: HashSet<&str> = HashSet::new();
     let mut stack: HashSet<&str> = HashSet::new();
@@ -66,20 +74,21 @@ fn dfs_cycle<'a>(
 /// Nodes at the same level are sorted lexicographically for deterministic output.
 pub fn topological_sort(ids: &[String], edges: &[(String, String)]) -> Vec<String> {
     let id_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    let filtered_edges: Vec<(String, String)> = edges
+        .iter()
+        .filter(|(f, t)| id_set.contains(f.as_str()) && id_set.contains(t.as_str()))
+        .cloned()
+        .collect();
 
-    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    let adj = build_adj(ids, &filtered_edges);
     let mut in_degree: HashMap<&str, usize> = HashMap::new();
 
     for id in ids {
-        adj.entry(id.as_str()).or_default();
         in_degree.entry(id.as_str()).or_insert(0);
     }
 
-    for (from, to) in edges {
-        if id_set.contains(from.as_str()) && id_set.contains(to.as_str()) {
-            adj.entry(from.as_str()).or_default().push(to.as_str());
-            *in_degree.entry(to.as_str()).or_insert(0) += 1;
-        }
+    for (_, to) in &filtered_edges {
+        *in_degree.entry(to.as_str()).or_insert(0) += 1;
     }
 
     let mut queue: VecDeque<&str> = {
@@ -182,6 +191,6 @@ mod tests {
         let ids = s(&["b", "a", "c"]);
         let edges = e(&[]);
         let sorted = topological_sort(&ids, &edges);
-        assert_eq!(sorted.len(), 3);
+        assert_eq!(sorted, vec!["a", "b", "c"]);
     }
 }

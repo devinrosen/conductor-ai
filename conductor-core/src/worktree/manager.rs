@@ -487,7 +487,11 @@ impl<'a> WorktreeManager<'a> {
         for ticket_ulid in &sorted_ids {
             let ticket = match ticket_map.get(ticket_ulid.as_str()) {
                 Some(t) => t,
-                None => continue, // shouldn't happen
+                None => {
+                    return Err(ConductorError::TicketNotFound {
+                        id: ticket_ulid.clone(),
+                    });
+                }
             };
 
             let wt_name =
