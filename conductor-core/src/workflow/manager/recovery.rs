@@ -887,7 +887,7 @@ impl<'a> WorkflowManager<'a> {
     /// Count running steps for `workflow_run_id` that have a live subprocess,
     /// checking both `wrs.subprocess_pid` and `agent_runs.subprocess_pid` via
     /// `child_run_id`.  Used for diagnostic logging in the resume path.
-    pub fn count_live_subprocess_steps(&self, workflow_run_id: &str) -> Result<usize> {
+    pub(crate) fn count_live_subprocess_steps(&self, workflow_run_id: &str) -> Result<usize> {
         #[cfg(unix)]
         {
             let pids: Vec<i64> = query_collect(
