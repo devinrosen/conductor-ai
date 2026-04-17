@@ -2169,6 +2169,9 @@ mod tests {
             vars.get("item.base_branch").map(|s| s.as_str()),
             Some("release/1.0")
         );
-        assert_eq!(vars.get("item.slug").map(|s| s.as_str()), Some("feat-linked"));
+        assert_eq!(
+            vars.get("item.slug").map(|s| s.as_str()),
+            Some("feat-linked")
+        );
     }
 }
