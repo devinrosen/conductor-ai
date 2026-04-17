@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 71;
+pub const LATEST_SCHEMA_VERSION: u32 = 72;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1024,6 +1024,43 @@ pub fn run(conn: &Connection) -> Result<()> {
             })?;
         }
         bump_version(conn, 71)?;
+    }
+
+    // Migration 072: Add 'worktree' to the item_type CHECK constraint on
+    // workflow_run_step_fan_out_items. SQLite cannot ALTER CHECK constraints
+    // in-place, so this uses the table-swap pattern with FK enforcement disabled.
+    // Guard skips the swap when the table does not exist (test stubs) or when
+    // 'worktree' is already present in the DDL (idempotent).
+    if version < 72 {
+        // Only run if the table exists AND has the full post-067 schema (child_run_id column).
+        // Stub tables created by migration tests may lack these columns.
+        let has_full_table = conn
+            .prepare("SELECT child_run_id FROM workflow_run_step_fan_out_items LIMIT 0")
+            .is_ok();
+        if has_full_table {
+            let already_has_worktree: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master \
+                     WHERE type='table' AND name='workflow_run_step_fan_out_items' \
+                     AND sql LIKE '%worktree%'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("migration 72: idempotency check failed, re-running: {e}");
+                    false
+                });
+            if !already_has_worktree {
+                with_foreign_keys_off(conn, || {
+                    conn.execute_batch(include_str!(
+                        "migrations/072_fan_out_item_type_worktree.sql"
+                    ))?;
+                    Ok(())
+                })?;
+            }
+        }
+        bump_version(conn, 72)?;
     }
 
     Ok(())

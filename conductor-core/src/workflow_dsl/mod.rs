@@ -37,11 +37,15 @@ mod validation;
 // Re-export everything that is currently public
 pub use types::{
     collect_agent_names, collect_workflow_refs, AgentRef, AlwaysNode, ApprovalMode, CallNode,
-    CallWorkflowNode, Condition, DoNode, DoWhileNode, ForEachNode, ForeachOver, GateNode,
-    GateOptions, GateType, IfNode, InputDecl, InputType, OnChildFail, OnCycle, OnFailAction,
-    OnMaxIter, OnTimeout, ParallelNode, ScriptNode, TicketScope, UnlessNode, WhileNode,
-    WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning,
+    CallWorkflowNode, Condition, DoNode, DoWhileNode, ForEachNode, ForeachOver, ForeachScope,
+    GateNode, GateOptions, GateType, IfNode, InputDecl, InputType, OnChildFail, OnCycle,
+    OnFailAction, OnMaxIter, OnTimeout, ParallelNode, ScriptNode, TicketScope, UnlessNode,
+    WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning,
 };
+// WorktreeScope is a field type on ForeachScope::Worktree and part of the public API
+// so callers can construct scope values. Only directly constructed in tests, hence the allow.
+#[allow(unused_imports)]
+pub use types::WorktreeScope;
 // QualityGateConfig is a field type on the public GateNode struct and must be
 // part of the public API so callers can name the type. It is only constructed
 // in tests within this crate, hence the allow.
