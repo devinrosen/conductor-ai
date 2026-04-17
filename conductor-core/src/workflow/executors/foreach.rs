@@ -438,14 +438,23 @@ fn collect_worktree_items(
         )
     })?;
 
-    // Extract base_branch from scope.
-    let base_branch = match &node.scope {
+    // Extract base_branch from scope, or infer from the execution context worktree.
+    let base_branch_owned: String;
+    let base_branch: &str = match &node.scope {
         Some(ForeachScope::Worktree(wt_scope)) => &wt_scope.base_branch,
         _ => {
-            return Err(ConductorError::Workflow(format!(
-                "foreach '{}': over = worktrees requires scope = {{ base_branch = \"...\" }}",
-                node.name
-            )));
+            let wt_id = state.worktree_id.as_deref().ok_or_else(|| {
+                ConductorError::Workflow(format!(
+                    "foreach '{}': over = worktrees requires either \
+                     scope = {{ base_branch = \"...\" }} or a worktree_id in the execution context",
+                    node.name
+                ))
+            })?;
+            let wt = WorktreeManager::new(state.conn, state.config).get_by_id(wt_id)?;
+            let repo =
+                crate::repo::RepoManager::new(state.conn, state.config).get_by_id(&wt.repo_id)?;
+            base_branch_owned = wt.effective_base(&repo.default_branch).to_string();
+            &base_branch_owned
         }
     };
 
@@ -1996,9 +2005,9 @@ mod tests {
         );
     }
 
-    /// collect_worktree_items returns an error when scope is not a Worktree scope.
+    /// collect_worktree_items errors when scope is None and worktree_id is also absent.
     #[test]
-    fn test_collect_worktree_items_wrong_scope_returns_error() {
+    fn test_collect_worktree_items_no_scope_no_worktree_id_errors() {
         let conn = setup_db();
         let config: &'static crate::config::Config =
             Box::leak(Box::new(crate::config::Config::default()));
@@ -2012,23 +2021,21 @@ mod tests {
             .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
+        // worktree_id = None — no scope and no context worktree → must error
         let mut state = make_execution_state_with_worktree(
             &conn,
             config,
             run.id,
             parent.id,
-            Some("w1".to_string()),
+            None,
             Some("r1".to_string()),
             None,
         );
 
-        // Ticket scope instead of worktree scope — should error
         let node = ForEachNode {
-            name: "bad-scope".to_string(),
+            name: "no-scope".to_string(),
             over: ForeachOver::Worktrees,
-            scope: Some(ForeachScope::Ticket(
-                crate::workflow_dsl::TicketScope::Unlabeled,
-            )),
+            scope: None,
             filter: std::collections::HashMap::new(),
             ordered: false,
             on_cycle: OnCycle::Fail,
@@ -2039,11 +2046,79 @@ mod tests {
         };
 
         let result = collect_worktree_items(&mut state, &node, &HashSet::new());
-        assert!(result.is_err(), "expected error when scope type is wrong");
+        assert!(
+            result.is_err(),
+            "expected error when neither scope nor worktree_id is set"
+        );
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("base_branch"),
-            "error should mention base_branch, got: {msg}"
+            msg.contains("worktree_id") || msg.contains("scope"),
+            "error should mention scope or worktree_id, got: {msg}"
+        );
+    }
+
+    /// collect_worktree_items infers base_branch from state.worktree_id when scope is omitted.
+    #[test]
+    fn test_collect_worktree_items_infers_base_branch_from_context() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // "w1" has no base_branch (NULL); effective_base falls back to repo default_branch "main".
+        // Insert a second active worktree on "main" to verify it is returned.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-infer', 'r1', 'feat-infer', 'feat/infer', '/tmp/infer', 'active', '2024-01-05T00:00:00Z', 'main')",
+            [],
+        ).unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        // worktree_id = "w1" (base_branch NULL → effective "main"), scope = None
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = ForEachNode {
+            name: "infer-foreach".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: None,
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 3,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let result = collect_worktree_items(&mut state, &node, &HashSet::new());
+        assert!(
+            result.is_ok(),
+            "expected Ok when worktree_id is present, got: {:?}",
+            result
+        );
+        let items = result.unwrap();
+        // "wt-infer" is on "main"; "w1" has NULL base_branch (not "main" explicitly) so it won't
+        // show up via list_by_repo_id_and_base_branch("main"). Only "wt-infer" should match.
+        let ids: Vec<&str> = items.iter().map(|(_, id, _)| id.as_str()).collect();
+        assert!(
+            ids.contains(&"wt-infer"),
+            "should include wt-infer on main, got: {:?}",
+            ids
         );
     }
 
