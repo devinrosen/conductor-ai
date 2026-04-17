@@ -455,9 +455,7 @@ fn collect_worktree_items(
                 ))
             })?;
             let wt = WorktreeManager::new(state.conn, state.config).get_by_id(wt_id)?;
-            let repo =
-                crate::repo::RepoManager::new(state.conn, state.config).get_by_id(&wt.repo_id)?;
-            base_branch_owned = wt.effective_base(&repo.default_branch).to_string();
+            base_branch_owned = wt.branch.clone();
             &base_branch_owned
         }
     };
@@ -1629,6 +1627,94 @@ mod tests {
         }
     }
 
+    /// Regression test: when no base_branch is in scope, collect_worktree_items must use the
+    /// context worktree's own branch to find children — not its parent (which would select
+    /// siblings instead).
+    #[test]
+    fn test_collect_worktree_items_inferred_base_uses_worktree_branch_not_parent() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // Context worktree: release/1.0 branched from main.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-release', 'r1', 'release-1.0', 'release/1.0', '/tmp/release', 'active', '2024-01-01T00:00:00Z', 'main')",
+            [],
+        ).unwrap();
+        // Children: branched from release/1.0 — should be selected.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-child-a', 'r1', 'feat-child-a', 'feat/child-a', '/tmp/ca', 'active', '2024-01-02T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-child-b', 'r1', 'feat-child-b', 'feat/child-b', '/tmp/cb', 'active', '2024-01-03T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+        // Sibling: also branched from main — must NOT be selected.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-sibling', 'r1', 'feat-sibling', 'feat/sibling', '/tmp/sib', 'active', '2024-01-04T00:00:00Z', 'main')",
+            [],
+        ).unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("wt-release"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run(
+                "test",
+                Some("wt-release"),
+                &parent.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("wt-release".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        // No base_branch in scope — engine must infer from context worktree's branch.
+        let node = ForEachNode {
+            name: "test-children".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: None,
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 1,
+            workflow: "ticket-to-pr".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let items = collect_worktree_items(&mut state, &node, &HashSet::new()).unwrap();
+
+        let ids: Vec<&str> = items.iter().map(|(_, id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"wt-child-a"), "child-a should be selected");
+        assert!(ids.contains(&"wt-child-b"), "child-b should be selected");
+        assert!(
+            !ids.contains(&"wt-sibling"),
+            "sibling (same parent as context worktree) must not be selected"
+        );
+        assert!(
+            !ids.contains(&"wt-release"),
+            "context worktree itself must not be selected"
+        );
+    }
+
     #[test]
     fn test_collect_worktree_items_has_open_pr_filter() {
         // setup_db() inserts repo r1 with remote_url = 'https://github.com/test/repo.git'.
@@ -2110,11 +2196,11 @@ mod tests {
         let config: &'static crate::config::Config =
             Box::leak(Box::new(crate::config::Config::default()));
 
-        // "w1" has no base_branch (NULL); effective_base falls back to repo default_branch "main".
-        // Insert a second active worktree on "main" to verify it is returned.
+        // "w1" has branch "feat/test"; the new inference uses wt.branch as the base_branch filter,
+        // so we look for worktrees whose base_branch = "feat/test" (children of w1).
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
-             VALUES ('wt-infer', 'r1', 'feat-infer', 'feat/infer', '/tmp/infer', 'active', '2024-01-05T00:00:00Z', 'main')",
+             VALUES ('wt-infer', 'r1', 'feat-infer', 'feat/infer', '/tmp/infer', 'active', '2024-01-05T00:00:00Z', 'feat/test')",
             [],
         ).unwrap();
 
@@ -2158,8 +2244,8 @@ mod tests {
             result
         );
         let items = result.unwrap();
-        // "wt-infer" is on "main"; "w1" has NULL base_branch (not "main" explicitly) so it won't
-        // show up via list_by_repo_id_and_base_branch("main"). Only "wt-infer" should match.
+        // "wt-infer" has base_branch = "feat/test" (w1's branch); "w1" itself is excluded because
+        // its base_branch is NULL, not "feat/test". Only "wt-infer" should match.
         let ids: Vec<&str> = items.iter().map(|(_, id, _)| id.as_str()).collect();
         assert!(
             ids.contains(&"wt-infer"),

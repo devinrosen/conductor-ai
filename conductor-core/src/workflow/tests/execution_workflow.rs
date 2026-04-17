@@ -1,7 +1,10 @@
 use super::*;
 use crate::agent::AgentManager;
 use crate::error::ConductorError;
-use crate::workflow_dsl::{AgentRef, CallNode, CallWorkflowNode, GateType, WorkflowNode};
+use crate::workflow_dsl::{
+    AgentRef, CallNode, CallWorkflowNode, ForEachNode, ForeachOver, GateType, OnChildFail,
+    WorkflowNode,
+};
 
 #[test]
 fn test_cannot_start_workflow_run_when_active() {
@@ -1142,6 +1145,66 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
         run.repo_id.as_deref(),
         Some("r1"),
         "repo_id should be derived from worktree w1's parent repo r1"
+    );
+}
+
+/// Regression test: when `repo_id` is `None` but `worktree_id` is provided, a
+/// `foreach over worktrees` step must not fail with "requires a repo_id in the execution
+/// context". The `effective_repo_id` derived from the worktree must be threaded into
+/// `ExecutionState`, not just saved to the DB row.
+#[test]
+fn test_foreach_worktrees_uses_derived_repo_id_from_worktree() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+
+    let foreach_node = ForEachNode {
+        name: "fan-out".to_string(),
+        over: ForeachOver::Worktrees,
+        scope: None,
+        filter: Default::default(),
+        ordered: false,
+        on_cycle: crate::workflow_dsl::OnCycle::Fail,
+        max_parallel: 1,
+        workflow: "ticket-to-pr".to_string(),
+        inputs: Default::default(),
+        on_child_fail: OnChildFail::Continue,
+    };
+    let mut workflow = make_empty_workflow();
+    workflow.body = vec![WorkflowNode::ForEach(foreach_node)];
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &workflow,
+        worktree_id: Some("w1"),
+        working_dir: "/tmp/ws/feat-test",
+        repo_path: "/tmp/repo",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        feature_id: None,
+        iteration: 0,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
+        force: false,
+    };
+
+    let result = execute_workflow(&input);
+    assert!(
+        !matches!(
+            result,
+            Err(ConductorError::Workflow(ref msg)) if msg.contains("requires a repo_id")
+        ),
+        "foreach over worktrees should not fail with missing repo_id when worktree_id is provided"
     );
 }
 
