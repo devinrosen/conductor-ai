@@ -20,10 +20,7 @@ pub(crate) fn slugify(s: &str) -> String {
 pub(crate) fn worktree_name_for_ticket(source_id: &str, title: &str) -> String {
     let title_slug = slugify(title);
     let raw = format!("feat-{source_id}-{title_slug}");
-    let end = raw
-        .char_indices()
-        .nth(60)
-        .map_or(raw.len(), |(i, _)| i);
+    let end = raw.char_indices().nth(60).map_or(raw.len(), |(i, _)| i);
     raw[..end].trim_end_matches('-').to_string()
 }
 

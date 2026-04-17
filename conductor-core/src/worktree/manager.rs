@@ -1875,8 +1875,14 @@ mod tests {
 
         assert_eq!(results.len(), 2, "should create two worktrees");
 
-        let (wt1, _) = results.iter().find(|(w, _)| w.branch.contains("201")).unwrap();
-        let (wt2, _) = results.iter().find(|(w, _)| w.branch.contains("202")).unwrap();
+        let (wt1, _) = results
+            .iter()
+            .find(|(w, _)| w.branch.contains("201"))
+            .unwrap();
+        let (wt2, _) = results
+            .iter()
+            .find(|(w, _)| w.branch.contains("202"))
+            .unwrap();
 
         // t1 has no in-set blockers → base_branch must be root_branch "main"
         assert_eq!(

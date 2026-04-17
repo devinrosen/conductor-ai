@@ -1274,10 +1274,7 @@ impl<'a> FeatureManager<'a> {
         // Fetch ticket details for prompt + slug
         let ticket = crate::tickets::TicketSyncer::new(self.conn).get_by_id(ticket_id)?;
 
-        let wt_name = crate::text_util::worktree_name_for_ticket(
-            &ticket.source_id,
-            &ticket.title,
-        );
+        let wt_name = crate::text_util::worktree_name_for_ticket(&ticket.source_id, &ticket.title);
 
         // Create worktree based off the feature branch
         let wt_opts = WorktreeCreateOptions {
