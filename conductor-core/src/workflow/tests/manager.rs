@@ -3501,8 +3501,7 @@ fn test_reset_steps_from_position_kills_agent_subprocesses() {
         )
         .unwrap();
     assert_eq!(
-        status_after,
-        "pending",
+        status_after, "pending",
         "agent step after boundary must be reset"
     );
 
@@ -3515,8 +3514,7 @@ fn test_reset_steps_from_position_kills_agent_subprocesses() {
         )
         .unwrap();
     assert_eq!(
-        status_before,
-        "running",
+        status_before, "running",
         "agent step before boundary must not be reset"
     );
 }
