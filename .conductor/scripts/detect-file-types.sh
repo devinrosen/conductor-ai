@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Get changed files relative to main
-changed_files=$(git diff origin/main...HEAD --name-only 2>/dev/null || true)
+# Get changed files relative to PR base branch
+BASE_BRANCH=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || echo main)
+changed_files=$(git diff origin/${BASE_BRANCH}...HEAD --name-only 2>/dev/null || true)
 
 # Filter for code files, excluding .conductor/, docs/, .github/, and root-level *.md
 code_files=()
