@@ -466,7 +466,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             .entry("ticket_raw_json".to_string())
             .or_insert_with(|| ticket.raw_json.clone());
     }
-    if let Some(rid) = input.repo_id {
+    if let Some(rid) = effective_repo_id {
         let repo = crate::repo::RepoManager::new(conn, config).get_by_id(rid)?;
         merged_inputs
             .entry("repo_id".to_string())
@@ -511,7 +511,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         worktree_slug,
         repo_path: input.repo_path.to_string(),
         ticket_id: input.ticket_id.map(String::from),
-        repo_id: input.repo_id.map(String::from),
+        repo_id: effective_repo_id.map(String::from),
         model: input.model.map(String::from),
         exec_config: input.exec_config.clone(),
         inputs: merged_inputs,
