@@ -10,7 +10,7 @@ workflow iterate-feature {
   foreach run-children {
     over          = worktrees
     scope         = { has_open_pr = false }
-    max_parallel  = 3
+    max_parallel  = 1
     workflow      = "ticket-to-pr"
     inputs        = { ticket_id = "{{item.ticket_id}}" }
     on_child_fail = continue
