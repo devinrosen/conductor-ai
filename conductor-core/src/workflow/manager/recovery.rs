@@ -878,7 +878,9 @@ impl<'a> WorkflowManager<'a> {
                 .map(|pid| std::thread::spawn(move || crate::process_utils::cancel_subprocess(pid)))
                 .collect();
             for h in handles {
-                let _ = h.join();
+                if let Err(e) = h.join() {
+                    tracing::warn!("subprocess cancel thread panicked: {:?}", e);
+                }
             }
         }
         Ok(())
