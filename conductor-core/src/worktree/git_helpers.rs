@@ -29,30 +29,36 @@ pub struct MainHealthStatus {
 ///
 /// Does not modify any git state (no checkout, no merge, no fetch).
 pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus {
-    // 1. Check dirty state
-    let (is_dirty, dirty_files, status_check_failed) =
-        match git_in(repo_path).args(["status", "--porcelain"]).output() {
-            Ok(o) if o.status.success() && !o.stdout.is_empty() => {
-                let files: Vec<String> = String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .map(|l| {
-                        l.trim_start_matches(|c: char| !c.is_whitespace())
-                            .trim()
-                            .to_string()
-                    })
-                    .collect();
-                (true, files, false)
-            }
-            Ok(o) if o.status.success() => {
-                // Empty stdout → working tree is clean
-                (false, Vec::new(), false)
-            }
-            _ => {
-                // Command failed or non-zero exit — cannot determine dirty state
-                (false, Vec::new(), true)
-            }
-        };
+    // 1. Check dirty state. Untracked files are excluded because `git worktree add`
+    //    creates a new working directory and never touches the original worktree's
+    //    untracked files — blocking on them just produces false positives (e.g.
+    //    untracked test-helper submodule directories that the user can't easily
+    //    commit or stash).
+    let (is_dirty, dirty_files, status_check_failed) = match git_in(repo_path)
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+    {
+        Ok(o) if o.status.success() && !o.stdout.is_empty() => {
+            let files: Vec<String> = String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| {
+                    l.trim_start_matches(|c: char| !c.is_whitespace())
+                        .trim()
+                        .to_string()
+                })
+                .collect();
+            (true, files, false)
+        }
+        Ok(o) if o.status.success() => {
+            // Empty stdout → working tree is clean
+            (false, Vec::new(), false)
+        }
+        _ => {
+            // Command failed or non-zero exit — cannot determine dirty state
+            (false, Vec::new(), true)
+        }
+    };
 
     // 2. Count commits behind using cached remote refs (no fetch — avoids double
     //    fetch with the subsequent ensure_base_up_to_date call in create()).
@@ -236,9 +242,14 @@ fn ensure_base_up_to_date_with_fetch_control(
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
 
-    // 1. Check for uncommitted changes in the repo working tree
+    // 1. Check for uncommitted changes in the repo working tree. Untracked files are
+    //    excluded — they don't affect `git worktree add` (new directory, separate from
+    //    the main working tree) and are the most common source of false-positive
+    //    "dirty" reports (e.g. untracked test-helper directories).
     if !force_dirty && !pre_verified_clean {
-        let output = git_in(repo_path).args(["status", "--porcelain"]).output()?;
+        let output = git_in(repo_path)
+            .args(["status", "--porcelain", "--untracked-files=no"])
+            .output()?;
         if output.status.success() && !output.stdout.is_empty() {
             return Err(ConductorError::InvalidInput(
                 "uncommitted changes on base branch, please commit or stash first".to_string(),

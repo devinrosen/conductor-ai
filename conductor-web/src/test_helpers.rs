@@ -66,19 +66,22 @@ pub fn seeded_state_with_dirty_repo() -> (AppState, NamedTempFile, TempDir) {
             .expect("git command failed");
     };
     run(&["init"]);
+    // Commit a tracked file we can later modify. (Untracked files don't count as
+    // dirty — only tracked-file changes do — so we need a committed file here.)
+    std::fs::write(git_dir.path().join("tracked.txt"), "original").expect("write tracked file");
+    run(&["add", "tracked.txt"]);
     run(&[
         "-c",
         "user.email=test@test.com",
         "-c",
         "user.name=Test",
         "commit",
-        "--allow-empty",
         "-m",
         "init",
     ]);
 
-    // Write an uncommitted file so that `git status --porcelain` reports dirty.
-    std::fs::write(git_dir.path().join("dirty.txt"), "dirty").expect("write dirty file");
+    // Modify the tracked file so `git status --porcelain` reports dirty.
+    std::fs::write(git_dir.path().join("tracked.txt"), "modified").expect("modify tracked file");
 
     let git_path_for_seed = git_path.clone();
     let (state, tmp) = state_with_file_db(move |conn| {
