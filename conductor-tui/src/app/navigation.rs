@@ -415,6 +415,7 @@ impl App {
                             Some(self.state.selected_worktree_id.clone());
                         if self.state.selected_worktree_id.is_none() {
                             self.state.selected_worktree_id = worktree_id;
+                            self.sync_selection_arcs();
                         }
                         self.state.selected_workflow_run_id = Some(run_id);
                         self.state.previous_view = Some(self.state.view);
@@ -450,6 +451,7 @@ impl App {
                             Some(self.state.selected_worktree_id.clone());
                         if self.state.selected_worktree_id.is_none() {
                             self.state.selected_worktree_id = worktree_id;
+                            self.sync_selection_arcs();
                         }
                         self.state.selected_workflow_run_id = Some(run_id);
                         self.state.previous_view = Some(self.state.view);
