@@ -3999,11 +3999,7 @@ mod tests {
         insert_blocks_dep(&conn, "tb", "tc");
 
         let mut result = syncer
-            .get_blocks_edges_within_set(&[
-                "ta".to_string(),
-                "tb".to_string(),
-                "tc".to_string(),
-            ])
+            .get_blocks_edges_within_set(&["ta".to_string(), "tb".to_string(), "tc".to_string()])
             .unwrap();
         result.sort();
         assert_eq!(
