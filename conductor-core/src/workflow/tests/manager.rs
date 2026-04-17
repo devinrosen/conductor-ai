@@ -3263,6 +3263,158 @@ fn test_reset_steps_from_position_clears_subprocess_pid() {
     );
 }
 
+/// reset_failed_steps must attempt to signal running subprocesses before
+/// nulling subprocess_pid, so orphaned child processes are cleaned up.
+/// Uses non-existent PIDs (u32::MAX - N) — cancel_subprocess tolerates ESRCH.
+/// Tests multiple running subprocesses to verify all PIDs are signalled.
+#[test]
+fn test_reset_failed_steps_kills_running_subprocesses() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    let step_id_a = crate::new_id();
+    let step_id_b = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-running-a', 'script', 0, 'running', 0, 4294967295)",
+        params![step_id_a, run_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-running-b', 'script', 1, 'running', 0, 4294967294)",
+        params![step_id_b, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    // Must not error even though the PIDs do not exist.
+    mgr.reset_failed_steps(&run_id).unwrap();
+
+    for (id, label) in [
+        (&step_id_a, "step-running-a"),
+        (&step_id_b, "step-running-b"),
+    ] {
+        let pid: Option<i64> = conn
+            .query_row(
+                "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            pid.is_none(),
+            "subprocess_pid must be NULL after reset_failed_steps for {label}"
+        );
+    }
+}
+
+/// reset_steps_from_position must attempt to signal running subprocesses at or
+/// after `position` before nulling subprocess_pid, and must NOT signal steps
+/// before the boundary.
+#[test]
+fn test_reset_steps_from_position_kills_running_subprocesses() {
+    let conn = setup_db();
+    let run_id = make_workflow_run_id(&conn);
+
+    // Step at position 1 — before the reset boundary; must be left untouched.
+    let step_id_before = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-before', 'script', 1, 'running', 0, 4294967294)",
+        params![step_id_before, run_id],
+    )
+    .unwrap();
+
+    // Step at position 2 — at the reset boundary; must be reset.
+    let step_id_at = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-at', 'script', 2, 'running', 0, 4294967295)",
+        params![step_id_at, run_id],
+    )
+    .unwrap();
+
+    // Step at position 3 — after the reset boundary; must also be reset.
+    let step_id_after = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES (?1, ?2, 'step-after', 'script', 3, 'running', 0, 4294967293)",
+        params![step_id_after, run_id],
+    )
+    .unwrap();
+
+    let mgr = WorkflowManager::new(&conn);
+    mgr.reset_steps_from_position(&run_id, 2).unwrap();
+
+    // Step at boundary must have subprocess_pid nulled.
+    let pid_at: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            params![step_id_at],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid_at.is_none(),
+        "subprocess_pid must be NULL after reset_steps_from_position for step at boundary"
+    );
+
+    // Step after boundary must also have subprocess_pid nulled and status reset.
+    let pid_after: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            params![step_id_after],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pid_after.is_none(),
+        "subprocess_pid must be NULL after reset_steps_from_position for step after boundary"
+    );
+    let status_after: String = conn
+        .query_row(
+            "SELECT status FROM workflow_run_steps WHERE id = ?1",
+            params![step_id_after],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status_after, "pending",
+        "status of step after boundary must be reset to pending"
+    );
+
+    // Step before boundary must retain its status and subprocess_pid.
+    let pid_before: Option<i64> = conn
+        .query_row(
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
+            params![step_id_before],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        pid_before,
+        Some(4294967294_i64),
+        "subprocess_pid of step before boundary must not be changed"
+    );
+    let status_before: String = conn
+        .query_row(
+            "SELECT status FROM workflow_run_steps WHERE id = ?1",
+            params![step_id_before],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status_before, "running",
+        "status of step before boundary must not be changed"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // step_error cleared on reset tests
 // ---------------------------------------------------------------------------
