@@ -3965,4 +3965,99 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], ("child-a".to_string(), "blocker-1".to_string()));
     }
+
+    // --- resolve_tickets_in_repo tests ---
+
+    fn insert_ticket_with_source(conn: &Connection, id: &str, repo_id: &str, source_id: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO tickets \
+             (id, repo_id, source_type, source_id, title, state, synced_at, raw_json) \
+             VALUES (?1, ?2, 'github', ?3, 'test', 'open', '2024-01-01T00:00:00Z', '{}')",
+            rusqlite::params![id, repo_id, source_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_empty_input() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.resolve_tickets_in_repo("r1", &[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_by_internal_id() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_ticket_with_source(&conn, "internal-id-1", "r1", "42");
+        let ids = vec!["internal-id-1".to_string()];
+        let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "internal-id-1");
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_by_source_id() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_ticket_with_source(&conn, "internal-id-2", "r1", "99");
+        let ids = vec!["99".to_string()];
+        let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].source_id, "99");
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_mixed_internal_and_source_id() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_ticket_with_source(&conn, "int-id-a", "r1", "10");
+        insert_ticket_with_source(&conn, "int-id-b", "r1", "20");
+        let ids = vec!["int-id-a".to_string(), "20".to_string()];
+        let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "int-id-a");
+        assert_eq!(result[1].source_id, "20");
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_unknown_id_returns_error() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let ids = vec!["nonexistent-id".to_string()];
+        let err = syncer.resolve_tickets_in_repo("r1", &ids).unwrap_err();
+        assert!(matches!(err, ConductorError::TicketNotFound { .. }));
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_cross_repo_id_not_matched() {
+        let conn = setup_db();
+        // setup_db creates repo "r1"; insert a second repo "r2"
+        crate::test_helpers::insert_test_repo(&conn, "r2", "test-repo-2", "/tmp/repo2");
+        let syncer = TicketSyncer::new(&conn);
+        // Ticket belongs to r2, not r1; its source_id doesn't exist in r1 either
+        insert_ticket_with_source(&conn, "cross-repo-id", "r2", "55");
+        let ids = vec!["cross-repo-id".to_string()];
+        let err = syncer.resolve_tickets_in_repo("r1", &ids).unwrap_err();
+        assert!(matches!(err, ConductorError::TicketNotFound { .. }));
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_preserves_order() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_ticket_with_source(&conn, "ord-id-1", "r1", "100");
+        insert_ticket_with_source(&conn, "ord-id-2", "r1", "200");
+        insert_ticket_with_source(&conn, "ord-id-3", "r1", "300");
+        let ids = vec![
+            "300".to_string(),
+            "ord-id-1".to_string(),
+            "200".to_string(),
+        ];
+        let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
+        assert_eq!(result[0].source_id, "300");
+        assert_eq!(result[1].id, "ord-id-1");
+        assert_eq!(result[2].source_id, "200");
+    }
 }
