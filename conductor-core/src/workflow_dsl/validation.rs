@@ -279,29 +279,27 @@ fn validate_foreach_node<F>(
     }
 
     // Check 5: scope required for over = tickets or over = worktrees
-    if n.over == ForeachOver::Tickets && n.scope.is_none() {
-        errors.push(ValidationError {
-            message: format!(
-                "foreach '{}': `scope` is required when over = tickets",
-                n.name
-            ),
-            hint: Some(
-                "Add `scope = { ticket_id = \"...\" }`, `scope = { label = \"...\" }`, or `scope = { unlabeled = true }`"
-                    .to_string(),
-            ),
-        });
-    }
-    if n.over == ForeachOver::Worktrees && n.scope.is_none() {
-        errors.push(ValidationError {
-            message: format!(
-                "foreach '{}': `scope` is required when over = worktrees",
-                n.name
-            ),
-            hint: Some(
-                "Add `scope = { base_branch = \"release/x.y.z\" }` to restrict to a specific base branch"
-                    .to_string(),
-            ),
-        });
+    let scope_required_hint: Option<(&str, &str)> = match n.over {
+        ForeachOver::Tickets => Some((
+            "tickets",
+            "Add `scope = { ticket_id = \"...\" }`, `scope = { label = \"...\" }`, or `scope = { unlabeled = true }`",
+        )),
+        ForeachOver::Worktrees => Some((
+            "worktrees",
+            "Add `scope = { base_branch = \"release/x.y.z\" }` to restrict to a specific base branch",
+        )),
+        _ => None,
+    };
+    if let Some((over_name, hint)) = scope_required_hint {
+        if n.scope.is_none() {
+            errors.push(ValidationError {
+                message: format!(
+                    "foreach '{}': `scope` is required when over = {}",
+                    n.name, over_name
+                ),
+                hint: Some(hint.to_string()),
+            });
+        }
     }
 
     // Check 6: ordered only valid for tickets or worktrees
