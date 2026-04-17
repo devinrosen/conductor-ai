@@ -1,5 +1,34 @@
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+thread_local! {
+    static BETWEEN_CYCLE_HOOK: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_between_cycle_hook(hook: impl FnMut() + 'static) {
+    BETWEEN_CYCLE_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn clear_between_cycle_hook() {
+    BETWEEN_CYCLE_HOOK.with(|h| *h.borrow_mut() = None);
+}
+
+#[cfg(test)]
+fn call_between_cycle_hook() {
+    BETWEEN_CYCLE_HOOK.with(|h| {
+        if let Some(hook) = h.borrow_mut().as_mut() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn call_between_cycle_hook() {}
+
 use crate::error::{ConductorError, Result};
 use crate::workflow::engine::{
     record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
@@ -535,6 +564,11 @@ fn run_dispatch_loop(
         }
     }
 
+    // Tracks item IDs that were observed in a non-completed terminal state on the previous cycle.
+    // A failure is only committed once the same item appears failed/cancelled on two consecutive
+    // cycles, guarding against transient DB-write races (#2269).
+    let mut pending_terminal_failed: HashSet<String> = HashSet::new();
+
     loop {
         let all_items = state.wf_mgr.get_fan_out_items(step_id, None)?;
         let _pending: Vec<_> = all_items
@@ -553,30 +587,49 @@ fn run_dispatch_loop(
         for item in &running {
             if let Some(ref child_run_id) = item.child_run_id {
                 match state.wf_mgr.get_workflow_run_status(child_run_id)? {
-                    Some(ref s) if is_terminal_status(s) => {
-                        let item_succeeded = s == "completed";
-                        let terminal_status = if item_succeeded {
-                            "completed"
-                        } else {
-                            "failed"
-                        };
+                    Some(ref s) if s == "completed" => {
                         state
                             .wf_mgr
-                            .update_fan_out_item_terminal(&item.id, terminal_status)?;
+                            .update_fan_out_item_terminal(&item.id, "completed")?;
                         state.wf_mgr.refresh_fan_out_counters(step_id)?;
+                        pending_terminal_failed.remove(&item.id);
 
                         tracing::info!(
-                            "foreach '{}': item '{}' → {terminal_status}",
+                            "foreach '{}': item '{}' → completed",
                             node.name,
                             item.item_ref,
                         );
+                    }
+                    Some(ref s) if is_terminal_status(s) => {
+                        // Non-completed terminal (failed/cancelled): require two consecutive
+                        // observations before committing, to avoid acting on transient DB state.
+                        if pending_terminal_failed.contains(&item.id) {
+                            pending_terminal_failed.remove(&item.id);
+                            state
+                                .wf_mgr
+                                .update_fan_out_item_terminal(&item.id, "failed")?;
+                            state.wf_mgr.refresh_fan_out_counters(step_id)?;
 
-                        if !item_succeeded {
+                            tracing::info!(
+                                "foreach '{}': item '{}' → failed (confirmed on second observation)",
+                                node.name,
+                                item.item_ref,
+                            );
+
                             newly_failed.push(item.id.clone());
+                        } else {
+                            pending_terminal_failed.insert(item.id.clone());
+                            tracing::debug!(
+                                "foreach '{}': item '{}' observed {} — deferring one cycle",
+                                node.name,
+                                item.item_ref,
+                                s,
+                            );
                         }
                     }
                     _ => {
-                        // Still running or DB miss — continue polling.
+                        // Still running or DB miss — clear any pending failure flag (status recovered).
+                        pending_terminal_failed.remove(&item.id);
                     }
                 }
             }
@@ -663,6 +716,7 @@ fn run_dispatch_loop(
         }
 
         // Sleep poll interval before next tick.
+        call_between_cycle_hook();
         std::thread::sleep(state.exec_config.poll_interval);
     }
 }
@@ -1792,6 +1846,219 @@ mod tests {
             items.len(),
             0,
             "has_open_pr=true with empty PR list: no worktrees should pass"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Two-cycle failure confirmation tests (#2269)
+    // -----------------------------------------------------------------------
+
+    fn make_foreach_node_continue() -> ForEachNode {
+        ForEachNode {
+            name: "test-foreach".to_string(),
+            over: ForeachOver::Tickets,
+            scope: None,
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: crate::workflow_dsl::OnCycle::Fail,
+            max_parallel: 1,
+            workflow: "child-wf".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        }
+    }
+
+    /// Regression test for #2269: a child run observed as 'failed' only once must NOT
+    /// immediately mark the fan-out item failed.  If the child run recovers to 'completed'
+    /// before the second polling cycle, the item must end as 'completed'.
+    ///
+    /// Uses a file-based WAL DB so a background thread can update the child run status
+    /// between the two dispatch loop cycles. Channel-based synchronization via
+    /// `between_cycle_hook` replaces wall-clock timing to avoid flaky-test failures.
+    #[test]
+    fn test_foreach_does_not_fail_item_on_first_failed_observation() {
+        use crate::workflow::status::WorkflowRunStatus;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let db_path = tmp_dir.path().join("test.db");
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let conn = crate::db::open_database(&db_path).unwrap();
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp/ws");
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "foreach-step", "foreach", false, 0, 1)
+            .unwrap();
+
+        let child_agent = agent_mgr
+            .create_run(Some("w1"), "child", None, None)
+            .unwrap();
+        let child_run = wf_mgr
+            .create_workflow_run(
+                "child-wf",
+                Some("w1"),
+                &child_agent.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
+        let child_run_id = child_run.id.clone();
+        // Child run starts as 'failed' — simulating a transient DB state.
+        wf_mgr
+            .update_workflow_status(&child_run_id, WorkflowRunStatus::Failed, None, None)
+            .unwrap();
+
+        let item_id = wf_mgr
+            .insert_fan_out_item(&step_id, "ticket", "ticket-1", "ticket-1")
+            .unwrap();
+        wf_mgr
+            .update_fan_out_item_running(&item_id, &child_run_id)
+            .unwrap();
+
+        // Channels synchronize the between-cycle hook with the background update thread.
+        // trigger: hook → BG ("cycle 1 done, update now")
+        // done:    BG → hook ("update complete")
+        let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+
+        // Background thread: waits for the between-cycle hook to fire, then updates the
+        // child run to 'completed' so cycle 2 sees the recovered state.
+        let db_path_bg = db_path.clone();
+        let child_run_id_bg = child_run_id.clone();
+        let bg = std::thread::spawn(move || {
+            trigger_rx.recv().unwrap();
+            let bg_conn = crate::db::open_database(&db_path_bg).unwrap();
+            let bg_wf_mgr = crate::workflow::manager::WorkflowManager::new(&bg_conn);
+            bg_wf_mgr
+                .update_workflow_status(
+                    &child_run_id_bg,
+                    WorkflowRunStatus::Completed,
+                    Some("recovered"),
+                    None,
+                )
+                .unwrap();
+            done_tx.send(()).unwrap();
+        });
+
+        let node = make_foreach_node_continue();
+        let child_def = make_minimal_child_def();
+        let run_id = run.id.clone();
+        let parent_id = parent.id.clone();
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run_id,
+            parent_id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+        // Zero poll interval: the between-cycle hook provides all needed synchronization.
+        state.exec_config.poll_interval = Duration::from_millis(0);
+        // Hook fires between cycles: signals BG to update DB and waits for confirmation.
+        set_between_cycle_hook(move || {
+            trigger_tx.send(()).unwrap();
+            done_rx.recv().unwrap();
+        });
+
+        let result = run_dispatch_loop(&mut state, &node, &step_id, &child_def, 1);
+        clear_between_cycle_hook();
+        bg.join().unwrap();
+        assert!(result.is_ok(), "dispatch loop should succeed: {:?}", result);
+
+        let items = wf_mgr.get_fan_out_items(&step_id, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].status, "completed",
+            "transient failure must not be committed: item must end as completed after recovery"
+        );
+    }
+
+    /// Regression test for #2269: a child run that remains 'failed' across two consecutive
+    /// polling cycles must be committed as 'failed'.
+    #[test]
+    fn test_foreach_fails_item_after_two_consecutive_failed_observations() {
+        use crate::workflow::status::WorkflowRunStatus;
+        use std::time::Duration;
+
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "foreach-step", "foreach", false, 0, 1)
+            .unwrap();
+
+        let child_agent = agent_mgr
+            .create_run(Some("w1"), "child", None, None)
+            .unwrap();
+        let child_run = wf_mgr
+            .create_workflow_run(
+                "child-wf",
+                Some("w1"),
+                &child_agent.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
+        let child_run_id = child_run.id.clone();
+        wf_mgr
+            .update_workflow_status(&child_run_id, WorkflowRunStatus::Failed, None, None)
+            .unwrap();
+
+        let item_id = wf_mgr
+            .insert_fan_out_item(&step_id, "ticket", "ticket-1", "ticket-1")
+            .unwrap();
+        wf_mgr
+            .update_fan_out_item_running(&item_id, &child_run_id)
+            .unwrap();
+
+        let node = make_foreach_node_continue();
+        let child_def = make_minimal_child_def();
+        let run_id = run.id.clone();
+        let parent_id = parent.id.clone();
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run_id,
+            parent_id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+        // No sleep between cycles so the test runs fast.
+        state.exec_config.poll_interval = Duration::ZERO;
+
+        let result = run_dispatch_loop(&mut state, &node, &step_id, &child_def, 1);
+        assert!(result.is_ok(), "dispatch loop should succeed: {:?}", result);
+
+        let items = wf_mgr.get_fan_out_items(&step_id, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].status, "failed",
+            "persistent failure must be committed after two consecutive failed observations"
         );
     }
 
