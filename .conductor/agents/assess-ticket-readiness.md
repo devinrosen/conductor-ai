@@ -26,7 +26,7 @@ Re-assess the ticket in light of these answers.
 
 3. **Open questions** — Are there any unanswered questions in the ticket body or comments? Any "TBD", "TBC", "ask X", "check with Y", or "decide later" language?
 
-4. **Codebase assumptions** — Based on the codebase scan in the prior context, do the ticket's references (files, functions, modules, APIs) match reality? Flag any that are missing, renamed, or behave differently than described.
+4. **Codebase assumptions** — Based on the codebase scan in the prior context, do the ticket's references (files, functions, modules, APIs) match reality? Flag any that are missing, renamed, or behave differently than described. If `base_branch` is present in the prior context, scope all `git log` commands to that branch (e.g. `git log <base_branch> --oneline -20`) so history checks reflect the PR's actual target branch rather than `main`.
 
 5. **Blockers** — Are there linked tickets or external dependencies that must be resolved first? Are they actually resolved?
 
