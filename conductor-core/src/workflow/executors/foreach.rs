@@ -961,27 +961,18 @@ fn load_ticket_dep_edges(
     }
 
     let syncer = crate::tickets::TicketSyncer::new(state.conn);
-    let mut edges: Vec<(String, String)> = Vec::new();
-
-    // For each ticket in the set, load its dependencies and collect edges
-    // where both endpoints are in the set.
     let id_set: HashSet<&String> = item_ids.iter().collect();
-    for ticket_id in &item_ids {
-        match syncer.get_dependencies(ticket_id) {
-            Ok(deps) => {
-                for blocker in &deps.blocked_by {
-                    if id_set.contains(&blocker.id) {
-                        // blocker.id → ticket_id (blocker must complete before ticket)
-                        edges.push((blocker.id.clone(), ticket_id.clone()));
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("foreach: could not load deps for ticket '{ticket_id}': {e}");
-            }
-        }
-    }
+    let ticket_id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+    let raw_edges = syncer
+        .get_blocking_edges_for_tickets(&ticket_id_refs)
+        .map_err(|e| ConductorError::Workflow(format!("foreach: dependency query failed: {e}")))?;
 
+    let edges: Vec<(String, String)> = raw_edges
+        .into_iter()
+        .filter(|(blocker_id, dependent_id)| {
+            id_set.contains(blocker_id) && id_set.contains(dependent_id)
+        })
+        .collect();
     Ok(edges)
 }
 
