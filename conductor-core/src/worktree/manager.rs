@@ -187,6 +187,23 @@ pub struct WorktreeCreateOptions {
     pub pre_health: Option<super::git_helpers::MainHealthStatus>,
 }
 
+/// Write `branch.<branch>.remote = origin` and `branch.<branch>.merge = refs/heads/<branch>`
+/// into the git config at `path`. This is the non-network equivalent of `git push -u origin <branch>`,
+/// ensuring bare `git push` inside the worktree always targets the correct remote branch.
+pub(crate) fn set_upstream_tracking(path: &Path, branch: &str) -> Result<()> {
+    check_output(git_in(path).args([
+        "config",
+        &format!("branch.{branch}.remote"),
+        "origin",
+    ]))?;
+    check_output(git_in(path).args([
+        "config",
+        &format!("branch.{branch}.merge"),
+        &format!("refs/heads/{branch}"),
+    ]))?;
+    Ok(())
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -352,16 +369,7 @@ impl<'a> WorktreeManager<'a> {
 
         // Set upstream tracking config so bare `git push` targets the correct remote branch.
         // This is the non-network equivalent of `git push -u origin <branch>`.
-        check_output(git_in(&wt_path).args([
-            "config",
-            &format!("branch.{branch}.remote"),
-            "origin",
-        ]))?;
-        check_output(git_in(&wt_path).args([
-            "config",
-            &format!("branch.{branch}.merge"),
-            &format!("refs/heads/{branch}"),
-        ]))?;
+        set_upstream_tracking(&wt_path, &branch)?;
 
         // Detect and install deps
         install_deps(&wt_path);
@@ -1894,6 +1902,62 @@ mod tests {
             wt2.base_branch.as_deref(),
             Some(wt1.branch.as_str()),
             "dependent ticket should base off its blocker's branch"
+        );
+    }
+
+    /// Verify set_upstream_tracking writes branch.<branch>.remote and branch.<branch>.merge
+    /// into the git config, which prevents bare `git push` from landing commits on the wrong branch.
+    #[test]
+    fn test_set_upstream_tracking_writes_config() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let repo_dir = TempDir::new().unwrap();
+        let repo_path = repo_dir.path();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(repo_path)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(repo_path)
+            .output()
+            .expect("initial commit");
+
+        set_upstream_tracking(repo_path, "feat/my-branch").unwrap();
+
+        let remote_val = Command::new("git")
+            .args(["config", "--get", "branch.feat/my-branch.remote"])
+            .current_dir(repo_path)
+            .output()
+            .expect("git config --get remote");
+        assert_eq!(
+            String::from_utf8_lossy(&remote_val.stdout).trim(),
+            "origin",
+            "branch.feat/my-branch.remote should be 'origin'"
+        );
+
+        let merge_val = Command::new("git")
+            .args(["config", "--get", "branch.feat/my-branch.merge"])
+            .current_dir(repo_path)
+            .output()
+            .expect("git config --get merge");
+        assert_eq!(
+            String::from_utf8_lossy(&merge_val.stdout).trim(),
+            "refs/heads/feat/my-branch",
+            "branch.feat/my-branch.merge should be 'refs/heads/feat/my-branch'"
         );
     }
 }
