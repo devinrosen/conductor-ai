@@ -479,7 +479,14 @@ fn validate_conditional_branch<F>(
         }
     }
     let mut branch_produced = produced.clone();
-    validate_nodes(body, &mut branch_produced, errors, warnings, loader, bool_inputs);
+    validate_nodes(
+        body,
+        &mut branch_produced,
+        errors,
+        warnings,
+        loader,
+        bool_inputs,
+    );
     // Conservative union: optimistically assume branch steps are available downstream.
     produced.extend(branch_produced);
 }

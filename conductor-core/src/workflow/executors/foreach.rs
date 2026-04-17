@@ -451,8 +451,8 @@ fn collect_worktree_items(
                 ))
             })?;
             let wt = WorktreeManager::new(state.conn, state.config).get_by_id(wt_id)?;
-            let repo = crate::repo::RepoManager::new(state.conn, state.config)
-                .get_by_id(&wt.repo_id)?;
+            let repo =
+                crate::repo::RepoManager::new(state.conn, state.config).get_by_id(&wt.repo_id)?;
             base_branch_owned = wt.effective_base(&repo.default_branch).to_string();
             &base_branch_owned
         }
@@ -2046,7 +2046,10 @@ mod tests {
         };
 
         let result = collect_worktree_items(&mut state, &node, &HashSet::new());
-        assert!(result.is_err(), "expected error when neither scope nor worktree_id is set");
+        assert!(
+            result.is_err(),
+            "expected error when neither scope nor worktree_id is set"
+        );
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("worktree_id") || msg.contains("scope"),
@@ -2103,12 +2106,20 @@ mod tests {
         };
 
         let result = collect_worktree_items(&mut state, &node, &HashSet::new());
-        assert!(result.is_ok(), "expected Ok when worktree_id is present, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "expected Ok when worktree_id is present, got: {:?}",
+            result
+        );
         let items = result.unwrap();
         // "wt-infer" is on "main"; "w1" has NULL base_branch (not "main" explicitly) so it won't
         // show up via list_by_repo_id_and_base_branch("main"). Only "wt-infer" should match.
         let ids: Vec<&str> = items.iter().map(|(_, id, _)| id.as_str()).collect();
-        assert!(ids.contains(&"wt-infer"), "should include wt-infer on main, got: {:?}", ids);
+        assert!(
+            ids.contains(&"wt-infer"),
+            "should include wt-infer on main, got: {:?}",
+            ids
+        );
     }
 
     /// build_item_vars for a worktree with NULL base_branch and NULL ticket_id should
