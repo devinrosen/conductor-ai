@@ -720,8 +720,7 @@ pub fn merged_branches_for_repo(
     let Ok(prs) = serde_json::from_slice::<Vec<PrHead>>(&output.stdout) else {
         return result;
     };
-    let branch_set: std::collections::HashSet<&str> =
-        branches.iter().map(String::as_str).collect();
+    let branch_set: std::collections::HashSet<&str> = branches.iter().map(String::as_str).collect();
     for pr in prs {
         if branch_set.contains(pr.head_ref_name.as_str()) {
             result.insert(pr.head_ref_name, pr.merged_at);

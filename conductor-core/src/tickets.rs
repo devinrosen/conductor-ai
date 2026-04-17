@@ -1694,7 +1694,10 @@ mod tests {
     }
 
     fn all_merged(_repo_id: &str, branches: &[String]) -> HashMap<String, String> {
-        branches.iter().map(|b| (b.clone(), String::new())).collect()
+        branches
+            .iter()
+            .map(|b| (b.clone(), String::new()))
+            .collect()
     }
 
     #[test]

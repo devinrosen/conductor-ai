@@ -1168,7 +1168,6 @@ impl<'a> WorktreeManager<'a> {
         )
     }
 
-
     pub(crate) fn cleanup_merged_worktrees_with_merge_check(
         &self,
         repo_slug: Option<&str>,
@@ -1234,14 +1233,18 @@ impl<'a> WorktreeManager<'a> {
         let fm = crate::feature::FeatureManager::new(self.conn, self.config);
 
         for row in &rows {
-            let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch, wt_created_at] = row;
+            let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch, wt_created_at] =
+                row;
             let Some(merged_at) = merged_branches.get(branch) else {
                 continue;
             };
 
             // If the worktree was created AFTER the PR was merged, the branch name is being
             // reused for a new worktree — do not clean it up.
-            if !merged_at.is_empty() && !wt_created_at.is_empty() && wt_created_at.as_str() > merged_at.as_str() {
+            if !merged_at.is_empty()
+                && !wt_created_at.is_empty()
+                && wt_created_at.as_str() > merged_at.as_str()
+            {
                 tracing::debug!(
                     worktree = %wt_id,
                     branch = %branch,
@@ -1531,7 +1534,8 @@ mod tests {
     // ── cleanup_merged_worktrees pull_fn tests ──────────────────────────────
 
     /// Returns a merge_check closure that marks only "feat/sub-task" as merged.
-    fn merged_sub_task_check() -> impl Fn(&str, &[String]) -> std::collections::HashMap<String, String> {
+    fn merged_sub_task_check(
+    ) -> impl Fn(&str, &[String]) -> std::collections::HashMap<String, String> {
         |_remote_url: &str, _branches: &[String]| {
             let mut map = std::collections::HashMap::new();
             map.insert("feat/sub-task".to_string(), String::new());
