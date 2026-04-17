@@ -191,11 +191,7 @@ pub struct WorktreeCreateOptions {
 /// into the git config at `path`. This is the non-network equivalent of `git push -u origin <branch>`,
 /// ensuring bare `git push` inside the worktree always targets the correct remote branch.
 pub(crate) fn set_upstream_tracking(path: &Path, branch: &str) -> Result<()> {
-    check_output(git_in(path).args([
-        "config",
-        &format!("branch.{branch}.remote"),
-        "origin",
-    ]))?;
+    check_output(git_in(path).args(["config", &format!("branch.{branch}.remote"), "origin"]))?;
     check_output(git_in(path).args([
         "config",
         &format!("branch.{branch}.merge"),
