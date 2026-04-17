@@ -1874,7 +1874,14 @@ mod tests {
             .create_run(Some("w1"), "child", None, None)
             .unwrap();
         let child_run = wf_mgr
-            .create_workflow_run("child-wf", Some("w1"), &child_agent.id, false, "manual", None)
+            .create_workflow_run(
+                "child-wf",
+                Some("w1"),
+                &child_agent.id,
+                false,
+                "manual",
+                None,
+            )
             .unwrap();
         let child_run_id = child_run.id.clone();
         // Child run starts as 'failed' — simulating a transient DB state.
@@ -1964,7 +1971,14 @@ mod tests {
             .create_run(Some("w1"), "child", None, None)
             .unwrap();
         let child_run = wf_mgr
-            .create_workflow_run("child-wf", Some("w1"), &child_agent.id, false, "manual", None)
+            .create_workflow_run(
+                "child-wf",
+                Some("w1"),
+                &child_agent.id,
+                false,
+                "manual",
+                None,
+            )
             .unwrap();
         let child_run_id = child_run.id.clone();
         wf_mgr
