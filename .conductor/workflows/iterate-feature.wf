@@ -1,0 +1,18 @@
+workflow iterate-feature {
+  meta {
+    title       = "Iterate Feature"
+    description = "Run ticket-to-pr on every child worktree of the current feature branch"
+    trigger     = "manual"
+    targets     = ["worktree"]
+    group       = "Development"
+  }
+
+  foreach run-children {
+    over          = worktrees
+    scope         = { has_open_pr = false }
+    max_parallel  = 1
+    workflow      = "ticket-to-pr"
+    inputs        = { ticket_id = "{{item.ticket_id}}" }
+    on_child_fail = continue
+  }
+}

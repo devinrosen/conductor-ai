@@ -225,8 +225,8 @@ pub struct ForEachNode {
     pub name: String,
     /// The collection type to fan out over.
     pub over: ForeachOver,
-    /// Scope filter for ticket fan-outs.
-    pub scope: Option<TicketScope>,
+    /// Scope filter for ticket or worktree fan-outs.
+    pub scope: Option<ForeachScope>,
     /// Generic filter map (required for workflow_run fan-outs, reserved for repos).
     #[serde(default)]
     pub filter: HashMap<String, String>,
@@ -253,6 +253,15 @@ pub enum ForeachOver {
     Tickets,
     Repos,
     WorkflowRuns,
+    Worktrees,
+}
+
+/// Unified scope for foreach fan-outs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "scope_type", content = "scope_value", rename_all = "snake_case")]
+pub enum ForeachScope {
+    Ticket(TicketScope),
+    Worktree(WorktreeScope),
 }
 
 /// Scope selector for ticket fan-outs.
@@ -265,6 +274,15 @@ pub enum TicketScope {
     Label(String),
     /// All open tickets with no entries in ticket_labels.
     Unlabeled,
+}
+
+/// Scope selector for worktree fan-outs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeScope {
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    #[serde(default)]
+    pub has_open_pr: Option<bool>,
 }
 
 /// What to do when a child workflow fails.

@@ -189,6 +189,27 @@ pub fn handle_worktree(
                 println!("Cleaned up {count} merged worktree(s).");
             }
         }
+        WorktreeCommands::CreateStack {
+            repo,
+            root_branch,
+            tickets,
+        } => {
+            if tickets.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "--tickets must specify at least one ticket ID."
+                ));
+            }
+            let mgr = WorktreeManager::new(conn, config);
+            let results = mgr.create_from_dep_graph(&repo, &root_branch, &tickets)?;
+            for (wt, warnings) in &results {
+                for warning in warnings {
+                    eprintln!("warning: {warning}");
+                }
+                println!("Created worktree: {} ({})", wt.slug, wt.branch);
+                println!("  Path: {}", wt.path);
+            }
+            println!("Stack of {} worktree(s) created.", results.len());
+        }
     }
     Ok(())
 }

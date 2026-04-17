@@ -1233,20 +1233,6 @@ impl<'a> FeatureManager<'a> {
             .optional()?)
     }
 
-    /// Slugify a string for use in a worktree name: lowercase, replace non-alphanum with hyphens, deduplicate hyphens, trim.
-    fn slugify(s: &str) -> String {
-        let mut slug = s
-            .to_lowercase()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '-' })
-            .collect::<String>();
-        // Collapse consecutive hyphens
-        while slug.contains("--") {
-            slug = slug.replace("--", "-");
-        }
-        slug.trim_matches('-').to_string()
-    }
-
     /// Query eligible tickets for a feature: tickets linked via `feature_tickets` that do not
     /// already have an `active` or `merged` worktree in the given repo.
     /// Tickets with only `abandoned` worktrees are eligible (retry-able).
@@ -1288,19 +1274,7 @@ impl<'a> FeatureManager<'a> {
         // Fetch ticket details for prompt + slug
         let ticket = crate::tickets::TicketSyncer::new(self.conn).get_by_id(ticket_id)?;
 
-        // Build a descriptive worktree name from the source_id + title slug
-        let title_slug = Self::slugify(&ticket.title);
-        let raw_name = format!("feat-{}-{}", ticket.source_id, title_slug);
-        // Cap at 60 chars to keep slugs manageable.
-        // Use char_indices to find a safe UTF-8 boundary (slugify passes non-ASCII
-        // alphanumerics through unchanged, so multi-byte codepoints are possible).
-        let wt_name = {
-            let end = raw_name
-                .char_indices()
-                .nth(60)
-                .map_or(raw_name.len(), |(i, _)| i);
-            raw_name[..end].trim_end_matches('-').to_string()
-        };
+        let wt_name = crate::text_util::worktree_name_for_ticket(&ticket.source_id, &ticket.title);
 
         // Create worktree based off the feature branch
         let wt_opts = WorktreeCreateOptions {

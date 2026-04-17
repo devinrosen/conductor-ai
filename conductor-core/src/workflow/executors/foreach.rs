@@ -7,7 +7,8 @@ use crate::workflow::engine::{
 use crate::workflow::prompt_builder::build_variable_map;
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::WorkflowExecStandalone;
-use crate::workflow_dsl::{ForEachNode, ForeachOver, OnChildFail};
+use crate::workflow_dsl::{ForEachNode, ForeachOver, ForeachScope, OnChildFail};
+use crate::worktree::WorktreeManager;
 
 /// Execute a `foreach` step: fan out a child workflow over a collection of items.
 ///
@@ -161,6 +162,7 @@ pub fn execute_foreach(
             ForeachOver::Tickets => "tickets",
             ForeachOver::Repos => "repos",
             ForeachOver::WorkflowRuns => "workflow_runs",
+            ForeachOver::Worktrees => "worktrees",
         },
     );
 
@@ -252,6 +254,7 @@ fn collect_items(
         ForeachOver::Tickets => collect_ticket_items(state, node, existing_set),
         ForeachOver::Repos => collect_repo_items(state, existing_set),
         ForeachOver::WorkflowRuns => collect_workflow_run_items(state, node, existing_set),
+        ForeachOver::Worktrees => collect_worktree_items(state, node, existing_set),
     }
 }
 
@@ -274,52 +277,59 @@ fn collect_ticket_items(
     let mut items = Vec::new();
 
     match &node.scope {
-        Some(crate::workflow_dsl::TicketScope::TicketId(ticket_id)) => {
-            // Single ticket — just look it up directly.
-            match syncer.get_by_id(ticket_id) {
-                Ok(t) if !existing_set.contains(&t.id) => {
-                    items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
-                }
-                Ok(_) => {} // Already in existing_set
-                Err(crate::error::ConductorError::TicketNotFound { .. }) => {
-                    return Err(ConductorError::Workflow(format!(
-                        "foreach: ticket '{}' not found",
-                        ticket_id
-                    )));
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Some(crate::workflow_dsl::TicketScope::Label(label)) => {
-            let filter = TicketFilter {
-                labels: vec![label.clone()],
-                search: None,
-                include_closed: false,
-                unlabeled_only: false,
-            };
-            let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-            for t in tickets {
-                if !existing_set.contains(&t.id) {
-                    items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
+        Some(ForeachScope::Ticket(ts)) => match ts {
+            crate::workflow_dsl::TicketScope::TicketId(ticket_id) => {
+                // Single ticket — just look it up directly.
+                match syncer.get_by_id(ticket_id) {
+                    Ok(t) if !existing_set.contains(&t.id) => {
+                        items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
+                    }
+                    Ok(_) => {} // Already in existing_set
+                    Err(crate::error::ConductorError::TicketNotFound { .. }) => {
+                        return Err(ConductorError::Workflow(format!(
+                            "foreach: ticket '{}' not found",
+                            ticket_id
+                        )));
+                    }
+                    Err(e) => return Err(e),
                 }
             }
-        }
-        Some(crate::workflow_dsl::TicketScope::Unlabeled) => {
-            let filter = TicketFilter {
-                labels: vec![],
-                search: None,
-                include_closed: false,
-                unlabeled_only: true,
-            };
-            let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-            for t in tickets {
-                if !existing_set.contains(&t.id) {
-                    items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
+            crate::workflow_dsl::TicketScope::Label(label) => {
+                let filter = TicketFilter {
+                    labels: vec![label.clone()],
+                    search: None,
+                    include_closed: false,
+                    unlabeled_only: false,
+                };
+                let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
+                for t in tickets {
+                    if !existing_set.contains(&t.id) {
+                        items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
+                    }
                 }
             }
+            crate::workflow_dsl::TicketScope::Unlabeled => {
+                let filter = TicketFilter {
+                    labels: vec![],
+                    search: None,
+                    include_closed: false,
+                    unlabeled_only: true,
+                };
+                let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
+                for t in tickets {
+                    if !existing_set.contains(&t.id) {
+                        items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
+                    }
+                }
+            }
+        },
+        Some(ForeachScope::Worktree(_)) => {
+            return Err(ConductorError::Workflow(
+                "foreach over = tickets does not accept a worktree scope; use over = worktrees instead".to_string(),
+            ));
         }
         None => {
-            // No scope specified — collect all open tickets for the repo.
+            // No ticket scope — collect all open tickets for the repo.
             let filter = TicketFilter {
                 labels: vec![],
                 search: None,
@@ -416,6 +426,64 @@ fn collect_workflow_run_items(
         .collect())
 }
 
+fn collect_worktree_items(
+    state: &mut ExecutionState<'_>,
+    node: &ForEachNode,
+    existing_set: &HashSet<String>,
+) -> Result<Vec<(String, String, String)>> {
+    // Require a repo_id for worktree fan-outs.
+    let repo_id = state.repo_id.as_deref().ok_or_else(|| {
+        ConductorError::Workflow(
+            "foreach over worktrees requires a repo_id in the execution context".to_string(),
+        )
+    })?;
+
+    // Extract base_branch from scope, or infer from the execution context worktree.
+    let base_branch_owned: String;
+    let wt_scope_opt = match &node.scope {
+        Some(ForeachScope::Worktree(s)) => Some(s),
+        _ => None,
+    };
+    let base_branch: &str = match wt_scope_opt.and_then(|s| s.base_branch.as_deref()) {
+        Some(b) => b,
+        None => {
+            let wt_id = state.worktree_id.as_deref().ok_or_else(|| {
+                ConductorError::Workflow(format!(
+                    "foreach '{}': over = worktrees requires either \
+                     scope = {{ base_branch = \"...\" }} or a worktree_id in the execution context",
+                    node.name
+                ))
+            })?;
+            let wt = WorktreeManager::new(state.conn, state.config).get_by_id(wt_id)?;
+            let repo =
+                crate::repo::RepoManager::new(state.conn, state.config).get_by_id(&wt.repo_id)?;
+            base_branch_owned = wt.effective_base(&repo.default_branch).to_string();
+            &base_branch_owned
+        }
+    };
+
+    let wt_mgr = WorktreeManager::new(state.conn, state.config);
+    let active_worktrees = wt_mgr.list_by_repo_id_and_base_branch(repo_id, base_branch)?;
+
+    let mut candidates: Vec<_> = active_worktrees
+        .into_iter()
+        .filter(|wt| !existing_set.contains(&wt.id))
+        .collect();
+
+    if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
+        let repo = crate::repo::RepoManager::new(state.conn, state.config).get_by_id(repo_id)?;
+        let open_prs = crate::github::list_open_prs(&repo.remote_url)?;
+        let open_branches: HashSet<String> =
+            open_prs.into_iter().map(|pr| pr.head_ref_name).collect();
+        candidates.retain(|wt| open_branches.contains(&wt.branch) == want_open_pr);
+    }
+
+    Ok(candidates
+        .into_iter()
+        .map(|wt| ("worktree".to_string(), wt.id, wt.slug))
+        .collect())
+}
+
 /// Run the dispatch loop. Returns Ok(true) on stall, Ok(false) on clean finish,
 /// Err on executor error.
 fn run_dispatch_loop(
@@ -425,39 +493,42 @@ fn run_dispatch_loop(
     child_def: &crate::workflow_dsl::WorkflowDef,
     iteration: u32,
 ) -> Result<bool> {
-    // Effective on_child_fail: default to SkipDependents for ordered tickets.
-    let on_child_fail = if node.on_child_fail == OnChildFail::Continue
-        && node.over == ForeachOver::Tickets
-        && node.ordered
-    {
+    // Effective on_child_fail: default to SkipDependents for ordered tickets/worktrees.
+    let ordered_dep_type =
+        node.ordered && (node.over == ForeachOver::Tickets || node.over == ForeachOver::Worktrees);
+    let on_child_fail = if node.on_child_fail == OnChildFail::Continue && ordered_dep_type {
         OnChildFail::SkipDependents
     } else {
         node.on_child_fail.clone()
     };
 
-    // Load dependency edges once upfront (for ordered ticket fan-outs).
-    let dep_edges: Vec<(String, String)> = if node.ordered && node.over == ForeachOver::Tickets {
-        load_ticket_dep_edges(state, step_id)?
+    // Load dependency edges once upfront (for ordered ticket/worktree fan-outs).
+    let dep_edges: Vec<(String, String)> = if ordered_dep_type {
+        if node.over == ForeachOver::Tickets {
+            load_ticket_dep_edges(state, step_id)?
+        } else {
+            load_worktree_dep_edges(state, step_id)?
+        }
     } else {
         vec![]
     };
 
-    // Detect cycles if ordered.
-    if node.ordered && node.over == ForeachOver::Tickets {
+    // Detect cycles if ordered (tickets or worktrees).
+    if ordered_dep_type {
         let all_items = state.wf_mgr.get_fan_out_items(step_id, None)?;
         let item_ids: Vec<String> = all_items.iter().map(|i| i.item_id.clone()).collect();
-        if let Some(cycle) = detect_ticket_cycles(&item_ids, &dep_edges) {
+        if let Some(cycle) = crate::graph::detect_cycles(&item_ids, &dep_edges) {
             match node.on_cycle {
                 crate::workflow_dsl::OnCycle::Fail => {
                     return Err(ConductorError::Workflow(format!(
-                        "foreach '{}': ticket cycle detected: {}",
+                        "foreach '{}': cycle detected: {}",
                         node.name,
                         cycle.join(" → ")
                     )));
                 }
                 crate::workflow_dsl::OnCycle::Warn => {
                     tracing::warn!(
-                        "foreach '{}': ticket cycle detected (continuing): {}",
+                        "foreach '{}': cycle detected (continuing): {}",
                         node.name,
                         cycle.join(" → ")
                     );
@@ -562,7 +633,7 @@ fn run_dispatch_loop(
             .collect();
 
         // Determine eligible items to dispatch.
-        let eligible: Vec<_> = if node.ordered && node.over == ForeachOver::Tickets {
+        let eligible: Vec<_> = if ordered_dep_type {
             // Only dispatch items whose blockers are all completed.
             pending
                 .iter()
@@ -618,6 +689,7 @@ fn resolve_child_context_ids(
             parent_repo_id.clone(),
             parent_worktree_id.clone(),
         ),
+        ForeachOver::Worktrees => (None, parent_repo_id.clone(), Some(item_id.to_string())),
     }
 }
 
@@ -670,6 +742,7 @@ fn build_child_dispatch_params(
         ForeachOver::Tickets => Some(item.item_ref.clone()),
         ForeachOver::Repos => Some(item.item_ref.clone()),
         ForeachOver::WorkflowRuns => Some(format!("run:{}", item.item_ref)),
+        ForeachOver::Worktrees => Some(item.item_ref.clone()),
     };
 
     // ticket_id, repo_id, and worktree_id: pass through based on item type.
@@ -849,6 +922,30 @@ fn build_item_vars(
             vars.insert("item.id".to_string(), item.item_id.clone());
             vars.insert("item.workflow_name".to_string(), item.item_ref.clone());
         }
+        ForeachOver::Worktrees => {
+            let wt_mgr = WorktreeManager::new(state.conn, state.config);
+            match wt_mgr.get_by_id(&item.item_id) {
+                Ok(wt) => {
+                    vars.insert("item.id".to_string(), wt.id);
+                    vars.insert("item.slug".to_string(), wt.slug);
+                    vars.insert("item.branch".to_string(), wt.branch);
+                    vars.insert("item.path".to_string(), wt.path);
+                    vars.insert(
+                        "item.base_branch".to_string(),
+                        wt.base_branch.unwrap_or_default(),
+                    );
+                    vars.insert(
+                        "item.ticket_id".to_string(),
+                        wt.ticket_id.unwrap_or_default(),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("foreach: could not load worktree '{}': {e}", item.item_id);
+                    vars.insert("item.id".to_string(), item.item_id.clone());
+                    vars.insert("item.slug".to_string(), item.item_ref.clone());
+                }
+            }
+        }
     }
 
     Ok(vars)
@@ -890,65 +987,72 @@ fn load_ticket_dep_edges(
     Ok(edges)
 }
 
-/// DFS cycle detection on the dependency graph.
-/// Returns Some(cycle_path) if a cycle is found, None otherwise.
-fn detect_ticket_cycles(item_ids: &[String], edges: &[(String, String)]) -> Option<Vec<String>> {
-    // Build adjacency list: ticket_id → Vec<dependent_ids>
-    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-    for id in item_ids {
-        adj.entry(id.as_str()).or_default();
-    }
-    for (blocker, dependent) in edges {
-        adj.entry(blocker.as_str())
-            .or_default()
-            .push(dependent.as_str());
+/// Load dependency edges (blocker_worktree_id → dependent_worktree_id) for worktrees in the fan_out.
+/// Pivots through worktree.ticket_id → ticket_dependencies.
+fn load_worktree_dep_edges(
+    state: &mut ExecutionState<'_>,
+    step_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let items = state.wf_mgr.get_fan_out_items(step_id, None)?;
+    let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
+    if item_ids.is_empty() {
+        return Ok(vec![]);
     }
 
-    let mut visited: HashSet<&str> = HashSet::new();
-    let mut stack: HashSet<&str> = HashSet::new();
-    let mut path: Vec<&str> = Vec::new();
+    let id_set: HashSet<&String> = item_ids.iter().collect();
 
-    for id in item_ids {
-        if !visited.contains(id.as_str()) {
-            if let Some(cycle) = dfs_cycle(id.as_str(), &adj, &mut visited, &mut stack, &mut path) {
-                return Some(cycle.into_iter().map(str::to_string).collect());
+    // Build worktree_id → ticket_id map for items that have a linked ticket.
+    // Use WorktreeManager.get_by_ids() to avoid raw SQL against the worktrees table.
+    let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+    let wt_mgr = WorktreeManager::new(state.conn, state.config);
+    let worktrees = match wt_mgr.get_by_ids(&id_refs) {
+        Ok(wts) => wts,
+        Err(e) => {
+            tracing::warn!(
+                "foreach: could not fetch worktrees for dep edges: {e}; skipping ordering"
+            );
+            return Ok(vec![]);
+        }
+    };
+    let mut wt_ticket_map: HashMap<String, String> = HashMap::new();
+    for wt in worktrees {
+        if let Some(tid) = wt.ticket_id {
+            wt_ticket_map.insert(wt.id, tid);
+        }
+    }
+
+    // Build reverse map: ticket_id → worktree_id.
+    let ticket_wt_map: HashMap<String, String> = wt_ticket_map
+        .iter()
+        .map(|(wt_id, tid)| (tid.clone(), wt_id.clone()))
+        .collect();
+
+    // Batch-query all 'blocks' edges for our ticket set via TicketSyncer.
+    let ticket_ids: Vec<String> = wt_ticket_map.values().cloned().collect();
+    if ticket_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let ticket_id_refs: Vec<&str> = ticket_ids.iter().map(String::as_str).collect();
+    let syncer = crate::tickets::TicketSyncer::new(state.conn);
+    let dep_edges = syncer
+        .get_blocking_edges_for_tickets(&ticket_id_refs)
+        .map_err(|e| ConductorError::Workflow(format!("foreach: dependency query failed: {e}")))?;
+
+    // Translate ticket-level edges into worktree-to-worktree edges.
+    // Deduplicate with a HashSet to handle multiple worktrees sharing a ticket_id.
+    let mut edges: HashSet<(String, String)> = HashSet::new();
+    for (blocker_ticket_id, dependent_ticket_id) in dep_edges {
+        if let (Some(blocker_wt_id), Some(dependent_wt_id)) = (
+            ticket_wt_map.get(&blocker_ticket_id),
+            ticket_wt_map.get(&dependent_ticket_id),
+        ) {
+            if id_set.contains(blocker_wt_id) && id_set.contains(dependent_wt_id) {
+                edges.insert((blocker_wt_id.clone(), dependent_wt_id.clone()));
             }
         }
     }
 
-    None
-}
-
-fn dfs_cycle<'a>(
-    node: &'a str,
-    adj: &HashMap<&'a str, Vec<&'a str>>,
-    visited: &mut HashSet<&'a str>,
-    stack: &mut HashSet<&'a str>,
-    path: &mut Vec<&'a str>,
-) -> Option<Vec<&'a str>> {
-    visited.insert(node);
-    stack.insert(node);
-    path.push(node);
-
-    if let Some(neighbors) = adj.get(node) {
-        for &neighbor in neighbors {
-            if !visited.contains(neighbor) {
-                if let Some(cycle) = dfs_cycle(neighbor, adj, visited, stack, path) {
-                    return Some(cycle);
-                }
-            } else if stack.contains(neighbor) {
-                // Found a back-edge: cycle starts at neighbor
-                let cycle_start = path.iter().position(|&n| n == neighbor).unwrap_or(0);
-                let mut cycle: Vec<&'a str> = path[cycle_start..].to_vec();
-                cycle.push(neighbor); // close the cycle
-                return Some(cycle);
-            }
-        }
-    }
-
-    stack.remove(node);
-    path.pop();
-    None
+    Ok(edges.into_iter().collect())
 }
 
 /// Check if all blockers of `item_id` are in 'completed' status.
@@ -1024,7 +1128,7 @@ fn is_terminal_status(status: &str) -> bool {
 mod tests {
     use super::*;
     use crate::tickets::{TicketInput, TicketLabelInput, TicketSyncer};
-    use crate::workflow_dsl::{ForeachOver, OnChildFail, OnCycle, TicketScope};
+    use crate::workflow_dsl::{ForeachOver, ForeachScope, OnChildFail, OnCycle, TicketScope};
 
     fn setup_db() -> rusqlite::Connection {
         crate::test_helpers::setup_db()
@@ -1053,7 +1157,7 @@ mod tests {
         ForEachNode {
             name: "test-foreach".to_string(),
             over: ForeachOver::Tickets,
-            scope: Some(TicketScope::Unlabeled),
+            scope: Some(ForeachScope::Ticket(TicketScope::Unlabeled)),
             filter: std::collections::HashMap::new(),
             ordered: false,
             on_cycle: OnCycle::Fail,
@@ -1419,6 +1523,772 @@ mod tests {
             params.worktree_id,
             Some("w1".to_string()),
             "WorkflowRuns fan-out must pass worktree_id through in dispatch params"
+        );
+    }
+
+    #[test]
+    fn test_resolve_child_context_ids_worktrees_sets_worktree_id() {
+        let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
+            ForeachOver::Worktrees,
+            "worktree-abc",
+            &Some("ticket-parent".to_string()),
+            &Some("repo-1".to_string()),
+            &Some("old-worktree".to_string()),
+        );
+        assert!(
+            ticket_id.is_none(),
+            "Worktrees fan-out must clear ticket_id"
+        );
+        assert_eq!(repo_id, Some("repo-1".to_string()));
+        assert_eq!(
+            worktree_id,
+            Some("worktree-abc".to_string()),
+            "Worktrees fan-out must set worktree_id to the item_id"
+        );
+    }
+
+    #[test]
+    fn test_collect_worktree_items_matching_base_branch() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // Insert two active worktrees with matching base_branch.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-a', 'r1', 'feat-a', 'feat/a', '/tmp/a', 'active', '2024-01-01T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-b', 'r1', 'feat-b', 'feat/b', '/tmp/b', 'active', '2024-01-02T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+        // Insert one with different base_branch — should be excluded.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-c', 'r1', 'feat-c', 'feat/c', '/tmp/c', 'active', '2024-01-03T00:00:00Z', 'main')",
+            [],
+        ).unwrap();
+        // Insert one with matching base_branch but non-active status — should be excluded.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-d', 'r1', 'feat-d', 'feat/d', '/tmp/d', 'abandoned', '2024-01-04T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = ForEachNode {
+            name: "test-wt-foreach".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+                base_branch: Some("release/1.0".to_string()),
+                has_open_pr: None,
+            })),
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 2,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let existing_set = HashSet::new();
+        let items = collect_worktree_items(&mut state, &node, &existing_set).unwrap();
+
+        assert_eq!(
+            items.len(),
+            2,
+            "should find only the 2 active worktrees on release/1.0 (wt-c excluded by base_branch, wt-d excluded by non-active status)"
+        );
+        let ids: Vec<&str> = items.iter().map(|(_, id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"wt-a"));
+        assert!(ids.contains(&"wt-b"));
+        assert!(!ids.contains(&"wt-d"), "completed worktree must not appear");
+        for (item_type, _, _) in &items {
+            assert_eq!(item_type, "worktree");
+        }
+    }
+
+    #[test]
+    fn test_collect_worktree_items_has_open_pr_filter() {
+        // setup_db() inserts repo r1 with remote_url = 'https://github.com/test/repo.git'.
+        // list_open_prs will fail in CI (no gh auth) and unwrap_or_default to [].
+        // So: has_open_pr=false → all pass (no open PRs found); has_open_pr=true → none pass.
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-p1', 'r1', 'feat-p1', 'feat/p1', '/tmp/p1', 'active', '2024-01-01T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-p2', 'r1', 'feat-p2', 'feat/p2', '/tmp/p2', 'active', '2024-01-02T00:00:00Z', 'release/1.0')",
+            [],
+        ).unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id.clone(),
+            parent.id.clone(),
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        // has_open_pr = Some(false): list_open_prs returns [] → all worktrees pass.
+        let node_no_pr = ForEachNode {
+            name: "wt-no-pr".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+                base_branch: Some("release/1.0".to_string()),
+                has_open_pr: Some(false),
+            })),
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 2,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let existing_set = HashSet::new();
+        let items = collect_worktree_items(&mut state, &node_no_pr, &existing_set).unwrap();
+        assert_eq!(
+            items.len(),
+            2,
+            "has_open_pr=false with empty PR list: both worktrees should pass (no PRs found)"
+        );
+
+        // has_open_pr = Some(true): list_open_prs returns [] → no worktrees pass.
+        let node_has_pr = ForEachNode {
+            name: "wt-has-pr".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+                base_branch: Some("release/1.0".to_string()),
+                has_open_pr: Some(true),
+            })),
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 2,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let items = collect_worktree_items(&mut state, &node_has_pr, &existing_set).unwrap();
+        assert_eq!(
+            items.len(),
+            0,
+            "has_open_pr=true with empty PR list: no worktrees should pass"
+        );
+    }
+
+    #[test]
+    fn test_build_item_vars_worktrees_all_fields() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // Insert a worktree with all fields populated.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-x', 'r1', 'feat-x', 'feat/x', '/tmp/x', 'active', '2024-01-01T00:00:00Z', 'release/2.0')",
+            [],
+        ).unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Worktrees);
+        let item = make_minimal_item("wt-x", "feat-x", "worktree");
+
+        let vars = build_item_vars(&mut state, &node, &item).unwrap();
+        assert_eq!(vars.get("item.slug").map(|s| s.as_str()), Some("feat-x"));
+        assert_eq!(vars.get("item.branch").map(|s| s.as_str()), Some("feat/x"));
+        assert_eq!(vars.get("item.path").map(|s| s.as_str()), Some("/tmp/x"));
+        assert_eq!(
+            vars.get("item.base_branch").map(|s| s.as_str()),
+            Some("release/2.0")
+        );
+        assert_eq!(vars.get("item.ticket_id").map(|s| s.as_str()), Some(""));
+        assert_eq!(vars.get("item.id").map(|s| s.as_str()), Some("wt-x"));
+    }
+
+    // -----------------------------------------------------------------------
+    // load_worktree_dep_edges tests
+    // -----------------------------------------------------------------------
+
+    /// Seed two worktrees each linked to a ticket, where ticket-1 blocks ticket-2.
+    /// Verify that load_worktree_dep_edges returns a single edge (wt-blocker → wt-blocked).
+    #[test]
+    fn test_load_worktree_dep_edges_basic() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // Insert two tickets where ticket "1" blocks ticket "2".
+        let t1 = make_ticket("1", "Blocker");
+        let mut t2 = make_ticket("2", "Blocked");
+        t2.blocked_by = vec!["1".to_string()];
+        let syncer = TicketSyncer::new(&conn);
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        // Resolve ULIDs (tickets table uses server-generated ULIDs).
+        let ticket1_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let ticket2_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        // Insert two worktrees linked to the tickets.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
+             VALUES ('wt-1', 'r1', 'feat-1', 'feat/1', '/tmp/1', 'active', '2024-01-01T00:00:00Z', ?1)",
+            rusqlite::params![ticket1_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
+             VALUES ('wt-2', 'r1', 'feat-2', 'feat/2', '/tmp/2', 'active', '2024-01-02T00:00:00Z', ?1)",
+            rusqlite::params![ticket2_id],
+        )
+        .unwrap();
+
+        // Create a workflow run + step + fan_out_items for the two worktrees.
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "release-foreach", "foreach", false, 0, 0)
+            .unwrap();
+
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-1", "feat-1")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-2", "feat-2")
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let edges = load_worktree_dep_edges(&mut state, &step_id).unwrap();
+
+        assert_eq!(edges.len(), 1, "expected exactly one dependency edge");
+        assert_eq!(
+            edges[0],
+            ("wt-1".to_string(), "wt-2".to_string()),
+            "wt-1 (blocker) should point to wt-2 (blocked)"
+        );
+    }
+
+    /// When no worktrees have a linked ticket, load_worktree_dep_edges returns no edges.
+    #[test]
+    fn test_load_worktree_dep_edges_no_tickets() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // Insert worktrees with no ticket_id.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-a', 'r1', 'feat-a', 'feat/a', '/tmp/a', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-b', 'r1', 'feat-b', 'feat/b', '/tmp/b', 'active', '2024-01-02T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "release-foreach", "foreach", false, 0, 0)
+            .unwrap();
+
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-a", "feat-a")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-b", "feat-b")
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let edges = load_worktree_dep_edges(&mut state, &step_id).unwrap();
+        assert!(
+            edges.is_empty(),
+            "expected no edges when worktrees have no linked tickets"
+        );
+    }
+
+    /// Mixed-case: wt-1 linked to ticket (which has a blocker in the set), wt-2 linked to
+    /// ticket (the blocker), wt-3 has no ticket. Expect one edge (wt-2 → wt-1); wt-3 ignored.
+    #[test]
+    fn test_load_worktree_dep_edges_mixed_some_with_tickets() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // ticket "blocker" blocks ticket "dep"
+        let t_blocker = make_ticket("blocker", "Blocker ticket");
+        let mut t_dep = make_ticket("dep", "Dependent ticket");
+        t_dep.blocked_by = vec!["blocker".to_string()];
+        let syncer = TicketSyncer::new(&conn);
+        syncer.upsert_tickets("r1", &[t_blocker, t_dep]).unwrap();
+
+        let blocker_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 'blocker'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let dep_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 'dep'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // wt-1 linked to "dep" ticket, wt-2 linked to "blocker" ticket, wt-3 no ticket
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
+             VALUES ('wt-1', 'r1', 'feat-dep', 'feat/dep', '/tmp/dep', 'active', '2024-01-01T00:00:00Z', ?1)",
+            rusqlite::params![dep_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
+             VALUES ('wt-2', 'r1', 'feat-blocker', 'feat/blocker', '/tmp/blocker', 'active', '2024-01-02T00:00:00Z', ?1)",
+            rusqlite::params![blocker_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-3', 'r1', 'feat-no-ticket', 'feat/no-ticket', '/tmp/no-ticket', 'active', '2024-01-03T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "mixed-foreach", "foreach", false, 0, 0)
+            .unwrap();
+
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-1", "feat-dep")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-2", "feat-blocker")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-3", "feat-no-ticket")
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let edges = load_worktree_dep_edges(&mut state, &step_id).unwrap();
+
+        assert_eq!(edges.len(), 1, "expected one edge: wt-2 blocks wt-1");
+        assert_eq!(
+            edges[0],
+            ("wt-2".to_string(), "wt-1".to_string()),
+            "wt-2 (blocker) should point to wt-1 (dependent)"
+        );
+    }
+
+    /// collect_worktree_items returns an error when repo_id is missing from the execution state.
+    #[test]
+    fn test_collect_worktree_items_no_repo_id_returns_error() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        // repo_id = None — collect_worktree_items must error
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            None,
+            None,
+        );
+
+        let node = ForEachNode {
+            name: "wt-foreach".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+                base_branch: Some("release/1.0".to_string()),
+                has_open_pr: None,
+            })),
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 2,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let result = collect_worktree_items(&mut state, &node, &HashSet::new());
+        assert!(result.is_err(), "expected error when repo_id is missing");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("repo_id"),
+            "error should mention repo_id, got: {msg}"
+        );
+    }
+
+    /// collect_worktree_items errors when scope is None and worktree_id is also absent.
+    #[test]
+    fn test_collect_worktree_items_no_scope_no_worktree_id_errors() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        // worktree_id = None — no scope and no context worktree → must error
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            None,
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = ForEachNode {
+            name: "no-scope".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: None,
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 2,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let result = collect_worktree_items(&mut state, &node, &HashSet::new());
+        assert!(
+            result.is_err(),
+            "expected error when neither scope nor worktree_id is set"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("worktree_id") || msg.contains("scope"),
+            "error should mention scope or worktree_id, got: {msg}"
+        );
+    }
+
+    /// collect_worktree_items infers base_branch from state.worktree_id when scope is omitted.
+    #[test]
+    fn test_collect_worktree_items_infers_base_branch_from_context() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // "w1" has no base_branch (NULL); effective_base falls back to repo default_branch "main".
+        // Insert a second active worktree on "main" to verify it is returned.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('wt-infer', 'r1', 'feat-infer', 'feat/infer', '/tmp/infer', 'active', '2024-01-05T00:00:00Z', 'main')",
+            [],
+        ).unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        // worktree_id = "w1" (base_branch NULL → effective "main"), scope = None
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = ForEachNode {
+            name: "infer-foreach".to_string(),
+            over: ForeachOver::Worktrees,
+            scope: None,
+            filter: std::collections::HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 3,
+            workflow: "child".to_string(),
+            inputs: std::collections::HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        let result = collect_worktree_items(&mut state, &node, &HashSet::new());
+        assert!(
+            result.is_ok(),
+            "expected Ok when worktree_id is present, got: {:?}",
+            result
+        );
+        let items = result.unwrap();
+        // "wt-infer" is on "main"; "w1" has NULL base_branch (not "main" explicitly) so it won't
+        // show up via list_by_repo_id_and_base_branch("main"). Only "wt-infer" should match.
+        let ids: Vec<&str> = items.iter().map(|(_, id, _)| id.as_str()).collect();
+        assert!(
+            ids.contains(&"wt-infer"),
+            "should include wt-infer on main, got: {:?}",
+            ids
+        );
+    }
+
+    /// build_item_vars for a worktree with NULL base_branch and NULL ticket_id should
+    /// populate those fields with empty strings rather than panicking or erroring.
+    #[test]
+    fn test_build_item_vars_worktrees_null_optional_fields() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // Insert a worktree with no base_branch and no ticket_id (both NULL).
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-null', 'r1', 'feat-null', 'feat/null', '/tmp/null', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Worktrees);
+        let item = make_minimal_item("wt-null", "feat-null", "worktree");
+
+        let vars = build_item_vars(&mut state, &node, &item).unwrap();
+        assert_eq!(vars.get("item.slug").map(|s| s.as_str()), Some("feat-null"));
+        assert_eq!(
+            vars.get("item.branch").map(|s| s.as_str()),
+            Some("feat/null")
+        );
+        assert_eq!(vars.get("item.path").map(|s| s.as_str()), Some("/tmp/null"));
+        assert_eq!(
+            vars.get("item.base_branch").map(|s| s.as_str()),
+            Some(""),
+            "NULL base_branch should become empty string"
+        );
+        assert_eq!(
+            vars.get("item.ticket_id").map(|s| s.as_str()),
+            Some(""),
+            "NULL ticket_id should become empty string"
+        );
+    }
+
+    /// build_item_vars for a worktree with a linked ticket_id should populate
+    /// vars["item.ticket_id"] with the ticket ULID.
+    #[test]
+    fn test_build_item_vars_worktrees_with_ticket_id() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // setup_db() inserts repo "r1" — upsert a ticket against it to get a valid ULID.
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[make_ticket("t-linked-1", "Linked ticket")])
+            .unwrap();
+        let ticket_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 't-linked-1' AND repo_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // Insert a worktree linked to the real ticket.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch, ticket_id) \
+             VALUES ('wt-linked', 'r1', 'feat-linked', 'feat/linked', '/tmp/linked', 'active', '2024-01-01T00:00:00Z', 'release/1.0', ?1)",
+            rusqlite::params![ticket_id],
+        )
+        .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Worktrees);
+        let item = make_minimal_item("wt-linked", "feat-linked", "worktree");
+
+        let vars = build_item_vars(&mut state, &node, &item).unwrap();
+        assert_eq!(
+            vars.get("item.ticket_id").map(|s| s.as_str()),
+            Some(ticket_id.as_str()),
+            "ticket_id should be populated from the linked ticket"
+        );
+        assert_eq!(
+            vars.get("item.base_branch").map(|s| s.as_str()),
+            Some("release/1.0")
+        );
+        assert_eq!(
+            vars.get("item.slug").map(|s| s.as_str()),
+            Some("feat-linked")
         );
     }
 }
