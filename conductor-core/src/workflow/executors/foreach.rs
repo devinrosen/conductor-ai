@@ -517,7 +517,7 @@ fn run_dispatch_loop(
     if ordered_dep_type {
         let all_items = state.wf_mgr.get_fan_out_items(step_id, None)?;
         let item_ids: Vec<String> = all_items.iter().map(|i| i.item_id.clone()).collect();
-        if let Some(cycle) = detect_ticket_cycles(&item_ids, &dep_edges) {
+        if let Some(cycle) = crate::graph::detect_cycles(&item_ids, &dep_edges) {
             match node.on_cycle {
                 crate::workflow_dsl::OnCycle::Fail => {
                     return Err(ConductorError::Workflow(format!(
@@ -1041,7 +1041,7 @@ fn load_worktree_dep_edges(
     // Translate ticket-level edges into worktree-to-worktree edges.
     // Deduplicate with a HashSet to handle multiple worktrees sharing a ticket_id.
     let mut edges: HashSet<(String, String)> = HashSet::new();
-    for (dependent_ticket_id, blocker_ticket_id) in dep_edges {
+    for (blocker_ticket_id, dependent_ticket_id) in dep_edges {
         if let (Some(blocker_wt_id), Some(dependent_wt_id)) = (
             ticket_wt_map.get(&blocker_ticket_id),
             ticket_wt_map.get(&dependent_ticket_id),
@@ -1053,67 +1053,6 @@ fn load_worktree_dep_edges(
     }
 
     Ok(edges.into_iter().collect())
-}
-
-/// DFS cycle detection on the dependency graph.
-/// Returns Some(cycle_path) if a cycle is found, None otherwise.
-fn detect_ticket_cycles(item_ids: &[String], edges: &[(String, String)]) -> Option<Vec<String>> {
-    // Build adjacency list: ticket_id → Vec<dependent_ids>
-    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-    for id in item_ids {
-        adj.entry(id.as_str()).or_default();
-    }
-    for (blocker, dependent) in edges {
-        adj.entry(blocker.as_str())
-            .or_default()
-            .push(dependent.as_str());
-    }
-
-    let mut visited: HashSet<&str> = HashSet::new();
-    let mut stack: HashSet<&str> = HashSet::new();
-    let mut path: Vec<&str> = Vec::new();
-
-    for id in item_ids {
-        if !visited.contains(id.as_str()) {
-            if let Some(cycle) = dfs_cycle(id.as_str(), &adj, &mut visited, &mut stack, &mut path) {
-                return Some(cycle.into_iter().map(str::to_string).collect());
-            }
-        }
-    }
-
-    None
-}
-
-fn dfs_cycle<'a>(
-    node: &'a str,
-    adj: &HashMap<&'a str, Vec<&'a str>>,
-    visited: &mut HashSet<&'a str>,
-    stack: &mut HashSet<&'a str>,
-    path: &mut Vec<&'a str>,
-) -> Option<Vec<&'a str>> {
-    visited.insert(node);
-    stack.insert(node);
-    path.push(node);
-
-    if let Some(neighbors) = adj.get(node) {
-        for &neighbor in neighbors {
-            if !visited.contains(neighbor) {
-                if let Some(cycle) = dfs_cycle(neighbor, adj, visited, stack, path) {
-                    return Some(cycle);
-                }
-            } else if stack.contains(neighbor) {
-                // Found a back-edge: cycle starts at neighbor
-                let cycle_start = path.iter().position(|&n| n == neighbor).unwrap_or(0);
-                let mut cycle: Vec<&'a str> = path[cycle_start..].to_vec();
-                cycle.push(neighbor); // close the cycle
-                return Some(cycle);
-            }
-        }
-    }
-
-    stack.remove(node);
-    path.pop();
-    None
 }
 
 /// Check if all blockers of `item_id` are in 'completed' status.

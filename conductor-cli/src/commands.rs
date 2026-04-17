@@ -537,6 +537,20 @@ pub enum WorktreeCommands {
         /// Repo slug (cleans all repos if omitted)
         repo: Option<String>,
     },
+    /// Create a stack of worktrees from a ticket dependency graph
+    #[command(
+        after_help = "Examples:\n  conductor worktree create-stack my-repo --root-branch main --tickets 101,102,103\n  conductor worktree create-stack my-repo --root-branch release/0.6.0 --tickets t1ulid,t2ulid"
+    )]
+    CreateStack {
+        /// Repo slug
+        repo: String,
+        /// Base branch for tickets with no in-set blockers
+        #[arg(long)]
+        root_branch: String,
+        /// Comma-separated ticket source IDs or ULIDs
+        #[arg(long, value_delimiter = ',')]
+        tickets: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]

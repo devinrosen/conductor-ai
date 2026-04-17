@@ -4,6 +4,8 @@ use chrono::Utc;
 
 /// Ticket columns for SELECT queries that join `tickets` with alias `t`.
 const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
+/// Ticket columns for SELECT queries without a table alias.
+const TICKET_COLS_BARE: &str = "id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map";
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -614,6 +616,69 @@ impl<'a> TicketSyncer<'a> {
             .map_err(ticket_not_found(ticket_id))
     }
 
+    /// Resolve a mixed list of IDs (internal IDs or source_ids) within a single repo
+    /// using at most 2 DB queries regardless of how many IDs are provided.
+    ///
+    /// First, all inputs are attempted as internal ticket IDs in a single IN-clause
+    /// query.  Any IDs not found that way (or belonging to a different repo) are
+    /// retried as `source_id`s in a second IN-clause query.
+    /// Returns tickets in the same order as `raw_ids`.
+    /// Returns `ConductorError::TicketNotFound` for the first unresolvable ID.
+    pub fn resolve_tickets_in_repo(
+        &self,
+        repo_id: &str,
+        raw_ids: &[String],
+    ) -> Result<Vec<Ticket>> {
+        if raw_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Query 1: batch-fetch by internal id.
+        let ph = sql_placeholders(raw_ids.len());
+        let sql = format!("SELECT {TICKET_COLS_BARE} FROM tickets WHERE id IN ({ph})");
+        let params_vec: Vec<&dyn rusqlite::ToSql> =
+            raw_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = query_collect(self.conn, &sql, params_vec.as_slice(), map_ticket_row)?;
+        let mut by_id: HashMap<String, Ticket> = HashMap::with_capacity(rows.len());
+        for t in rows {
+            by_id.insert(t.id.clone(), t);
+        }
+
+        // Collect IDs that were not found or belong to a different repo.
+        let fallback_ids: Vec<&str> = raw_ids
+            .iter()
+            .filter(|raw| by_id.get(raw.as_str()).is_none_or(|t| t.repo_id != repo_id))
+            .map(String::as_str)
+            .collect();
+
+        // Query 2: batch-fetch misses by source_id (scoped to the repo).
+        let mut by_source_id: HashMap<String, Ticket> = HashMap::new();
+        if !fallback_ids.is_empty() {
+            let ph2 = crate::db::sql_placeholders_from(fallback_ids.len(), 2);
+            let sql2 = format!(
+                "SELECT {TICKET_COLS_BARE} FROM tickets WHERE repo_id = ?1 AND source_id IN ({ph2})"
+            );
+            let mut p2: Vec<&dyn rusqlite::ToSql> = vec![&repo_id];
+            p2.extend(fallback_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
+            let rows2 = query_collect(self.conn, &sql2, p2.as_slice(), map_ticket_row)?;
+            for t in rows2 {
+                by_source_id.insert(t.source_id.clone(), t);
+            }
+        }
+
+        // Reconstruct in original order: internal-id hit first, then source_id hit.
+        let mut resolved = Vec::with_capacity(raw_ids.len());
+        for raw in raw_ids {
+            let ticket = by_id
+                .get(raw)
+                .filter(|t| t.repo_id == repo_id)
+                .or_else(|| by_source_id.get(raw))
+                .ok_or_else(|| ConductorError::TicketNotFound { id: raw.clone() })?;
+            resolved.push(ticket.clone());
+        }
+        Ok(resolved)
+    }
+
     /// Update the `state`, `workflow`, and/or `agent_map` columns on a ticket.
     ///
     /// For `workflow` and `agent_map`:
@@ -873,7 +938,7 @@ impl<'a> TicketSyncer<'a> {
     }
 
     /// Batch-loads `blocks` edges for a specific set of ticket IDs.
-    /// Returns `(to_ticket_id, from_ticket_id)` pairs — i.e. (blocked, blocker).
+    /// Returns `(from_ticket_id, to_ticket_id)` pairs — i.e. (blocker, blocked).
     /// Callers must guard against an empty `ticket_ids` slice before calling.
     pub fn get_blocking_edges_for_tickets(
         &self,
@@ -884,7 +949,7 @@ impl<'a> TicketSyncer<'a> {
         }
         let placeholders = sql_placeholders(ticket_ids.len());
         let sql = format!(
-            "SELECT to_ticket_id, from_ticket_id FROM ticket_dependencies \
+            "SELECT from_ticket_id, to_ticket_id FROM ticket_dependencies \
              WHERE to_ticket_id IN ({placeholders}) AND dep_type = 'blocks'"
         );
         let params: Vec<&dyn rusqlite::ToSql> = ticket_ids
@@ -898,6 +963,38 @@ impl<'a> TicketSyncer<'a> {
             })
             .map_err(ConductorError::Database)?;
         rows.map(|r| r.map_err(ConductorError::Database)).collect()
+    }
+
+    /// Returns `(from_ticket_id, to_ticket_id)` pairs for `blocks` edges where
+    /// **both** endpoints are within `ticket_ids`. Used by `WorktreeManager` to
+    /// build the intra-set dependency graph for stacked-worktree creation.
+    pub fn get_blocks_edges_within_set(
+        &self,
+        ticket_ids: &[String],
+    ) -> Result<Vec<(String, String)>> {
+        if ticket_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let n = ticket_ids.len();
+        let from_ph = sql_placeholders(n);
+        let to_ph = crate::db::sql_placeholders_from(n, n + 1);
+        let sql = format!(
+            "SELECT from_ticket_id, to_ticket_id \
+             FROM ticket_dependencies \
+             WHERE from_ticket_id IN ({from_ph}) \
+               AND to_ticket_id IN ({to_ph}) \
+               AND dep_type = 'blocks'"
+        );
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(n * 2);
+        for id in ticket_ids {
+            params_vec.push(id);
+        }
+        for id in ticket_ids {
+            params_vec.push(id);
+        }
+        query_collect(self.conn, &sql, params_vec.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
     }
 
     /// After syncing tickets, mark any linked worktrees whose ticket is now
@@ -3814,9 +3911,9 @@ mod tests {
         assert_eq!(
             result,
             vec![
-                ("blocked-a".to_string(), "blocker-1".to_string()),
-                ("blocked-a".to_string(), "blocker-2".to_string()),
-                ("blocked-b".to_string(), "blocker-3".to_string()),
+                ("blocker-1".to_string(), "blocked-a".to_string()),
+                ("blocker-2".to_string(), "blocked-a".to_string()),
+                ("blocker-3".to_string(), "blocked-b".to_string()),
             ]
         );
     }
@@ -3838,7 +3935,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(
             result[0],
-            ("tid-target".to_string(), "blocker-x".to_string())
+            ("blocker-x".to_string(), "tid-target".to_string())
         );
     }
 
@@ -3862,6 +3959,179 @@ mod tests {
 
         let result = syncer.get_blocking_edges_for_tickets(&["child-a"]).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ("child-a".to_string(), "blocker-1".to_string()));
+        assert_eq!(result[0], ("blocker-1".to_string(), "child-a".to_string()));
+    }
+
+    // --- get_blocks_edges_within_set tests ---
+
+    #[test]
+    fn test_get_blocks_edges_within_set_empty_input() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.get_blocks_edges_within_set(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_blocks_edges_within_set_no_edges() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "t-a", "r1");
+        insert_test_ticket(&conn, "t-b", "r1");
+        let result = syncer
+            .get_blocks_edges_within_set(&["t-a".to_string(), "t-b".to_string()])
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_blocks_edges_within_set_returns_intra_set_edges() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "ta", "r1");
+        insert_test_ticket(&conn, "tb", "r1");
+        insert_test_ticket(&conn, "tc", "r1");
+        insert_blocks_dep(&conn, "ta", "tb");
+        insert_blocks_dep(&conn, "tb", "tc");
+
+        let mut result = syncer
+            .get_blocks_edges_within_set(&["ta".to_string(), "tb".to_string(), "tc".to_string()])
+            .unwrap();
+        result.sort();
+        assert_eq!(
+            result,
+            vec![
+                ("ta".to_string(), "tb".to_string()),
+                ("tb".to_string(), "tc".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_get_blocks_edges_within_set_excludes_edges_outside_set() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "in-a", "r1");
+        insert_test_ticket(&conn, "in-b", "r1");
+        insert_test_ticket(&conn, "out-c", "r1");
+        // Edge where the blocker is outside the queried set
+        insert_blocks_dep(&conn, "out-c", "in-a");
+        // Edge fully within the set
+        insert_blocks_dep(&conn, "in-a", "in-b");
+
+        let result = syncer
+            .get_blocks_edges_within_set(&["in-a".to_string(), "in-b".to_string()])
+            .unwrap();
+        assert_eq!(result, vec![("in-a".to_string(), "in-b".to_string())]);
+    }
+
+    #[test]
+    fn test_get_blocks_edges_within_set_excludes_parent_of_dep_type() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "p1", "r1");
+        insert_test_ticket(&conn, "c1", "r1");
+        conn.execute(
+            "INSERT OR IGNORE INTO ticket_dependencies \
+             (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+            rusqlite::params!["p1", "c1"],
+        )
+        .unwrap();
+
+        let result = syncer
+            .get_blocks_edges_within_set(&["p1".to_string(), "c1".to_string()])
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    // --- resolve_tickets_in_repo tests ---
+
+    fn insert_ticket_with_source(conn: &Connection, id: &str, repo_id: &str, source_id: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO tickets \
+             (id, repo_id, source_type, source_id, title, state, synced_at, raw_json) \
+             VALUES (?1, ?2, 'github', ?3, 'test', 'open', '2024-01-01T00:00:00Z', '{}')",
+            rusqlite::params![id, repo_id, source_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_empty_input() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.resolve_tickets_in_repo("r1", &[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_by_internal_id() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_ticket_with_source(&conn, "internal-id-1", "r1", "42");
+        let ids = vec!["internal-id-1".to_string()];
+        let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "internal-id-1");
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_by_source_id() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_ticket_with_source(&conn, "internal-id-2", "r1", "99");
+        let ids = vec!["99".to_string()];
+        let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].source_id, "99");
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_mixed_internal_and_source_id() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_ticket_with_source(&conn, "int-id-a", "r1", "10");
+        insert_ticket_with_source(&conn, "int-id-b", "r1", "20");
+        let ids = vec!["int-id-a".to_string(), "20".to_string()];
+        let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "int-id-a");
+        assert_eq!(result[1].source_id, "20");
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_unknown_id_returns_error() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let ids = vec!["nonexistent-id".to_string()];
+        let err = syncer.resolve_tickets_in_repo("r1", &ids).unwrap_err();
+        assert!(matches!(err, ConductorError::TicketNotFound { .. }));
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_cross_repo_id_not_matched() {
+        let conn = setup_db();
+        // setup_db creates repo "r1"; insert a second repo "r2"
+        crate::test_helpers::insert_test_repo(&conn, "r2", "test-repo-2", "/tmp/repo2");
+        let syncer = TicketSyncer::new(&conn);
+        // Ticket belongs to r2, not r1; its source_id doesn't exist in r1 either
+        insert_ticket_with_source(&conn, "cross-repo-id", "r2", "55");
+        let ids = vec!["cross-repo-id".to_string()];
+        let err = syncer.resolve_tickets_in_repo("r1", &ids).unwrap_err();
+        assert!(matches!(err, ConductorError::TicketNotFound { .. }));
+    }
+
+    #[test]
+    fn test_resolve_tickets_in_repo_preserves_order() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_ticket_with_source(&conn, "ord-id-1", "r1", "100");
+        insert_ticket_with_source(&conn, "ord-id-2", "r1", "200");
+        insert_ticket_with_source(&conn, "ord-id-3", "r1", "300");
+        let ids = vec!["300".to_string(), "ord-id-1".to_string(), "200".to_string()];
+        let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
+        assert_eq!(result[0].source_id, "300");
+        assert_eq!(result[1].id, "ord-id-1");
+        assert_eq!(result[2].source_id, "200");
     }
 }
