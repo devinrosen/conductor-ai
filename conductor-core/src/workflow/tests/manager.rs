@@ -3415,6 +3415,34 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     );
 }
 
+/// Insert a running agent step into a workflow run, returning (agent_run_id, step_id).
+fn create_agent_step(
+    conn: &Connection,
+    run_id: &str,
+    step_name: &str,
+    position: i64,
+    subprocess_pid: i64,
+) -> (String, String) {
+    let agent_mgr = AgentManager::new(conn);
+    let agent = agent_mgr
+        .create_run(Some("w1"), step_name, None, None)
+        .unwrap();
+    conn.execute(
+        "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
+        params![subprocess_pid, agent.id],
+    )
+    .unwrap();
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, child_run_id) \
+         VALUES (?1, ?2, ?3, 'actor', ?4, 'running', 0, ?5)",
+        params![step_id, run_id, step_name, position, agent.id],
+    )
+    .unwrap();
+    (agent.id, step_id)
+}
+
 /// reset_steps_from_position with `from_position=Some(pos)` must also signal
 /// agent-step subprocesses (tracked via child_run_id) at or after the boundary,
 /// and must NOT signal agent steps before the boundary.
@@ -3423,61 +3451,14 @@ fn test_reset_steps_from_position_kills_agent_subprocesses() {
     let conn = setup_db();
     let run_id = make_workflow_run_id(&conn);
 
-    let agent_mgr = AgentManager::new(&conn);
-
     // Agent run before the boundary — its subprocess must NOT be touched.
-    let agent_before = agent_mgr
-        .create_run(Some("w1"), "before step", None, None)
-        .unwrap();
-    conn.execute(
-        "UPDATE agent_runs SET subprocess_pid = 4294967290 WHERE id = ?1",
-        params![agent_before.id],
-    )
-    .unwrap();
-    let step_before = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, child_run_id) \
-         VALUES (?1, ?2, 'agent-before', 'actor', 1, 'running', 0, ?3)",
-        params![step_before, run_id, agent_before.id],
-    )
-    .unwrap();
+    let (_, step_before) = create_agent_step(&conn, &run_id, "agent-before", 1, 4294967290);
 
     // Agent run at the boundary — its subprocess must be signalled.
-    let agent_at = agent_mgr
-        .create_run(Some("w1"), "at-boundary step", None, None)
-        .unwrap();
-    conn.execute(
-        "UPDATE agent_runs SET subprocess_pid = 4294967291 WHERE id = ?1",
-        params![agent_at.id],
-    )
-    .unwrap();
-    let step_at = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, child_run_id) \
-         VALUES (?1, ?2, 'agent-at', 'actor', 2, 'running', 0, ?3)",
-        params![step_at, run_id, agent_at.id],
-    )
-    .unwrap();
+    let (_, step_at) = create_agent_step(&conn, &run_id, "agent-at", 2, 4294967291);
 
     // Agent run after the boundary — its subprocess must also be signalled.
-    let agent_after = agent_mgr
-        .create_run(Some("w1"), "after-boundary step", None, None)
-        .unwrap();
-    conn.execute(
-        "UPDATE agent_runs SET subprocess_pid = 4294967292 WHERE id = ?1",
-        params![agent_after.id],
-    )
-    .unwrap();
-    let step_after = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, child_run_id) \
-         VALUES (?1, ?2, 'agent-after', 'actor', 3, 'running', 0, ?3)",
-        params![step_after, run_id, agent_after.id],
-    )
-    .unwrap();
+    let (_, step_after) = create_agent_step(&conn, &run_id, "agent-after", 3, 4294967292);
 
     let mgr = WorkflowManager::new(&conn);
     // Must not error even if the PIDs are not real processes.
@@ -3526,25 +3507,8 @@ fn test_reset_failed_steps_kills_agent_subprocesses() {
     let conn = setup_db();
     let run_id = make_workflow_run_id(&conn);
 
-    let agent_mgr = AgentManager::new(&conn);
-
     // Agent run in running state — its subprocess must be signalled by reset_failed_steps.
-    let agent_run = agent_mgr
-        .create_run(Some("w1"), "running step", None, None)
-        .unwrap();
-    conn.execute(
-        "UPDATE agent_runs SET subprocess_pid = 4294967290 WHERE id = ?1",
-        params![agent_run.id],
-    )
-    .unwrap();
-    let step_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, child_run_id) \
-         VALUES (?1, ?2, 'agent-step', 'actor', 1, 'running', 0, ?3)",
-        params![step_id, run_id, agent_run.id],
-    )
-    .unwrap();
+    let (_, step_id) = create_agent_step(&conn, &run_id, "agent-step", 1, 4294967290);
 
     let mgr = WorkflowManager::new(&conn);
     // Must not error even if the PID is not a real process.
