@@ -732,6 +732,7 @@ mod tests {
             raw_json: "{}".into(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         };
         app.state.filtered_detail_tickets = vec![ticket];
         app.state.detail_ticket_index = 0;

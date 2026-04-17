@@ -39,6 +39,7 @@ pub(crate) fn make_ticket(id: &str, state: &str) -> conductor_core::tickets::Tic
         raw_json: String::new(),
         workflow: None,
         agent_map: None,
+        workflow_completed: false,
     }
 }
 

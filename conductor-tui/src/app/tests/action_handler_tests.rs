@@ -1039,6 +1039,7 @@ fn selected_ticket_url_from_ticket_info_modal() {
             raw_json: "{}".into(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         }),
     };
     assert_eq!(
@@ -1127,6 +1128,7 @@ fn selected_ticket_url_from_repo_detail_tickets() {
         raw_json: "{}".into(),
         workflow: None,
         agent_map: None,
+        workflow_completed: false,
     }];
     app.state.detail_ticket_index = 0;
     assert_eq!(

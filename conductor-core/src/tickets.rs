@@ -31,6 +31,11 @@ pub struct Ticket {
     pub raw_json: String,
     pub workflow: Option<String>,
     pub agent_map: Option<String>,
+    /// True when a `ticket-to-pr` workflow run has completed for this ticket.
+    /// Populated by dependency queries; defaults to `false` when loaded outside
+    /// that context.
+    #[serde(default)]
+    pub workflow_completed: bool,
 }
 
 /// A normalized ticket from any source, ready to be upserted into the database.
@@ -109,14 +114,20 @@ pub struct TicketDependencies {
 }
 
 impl TicketDependencies {
-    /// Returns `true` if this ticket has at least one unresolved (non-closed) blocker.
+    /// Returns `true` if this ticket has at least one unresolved blocker.
+    /// A blocker is resolved when it is closed or has a completed `ticket-to-pr` workflow.
     pub fn is_actively_blocked(&self) -> bool {
-        self.blocked_by.iter().any(|b| b.state != "closed")
+        self.blocked_by
+            .iter()
+            .any(|b| b.state != "closed" && !b.workflow_completed)
     }
 
-    /// Returns an iterator over unresolved (non-closed) blockers.
+    /// Returns an iterator over unresolved blockers.
+    /// A blocker is resolved when it is closed or has a completed `ticket-to-pr` workflow.
     pub fn active_blockers(&self) -> impl Iterator<Item = &Ticket> {
-        self.blocked_by.iter().filter(|b| b.state != "closed")
+        self.blocked_by
+            .iter()
+            .filter(|b| b.state != "closed" && !b.workflow_completed)
     }
 }
 
@@ -761,10 +772,35 @@ impl<'a> TicketSyncer<'a> {
         Ok(map)
     }
 
+    /// Returns the set of ticket IDs that have at least one completed
+    /// `ticket-to-pr` workflow run. Used to mark blockers as resolved even
+    /// when their ticket state has not yet transitioned to `closed`.
+    fn tickets_with_completed_workflow(&self) -> Result<HashSet<String>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT ticket_id FROM workflow_runs \
+             WHERE ticket_id IS NOT NULL \
+               AND status = 'completed' \
+               AND workflow_name = 'ticket-to-pr'",
+            )
+            .map_err(ConductorError::Database)?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(ConductorError::Database)?;
+        let mut set = HashSet::new();
+        for r in rows {
+            set.insert(r.map_err(ConductorError::Database)?);
+        }
+        Ok(set)
+    }
+
     /// Returns dependency relationships for a single ticket.
     pub fn get_dependencies(&self, ticket_id: &str) -> Result<TicketDependencies> {
+        let completed = self.tickets_with_completed_workflow()?;
+
         // Tickets that block this one (from_ticket_id = blocker, to_ticket_id = this)
-        let blocked_by = query_collect(
+        let mut blocked_by = query_collect(
             self.conn,
             &format!(
                 "SELECT {TICKET_COLS} FROM tickets t
@@ -774,6 +810,9 @@ impl<'a> TicketSyncer<'a> {
             params![ticket_id],
             map_ticket_row,
         )?;
+        for t in &mut blocked_by {
+            t.workflow_completed = completed.contains(&t.id);
+        }
 
         // Tickets this one blocks (from_ticket_id = this, to_ticket_id = blocked)
         let blocks = query_collect(
@@ -830,10 +869,12 @@ impl<'a> TicketSyncer<'a> {
     ) -> Result<HashMap<String, TicketDependencies>> {
         let blocks_rows = query_dep_pairs_for_repo(self.conn, "blocks", repo_id)?;
         let parent_rows = query_dep_pairs_for_repo(self.conn, "parent_of", repo_id)?;
+        let completed = self.tickets_with_completed_workflow()?;
 
         let mut map: HashMap<String, TicketDependencies> = HashMap::new();
 
-        for (from_id, to_id, from_ticket, to_ticket) in blocks_rows {
+        for (from_id, to_id, mut from_ticket, to_ticket) in blocks_rows {
+            from_ticket.workflow_completed = completed.contains(&from_ticket.id);
             map.entry(to_id).or_default().blocked_by.push(from_ticket);
             map.entry(from_id).or_default().blocks.push(to_ticket);
         }
@@ -852,12 +893,14 @@ impl<'a> TicketSyncer<'a> {
     pub fn get_all_dependencies(&self) -> Result<HashMap<String, TicketDependencies>> {
         let blocks_rows = query_dep_pairs(self.conn, "blocks")?;
         let parent_rows = query_dep_pairs(self.conn, "parent_of")?;
+        let completed = self.tickets_with_completed_workflow()?;
 
         let mut map: HashMap<String, TicketDependencies> = HashMap::new();
 
         // blocks_rows: (from_id=blocker, to_id=blocked, from_ticket=blocker, to_ticket=blocked)
         // → to_id's blocked_by list gets the blocker; from_id's blocks list gets the blocked
-        for (from_id, to_id, from_ticket, to_ticket) in blocks_rows {
+        for (from_id, to_id, mut from_ticket, to_ticket) in blocks_rows {
+            from_ticket.workflow_completed = completed.contains(&from_ticket.id);
             map.entry(to_id).or_default().blocked_by.push(from_ticket);
             map.entry(from_id).or_default().blocks.push(to_ticket);
         }
@@ -959,10 +1002,15 @@ impl<'a> TicketSyncer<'a> {
                AND NOT EXISTS ( \
                    SELECT 1 FROM ticket_dependencies dep \
                    JOIN tickets blocker ON blocker.id = dep.from_ticket_id \
-                   LEFT JOIN workflow_runs wr ON wr.ticket_id = blocker.id \
                    WHERE dep.to_ticket_id = t.id \
                      AND dep.dep_type = 'blocks' \
-                     AND (blocker.state != 'closed' OR COALESCE(wr.status, 'completed') != 'completed') \
+                     AND blocker.state != 'closed' \
+                     AND NOT EXISTS ( \
+                         SELECT 1 FROM workflow_runs wr \
+                         WHERE wr.ticket_id = blocker.id \
+                           AND wr.status = 'completed' \
+                           AND wr.workflow_name = 'ticket-to-pr' \
+                     ) \
                ) \
                AND NOT EXISTS ( \
                    SELECT 1 FROM workflow_runs wr \
@@ -1225,6 +1273,7 @@ fn map_ticket_row_at(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<Tic
         raw_json: row.get(offset + 12)?,
         workflow: row.get(offset + 13)?,
         agent_map: row.get(offset + 14)?,
+        workflow_completed: false,
     })
 }
 
@@ -1282,6 +1331,7 @@ mod tests {
             raw_json: "{}".to_string(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         }
     }
 
@@ -2156,6 +2206,7 @@ mod tests {
             raw_json: "{}".to_string(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         };
 
         let prompt = build_agent_prompt(&ticket);
@@ -2184,6 +2235,7 @@ mod tests {
             raw_json: "{}".to_string(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         };
 
         let prompt = build_agent_prompt(&ticket);

@@ -1242,6 +1242,7 @@ mod tests {
             raw_json: "{}".into(),
             workflow: None,
             agent_map: None,
+            workflow_completed: false,
         }];
         app.state.ticket_index = 5;
         app.clamp_indices();
