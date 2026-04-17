@@ -2354,6 +2354,202 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // load_ticket_dep_edges tests
+    // -----------------------------------------------------------------------
+
+    /// Two tickets where ticket "1" blocks ticket "2". Fan-out both tickets.
+    /// Expect exactly one edge: (ticket1_id, ticket2_id).
+    #[test]
+    fn test_load_ticket_dep_edges_basic() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let t1 = make_ticket("t1", "Blocker");
+        let mut t2 = make_ticket("t2", "Blocked");
+        t2.blocked_by = vec!["t1".to_string()];
+        let syncer = TicketSyncer::new(&conn);
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        let ticket1_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = 't1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let ticket2_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = 't2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "ticket-foreach", "foreach", false, 0, 0)
+            .unwrap();
+
+        wf_mgr
+            .insert_fan_out_item(&step_id, "ticket", &ticket1_id, "t1")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "ticket", &ticket2_id, "t2")
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let edges = load_ticket_dep_edges(&mut state, &step_id).unwrap();
+
+        assert_eq!(edges.len(), 1, "expected exactly one dependency edge");
+        assert_eq!(
+            edges[0],
+            (ticket1_id.clone(), ticket2_id.clone()),
+            "ticket1 (blocker) should point to ticket2 (blocked)"
+        );
+    }
+
+    /// Two tickets with no blocking relationship. Fan-out both. Expect empty edges.
+    #[test]
+    fn test_load_ticket_dep_edges_no_deps() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let t1 = make_ticket("nd1", "Independent A");
+        let t2 = make_ticket("nd2", "Independent B");
+        let syncer = TicketSyncer::new(&conn);
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        let ticket1_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 'nd1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ticket2_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 'nd2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "ticket-foreach", "foreach", false, 0, 0)
+            .unwrap();
+
+        wf_mgr
+            .insert_fan_out_item(&step_id, "ticket", &ticket1_id, "nd1")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "ticket", &ticket2_id, "nd2")
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let edges = load_ticket_dep_edges(&mut state, &step_id).unwrap();
+        assert!(edges.is_empty(), "expected no edges for independent tickets");
+    }
+
+    /// t-ext (external blocker, not in fan-out) blocks t-a. t-b is unrelated.
+    /// Fan-out only t-a and t-b. The raw edge (t-ext → t-a) must be filtered because
+    /// t-ext is not in the fan-out id_set. Expect empty edges.
+    #[test]
+    fn test_load_ticket_dep_edges_filters_external_blocker() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let t_ext = make_ticket("ext", "External blocker");
+        let mut t_a = make_ticket("ta", "Blocked by external");
+        t_a.blocked_by = vec!["ext".to_string()];
+        let t_b = make_ticket("tb", "Unrelated");
+        let syncer = TicketSyncer::new(&conn);
+        syncer.upsert_tickets("r1", &[t_ext, t_a, t_b]).unwrap();
+
+        let ticket_a_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 'ta'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ticket_b_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 'tb'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "ticket-foreach", "foreach", false, 0, 0)
+            .unwrap();
+
+        // t-ext is intentionally NOT in the fan-out.
+        wf_mgr
+            .insert_fan_out_item(&step_id, "ticket", &ticket_a_id, "ta")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "ticket", &ticket_b_id, "tb")
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let edges = load_ticket_dep_edges(&mut state, &step_id).unwrap();
+        assert!(
+            edges.is_empty(),
+            "external blocker not in fan-out must be filtered out"
+        );
+    }
+
     /// collect_worktree_items returns an error when repo_id is missing from the execution state.
     #[test]
     fn test_collect_worktree_items_no_repo_id_returns_error() {
