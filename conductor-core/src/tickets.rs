@@ -4050,11 +4050,7 @@ mod tests {
         insert_ticket_with_source(&conn, "ord-id-1", "r1", "100");
         insert_ticket_with_source(&conn, "ord-id-2", "r1", "200");
         insert_ticket_with_source(&conn, "ord-id-3", "r1", "300");
-        let ids = vec![
-            "300".to_string(),
-            "ord-id-1".to_string(),
-            "200".to_string(),
-        ];
+        let ids = vec!["300".to_string(), "ord-id-1".to_string(), "200".to_string()];
         let result = syncer.resolve_tickets_in_repo("r1", &ids).unwrap();
         assert_eq!(result[0].source_id, "300");
         assert_eq!(result[1].id, "ord-id-1");
