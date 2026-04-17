@@ -862,9 +862,7 @@ impl<'a> WorkflowManager<'a> {
             let handles: Vec<_> = pids
                 .into_iter()
                 .filter_map(|pid| u32::try_from(pid).ok())
-                .map(|pid| {
-                    std::thread::spawn(move || crate::process_utils::cancel_subprocess(pid))
-                })
+                .map(|pid| std::thread::spawn(move || crate::process_utils::cancel_subprocess(pid)))
                 .collect();
             for h in handles {
                 let _ = h.join();

@@ -3293,7 +3293,10 @@ fn test_reset_failed_steps_kills_running_subprocesses() {
     // Must not error even though the PIDs do not exist.
     mgr.reset_failed_steps(&run_id).unwrap();
 
-    for (id, label) in [(&step_id_a, "step-running-a"), (&step_id_b, "step-running-b")] {
+    for (id, label) in [
+        (&step_id_a, "step-running-a"),
+        (&step_id_b, "step-running-b"),
+    ] {
         let pid: Option<i64> = conn
             .query_row(
                 "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
