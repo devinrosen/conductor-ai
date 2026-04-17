@@ -322,7 +322,12 @@ fn collect_ticket_items(
                 }
             }
         },
-        Some(ForeachScope::Worktree(_)) | None => {
+        Some(ForeachScope::Worktree(_)) => {
+            return Err(ConductorError::Workflow(
+                "foreach over = tickets does not accept a worktree scope; use over = worktrees instead".to_string(),
+            ));
+        }
+        None => {
             // No ticket scope — collect all open tickets for the repo.
             let filter = TicketFilter {
                 labels: vec![],
@@ -986,16 +991,34 @@ fn load_worktree_dep_edges(
     let id_set: HashSet<&String> = item_ids.iter().collect();
 
     // Build worktree_id → ticket_id map for items that have a linked ticket.
+    // Use a single batched query to avoid N+1 per worktree.
+    let placeholders = item_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT id, ticket_id FROM worktrees WHERE id IN ({placeholders}) AND ticket_id IS NOT NULL"
+    );
+    let params: Vec<&dyn rusqlite::ToSql> = item_ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::ToSql)
+        .collect();
+    let mut stmt = state.conn.prepare(&sql).map_err(|e| {
+        ConductorError::Workflow(format!("foreach: failed to prepare worktree query: {e}"))
+    })?;
     let mut wt_ticket_map: HashMap<String, String> = HashMap::new();
-    for wt_id in &item_ids {
-        let ticket_id: std::result::Result<Option<String>, rusqlite::Error> = state.conn.query_row(
-            "SELECT ticket_id FROM worktrees WHERE id = ?1",
-            rusqlite::params![wt_id],
-            |row| row.get::<_, Option<String>>(0),
-        );
-        if let Ok(Some(tid)) = ticket_id {
-            wt_ticket_map.insert(wt_id.clone(), tid);
-        }
+    let rows = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+            ))
+        })
+        .map_err(|e| ConductorError::Workflow(format!("foreach: worktree ticket query failed: {e}")))?;
+    for row in rows.flatten() {
+        wt_ticket_map.insert(row.0, row.1);
     }
 
     // Build reverse map: ticket_id → worktree_id.
@@ -1704,5 +1727,151 @@ mod tests {
         );
         assert_eq!(vars.get("item.ticket_id").map(|s| s.as_str()), Some(""));
         assert_eq!(vars.get("item.id").map(|s| s.as_str()), Some("wt-x"));
+    }
+
+    // -----------------------------------------------------------------------
+    // load_worktree_dep_edges tests
+    // -----------------------------------------------------------------------
+
+    /// Seed two worktrees each linked to a ticket, where ticket-1 blocks ticket-2.
+    /// Verify that load_worktree_dep_edges returns a single edge (wt-blocker → wt-blocked).
+    #[test]
+    fn test_load_worktree_dep_edges_basic() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // Insert two tickets where ticket "1" blocks ticket "2".
+        let t1 = make_ticket("1", "Blocker");
+        let mut t2 = make_ticket("2", "Blocked");
+        t2.blocked_by = vec!["1".to_string()];
+        let syncer = TicketSyncer::new(&conn);
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        // Resolve ULIDs (tickets table uses server-generated ULIDs).
+        let ticket1_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = '1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ticket2_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = '2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // Insert two worktrees linked to the tickets.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
+             VALUES ('wt-1', 'r1', 'feat-1', 'feat/1', '/tmp/1', 'active', '2024-01-01T00:00:00Z', ?1)",
+            rusqlite::params![ticket1_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
+             VALUES ('wt-2', 'r1', 'feat-2', 'feat/2', '/tmp/2', 'active', '2024-01-02T00:00:00Z', ?1)",
+            rusqlite::params![ticket2_id],
+        )
+        .unwrap();
+
+        // Create a workflow run + step + fan_out_items for the two worktrees.
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "release-foreach", "foreach", false, 0, 0)
+            .unwrap();
+
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-1", "feat-1")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-2", "feat-2")
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let edges = load_worktree_dep_edges(&mut state, &step_id).unwrap();
+
+        assert_eq!(edges.len(), 1, "expected exactly one dependency edge");
+        assert_eq!(
+            edges[0],
+            ("wt-1".to_string(), "wt-2".to_string()),
+            "wt-1 (blocker) should point to wt-2 (blocked)"
+        );
+    }
+
+    /// When no worktrees have a linked ticket, load_worktree_dep_edges returns no edges.
+    #[test]
+    fn test_load_worktree_dep_edges_no_tickets() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        // Insert worktrees with no ticket_id.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-a', 'r1', 'feat-a', 'feat/a', '/tmp/a', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-b', 'r1', 'feat-b', 'feat/b', '/tmp/b', 'active', '2024-01-02T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "release-foreach", "foreach", false, 0, 0)
+            .unwrap();
+
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-a", "feat-a")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt-b", "feat-b")
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            Some("w1".to_string()),
+            Some("r1".to_string()),
+            None,
+        );
+
+        let edges = load_worktree_dep_edges(&mut state, &step_id).unwrap();
+        assert!(
+            edges.is_empty(),
+            "expected no edges when worktrees have no linked tickets"
+        );
     }
 }
