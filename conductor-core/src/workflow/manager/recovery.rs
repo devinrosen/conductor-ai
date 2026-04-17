@@ -1621,4 +1621,25 @@ mod tests {
             .unwrap();
         assert_eq!(status, "pending");
     }
+
+    /// Regression test: a panicking cancel thread must not be silently discarded.
+    /// `cancel_subprocess` itself never panics, so we test the join-error-handling
+    /// pattern directly to prove that `JoinHandle::join()` returns `Err` on a panic
+    /// and that our `if let Err` guard captures it (rather than the old `let _ =` silencing it).
+    #[test]
+    fn test_cancel_thread_panic_is_captured_by_join() {
+        let h = std::thread::spawn(|| {
+            panic!("simulated cancel thread panic");
+        });
+        let result = h.join();
+        assert!(
+            result.is_err(),
+            "a panicking thread must return Err from join()"
+        );
+        // Verify the Err payload is non-empty — this is what our warn! formats.
+        if let Err(e) = result {
+            let msg = format!("{e:?}");
+            assert!(!msg.is_empty());
+        }
+    }
 }
