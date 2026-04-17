@@ -278,7 +278,7 @@ fn validate_foreach_node<F>(
         }
     }
 
-    // Check 5: scope required for over = tickets
+    // Check 5: scope required for over = tickets or over = worktrees
     if n.over == ForeachOver::Tickets && n.scope.is_none() {
         errors.push(ValidationError {
             message: format!(
@@ -291,15 +291,29 @@ fn validate_foreach_node<F>(
             ),
         });
     }
-
-    // Check 6: ordered rejected for non-ticket over
-    if n.ordered && n.over != ForeachOver::Tickets {
+    if n.over == ForeachOver::Worktrees && n.scope.is_none() {
         errors.push(ValidationError {
             message: format!(
-                "foreach '{}': ordered = true is only valid when over = tickets",
+                "foreach '{}': `scope` is required when over = worktrees",
                 n.name
             ),
-            hint: Some("Remove `ordered = true` or change `over` to `tickets`".to_string()),
+            hint: Some(
+                "Add `scope = { base_branch = \"release/x.y.z\" }` to restrict to a specific base branch"
+                    .to_string(),
+            ),
+        });
+    }
+
+    // Check 6: ordered only valid for tickets or worktrees
+    if n.ordered && n.over != ForeachOver::Tickets && n.over != ForeachOver::Worktrees {
+        errors.push(ValidationError {
+            message: format!(
+                "foreach '{}': ordered = true is only valid when over = tickets or over = worktrees",
+                n.name
+            ),
+            hint: Some(
+                "Remove `ordered = true` or change `over` to `tickets` or `worktrees`".to_string(),
+            ),
         });
     }
 
@@ -355,6 +369,17 @@ fn validate_foreach_node<F>(
                 n.name
             ),
             hint: Some("Remove the `filter` block for repo fan-outs".to_string()),
+        });
+    }
+
+    // Warn if filter provided for worktrees (scope = base_branch is the filter mechanism)
+    if n.over == ForeachOver::Worktrees && !n.filter.is_empty() {
+        errors.push(ValidationError {
+            message: format!(
+                "foreach '{}': filter has no effect when over = worktrees (use scope = {{ base_branch = \"...\" }} instead)",
+                n.name
+            ),
+            hint: Some("Remove the `filter` block for worktree fan-outs".to_string()),
         });
     }
 }

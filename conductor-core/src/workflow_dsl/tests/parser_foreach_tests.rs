@@ -33,7 +33,7 @@ fn test_foreach_over_tickets() {
             );
             assert_eq!(n.on_child_fail, OnChildFail::SkipDependents);
             match &n.scope {
-                Some(TicketScope::TicketId(id)) => assert_eq!(id, "42"),
+                Some(ForeachScope::Ticket(TicketScope::TicketId(id))) => assert_eq!(id, "42"),
                 other => panic!("Expected TicketId scope, got {other:?}"),
             }
         }
@@ -58,7 +58,7 @@ fn test_foreach_over_tickets_label_scope() {
         WorkflowNode::ForEach(n) => {
             assert_eq!(n.over, ForeachOver::Tickets);
             match &n.scope {
-                Some(TicketScope::Label(lbl)) => assert_eq!(lbl, "sprint-42"),
+                Some(ForeachScope::Ticket(TicketScope::Label(lbl))) => assert_eq!(lbl, "sprint-42"),
                 other => panic!("Expected Label scope, got {other:?}"),
             }
         }
@@ -271,7 +271,7 @@ fn test_foreach_scope_unlabeled_true() {
         WorkflowNode::ForEach(n) => {
             assert_eq!(n.over, ForeachOver::Tickets);
             match &n.scope {
-                Some(TicketScope::Unlabeled) => {}
+                Some(ForeachScope::Ticket(TicketScope::Unlabeled)) => {}
                 other => panic!("Expected Unlabeled scope, got {other:?}"),
             }
         }
@@ -316,4 +316,113 @@ fn test_foreach_scope_missing_key() {
         err.contains("scope must contain ticket_id, label, or unlabeled"),
         "got: {err}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Worktrees foreach parsing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_foreach_over_worktrees_basic() {
+    let input = r#"
+        workflow test {
+            foreach release-worktrees {
+                over          = worktrees
+                scope         = { base_branch = "release/0.5.2" }
+                max_parallel  = 3
+                workflow      = "ticket-to-pr"
+                inputs        = { worktree_slug = "{{item.slug}}" }
+                on_child_fail = skip_dependents
+            }
+        }
+    "#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    match &def.body[0] {
+        WorkflowNode::ForEach(n) => {
+            assert_eq!(n.name, "release-worktrees");
+            assert_eq!(n.over, ForeachOver::Worktrees);
+            assert!(!n.ordered);
+            assert_eq!(n.max_parallel, 3);
+            assert_eq!(n.workflow, "ticket-to-pr");
+            assert_eq!(n.on_child_fail, OnChildFail::SkipDependents);
+            match &n.scope {
+                Some(ForeachScope::Worktree(ws)) => {
+                    assert_eq!(ws.base_branch, "release/0.5.2");
+                }
+                other => panic!("Expected Worktree scope, got {other:?}"),
+            }
+        }
+        other => panic!("Expected ForEach node, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_foreach_over_worktrees_ordered() {
+    let input = r#"
+        workflow test {
+            foreach release-wts {
+                over         = worktrees
+                scope        = { base_branch = "release/1.0" }
+                ordered      = true
+                on_cycle     = warn
+                max_parallel = 2
+                workflow     = "ticket-to-pr"
+            }
+        }
+    "#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    match &def.body[0] {
+        WorkflowNode::ForEach(n) => {
+            assert_eq!(n.over, ForeachOver::Worktrees);
+            assert!(n.ordered);
+            assert_eq!(n.on_cycle, OnCycle::Warn);
+            match &n.scope {
+                Some(ForeachScope::Worktree(ws)) => {
+                    assert_eq!(ws.base_branch, "release/1.0");
+                }
+                other => panic!("Expected Worktree scope, got {other:?}"),
+            }
+        }
+        other => panic!("Expected ForEach node, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_foreach_over_worktrees_scope_missing_base_branch() {
+    let input = r#"
+        workflow test {
+            foreach release-wts {
+                over         = worktrees
+                scope        = { unknown_key = "x" }
+                max_parallel = 3
+                workflow     = "foo"
+            }
+        }
+    "#;
+    let result = parse_workflow_str(input, "test.wf");
+    assert!(result.is_err());
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("scope must contain base_branch"), "got: {err}");
+}
+
+#[test]
+fn test_foreach_over_worktrees_missing_scope() {
+    // Missing scope for worktrees is a parser success (validated at semantic layer).
+    let input = r#"
+        workflow test {
+            foreach release-wts {
+                over         = worktrees
+                max_parallel = 3
+                workflow     = "foo"
+            }
+        }
+    "#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    match &def.body[0] {
+        WorkflowNode::ForEach(n) => {
+            assert_eq!(n.over, ForeachOver::Worktrees);
+            assert!(n.scope.is_none());
+        }
+        other => panic!("Expected ForEach node, got {other:?}"),
+    }
 }
