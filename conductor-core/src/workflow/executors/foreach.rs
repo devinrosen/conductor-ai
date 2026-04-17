@@ -983,7 +983,9 @@ fn load_worktree_dep_edges(
     let worktrees = match wt_mgr.get_by_ids(&id_refs) {
         Ok(wts) => wts,
         Err(e) => {
-            tracing::warn!("foreach: could not fetch worktrees for dep edges: {e}; skipping ordering");
+            tracing::warn!(
+                "foreach: could not fetch worktrees for dep edges: {e}; skipping ordering"
+            );
             return Ok(vec![]);
         }
     };
