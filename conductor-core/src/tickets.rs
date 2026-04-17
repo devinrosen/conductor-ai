@@ -4,6 +4,8 @@ use chrono::Utc;
 
 /// Ticket columns for SELECT queries that join `tickets` with alias `t`.
 const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
+/// Ticket columns for SELECT queries without a table alias.
+const TICKET_COLS_BARE: &str = "id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map";
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -634,9 +636,7 @@ impl<'a> TicketSyncer<'a> {
         // Query 1: batch-fetch by internal id.
         let ph = sql_placeholders(raw_ids.len());
         let sql = format!(
-            "SELECT id, repo_id, source_type, source_id, title, body, state, labels, \
-             assignee, priority, url, synced_at, raw_json, workflow, agent_map \
-             FROM tickets WHERE id IN ({ph})"
+            "SELECT {TICKET_COLS_BARE} FROM tickets WHERE id IN ({ph})"
         );
         let params_vec: Vec<&dyn rusqlite::ToSql> =
             raw_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
@@ -658,9 +658,7 @@ impl<'a> TicketSyncer<'a> {
         if !fallback_ids.is_empty() {
             let ph2 = crate::db::sql_placeholders_from(fallback_ids.len(), 2);
             let sql2 = format!(
-                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, \
-                 assignee, priority, url, synced_at, raw_json, workflow, agent_map \
-                 FROM tickets WHERE repo_id = ?1 AND source_id IN ({ph2})"
+                "SELECT {TICKET_COLS_BARE} FROM tickets WHERE repo_id = ?1 AND source_id IN ({ph2})"
             );
             let mut p2: Vec<&dyn rusqlite::ToSql> = vec![&repo_id];
             p2.extend(fallback_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
@@ -942,7 +940,7 @@ impl<'a> TicketSyncer<'a> {
     }
 
     /// Batch-loads `blocks` edges for a specific set of ticket IDs.
-    /// Returns `(to_ticket_id, from_ticket_id)` pairs — i.e. (blocked, blocker).
+    /// Returns `(from_ticket_id, to_ticket_id)` pairs — i.e. (blocker, blocked).
     /// Callers must guard against an empty `ticket_ids` slice before calling.
     pub fn get_blocking_edges_for_tickets(
         &self,
@@ -953,7 +951,7 @@ impl<'a> TicketSyncer<'a> {
         }
         let placeholders = sql_placeholders(ticket_ids.len());
         let sql = format!(
-            "SELECT to_ticket_id, from_ticket_id FROM ticket_dependencies \
+            "SELECT from_ticket_id, to_ticket_id FROM ticket_dependencies \
              WHERE to_ticket_id IN ({placeholders}) AND dep_type = 'blocks'"
         );
         let params: Vec<&dyn rusqlite::ToSql> = ticket_ids
@@ -3915,9 +3913,9 @@ mod tests {
         assert_eq!(
             result,
             vec![
-                ("blocked-a".to_string(), "blocker-1".to_string()),
-                ("blocked-a".to_string(), "blocker-2".to_string()),
-                ("blocked-b".to_string(), "blocker-3".to_string()),
+                ("blocker-1".to_string(), "blocked-a".to_string()),
+                ("blocker-2".to_string(), "blocked-a".to_string()),
+                ("blocker-3".to_string(), "blocked-b".to_string()),
             ]
         );
     }
@@ -3939,7 +3937,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(
             result[0],
-            ("tid-target".to_string(), "blocker-x".to_string())
+            ("blocker-x".to_string(), "tid-target".to_string())
         );
     }
 
@@ -3963,7 +3961,7 @@ mod tests {
 
         let result = syncer.get_blocking_edges_for_tickets(&["child-a"]).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ("child-a".to_string(), "blocker-1".to_string()));
+        assert_eq!(result[0], ("blocker-1".to_string(), "child-a".to_string()));
     }
 
     // --- get_blocks_edges_within_set tests ---

@@ -1041,7 +1041,7 @@ fn load_worktree_dep_edges(
     // Translate ticket-level edges into worktree-to-worktree edges.
     // Deduplicate with a HashSet to handle multiple worktrees sharing a ticket_id.
     let mut edges: HashSet<(String, String)> = HashSet::new();
-    for (dependent_ticket_id, blocker_ticket_id) in dep_edges {
+    for (blocker_ticket_id, dependent_ticket_id) in dep_edges {
         if let (Some(blocker_wt_id), Some(dependent_wt_id)) = (
             ticket_wt_map.get(&blocker_ticket_id),
             ticket_wt_map.get(&dependent_ticket_id),
