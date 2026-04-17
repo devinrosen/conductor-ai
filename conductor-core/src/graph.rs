@@ -177,13 +177,14 @@ mod tests {
 
     #[test]
     fn test_topo_sort_parallel_roots() {
-        // Two independent chains: a→b and c→d
+        // Two independent chains: a→b and c→d.
+        // Roots [a, c] are enqueued lex-sorted, so a is processed before c.
+        // After a is processed, b unlocks; after c, d unlocks.
+        // Full expected order: a, c, b, d.
         let ids = s(&["a", "b", "c", "d"]);
         let edges = e(&[("a", "b"), ("c", "d")]);
         let sorted = topological_sort(&ids, &edges);
-        // Roots a and c come before their dependents; within each level, sorted lex
-        assert!(sorted.iter().position(|s| s == "a") < sorted.iter().position(|s| s == "b"));
-        assert!(sorted.iter().position(|s| s == "c") < sorted.iter().position(|s| s == "d"));
+        assert_eq!(sorted, vec!["a", "c", "b", "d"]);
     }
 
     #[test]
