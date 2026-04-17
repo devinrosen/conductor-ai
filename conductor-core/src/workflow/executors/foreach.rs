@@ -1001,22 +1001,19 @@ fn load_worktree_dep_edges(
     let sql = format!(
         "SELECT id, ticket_id FROM worktrees WHERE id IN ({placeholders}) AND ticket_id IS NOT NULL"
     );
-    let params: Vec<&dyn rusqlite::ToSql> = item_ids
-        .iter()
-        .map(|s| s as &dyn rusqlite::ToSql)
-        .collect();
+    let params: Vec<&dyn rusqlite::ToSql> =
+        item_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
     let mut stmt = state.conn.prepare(&sql).map_err(|e| {
         ConductorError::Workflow(format!("foreach: failed to prepare worktree query: {e}"))
     })?;
     let mut wt_ticket_map: HashMap<String, String> = HashMap::new();
     let rows = stmt
         .query_map(params.as_slice(), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(|e| ConductorError::Workflow(format!("foreach: worktree ticket query failed: {e}")))?;
+        .map_err(|e| {
+            ConductorError::Workflow(format!("foreach: worktree ticket query failed: {e}"))
+        })?;
     for row in rows.flatten() {
         wt_ticket_map.insert(row.0, row.1);
     }
@@ -1750,18 +1747,14 @@ mod tests {
 
         // Resolve ULIDs (tickets table uses server-generated ULIDs).
         let ticket1_id: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE source_id = '1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         let ticket2_id: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE source_id = '2'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
 
         // Insert two worktrees linked to the tickets.
