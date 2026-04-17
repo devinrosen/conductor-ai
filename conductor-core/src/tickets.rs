@@ -3793,7 +3793,13 @@ mod tests {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
 
-        for id in ["blocker-1", "blocker-2", "blocker-3", "blocked-a", "blocked-b"] {
+        for id in [
+            "blocker-1",
+            "blocker-2",
+            "blocker-3",
+            "blocked-a",
+            "blocked-b",
+        ] {
             insert_test_ticket(&conn, id, "r1");
         }
         insert_blocks_dep(&conn, "blocker-1", "blocked-a");
@@ -3830,7 +3836,10 @@ mod tests {
             .get_blocking_edges_for_tickets(&["tid-target"])
             .unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ("tid-target".to_string(), "blocker-x".to_string()));
+        assert_eq!(
+            result[0],
+            ("tid-target".to_string(), "blocker-x".to_string())
+        );
     }
 
     #[test]
@@ -3851,9 +3860,7 @@ mod tests {
         // Insert a 'blocks' edge — should be returned
         insert_blocks_dep(&conn, "blocker-1", "child-a");
 
-        let result = syncer
-            .get_blocking_edges_for_tickets(&["child-a"])
-            .unwrap();
+        let result = syncer.get_blocking_edges_for_tickets(&["child-a"]).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], ("child-a".to_string(), "blocker-1".to_string()));
     }
