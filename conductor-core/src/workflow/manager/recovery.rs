@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use crate::agent::status::AgentRunStatus;
+use crate::agent::AgentManager;
 use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::Result;
@@ -845,56 +846,20 @@ impl<'a> WorkflowManager<'a> {
         #[cfg(unix)]
         {
             // Script-step PIDs (subprocess_pid on the step row itself).
-            let script_pids: Vec<i64> = if let Some(pos) = from_position {
-                query_collect(
-                    self.conn,
-                    "SELECT subprocess_pid FROM workflow_run_steps \
-                     WHERE workflow_run_id = ?1 AND position >= ?2 AND status = 'running' \
-                       AND subprocess_pid IS NOT NULL",
-                    params![workflow_run_id, pos],
-                    |row| row.get(0),
-                )?
-            } else {
-                query_collect(
-                    self.conn,
-                    "SELECT subprocess_pid FROM workflow_run_steps \
-                     WHERE workflow_run_id = ?1 AND status = 'running' \
-                       AND subprocess_pid IS NOT NULL",
-                    params![workflow_run_id],
-                    |row| row.get(0),
-                )?
-            };
+            let script_pids: Vec<i64> = query_collect(
+                self.conn,
+                "SELECT subprocess_pid FROM workflow_run_steps \
+                 WHERE workflow_run_id = ?1 AND status = 'running' \
+                   AND subprocess_pid IS NOT NULL \
+                   AND (?2 IS NULL OR position >= ?2)",
+                params![workflow_run_id, from_position],
+                |row| row.get(0),
+            )?;
 
             // Agent-step PIDs tracked in agent_runs via child_run_id.
-            // Only collected when wrs.subprocess_pid IS NULL to avoid double-killing
-            // steps that somehow have both fields set.
-            let agent_pids: Vec<i64> = if let Some(pos) = from_position {
-                query_collect(
-                    self.conn,
-                    "SELECT ar.subprocess_pid \
-                     FROM workflow_run_steps wrs \
-                     JOIN agent_runs ar ON ar.id = wrs.child_run_id \
-                     WHERE wrs.workflow_run_id = ?1 AND wrs.position >= ?2 \
-                       AND wrs.status = 'running' \
-                       AND wrs.subprocess_pid IS NULL \
-                       AND ar.subprocess_pid IS NOT NULL",
-                    params![workflow_run_id, pos],
-                    |row| row.get(0),
-                )?
-            } else {
-                query_collect(
-                    self.conn,
-                    "SELECT ar.subprocess_pid \
-                     FROM workflow_run_steps wrs \
-                     JOIN agent_runs ar ON ar.id = wrs.child_run_id \
-                     WHERE wrs.workflow_run_id = ?1 \
-                       AND wrs.status = 'running' \
-                       AND wrs.subprocess_pid IS NULL \
-                       AND ar.subprocess_pid IS NOT NULL",
-                    params![workflow_run_id],
-                    |row| row.get(0),
-                )?
-            };
+            // Delegated to AgentManager to avoid coupling workflow domain to agent schema.
+            let agent_pids = AgentManager::new(self.conn)
+                .collect_agent_pids_for_workflow_steps(workflow_run_id, from_position)?;
 
             let handles: Vec<_> = script_pids
                 .into_iter()

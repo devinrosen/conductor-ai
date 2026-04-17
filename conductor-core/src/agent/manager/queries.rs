@@ -378,6 +378,32 @@ impl<'a> AgentManager<'a> {
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
+
+    /// Collect subprocess PIDs from agent runs linked to workflow steps via
+    /// `child_run_id`.  Only steps in `status = 'running'` with no direct
+    /// `subprocess_pid` (i.e. the PID lives in `agent_runs`) are returned.
+    ///
+    /// If `from_position` is `Some(pos)`, only steps at or after `pos` are
+    /// included; `None` covers the entire run.
+    pub fn collect_agent_pids_for_workflow_steps(
+        &self,
+        workflow_run_id: &str,
+        from_position: Option<i64>,
+    ) -> Result<Vec<i64>> {
+        query_collect(
+            self.conn,
+            "SELECT ar.subprocess_pid \
+             FROM workflow_run_steps wrs \
+             JOIN agent_runs ar ON ar.id = wrs.child_run_id \
+             WHERE wrs.workflow_run_id = ?1 \
+               AND wrs.status = 'running' \
+               AND wrs.subprocess_pid IS NULL \
+               AND ar.subprocess_pid IS NOT NULL \
+               AND (?2 IS NULL OR wrs.position >= ?2)",
+            params![workflow_run_id, from_position],
+            |row| row.get(0),
+        )
+    }
 }
 
 #[cfg(test)]
