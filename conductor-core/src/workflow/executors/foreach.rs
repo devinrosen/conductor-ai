@@ -12,6 +12,11 @@ fn set_between_cycle_hook(hook: impl FnMut() + 'static) {
 }
 
 #[cfg(test)]
+fn clear_between_cycle_hook() {
+    BETWEEN_CYCLE_HOOK.with(|h| *h.borrow_mut() = None);
+}
+
+#[cfg(test)]
 fn call_between_cycle_hook() {
     BETWEEN_CYCLE_HOOK.with(|h| {
         if let Some(hook) = h.borrow_mut().as_mut() {
@@ -1970,6 +1975,7 @@ mod tests {
         });
 
         let result = run_dispatch_loop(&mut state, &node, &step_id, &child_def, 1);
+        clear_between_cycle_hook();
         bg.join().unwrap();
         assert!(result.is_ok(), "dispatch loop should succeed: {:?}", result);
 
