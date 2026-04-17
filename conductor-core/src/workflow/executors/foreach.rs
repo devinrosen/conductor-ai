@@ -1014,8 +1014,15 @@ fn load_worktree_dep_edges(
         .map_err(|e| {
             ConductorError::Workflow(format!("foreach: worktree ticket query failed: {e}"))
         })?;
-    for row in rows.flatten() {
-        wt_ticket_map.insert(row.0, row.1);
+    for row in rows {
+        match row {
+            Ok(pair) => {
+                wt_ticket_map.insert(pair.0, pair.1);
+            }
+            Err(e) => {
+                tracing::warn!("foreach: skipping unparseable worktree row: {e}");
+            }
+        }
     }
 
     // Build reverse map: ticket_id → worktree_id.
@@ -1024,37 +1031,21 @@ fn load_worktree_dep_edges(
         .map(|(wt_id, tid)| (tid.clone(), wt_id.clone()))
         .collect();
 
-    // Batch-query all 'blocks' edges whose dependent ticket is in our set.
-    // This avoids N+1 get_dependencies() calls by issuing a single IN-clause query.
+    // Batch-query all 'blocks' edges for our ticket set via TicketSyncer.
     let ticket_ids: Vec<String> = wt_ticket_map.values().cloned().collect();
-    let ticket_placeholders = ticket_ids
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("?{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let dep_sql = format!(
-        "SELECT to_ticket_id, from_ticket_id FROM ticket_dependencies \
-         WHERE to_ticket_id IN ({ticket_placeholders}) AND dep_type = 'blocks'"
-    );
-    let dep_params: Vec<&dyn rusqlite::ToSql> = ticket_ids
-        .iter()
-        .map(|s| s as &dyn rusqlite::ToSql)
-        .collect();
-    let mut dep_stmt = state.conn.prepare(&dep_sql).map_err(|e| {
-        ConductorError::Workflow(format!("foreach: failed to prepare dependency query: {e}"))
-    })?;
-    let dep_rows = dep_stmt
-        .query_map(dep_params.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
+    if ticket_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let ticket_id_refs: Vec<&str> = ticket_ids.iter().map(String::as_str).collect();
+    let syncer = crate::tickets::TicketSyncer::new(state.conn);
+    let dep_edges = syncer
+        .get_blocking_edges_for_tickets(&ticket_id_refs)
         .map_err(|e| ConductorError::Workflow(format!("foreach: dependency query failed: {e}")))?;
 
     // Translate ticket-level edges into worktree-to-worktree edges.
     // Deduplicate with a HashSet to handle multiple worktrees sharing a ticket_id.
     let mut edges: HashSet<(String, String)> = HashSet::new();
-    for row in dep_rows.flatten() {
-        let (dependent_ticket_id, blocker_ticket_id) = row;
+    for (dependent_ticket_id, blocker_ticket_id) in dep_edges {
         if let (Some(blocker_wt_id), Some(dependent_wt_id)) = (
             ticket_wt_map.get(&blocker_ticket_id),
             ticket_wt_map.get(&dependent_ticket_id),

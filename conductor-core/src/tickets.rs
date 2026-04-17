@@ -872,6 +872,39 @@ impl<'a> TicketSyncer<'a> {
         Ok(map)
     }
 
+    /// Batch-loads `blocks` edges for a specific set of ticket IDs.
+    /// Returns `(to_ticket_id, from_ticket_id)` pairs — i.e. (blocked, blocker).
+    /// Callers must guard against an empty `ticket_ids` slice before calling.
+    pub fn get_blocking_edges_for_tickets(
+        &self,
+        ticket_ids: &[&str],
+    ) -> Result<Vec<(String, String)>> {
+        if ticket_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = ticket_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT to_ticket_id, from_ticket_id FROM ticket_dependencies \
+             WHERE to_ticket_id IN ({placeholders}) AND dep_type = 'blocks'"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> = ticket_ids
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        let mut stmt = self.conn.prepare(&sql).map_err(ConductorError::Database)?;
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(ConductorError::Database)?;
+        rows.map(|r| r.map_err(ConductorError::Database)).collect()
+    }
+
     /// After syncing tickets, mark any linked worktrees whose ticket is now
     /// closed by setting their status to `'merged'`. Also removes the git
     /// worktree directory and branch for each affected worktree (best-effort).
