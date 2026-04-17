@@ -1012,7 +1012,7 @@ impl<'a> TicketSyncer<'a> {
     fn mark_worktrees_for_closed_tickets_with_merge_check(
         &self,
         repo_id: &str,
-        merge_check: impl Fn(&str, &[String]) -> HashSet<String>,
+        merge_check: impl Fn(&str, &[String]) -> HashMap<String, String>,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
         let artifacts: Vec<(String, String, String, String)> = query_collect(
@@ -1032,7 +1032,7 @@ impl<'a> TicketSyncer<'a> {
         }
         let mut merged_branches: HashSet<String> = HashSet::new();
         for (remote_url, branches) in &branches_by_remote {
-            merged_branches.extend(merge_check(remote_url, branches));
+            merged_branches.extend(merge_check(remote_url, branches).into_keys());
         }
 
         let now = Utc::now().to_rfc3339();
@@ -1693,8 +1693,8 @@ mod tests {
         .unwrap()
     }
 
-    fn all_merged(_repo_id: &str, branches: &[String]) -> HashSet<String> {
-        branches.iter().cloned().collect()
+    fn all_merged(_repo_id: &str, branches: &[String]) -> HashMap<String, String> {
+        branches.iter().map(|b| (b.clone(), String::new())).collect()
     }
 
     #[test]
@@ -2053,7 +2053,7 @@ mod tests {
 
         let count = syncer
             .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _: &[String]| {
-                HashSet::new()
+                HashMap::new()
             })
             .unwrap();
         assert_eq!(count, 0);

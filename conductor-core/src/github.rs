@@ -680,11 +680,14 @@ pub fn has_merged_pr(remote_url: &str, branch: &str) -> bool {
 /// Given a remote URL and a list of branch names, return the subset of branches
 /// that have at least one merged PR. Makes a single `gh pr list` call per repo
 /// instead of one per branch, avoiding N+1 API calls.
+/// Returns a map of branch name → mergedAt (ISO 8601) for branches that have
+/// a merged PR in the repo. Branches not found in merged PRs are absent from
+/// the map. Returns an empty map on any API failure.
 pub fn merged_branches_for_repo(
     remote_url: &str,
     branches: &[String],
-) -> std::collections::HashSet<String> {
-    let mut result = std::collections::HashSet::new();
+) -> std::collections::HashMap<String, String> {
+    let mut result = std::collections::HashMap::new();
     if branches.is_empty() {
         return result;
     }
@@ -701,7 +704,7 @@ pub fn merged_branches_for_repo(
         "--state",
         "merged",
         "--json",
-        "headRefName",
+        "headRefName,mergedAt",
         "--limit",
         &limit,
     ]) else {
@@ -711,15 +714,17 @@ pub fn merged_branches_for_repo(
     struct PrHead {
         #[serde(rename = "headRefName")]
         head_ref_name: String,
+        #[serde(rename = "mergedAt")]
+        merged_at: String,
     }
     let Ok(prs) = serde_json::from_slice::<Vec<PrHead>>(&output.stdout) else {
         return result;
     };
-    let merged_set: std::collections::HashSet<&str> =
-        prs.iter().map(|p| p.head_ref_name.as_str()).collect();
-    for b in branches {
-        if merged_set.contains(b.as_str()) {
-            result.insert(b.clone());
+    let branch_set: std::collections::HashSet<&str> =
+        branches.iter().map(String::as_str).collect();
+    for pr in prs {
+        if branch_set.contains(pr.head_ref_name.as_str()) {
+            result.insert(pr.head_ref_name, pr.merged_at);
         }
     }
     result
