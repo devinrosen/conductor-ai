@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-git push --force-with-lease origin HEAD
+git push -u --force-with-lease origin HEAD
 branch=$(git rev-parse --abbrev-ref HEAD)
 
 cat <<EOF
