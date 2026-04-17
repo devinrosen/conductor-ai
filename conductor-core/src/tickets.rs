@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::db::{query_collect, with_in_clause};
+use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
 use crate::github::merged_branches_for_repo;
 use crate::worktree::WorktreeManager;
@@ -882,12 +882,7 @@ impl<'a> TicketSyncer<'a> {
         if ticket_ids.is_empty() {
             return Ok(vec![]);
         }
-        let placeholders = ticket_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders = sql_placeholders(ticket_ids.len());
         let sql = format!(
             "SELECT to_ticket_id, from_ticket_id FROM ticket_dependencies \
              WHERE to_ticket_id IN ({placeholders}) AND dep_type = 'blocks'"
@@ -3749,5 +3744,117 @@ mod tests {
             id_first, id_second,
             "ULID must be stable across conflict updates"
         );
+    }
+
+    // --- get_blocking_edges_for_tickets tests ---
+
+    fn insert_test_ticket(conn: &Connection, id: &str, repo_id: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO tickets \
+             (id, repo_id, source_type, source_id, title, state, synced_at, raw_json) \
+             VALUES (?1, ?2, 'github', ?1, 'test', 'open', '2024-01-01T00:00:00Z', '{}')",
+            rusqlite::params![id, repo_id],
+        )
+        .unwrap();
+    }
+
+    fn insert_blocks_dep(conn: &Connection, from_id: &str, to_id: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO ticket_dependencies \
+             (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
+            rusqlite::params![from_id, to_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_get_blocking_edges_empty_input() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.get_blocking_edges_for_tickets(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_blocking_edges_no_matching_rows() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        insert_test_ticket(&conn, "tid-a", "r1");
+        insert_test_ticket(&conn, "tid-b", "r1");
+        // No ticket_dependencies rows at all
+        let result = syncer
+            .get_blocking_edges_for_tickets(&["tid-a", "tid-b"])
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_blocking_edges_returns_matching_edges() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        for id in ["blocker-1", "blocker-2", "blocker-3", "blocked-a", "blocked-b"] {
+            insert_test_ticket(&conn, id, "r1");
+        }
+        insert_blocks_dep(&conn, "blocker-1", "blocked-a");
+        insert_blocks_dep(&conn, "blocker-2", "blocked-a");
+        insert_blocks_dep(&conn, "blocker-3", "blocked-b");
+
+        let mut result = syncer
+            .get_blocking_edges_for_tickets(&["blocked-a", "blocked-b"])
+            .unwrap();
+        result.sort();
+
+        assert_eq!(
+            result,
+            vec![
+                ("blocked-a".to_string(), "blocker-1".to_string()),
+                ("blocked-a".to_string(), "blocker-2".to_string()),
+                ("blocked-b".to_string(), "blocker-3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_get_blocking_edges_excludes_non_queried_tickets() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        for id in ["blocker-x", "blocker-y", "tid-target", "tid-other"] {
+            insert_test_ticket(&conn, id, "r1");
+        }
+        insert_blocks_dep(&conn, "blocker-x", "tid-target");
+        insert_blocks_dep(&conn, "blocker-y", "tid-other");
+
+        let result = syncer
+            .get_blocking_edges_for_tickets(&["tid-target"])
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], ("tid-target".to_string(), "blocker-x".to_string()));
+    }
+
+    #[test]
+    fn test_get_blocking_edges_excludes_parent_of_dep_type() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        for id in ["parent-1", "blocker-1", "child-a"] {
+            insert_test_ticket(&conn, id, "r1");
+        }
+        // Insert a 'parent_of' edge — should NOT be returned
+        conn.execute(
+            "INSERT OR IGNORE INTO ticket_dependencies \
+             (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
+            rusqlite::params!["parent-1", "child-a"],
+        )
+        .unwrap();
+        // Insert a 'blocks' edge — should be returned
+        insert_blocks_dep(&conn, "blocker-1", "child-a");
+
+        let result = syncer
+            .get_blocking_edges_for_tickets(&["child-a"])
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], ("child-a".to_string(), "blocker-1".to_string()));
     }
 }

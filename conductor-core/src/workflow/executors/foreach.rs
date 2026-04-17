@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::db::sql_placeholders;
 use crate::error::{ConductorError, Result};
 use crate::workflow::engine::{
     record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
@@ -992,12 +993,7 @@ fn load_worktree_dep_edges(
 
     // Build worktree_id → ticket_id map for items that have a linked ticket.
     // Use a single batched query to avoid N+1 per worktree.
-    let placeholders = item_ids
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("?{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let placeholders = sql_placeholders(item_ids.len());
     let sql = format!(
         "SELECT id, ticket_id FROM worktrees WHERE id IN ({placeholders}) AND ticket_id IS NOT NULL"
     );
