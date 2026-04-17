@@ -11,6 +11,13 @@ OWNER=$(echo "$TICKET_URL" | sed -E 's|https://github.com/([^/]+)/([^/]+)/issues
 REPO=$(echo "$TICKET_URL" | sed -E 's|https://github.com/([^/]+)/([^/]+)/issues/([0-9]+)|\2|')
 ISSUE_NUMBER=$(echo "$TICKET_URL" | sed -E 's|https://github.com/([^/]+)/([^/]+)/issues/([0-9]+)|\3|')
 
+# Validate that URL parsing succeeded — sed returns the original string if pattern doesn't match
+if [ -z "$OWNER" ] || [ -z "$REPO" ] || [ -z "$ISSUE_NUMBER" ] || \
+   [ "$OWNER" = "$TICKET_URL" ] || ! echo "$ISSUE_NUMBER" | grep -qE '^[0-9]+$'; then
+  echo "ERROR: Could not parse OWNER/REPO/ISSUE_NUMBER from TICKET_URL: ${TICKET_URL}" >&2
+  exit 1
+fi
+
 emit_output() {
   local markers="$1"
   local context="$2"
@@ -21,7 +28,7 @@ emit_output() {
 }
 
 # Check existing labels — skip if already qualified or needs-work
-existing_labels=$(gh issue view "$ISSUE_NUMBER" --repo "$OWNER/$REPO" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+existing_labels=$(gh issue view "$ISSUE_NUMBER" --repo "$OWNER/$REPO" --json labels --jq '[.labels[].name] | join(",")')
 if echo "$existing_labels" | grep -qE '(^|,)(qualified|needs-work)(,|$)'; then
   emit_output '[]' "Skipping: ticket #${ISSUE_NUMBER} already has a qualification label (${existing_labels})"
   exit 0
