@@ -808,11 +808,22 @@ fn build_child_dispatch_params(
         &state.worktree_id,
     );
 
+    // For worktree fan-outs, run the child in the child worktree's directory,
+    // not the parent's CWD (which may be a different worktree entirely).
+    let child_working_dir = if node.over == ForeachOver::Worktrees {
+        WorktreeManager::new(state.conn, state.config)
+            .get_by_id(&item.item_id)
+            .map(|wt| wt.path)
+            .unwrap_or_else(|_| state.working_dir.clone())
+    } else {
+        state.working_dir.clone()
+    };
+
     Ok(WorkflowExecStandalone {
         config: state.config.clone(),
         workflow: child_def.clone(),
         worktree_id: item_worktree_id,
-        working_dir: state.working_dir.clone(),
+        working_dir: child_working_dir,
         repo_path: state.repo_path.clone(),
         ticket_id: item_ticket_id,
         repo_id: item_repo_id,
