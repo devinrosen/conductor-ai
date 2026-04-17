@@ -30,6 +30,8 @@ impl fmt::Display for ValidationError {
 #[derive(Debug, Default)]
 pub struct ValidationReport {
     pub errors: Vec<ValidationError>,
+    /// Non-fatal warnings that don't block execution.
+    pub warnings: Vec<String>,
 }
 
 impl ValidationReport {
@@ -55,6 +57,7 @@ where
     F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
 {
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
     let mut produced: HashSet<String> = HashSet::new();
 
     // Collect declared boolean input names for condition validation.
@@ -65,7 +68,14 @@ where
         .map(|i| i.name.clone())
         .collect();
 
-    validate_nodes(&def.body, &mut produced, &mut errors, loader, &bool_inputs);
+    validate_nodes(
+        &def.body,
+        &mut produced,
+        &mut errors,
+        &mut warnings,
+        loader,
+        &bool_inputs,
+    );
 
     // The `always` block sees every step key produced anywhere in the main body.
     let mut always_produced = produced.clone();
@@ -73,6 +83,7 @@ where
         &def.always,
         &mut always_produced,
         &mut errors,
+        &mut warnings,
         loader,
         &bool_inputs,
     );
@@ -97,13 +108,14 @@ where
         }
     }
 
-    ValidationReport { errors }
+    ValidationReport { errors, warnings }
 }
 
 fn validate_nodes<F>(
     nodes: &[WorkflowNode],
     produced: &mut HashSet<String>,
     errors: &mut Vec<ValidationError>,
+    warnings: &mut Vec<String>,
     loader: &F,
     bool_inputs: &HashSet<String>,
 ) where
@@ -166,6 +178,7 @@ fn validate_nodes<F>(
                     &n.body,
                     produced,
                     errors,
+                    warnings,
                     loader,
                     bool_inputs,
                 );
@@ -176,6 +189,7 @@ fn validate_nodes<F>(
                     &n.body,
                     produced,
                     errors,
+                    warnings,
                     loader,
                     bool_inputs,
                 );
@@ -184,16 +198,23 @@ fn validate_nodes<F>(
                 // Condition is checked before the first iteration.
                 check_condition_reachable(&n.step, produced, errors);
                 let mut body_produced = produced.clone();
-                validate_nodes(&n.body, &mut body_produced, errors, loader, bool_inputs);
+                validate_nodes(
+                    &n.body,
+                    &mut body_produced,
+                    errors,
+                    warnings,
+                    loader,
+                    bool_inputs,
+                );
                 produced.extend(body_produced);
             }
             WorkflowNode::DoWhile(n) => {
                 // Body always executes at least once before the condition is checked.
-                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
+                validate_nodes(&n.body, produced, errors, warnings, loader, bool_inputs);
                 check_condition_reachable(&n.step, produced, errors);
             }
             WorkflowNode::Do(n) => {
-                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
+                validate_nodes(&n.body, produced, errors, warnings, loader, bool_inputs);
             }
             WorkflowNode::Gate(n) => {
                 // Quality gates require a quality_gate config block.
@@ -227,10 +248,10 @@ fn validate_nodes<F>(
             }
             WorkflowNode::Always(n) => {
                 // An Always node nested inside a body block sees the current produced set.
-                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
+                validate_nodes(&n.body, produced, errors, warnings, loader, bool_inputs);
             }
             WorkflowNode::ForEach(n) => {
-                validate_foreach_node(n, errors, loader);
+                validate_foreach_node(n, errors, warnings, loader);
                 // foreach produces a step key for downstream use
                 produced.insert(format!("foreach:{}", n.name));
             }
@@ -242,6 +263,7 @@ fn validate_nodes<F>(
 fn validate_foreach_node<F>(
     n: &super::types::ForEachNode,
     errors: &mut Vec<ValidationError>,
+    warnings: &mut Vec<String>,
     loader: &F,
 ) where
     F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
@@ -278,27 +300,28 @@ fn validate_foreach_node<F>(
         }
     }
 
-    // Check 5: scope required for over = tickets or over = worktrees
-    let scope_required_hint: Option<(&str, &str)> = match n.over {
-        ForeachOver::Tickets => Some((
-            "tickets",
-            "Add `scope = { ticket_id = \"...\" }`, `scope = { label = \"...\" }`, or `scope = { unlabeled = true }`",
-        )),
-        ForeachOver::Worktrees => Some((
-            "worktrees",
-            "Add `scope = { base_branch = \"release/x.y.z\" }` to restrict to a specific base branch",
-        )),
-        _ => None,
-    };
-    if let Some((over_name, hint)) = scope_required_hint {
-        if n.scope.is_none() {
-            errors.push(ValidationError {
-                message: format!(
-                    "foreach '{}': `scope` is required when over = {}",
-                    n.name, over_name
-                ),
-                hint: Some(hint.to_string()),
-            });
+    // Check 5: scope required for over = tickets (hard error); optional for over = worktrees (warning)
+    if n.scope.is_none() {
+        match n.over {
+            ForeachOver::Tickets => {
+                errors.push(ValidationError {
+                    message: format!(
+                        "foreach '{}': `scope` is required when over = tickets",
+                        n.name
+                    ),
+                    hint: Some(
+                        "Add `scope = { ticket_id = \"...\" }`, `scope = { label = \"...\" }`, or `scope = { unlabeled = true }`"
+                            .to_string(),
+                    ),
+                });
+            }
+            ForeachOver::Worktrees => {
+                warnings.push(format!(
+                    "foreach '{}': no scope specified; base_branch will be inferred from the execution context worktree at runtime",
+                    n.name
+                ));
+            }
+            _ => {}
         }
     }
 
@@ -441,6 +464,7 @@ fn validate_conditional_branch<F>(
     body: &[WorkflowNode],
     produced: &mut HashSet<String>,
     errors: &mut Vec<ValidationError>,
+    warnings: &mut Vec<String>,
     loader: &F,
     bool_inputs: &HashSet<String>,
 ) where
@@ -455,7 +479,14 @@ fn validate_conditional_branch<F>(
         }
     }
     let mut branch_produced = produced.clone();
-    validate_nodes(body, &mut branch_produced, errors, loader, bool_inputs);
+    validate_nodes(
+        body,
+        &mut branch_produced,
+        errors,
+        warnings,
+        loader,
+        bool_inputs,
+    );
     // Conservative union: optimistically assume branch steps are available downstream.
     produced.extend(branch_produced);
 }
@@ -636,15 +667,48 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_foreach_worktrees_scope_required() {
+    fn test_validate_foreach_worktrees_scope_emits_warning_not_error() {
         let node = make_bare_foreach_node(ForeachOver::Worktrees);
         let mut errors = Vec::new();
-        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        let mut warnings = Vec::new();
+        validate_foreach_node(&node, &mut errors, &mut warnings, &no_op_loader);
         assert!(
-            errors
+            !errors
                 .iter()
                 .any(|e| e.message.contains("scope") && e.message.contains("worktrees")),
-            "expected scope-required error for worktrees, got: {:?}",
+            "missing scope for worktrees must not be a hard error, got: {:?}",
+            errors
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("base_branch") && w.contains("inferred")),
+            "expected inference warning for missing worktrees scope, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_validate_foreach_worktrees_explicit_scope_no_warning() {
+        use super::super::types::{ForEachNode, ForeachScope, WorktreeScope};
+        let node = ForEachNode {
+            scope: Some(ForeachScope::Worktree(WorktreeScope {
+                base_branch: "main".to_string(),
+            })),
+            ..make_bare_foreach_node(ForeachOver::Worktrees)
+        };
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_foreach_node(&node, &mut errors, &mut warnings, &no_op_loader);
+        assert!(
+            !warnings.iter().any(|w| w.contains("base_branch")),
+            "explicit scope must not produce a base_branch warning, got: {:?}",
+            warnings
+        );
+        // No scope error either
+        assert!(
+            !errors.iter().any(|e| e.message.contains("scope")),
+            "explicit scope must not produce scope errors, got: {:?}",
             errors
         );
     }
@@ -653,7 +717,7 @@ mod tests {
     fn test_validate_foreach_tickets_scope_required() {
         let node = make_bare_foreach_node(ForeachOver::Tickets);
         let mut errors = Vec::new();
-        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
         assert!(
             errors
                 .iter()
@@ -671,7 +735,7 @@ mod tests {
             ..make_bare_foreach_node(ForeachOver::Repos)
         };
         let mut errors = Vec::new();
-        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
         assert!(
             errors.iter().any(|e| e.message.contains("ordered")
                 && e.message.contains("tickets or over = worktrees")),
@@ -689,7 +753,7 @@ mod tests {
             ..make_bare_foreach_node(ForeachOver::Tickets)
         };
         let mut errors = Vec::new();
-        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
         assert!(
             errors
                 .iter()
@@ -703,7 +767,7 @@ mod tests {
     fn test_validate_foreach_workflow_runs_filter_required() {
         let node = make_bare_foreach_node(ForeachOver::WorkflowRuns);
         let mut errors = Vec::new();
-        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
         assert!(
             errors
                 .iter()
@@ -723,7 +787,7 @@ mod tests {
             ..make_bare_foreach_node(ForeachOver::WorkflowRuns)
         };
         let mut errors = Vec::new();
-        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
         assert!(
             errors
                 .iter()
@@ -746,7 +810,7 @@ mod tests {
             ..make_bare_foreach_node(ForeachOver::Worktrees)
         };
         let mut errors = Vec::new();
-        validate_foreach_node(&node, &mut errors, &no_op_loader);
+        validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
         assert!(
             errors
                 .iter()
@@ -781,7 +845,7 @@ mod tests {
         };
         let node = make_bare_foreach_node(ForeachOver::Repos);
         let mut errors = Vec::new();
-        validate_foreach_node(&node, &mut errors, &loader);
+        validate_foreach_node(&node, &mut errors, &mut Vec::new(), &loader);
         assert!(
             errors.iter().any(|e| e.message.contains("required-input")),
             "expected error for missing required child input, got: {:?}",
