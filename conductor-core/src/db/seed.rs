@@ -18,7 +18,6 @@ pub fn seed_database(conn: &Connection) -> Result<()> {
     seed_worktrees(conn)?;
     seed_agent_runs(conn)?;
     seed_workflow_runs(conn)?;
-    seed_features(conn)?;
     Ok(())
 }
 
@@ -296,43 +295,6 @@ fn seed_workflow_runs(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn seed_features(conn: &Connection) -> Result<()> {
-    conn.execute(
-        "INSERT OR IGNORE INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            "seed-feature-001",
-            "seed-repo-001",
-            "auth-overhaul",
-            "feat/auth-overhaul",
-            "main",
-            "in_progress",
-            "2025-01-15T12:00:00+00:00",
-        ],
-    )?;
-
-    conn.execute(
-        "INSERT OR IGNORE INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            "seed-feature-002",
-            "seed-repo-001",
-            "payments-v2",
-            "feat/payments-v2",
-            "main",
-            "closed",
-            "2025-01-10T08:00:00+00:00",
-        ],
-    )?;
-
-    // Link a ticket to the auth-overhaul feature
-    conn.execute(
-        "INSERT OR IGNORE INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
-        params!["seed-feature-001", "seed-ticket-001"],
-    )?;
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
