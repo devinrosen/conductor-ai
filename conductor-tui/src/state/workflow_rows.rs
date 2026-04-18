@@ -406,4 +406,3 @@ pub(super) fn push_children(
         }
     }
 }
-

@@ -1923,13 +1923,13 @@ fn workflow_name_filter_filter_does_not_suppress_expanded_steps() {
     app.state.selected_repo_id = Some("repo1".to_string());
     let run = make_wf_run_named("r1", "process-release");
     app.state.data.workflow_runs = vec![run];
-    app.state
-        .data
-        .workflow_run_steps
-        .insert("r1".to_string(), vec![
+    app.state.data.workflow_run_steps.insert(
+        "r1".to_string(),
+        vec![
             crate::state::tests::make_wf_step("s1", "r1", "step-one", 0),
             crate::state::tests::make_wf_step("s2", "r1", "step-two", 1),
-        ]);
+        ],
+    );
     app.state.expanded_step_run_ids.insert("r1".to_string());
     app.state.workflow_name_filter = Some("release".to_string());
     app.state.rebuild_workflow_run_rows();
@@ -1943,7 +1943,10 @@ fn workflow_name_filter_filter_does_not_suppress_expanded_steps() {
         .iter()
         .filter(|r| matches!(r, crate::state::WorkflowRunRow::Step { .. }))
         .count();
-    assert_eq!(step_count, 2, "expanded steps must appear alongside matching parent");
+    assert_eq!(
+        step_count, 2,
+        "expanded steps must appear alongside matching parent"
+    );
 }
 
 // active agent run should open the ModelPicker.
