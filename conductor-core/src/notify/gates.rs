@@ -4,6 +4,13 @@ use crate::workflow_dsl::GateType;
 
 use super::{dispatch_notification, DispatchParams};
 
+fn wf_label(workflow_name: &str, target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("{workflow_name} on {label}"),
+        None => workflow_name.to_string(),
+    }
+}
+
 /// Build the notification title and body for a gate based on its type.
 ///
 /// Pure function — no side effects — extracted so the formatting logic is
@@ -15,10 +22,7 @@ pub fn gate_notification_text(
     target_label: Option<&str>,
     gate_prompt: Option<&str>,
 ) -> (&'static str, String) {
-    let wf = match target_label {
-        Some(label) => format!("{workflow_name} on {label}"),
-        None => workflow_name.to_string(),
-    };
+    let wf = wf_label(workflow_name, target_label);
 
     match gate_type {
         Some(GateType::HumanApproval) | Some(GateType::HumanReview) => {
@@ -109,13 +113,10 @@ pub fn fire_gate_notification(
         return;
     }
 
-    let wf_label = match params.target_label {
-        Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
-        None => params.workflow_name.to_string(),
-    };
+    let label = wf_label(params.workflow_name, params.target_label);
     let hook_event = NotificationEvent::GateWaiting {
         run_id: params.step_id.to_string(),
-        label: wf_label,
+        label,
         timestamp: chrono::Utc::now().to_rfc3339(),
         url: None,
         step_name: params.step_name.to_string(),
@@ -180,10 +181,7 @@ pub fn grouped_gate_notification_text(
         None => "Conductor \u{2014} Approval Required",
     };
 
-    let wf = match target_label {
-        Some(label) => format!("{workflow_name} on {label}"),
-        None => workflow_name.to_string(),
-    };
+    let wf = wf_label(workflow_name, target_label);
     let body = format!("{wf}: {count} gates pending");
 
     (title, body)
@@ -212,13 +210,10 @@ pub fn fire_grouped_gate_notification(
         return;
     }
 
-    let wf_label = match params.target_label {
-        Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
-        None => params.workflow_name.to_string(),
-    };
+    let label = wf_label(params.workflow_name, params.target_label);
     let hook_event = NotificationEvent::GateWaiting {
         run_id: params.run_id.to_string(),
-        label: wf_label,
+        label,
         timestamp: chrono::Utc::now().to_rfc3339(),
         url: None,
         step_name: format!("{} gates pending", params.count),
