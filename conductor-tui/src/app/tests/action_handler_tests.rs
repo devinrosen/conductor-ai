@@ -1783,6 +1783,7 @@ fn workflow_name_filter_hides_non_matching_runs() {
         make_wf_run_named("r3", "process-release"),
     ];
     app.state.workflow_name_filter = Some("release".to_string());
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1802,6 +1803,7 @@ fn workflow_name_filter_case_insensitive() {
         make_wf_run_named("r2", "process-feature"),
     ];
     app.state.workflow_name_filter = Some("RELEASE".to_string());
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1818,6 +1820,7 @@ fn no_workflow_name_filter_shows_all_runs() {
         make_wf_run_named("r2", "process-feature"),
     ];
     app.state.workflow_name_filter = None;
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1838,6 +1841,7 @@ fn workflow_name_filter_global_mode_hides_non_matching_runs() {
     r2.target_label = Some("my-repo/wt1".to_string());
     app.state.data.workflow_runs = vec![r1, r2];
     app.state.workflow_name_filter = Some("release".to_string());
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1871,6 +1875,7 @@ fn workflow_name_filter_global_mode_no_filter_shows_all() {
     r2.target_label = Some("my-repo/wt1".to_string());
     app.state.data.workflow_runs = vec![r1, r2];
     app.state.workflow_name_filter = None;
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1882,6 +1887,66 @@ fn workflow_name_filter_global_mode_no_filter_shows_all() {
     );
     // 1 RepoHeader + 1 TargetHeader + 2 Parent rows.
     assert_eq!(len, 4);
+}
+
+#[test]
+fn workflow_name_filter_matching_parent_shows_child_even_when_child_name_differs() {
+    let mut app = make_app();
+    app.state.selected_repo_id = Some("repo1".to_string());
+    // Parent matches filter; child does not match by name but is still shown as a child.
+    let parent = make_wf_run_named("p1", "process-release");
+    let mut child = make_wf_run_named("c1", "process-feature");
+    child.parent_workflow_run_id = Some("p1".to_string());
+    app.state.data.workflow_runs = vec![parent, child];
+    app.state.workflow_name_filter = Some("release".to_string());
+    app.state.rebuild_workflow_run_rows();
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+    assert_eq!(rows.len(), len);
+    // Name filter is applied only to root runs; children of matching roots are always shown.
+    // 1 Parent row + 1 Child row.
+    assert_eq!(len, 2);
+    assert!(
+        matches!(&rows[0], crate::state::WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"),
+        "matching parent should be the first row"
+    );
+    assert!(
+        matches!(&rows[1], crate::state::WorkflowRunRow::Child { run_id, .. } if run_id == "c1"),
+        "child of matching parent must appear even though its name does not match the filter"
+    );
+}
+
+#[test]
+fn workflow_name_filter_filter_does_not_suppress_expanded_steps() {
+    let mut app = make_app();
+    app.state.selected_repo_id = Some("repo1".to_string());
+    let run = make_wf_run_named("r1", "process-release");
+    app.state.data.workflow_runs = vec![run];
+    app.state.data.workflow_run_steps.insert(
+        "r1".to_string(),
+        vec![
+            crate::state::tests::make_wf_step("s1", "r1", "step-one", 0),
+            crate::state::tests::make_wf_step("s2", "r1", "step-two", 1),
+        ],
+    );
+    app.state.expanded_step_run_ids.insert("r1".to_string());
+    app.state.workflow_name_filter = Some("release".to_string());
+    app.state.rebuild_workflow_run_rows();
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+    assert_eq!(rows.len(), len);
+    // 1 Parent + 2 Step rows.
+    assert_eq!(len, 3);
+    let step_count = rows
+        .iter()
+        .filter(|r| matches!(r, crate::state::WorkflowRunRow::Step { .. }))
+        .count();
+    assert_eq!(
+        step_count, 2,
+        "expanded steps must appear alongside matching parent"
+    );
 }
 
 // active agent run should open the ModelPicker.

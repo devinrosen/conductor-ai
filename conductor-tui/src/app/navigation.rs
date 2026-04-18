@@ -1726,6 +1726,7 @@ mod tests {
         // (no header rows), placing the run directly at index 0.
         app.state.selected_repo_id = Some("r1".into());
         app.state.data.workflow_runs = vec![make_test_run_with_worktree("run1", "wt1")];
+        app.state.rebuild_workflow_run_rows();
         app.state.column_focus = ColumnFocus::Workflow;
         app.state.workflows_focus = WorkflowsFocus::Runs;
         app.state.workflow_run_index = 0;
@@ -1780,6 +1781,7 @@ mod tests {
         app.state.selected_worktree_id = None;
         app.state.selected_repo_id = Some("r1".into());
         app.state.data.workflow_runs = vec![make_test_run_without_worktree("run1")];
+        app.state.rebuild_workflow_run_rows();
         app.state.column_focus = ColumnFocus::Workflow;
         app.state.workflows_focus = WorkflowsFocus::Runs;
         app.state.workflow_run_index = 0;
