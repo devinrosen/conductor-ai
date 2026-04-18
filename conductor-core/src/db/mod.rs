@@ -48,13 +48,6 @@ pub(crate) fn prefix_columns(cols: &str, prefix: &str) -> String {
 /// Build a comma-separated list of anonymous SQLite positional placeholders:
 /// `?, ?, …`.  Returns an empty string when `n == 0`.
 pub(crate) fn sql_placeholders(n: usize) -> String {
-    sql_placeholders_from(n, 1)
-}
-
-/// `?, ?, …` (n anonymous placeholders).  Returns an empty string when `n == 0`.
-/// The `start` parameter is retained for API compatibility but ignored — all
-/// placeholders are anonymous `?` to stay compatible with IN-clause queries.
-pub(crate) fn sql_placeholders_from(n: usize, _start: usize) -> String {
     if n == 0 {
         return String::new();
     }
@@ -88,7 +81,7 @@ pub(crate) fn with_in_clause<T>(
         !items.is_empty(),
         "with_in_clause called with empty items — produces invalid SQL `IN ()`"
     );
-    let placeholders = sql_placeholders_from(items.len(), 1);
+    let placeholders = sql_placeholders(items.len());
     let sql = format!("{prefix} ({placeholders})");
     let mut params: Vec<&dyn ToSql> = leading_params.to_vec();
     for item in items {
