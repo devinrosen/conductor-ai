@@ -2767,9 +2767,26 @@ mod tests {
         let err =
             crate::worktree::get_ticket_id_by_branch(&conn, &repo.id, "feat/missing").unwrap_err();
         assert!(
-            matches!(err, ConductorError::TicketSync(_)),
-            "expected TicketSync error, got: {err:?}"
+            matches!(err, ConductorError::WorktreeNotFound { .. }),
+            "expected WorktreeNotFound error, got: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_worktree_no_linked_ticket() {
+        let conn = setup_db();
+        let repo = make_repo();
+
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
+             VALUES ('wt2', 'r1', 'wt-2', 'feat/no-ticket', '/tmp/wt2', NULL, 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let result =
+            crate::worktree::get_ticket_id_by_branch(&conn, &repo.id, "feat/no-ticket").unwrap();
+        assert_eq!(result, None);
     }
 
     #[test]
