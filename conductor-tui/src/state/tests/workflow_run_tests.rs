@@ -844,6 +844,110 @@ fn visible_workflow_run_rows_loop_partial_iteration_shows_latest() {
     );
 }
 
+// --- global mode workflow_name_filter tests ---
+
+#[test]
+fn global_mode_name_filter_includes_matching_run() {
+    let mut state = AppState::new();
+    state.data.workflow_runs = vec![
+        make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+        make_wf_run_with_label("r2", Some("repo-b/feat-2"), None),
+    ];
+    // r1's workflow_name is "test-workflow" (default); filter on substring
+    state.workflow_name_filter = Some("test-workflow".into());
+    let rows = state.visible_workflow_run_rows();
+    // Both runs match "test-workflow" so both groups appear
+    let run_ids: Vec<_> = rows
+        .iter()
+        .filter_map(|r| {
+            if let WorkflowRunRow::Parent { run_id, .. } = r {
+                Some(run_id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(run_ids.contains(&"r1"));
+    assert!(run_ids.contains(&"r2"));
+}
+
+#[test]
+fn global_mode_name_filter_excludes_non_matching_run() {
+    let mut state = AppState::new();
+    state.data.workflow_runs = vec![
+        make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+        make_wf_run_with_label("r2", Some("repo-a/feat-2"), None),
+    ];
+    state.workflow_name_filter = Some("nonexistent-workflow".into());
+    let rows = state.visible_workflow_run_rows();
+    assert!(
+        rows.is_empty(),
+        "filter matches nothing; expected no rows, got {rows:?}"
+    );
+}
+
+#[test]
+fn global_mode_name_filter_is_case_insensitive() {
+    let mut state = AppState::new();
+    let mut run = make_wf_run_with_label("r1", Some("repo-a/feat-1"), None);
+    run.workflow_name = "deploy-prod".into();
+    state.data.workflow_runs = vec![run];
+    state.workflow_name_filter = Some("DEPLOY".into());
+    let rows = state.visible_workflow_run_rows();
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, WorkflowRunRow::Parent { run_id, .. } if run_id == "r1")),
+        "case-insensitive filter should match; rows: {rows:?}"
+    );
+}
+
+#[test]
+fn global_mode_name_filter_none_shows_all() {
+    let mut state = AppState::new();
+    state.data.workflow_runs = vec![
+        make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+        make_wf_run_with_label("r2", Some("repo-b/feat-2"), None),
+    ];
+    state.workflow_name_filter = None;
+    let rows = state.visible_workflow_run_rows();
+    let run_ids: Vec<_> = rows
+        .iter()
+        .filter_map(|r| {
+            if let WorkflowRunRow::Parent { run_id, .. } = r {
+                Some(run_id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(run_ids.contains(&"r1"));
+    assert!(run_ids.contains(&"r2"));
+}
+
+#[test]
+fn global_mode_name_filter_excludes_whole_target_group() {
+    let mut state = AppState::new();
+    let mut r1 = make_wf_run_with_label("r1", Some("repo-a/feat-1"), None);
+    r1.workflow_name = "deploy-prod".into();
+    let mut r2 = make_wf_run_with_label("r2", Some("repo-a/feat-2"), None);
+    r2.workflow_name = "run-tests".into();
+    state.data.workflow_runs = vec![r1, r2];
+    state.workflow_name_filter = Some("deploy".into());
+    let rows = state.visible_workflow_run_rows();
+    // r1 matches; r2 does not — the TargetHeader for feat-2 should be absent
+    assert!(
+        !rows
+            .iter()
+            .any(|r| matches!(r, WorkflowRunRow::TargetHeader { label, .. } if label == "feat-2")),
+        "TargetHeader for non-matching run should be absent; rows: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, WorkflowRunRow::TargetHeader { label, .. } if label == "feat-1")),
+        "TargetHeader for matching run should be present; rows: {rows:?}"
+    );
+}
+
 // --- direct-step interleaving tests ---
 
 #[test]
