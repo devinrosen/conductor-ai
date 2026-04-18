@@ -1213,6 +1213,30 @@ pub(super) fn record_step_failure(
     Ok(())
 }
 
+/// Record a skipped step (on_fail = continue): insert StepResult with Skipped status.
+/// Does NOT set `state.all_succeeded = false` — the workflow continues normally.
+pub(super) fn record_step_skipped(
+    state: &mut ExecutionState<'_>,
+    step_key: String,
+    step_label: &str,
+) {
+    tracing::info!("Step '{}' skipped via on_fail = continue", step_label);
+    let step_result = StepResult {
+        step_name: step_label.to_string(),
+        status: WorkflowStepStatus::Skipped,
+        result_text: None,
+        cost_usd: None,
+        num_turns: None,
+        duration_ms: None,
+        markers: Vec::new(),
+        context: String::new(),
+        child_run_id: None,
+        structured_output: None,
+        output_file: None,
+    };
+    state.step_results.insert(step_key, step_result);
+}
+
 /// Record a successful step: accumulate stats, insert StepResult, push context.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_step_success(
