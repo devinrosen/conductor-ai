@@ -1823,7 +1823,10 @@ mod tests {
             app.state.workflow_run_nav_stack.is_empty(),
             "nav stack must be cleared when entering a new top-level workflow run"
         );
-        assert_eq!(app.state.selected_workflow_run_id.as_deref(), Some("new-run"));
+        assert_eq!(
+            app.state.selected_workflow_run_id.as_deref(),
+            Some("new-run")
+        );
         assert_eq!(app.state.view, View::WorkflowRunDetail);
     }
 
