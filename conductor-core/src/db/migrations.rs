@@ -2509,4 +2509,95 @@ mod tests {
             "error must be ConductorError::Schema"
         );
     }
+
+    #[test]
+    fn test_migration_073_drops_feature_tables_and_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Minimal pre-073 schema with feature_id column and feature tables.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY,
+                 workflow_name TEXT NOT NULL,
+                 trigger TEXT NOT NULL DEFAULT 'manual',
+                 started_at TEXT NOT NULL,
+                 feature_id TEXT
+             );
+             CREATE TABLE features (
+                 id TEXT PRIMARY KEY,
+                 repo_id TEXT NOT NULL,
+                 name TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'active',
+                 created_at TEXT NOT NULL
+             );
+             CREATE TABLE feature_tickets (
+                 id TEXT PRIMARY KEY,
+                 feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE CASCADE,
+                 ticket_id TEXT NOT NULL
+             );
+             INSERT INTO _conductor_meta VALUES ('schema_version', '72');
+             INSERT INTO workflow_runs (id, workflow_name, started_at, feature_id)
+                 VALUES ('wfr1', 'my-flow', '2024-01-01T00:00:00Z', 'feat1'),
+                        ('wfr2', 'other-flow', '2024-01-01T00:00:00Z', NULL);",
+        )
+        .unwrap();
+
+        run(&conn).unwrap();
+
+        // feature_id column must be gone from workflow_runs.
+        let err = conn.prepare("SELECT feature_id FROM workflow_runs LIMIT 0");
+        assert!(
+            err.is_err(),
+            "feature_id column should have been dropped from workflow_runs"
+        );
+
+        // features and feature_tickets tables must not exist.
+        let features_gone: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='features'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(features_gone, 0, "features table should be dropped");
+
+        let ft_gone: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='feature_tickets'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ft_gone, 0, "feature_tickets table should be dropped");
+
+        // workflow_runs rows must survive with other columns intact.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM workflow_runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "workflow_runs rows must survive migration 073");
+    }
+
+    #[test]
+    fn test_migration_073_idempotent_without_feature_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Schema already at 72 but without the feature tables/column (already cleaned).
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE workflow_runs (
+                 id TEXT PRIMARY KEY,
+                 workflow_name TEXT NOT NULL,
+                 trigger TEXT NOT NULL DEFAULT 'manual',
+                 started_at TEXT NOT NULL
+             );
+             INSERT INTO _conductor_meta VALUES ('schema_version', '72');",
+        )
+        .unwrap();
+
+        // Must not error when feature_id / feature tables are already absent.
+        run(&conn).expect("migration 073 must be idempotent when tables are already absent");
+    }
 }
