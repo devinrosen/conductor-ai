@@ -1,0 +1,17 @@
+workflow security-audit {
+  meta {
+    title       = "Security Audit"
+    description = "Run cargo-audit and file GitHub issues for any advisories found"
+    trigger     = "manual"
+    targets     = ["repo"]
+    group       = "Analysis"
+  }
+
+  script cargo-audit {
+    run = ".conductor/scripts/cargo-audit.sh"
+  }
+
+  if cargo-audit.has_vulnerabilities {
+    call file-vulnerability-issues
+  }
+}
