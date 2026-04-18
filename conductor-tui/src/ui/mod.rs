@@ -1,7 +1,5 @@
 mod common;
 mod dashboard;
-mod feature_detail;
-mod features;
 pub mod graph;
 mod help;
 pub(crate) mod helpers;
@@ -40,8 +38,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         View::WorktreeDetail => worktree_detail::render(frame, body_area, state),
         View::WorkflowRunDetail => workflows::render_run_detail(frame, body_area, state),
         View::WorkflowDefDetail => workflow_def_detail::render(frame, body_area, state),
-        View::Features => features::render(frame, body_area, state),
-        View::FeatureDetail => feature_detail::render(frame, body_area, state),
         View::Settings => settings::render(frame, body_area, state),
     }
 

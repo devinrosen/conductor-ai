@@ -7,7 +7,6 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::{db_path, load_config};
 use conductor_core::db::open_database;
 use conductor_core::error::ConductorError;
-use conductor_core::feature::FeatureManager;
 use conductor_core::github;
 use conductor_core::github_app;
 use conductor_core::issue_source::IssueSourceManager;
@@ -540,26 +539,6 @@ pub fn poll_data(
                     }
                 }
             }
-            // reap_dangling_all() spawns one `gh pr list` subprocess per candidate —
-            // a network-bound call unlike the local reapers above. Throttle to at most
-            // once every 5 minutes to avoid hammering the GitHub API on each poll cycle.
-            {
-                static LAST_DANGLING_REAP: AtomicI64 = AtomicI64::new(0);
-                if now - LAST_DANGLING_REAP.load(Ordering::Relaxed) >= 300 {
-                    LAST_DANGLING_REAP.store(now, Ordering::Relaxed);
-                    let feat_mgr = conductor_core::feature::FeatureManager::new(&conn, &config);
-                    match feat_mgr.reap_dangling_all() {
-                        Ok(v) if !v.is_empty() => {
-                            tracing::warn!(
-                                "Dangling features detected: {:?}",
-                                v.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
-                            );
-                        }
-                        Ok(_) => {}
-                        Err(e) => tracing::warn!("reap_dangling_all failed: {e}"),
-                    }
-                }
-            }
         }
     }
 
@@ -738,32 +717,6 @@ pub fn poll_data(
         NotificationManager::new(&conn).unread_count().unwrap_or(0)
     };
 
-    // Load active features for all repos in a single query.
-    let feat_mgr = FeatureManager::new(&conn, &config);
-
-    // Refresh last_commit_at cache at most once per 60 seconds.
-    {
-        static LAST_REFRESH: AtomicI64 = AtomicI64::new(0);
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        if now_secs - LAST_REFRESH.load(Ordering::Relaxed) >= 60 {
-            LAST_REFRESH.store(now_secs, Ordering::Relaxed);
-            let repos_for_refresh = repo_mgr.list().unwrap_or_default();
-            for repo in &repos_for_refresh {
-                if let Err(e) = feat_mgr.refresh_last_commit_all(&repo.slug) {
-                    tracing::warn!("refresh_last_commit_all for {}: {e}", repo.slug);
-                }
-            }
-        }
-    }
-
-    let features_by_repo = feat_mgr.list_all_active().unwrap_or_else(|e| {
-        tracing::warn!("list_all_active features failed: {e}");
-        std::collections::HashMap::new()
-    });
-
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
@@ -778,7 +731,6 @@ pub fn poll_data(
         pending_feedback_requests,
         waiting_gate_steps,
         live_turns_by_worktree,
-        features_by_repo,
         unread_notification_count,
         latest_repo_agent_runs,
         worktree_agent_events,

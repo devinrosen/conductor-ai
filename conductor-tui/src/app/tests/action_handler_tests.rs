@@ -117,7 +117,6 @@ fn data_refreshed_updates_repos() {
             pending_feedback_requests: vec![],
             waiting_gate_steps: vec![],
             live_turns_by_worktree: std::collections::HashMap::new(),
-            features_by_repo: std::collections::HashMap::new(),
             unread_notification_count: 0,
             latest_repo_agent_runs: std::collections::HashMap::new(),
             worktree_agent_events: vec![],

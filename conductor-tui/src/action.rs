@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use conductor_core::agent::{AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals};
-use conductor_core::feature::FeatureRow;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
@@ -66,8 +65,6 @@ pub struct DataRefreshedPayload {
     /// Live turn count for currently running agents, keyed by worktree_id.
     /// Computed in the background poller to avoid blocking the main thread.
     pub live_turns_by_worktree: HashMap<String, i64>,
-    /// Active features per repo (repo_id → active FeatureRows).
-    pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
     /// Number of unread in-app notifications.
     pub unread_notification_count: usize,
     /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
@@ -492,25 +489,17 @@ pub enum Action {
     #[allow(dead_code)]
     SettingsToggleBool,
 
-    // ── Features view actions ──────────────────────────────────────────────
-    /// Navigate to View::Features (global key `F`, or `f` from RepoDetail).
-    OpenFeatures,
-    /// User pressed `r` — dispatch fan-out in background thread.
-    FeatureRunFanOut,
-    /// Background result from fan-out (`r` key).
-    FeatureRunFanOutComplete {
-        result: Result<conductor_core::feature::RunSummary, String>,
-    },
-    /// User pressed `v` — transition selected feature to ReadyForReview (inline SQL).
-    FeatureTransitionReady,
-    /// User pressed `a` — transition selected feature to Approved (inline SQL).
-    FeatureTransitionApprove,
-    /// User pressed `x` — close the selected feature (off-thread: calls git for merge detection).
-    FeatureClose,
-    /// Background result from `x` close action.
-    FeatureCloseComplete {
-        result: Result<(), String>,
-    },
+    // ── Workflow name filter actions ───────────────────────────────────────
+    /// Open the inline workflow name filter bar (/ key in Runs focus).
+    OpenWorkflowFilter,
+    /// A printable character typed into the workflow filter bar.
+    WorkflowFilterInput(char),
+    /// Backspace in the workflow filter bar.
+    WorkflowFilterBackspace,
+    /// Clear the active workflow name filter (Esc while filter is active).
+    ClearWorkflowFilter,
+    /// Confirm the typed filter and apply it (Enter in filter bar).
+    ConfirmWorkflowFilter,
 
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,
