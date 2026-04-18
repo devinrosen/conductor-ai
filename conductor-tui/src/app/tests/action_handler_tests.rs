@@ -1686,10 +1686,7 @@ fn open_workflow_filter_sets_focus_and_copies_current_filter() {
     let mut app = make_app();
     app.state.workflow_name_filter = Some("release".to_string());
     app.update(Action::OpenWorkflowFilter);
-    assert_eq!(
-        app.state.workflows_focus,
-        WorkflowsFocus::Filter
-    );
+    assert_eq!(app.state.workflows_focus, WorkflowsFocus::Filter);
     assert_eq!(app.state.workflow_filter_input, "release");
 }
 
@@ -1697,10 +1694,7 @@ fn open_workflow_filter_sets_focus_and_copies_current_filter() {
 fn open_workflow_filter_empty_when_no_filter_set() {
     let mut app = make_app();
     app.update(Action::OpenWorkflowFilter);
-    assert_eq!(
-        app.state.workflows_focus,
-        WorkflowsFocus::Filter
-    );
+    assert_eq!(app.state.workflows_focus, WorkflowsFocus::Filter);
     assert_eq!(app.state.workflow_filter_input, "");
 }
 
@@ -1741,10 +1735,7 @@ fn confirm_workflow_filter_sets_filter_and_returns_to_runs() {
     app.update(Action::ConfirmWorkflowFilter);
     assert_eq!(app.state.workflow_name_filter, Some("re".to_string()));
     assert_eq!(app.state.workflow_filter_input, "");
-    assert_eq!(
-        app.state.workflows_focus,
-        WorkflowsFocus::Runs
-    );
+    assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
 }
 
 #[test]
@@ -1764,10 +1755,7 @@ fn clear_workflow_filter_resets_all_filter_state() {
     app.update(Action::ClearWorkflowFilter);
     assert!(app.state.workflow_name_filter.is_none());
     assert_eq!(app.state.workflow_filter_input, "");
-    assert_eq!(
-        app.state.workflows_focus,
-        WorkflowsFocus::Runs
-    );
+    assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
