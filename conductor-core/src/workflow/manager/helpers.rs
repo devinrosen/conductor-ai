@@ -55,16 +55,15 @@ pub(in crate::workflow) fn row_to_workflow_run(
             None
         })
     });
-    let feature_id: Option<String> = row.get(19)?;
-    let total_input_tokens: Option<i64> = row.get(20)?;
-    let total_output_tokens: Option<i64> = row.get(21)?;
-    let total_cache_read_input_tokens: Option<i64> = row.get(22)?;
-    let total_cache_creation_input_tokens: Option<i64> = row.get(23)?;
-    let total_turns: Option<i64> = row.get(24)?;
-    let total_cost_usd: Option<f64> = row.get(25)?;
-    let total_duration_ms: Option<i64> = row.get(26)?;
-    let model: Option<String> = row.get(27)?;
-    let error: Option<String> = row.get(28)?;
+    let total_input_tokens: Option<i64> = row.get(19)?;
+    let total_output_tokens: Option<i64> = row.get(20)?;
+    let total_cache_read_input_tokens: Option<i64> = row.get(21)?;
+    let total_cache_creation_input_tokens: Option<i64> = row.get(22)?;
+    let total_turns: Option<i64> = row.get(23)?;
+    let total_cost_usd: Option<f64> = row.get(24)?;
+    let total_duration_ms: Option<i64> = row.get(25)?;
+    let model: Option<String> = row.get(26)?;
+    let error: Option<String> = row.get(27)?;
     let definition_snapshot: Option<String> = row.get(10)?;
     let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
     Ok(WorkflowRun {
@@ -88,7 +87,6 @@ pub(in crate::workflow) fn row_to_workflow_run(
         default_bot_name,
         iteration,
         blocked_on,
-        feature_id,
         workflow_title,
         total_input_tokens,
         total_output_tokens,

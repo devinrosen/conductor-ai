@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 use conductor_core::config::Config;
-use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::workflow::{WorkflowExecConfig, WorkflowManager};
@@ -170,7 +169,6 @@ pub fn handle_workflow(
             no_fail_fast,
             step_timeout_secs,
             inputs,
-            feature,
             background,
             plugin_dirs,
         } => {
@@ -194,15 +192,6 @@ pub fn handle_workflow(
             if dry_run {
                 println!("DRY RUN: Actor steps will show intended changes without committing.");
             }
-
-            // Resolve --feature to a feature_id. When --feature is absent and
-            // --ticket is provided, auto-detect from the feature_tickets table.
-            let feature_id = FeatureManager::new(conn, config).resolve_feature_id_for_run(
-                feature.as_deref(),
-                repo.as_deref().or(repo_flag.as_deref()),
-                ticket.as_deref(),
-                worktree.as_deref(),
-            )?;
 
             if let Some(pr_url) = pr {
                 // Ephemeral PR run
@@ -271,7 +260,6 @@ pub fn handle_workflow(
                     parent_workflow_run_id: None,
                     target_label: Some(r.slug.as_str()),
                     default_bot_name: None,
-                    feature_id: feature_id.as_deref(),
                     iteration: 0,
                     run_id_notify: None,
                     triggered_by_hook: false,
@@ -316,7 +304,6 @@ pub fn handle_workflow(
                     parent_workflow_run_id: None,
                     target_label: Some(run_id.as_str()),
                     default_bot_name: None,
-                    feature_id: feature_id.as_deref(),
                     iteration: 0,
                     run_id_notify: None,
                     triggered_by_hook: false,
@@ -358,7 +345,6 @@ pub fn handle_workflow(
                     parent_workflow_run_id: None,
                     target_label: Some(repo.slug.as_str()),
                     default_bot_name: None,
-                    feature_id: feature_id.as_deref(),
                     iteration: 0,
                     run_id_notify: None,
                     triggered_by_hook: false,
@@ -398,7 +384,6 @@ pub fn handle_workflow(
                         exec_config,
                         inputs: input_map,
                         target_label: Some(wt_label),
-                        feature_id: feature_id.map(|s| s.to_string()),
                         run_id_notify: None,
                         triggered_by_hook: false,
                         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
@@ -437,7 +422,6 @@ pub fn handle_workflow(
                     parent_workflow_run_id: None,
                     target_label: Some(&wt_label),
                     default_bot_name: None,
-                    feature_id: feature_id.as_deref(),
                     iteration: 0,
                     run_id_notify: None,
                     triggered_by_hook: false,

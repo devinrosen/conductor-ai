@@ -6,7 +6,6 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use conductor_core::error::ConductorError;
-use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, estimation, execute_workflow, validate_resume_preconditions,
@@ -238,7 +237,6 @@ pub struct RunWorkflowRequest {
     pub model: Option<String>,
     pub dry_run: Option<bool>,
     pub inputs: Option<HashMap<String, String>>,
-    pub feature: Option<String>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -250,7 +248,6 @@ pub struct PostWorkflowRunRequest {
     pub inputs: Option<HashMap<String, String>>,
     pub dry_run: Option<bool>,
     pub model: Option<String>,
-    pub feature: Option<String>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -445,7 +442,7 @@ pub async fn run_workflow(
     Json(req): Json<RunWorkflowRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate inputs while holding the lock
-    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, model, feature_id) = {
+    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let wt_mgr = WorktreeManager::new(&db, &config);
@@ -473,15 +470,6 @@ pub async fn run_workflow(
             .or_else(|| repo.model.clone())
             .or_else(|| config.general.model.clone());
 
-        // Resolve feature_id synchronously so user-facing errors (e.g. ambiguous
-        // features) are returned as HTTP errors before the 202 Accepted.
-        let feature_id = FeatureManager::new(&db, &config).resolve_feature_id_for_run(
-            req.feature.as_deref(),
-            Some(&repo.slug),
-            wt.ticket_id.as_deref(),
-            Some(&wt.slug),
-        )?;
-
         (
             wt.path.clone(),
             wt.slug.clone(),
@@ -490,7 +478,6 @@ pub async fn run_workflow(
             repo.slug.clone(),
             repo.id.clone(),
             model,
-            feature_id,
         )
     };
 
@@ -545,7 +532,6 @@ pub async fn run_workflow(
             },
             inputs,
             target_label: Some(wt_target_label.clone()),
-            feature_id,
             run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
             triggered_by_hook: false,
             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
@@ -673,18 +659,7 @@ pub async fn post_workflow_run(
     Json(req): Json<PostWorkflowRunRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate inputs while holding the lock
-    let (
-        wt_path,
-        wt_slug,
-        wt_ticket_id,
-        repo_path,
-        repo_slug,
-        repo_id,
-        resolved_wt_id,
-        model,
-        feature_id,
-        def,
-    ) = {
+    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, resolved_wt_id, model, def) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let wt_mgr = WorktreeManager::new(&db, &config);
@@ -752,14 +727,6 @@ pub async fn post_workflow_run(
             .or_else(|| repo.model.clone())
             .or_else(|| config.general.model.clone());
 
-        // Resolve feature_id synchronously
-        let feature_id = FeatureManager::new(&db, &config).resolve_feature_id_for_run(
-            req.feature.as_deref(),
-            Some(&repo.slug),
-            wt_ticket_id.as_deref(),
-            resolved_wt_id.as_deref().map(|_| wt_slug.as_str()),
-        )?;
-
         (
             wt_path,
             wt_slug,
@@ -769,7 +736,6 @@ pub async fn post_workflow_run(
             repo.id.clone(),
             resolved_wt_id,
             model,
-            feature_id,
             def,
         )
     };
@@ -851,7 +817,6 @@ pub async fn post_workflow_run(
             parent_workflow_run_id: None,
             target_label: Some(&target_label),
             default_bot_name: None,
-            feature_id: feature_id.as_deref(),
             iteration: 0,
             run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
             triggered_by_hook: false,

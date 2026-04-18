@@ -64,7 +64,6 @@ fn create_repo_run(conn: &rusqlite::Connection, repo_id: &str) -> WorkflowRun {
             None,
             None,
             None,
-            None,
         )
         .unwrap()
 }
@@ -108,7 +107,6 @@ fn test_list_workflow_runs_for_repo_distinct_no_duplicates() {
             &parent_id,
             false,
             "manual",
-            None,
             None,
             None,
             None,
@@ -846,7 +844,6 @@ fn test_list_all_waiting_gate_steps_includes_target_label() {
             None,
             None,
             Some("conductor-ai/feat-123"),
-            None,
         )
         .unwrap();
 
@@ -1288,7 +1285,6 @@ fn test_get_step_summaries_for_runs_child_chain_traversal() {
             None,
             Some(&root.id), // parent_workflow_run_id
             None,
-            None,
         )
         .unwrap();
     mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None, None)
@@ -1336,7 +1332,6 @@ fn test_get_step_summaries_for_runs_deep_chain() {
             None,
             Some(&root.id),
             None,
-            None,
         )
         .unwrap();
     mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None, None)
@@ -1354,7 +1349,6 @@ fn test_get_step_summaries_for_runs_deep_chain() {
             "manual",
             None,
             Some(&child.id),
-            None,
             None,
         )
         .unwrap();
@@ -1461,7 +1455,6 @@ fn test_get_step_summaries_for_runs_multiple_roots_with_chains() {
             "manual",
             None,
             Some(&root_a.id),
-            None,
             None,
         )
         .unwrap();
@@ -1870,7 +1863,6 @@ fn test_list_active_workflow_runs_for_repo_distinct_no_duplicates() {
             None,
             None,
             None,
-            None,
         )
         .unwrap();
     let runs = WorkflowManager::new(&conn)
@@ -1907,7 +1899,6 @@ fn create_named_repo_run(conn: &rusqlite::Connection, repo_id: &str, wf_name: &s
             &parent_id,
             false,
             "manual",
-            None,
             None,
             None,
             None,
@@ -3924,7 +3915,6 @@ fn test_spike_baseline_excludes_sub_workflow_runs() {
                 "manual",
                 None,
                 Some(&root_run.id),
-                None,
                 None,
             )
             .unwrap();

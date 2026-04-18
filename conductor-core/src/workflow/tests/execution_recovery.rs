@@ -804,7 +804,6 @@ fn test_reap_finalization_child_run_not_reaped() {
             None,
             Some(&root_run_id),
             None,
-            None,
         )
         .unwrap();
     wf_mgr

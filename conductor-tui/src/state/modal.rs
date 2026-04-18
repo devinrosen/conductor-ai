@@ -147,6 +147,7 @@ pub enum Modal {
         message: String,
     },
     /// Branch picker shown during worktree creation: select a target branch.
+    #[allow(dead_code)]
     BranchPicker {
         repo_slug: String,
         wt_name: String,

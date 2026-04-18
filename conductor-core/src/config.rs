@@ -318,13 +318,6 @@ pub struct GeneralConfig {
     /// `CLAUDE_CONFIG_DIR` to agent runs. Defaults to `~/.claude` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,
-    /// Max concurrent agent runs when using `conductor feature run`. Defaults to 3.
-    #[serde(default = "default_max_feature_parallelism")]
-    pub max_feature_parallelism: u32,
-    /// Automatically transition a feature to ready_for_review when its last
-    /// worktree is marked merged. Set to false to require an explicit call.
-    #[serde(default = "default_true")]
-    pub auto_ready_for_review: bool,
     /// Maximum number of times a workflow run will be automatically resumed
     /// after orphan detection. Set to 0 to disable automatic resume. Defaults to 3.
     #[serde(default = "default_auto_resume_limit")]
@@ -339,10 +332,6 @@ pub struct DefaultsConfig {
     pub worktree_prefix_feat: String,
     #[serde(default = "default_fix_prefix")]
     pub worktree_prefix_fix: String,
-    /// Number of days after which an active feature with no recent activity is
-    /// considered stale. Set to 0 to disable stale detection.
-    #[serde(default = "default_stale_feature_days")]
-    pub stale_feature_days: u32,
 }
 
 fn default_workspace_root() -> PathBuf {
@@ -365,20 +354,12 @@ fn default_fix_prefix() -> String {
     "fix-".to_string()
 }
 
-fn default_stale_feature_days() -> u32 {
-    14
-}
-
 fn default_stale_workflow_minutes() -> u32 {
     60
 }
 
 fn default_true() -> bool {
     true
-}
-
-fn default_max_feature_parallelism() -> u32 {
-    3
 }
 
 fn default_auto_resume_limit() -> u32 {
@@ -398,8 +379,6 @@ impl Default for GeneralConfig {
             auto_cleanup_merged_branches: true,
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
-            max_feature_parallelism: default_max_feature_parallelism(),
-            auto_ready_for_review: default_true(),
             auto_resume_limit: default_auto_resume_limit(),
         }
     }
@@ -458,7 +437,6 @@ impl Default for DefaultsConfig {
             default_branch: default_branch(),
             worktree_prefix_feat: default_feat_prefix(),
             worktree_prefix_fix: default_fix_prefix(),
-            stale_feature_days: default_stale_feature_days(),
         }
     }
 }

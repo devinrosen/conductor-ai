@@ -357,26 +357,6 @@ impl App {
                     );
                 }
             },
-            Action::FeatureBranchesLoaded {
-                repo_slug,
-                wt_name,
-                ticket_id,
-                items,
-                inferred_base_branch,
-            } => {
-                self.handle_feature_branches_loaded(
-                    repo_slug,
-                    wt_name,
-                    ticket_id,
-                    items,
-                    inferred_base_branch,
-                );
-            }
-            Action::FeatureBranchesFailed { error } => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to load feature branches: {error}"),
-                };
-            }
             Action::SelectBranch(index) => self.handle_branch_pick(index),
             Action::SelectListItem(index) => {
                 if let Modal::WorkflowPicker {
@@ -460,18 +440,6 @@ impl App {
 
             // Base branch change
             Action::SetBaseBranch => self.handle_set_base_branch(),
-            Action::BaseBranchesLoaded {
-                repo_slug,
-                wt_slug,
-                items,
-            } => {
-                self.handle_base_branches_loaded(repo_slug, wt_slug, items);
-            }
-            Action::BaseBranchesFailed { error } => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to load branches: {error}"),
-                };
-            }
             Action::SelectBaseBranch(index) => self.handle_base_branch_pick(index),
 
             // Theme picker

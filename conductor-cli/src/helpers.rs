@@ -36,15 +36,6 @@ pub(crate) fn report_workflow_result(result: conductor_core::workflow::WorkflowR
     }
 }
 
-/// Parse a comma-separated list of ticket IDs, trimming whitespace and dropping empties.
-pub(crate) fn parse_ticket_ids(input: &str) -> Vec<String> {
-    input
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 pub(crate) fn truncate_str(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -194,7 +185,7 @@ pub(crate) fn sync_repo(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ticket_ids, read_and_maybe_cleanup_prompt_file, truncate_str};
+    use super::{read_and_maybe_cleanup_prompt_file, truncate_str};
 
     #[test]
     fn internal_temp_file_is_deleted_after_read() {
@@ -247,35 +238,6 @@ mod tests {
         );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&subdir);
-    }
-
-    #[test]
-    fn parse_ticket_ids_basic() {
-        assert_eq!(parse_ticket_ids("ABC-1,ABC-2"), vec!["ABC-1", "ABC-2"]);
-    }
-
-    #[test]
-    fn parse_ticket_ids_trims_whitespace() {
-        assert_eq!(
-            parse_ticket_ids("  ABC-1 , ABC-2 , ABC-3 "),
-            vec!["ABC-1", "ABC-2", "ABC-3"]
-        );
-    }
-
-    #[test]
-    fn parse_ticket_ids_drops_empties() {
-        assert_eq!(parse_ticket_ids(",ABC-1,,ABC-2,"), vec!["ABC-1", "ABC-2"]);
-    }
-
-    #[test]
-    fn parse_ticket_ids_single() {
-        assert_eq!(parse_ticket_ids("ABC-1"), vec!["ABC-1"]);
-    }
-
-    #[test]
-    fn parse_ticket_ids_empty_string() {
-        let result: Vec<String> = parse_ticket_ids("");
-        assert!(result.is_empty());
     }
 
     #[test]
