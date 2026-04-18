@@ -555,6 +555,11 @@ fn test_call_workflow_resume_failure_triggers_on_fail_agent() {
         !state.all_succeeded,
         "state must be failed after resume error"
     );
+    assert_no_new_child_run(
+        &conn,
+        &parent_run.id,
+        "resume failure must not spawn a new child run",
+    );
 
     // The on_fail agent step must have been inserted under the parent run.
     let on_fail_step_count: i64 = conn
