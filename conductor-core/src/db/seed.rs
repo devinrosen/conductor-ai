@@ -295,7 +295,6 @@ fn seed_workflow_runs(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
