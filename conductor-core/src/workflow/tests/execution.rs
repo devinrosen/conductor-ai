@@ -901,7 +901,6 @@ fn test_cannot_start_workflow_run_when_active() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -951,7 +950,6 @@ fn test_force_bypasses_active_workflow_guard() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -1004,7 +1002,6 @@ fn test_can_start_workflow_run_after_completion() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -1054,7 +1051,6 @@ fn test_child_workflow_not_blocked_by_parent() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -1098,7 +1094,6 @@ fn test_run_id_notify_slot_is_populated() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: Some(std::sync::Arc::clone(&slot)),
         triggered_by_hook: false,
@@ -1150,7 +1145,6 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2136,7 +2130,6 @@ fn test_execute_workflow_injects_repo_variables() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2190,7 +2183,6 @@ fn test_execute_workflow_injects_ticket_variables() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2268,7 +2260,6 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2313,7 +2304,6 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2349,7 +2339,6 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2390,7 +2379,6 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2425,7 +2413,6 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2766,7 +2753,6 @@ fn test_execute_workflow_iteration_persisted() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 3,
         run_id_notify: Some(slot.clone()),
         triggered_by_hook: false,
@@ -2842,7 +2828,6 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2918,7 +2903,6 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -2998,7 +2982,6 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -3020,202 +3003,6 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
             );
         }
     }
-}
-
-#[test]
-fn test_execute_workflow_injects_feature_variables() {
-    let conn = setup_db();
-    let config = Config::default();
-    let exec_config = WorkflowExecConfig::default();
-    let workflow = make_empty_workflow();
-
-    // Insert a feature for repo r1 (created by setup_db).
-    conn.execute(
-        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
-         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'in_progress', '2025-01-01T00:00:00Z')",
-        [],
-    )
-    .unwrap();
-
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        feature_id: Some("f1"),
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-    };
-    let result = execute_workflow(&input).unwrap();
-
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = wf_mgr
-        .get_workflow_run(&result.workflow_run_id)
-        .unwrap()
-        .unwrap();
-
-    // Feature variables should be injected into persisted inputs.
-    assert_eq!(run.inputs.get("feature_id").map(String::as_str), Some("f1"));
-    assert_eq!(
-        run.inputs.get("feature_name").map(String::as_str),
-        Some("my-feature")
-    );
-    assert_eq!(
-        run.inputs.get("feature_branch").map(String::as_str),
-        Some("feat/my-feature")
-    );
-    // feature_id should also be persisted on the workflow run record.
-    assert_eq!(run.feature_id.as_deref(), Some("f1"));
-}
-
-#[test]
-fn test_execute_workflow_invalid_feature_id_returns_error() {
-    let conn = setup_db();
-    let config = Config::default();
-    let exec_config = WorkflowExecConfig::default();
-    let workflow = make_empty_workflow();
-
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        feature_id: Some("nonexistent-feature-id"),
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-    };
-    let err = execute_workflow(&input).unwrap_err();
-    assert!(
-        matches!(err, ConductorError::FeatureNotFound { .. }),
-        "expected FeatureNotFound error, got: {err:?}"
-    );
-}
-
-#[test]
-fn test_call_workflow_propagates_feature_id_to_child() {
-    let conn = setup_db();
-    let config = Config::default();
-    let exec_config = WorkflowExecConfig::default();
-
-    // Create a temp dir with a child workflow file (empty body, so it completes instantly).
-    let tmp = tempfile::tempdir().unwrap();
-    let wf_dir = tmp.path().join(".conductor/workflows");
-    std::fs::create_dir_all(&wf_dir).unwrap();
-    std::fs::write(
-        wf_dir.join("child.wf"),
-        "workflow child { meta { targets = [\"worktree\"] } }",
-    )
-    .unwrap();
-    let working_dir = tmp.path().to_str().unwrap();
-
-    // Insert a feature for repo r1 (created by setup_db).
-    conn.execute(
-        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
-         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'in_progress', '2025-01-01T00:00:00Z')",
-        [],
-    )
-    .unwrap();
-
-    // Parent workflow that calls the child.
-    let mut parent = make_empty_workflow();
-    parent
-        .body
-        .push(WorkflowNode::CallWorkflow(CallWorkflowNode {
-            workflow: "child".into(),
-            inputs: HashMap::new(),
-            retries: 0,
-            on_fail: None,
-            bot_name: None,
-        }));
-
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &parent,
-        worktree_id: None,
-        working_dir,
-        repo_path: "",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        feature_id: Some("f1"),
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-    };
-    let result = execute_workflow(&input).unwrap();
-
-    let wf_mgr = WorkflowManager::new(&conn);
-
-    // Find the child run by querying for runs whose parent is our parent run.
-    use rusqlite::params;
-    let child_run_id: String = conn
-        .query_row(
-            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = ?1",
-            params![result.workflow_run_id],
-            |row| row.get(0),
-        )
-        .expect("child run should exist");
-    let child_run = wf_mgr
-        .get_workflow_run(&child_run_id)
-        .unwrap()
-        .expect("child run should exist");
-    assert_eq!(
-        child_run.feature_id.as_deref(),
-        Some("f1"),
-        "child run should inherit feature_id from parent"
-    );
-    assert_eq!(
-        child_run.inputs.get("feature_id").map(String::as_str),
-        Some("f1"),
-        "child run should have feature_id in its inputs"
-    );
-    assert_eq!(
-        child_run.inputs.get("feature_name").map(String::as_str),
-        Some("my-feature"),
-        "child run should have feature_name in its inputs"
-    );
-    assert_eq!(
-        child_run.inputs.get("feature_branch").map(String::as_str),
-        Some("feat/my-feature"),
-        "child run should have feature_branch in its inputs"
-    );
 }
 
 #[test]
@@ -3263,7 +3050,6 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: true,
@@ -3353,7 +3139,6 @@ on_complete = "should-not-fire"
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: true,
@@ -3421,7 +3206,6 @@ on_complete = "nonexistent-hook-wf"
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -3479,7 +3263,6 @@ on_complete = "post-complete"
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,

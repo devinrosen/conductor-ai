@@ -3,7 +3,6 @@ use rusqlite::Connection;
 
 use conductor_core::agent::AgentManager;
 use conductor_core::config::Config;
-use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
@@ -29,19 +28,11 @@ pub fn handle_worktree(
             name,
             from,
             from_pr,
-            feature,
             ticket,
             auto_agent,
             force,
         } => {
-            // --feature resolves to --from <feature-branch>
-            let effective_from = if let Some(ref feat_name) = feature {
-                let feat_mgr = FeatureManager::new(conn, config);
-                let f = feat_mgr.get_by_name(&repo, feat_name)?;
-                Some(f.branch)
-            } else {
-                from
-            };
+            let effective_from = from;
 
             let mgr = WorktreeManager::new(conn, config);
 

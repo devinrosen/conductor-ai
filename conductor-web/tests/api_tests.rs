@@ -1501,28 +1501,6 @@ async fn test_patch_global_model_set_and_clear() {
     assert!(body["model"].is_null());
 }
 
-// ── Feature route tests ──────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_list_features_empty() {
-    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
-    let resp = reqwest::get(format!("{base}/api/repos/r1/features"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["features"].as_array().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn test_list_features_nonexistent_repo() {
-    let base = spawn_test_server().await;
-    let resp = reqwest::get(format!("{base}/api/repos/bad/features"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 404);
-}
-
 // ── Stop agent (worktree-scoped) tests ──────────────────────────────
 
 #[tokio::test]

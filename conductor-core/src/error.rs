@@ -132,22 +132,6 @@ pub enum ConductorError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
-    #[error("feature not found: {name}")]
-    FeatureNotFound { name: String },
-
-    #[error("feature already exists: {name}")]
-    FeatureAlreadyExists { name: String },
-
-    #[error("feature '{name}' is still active. Run `conductor feature close {repo} {name}` first")]
-    FeatureStillActive { repo: String, name: String },
-
-    #[error("cannot transition feature '{name}' from {from} to {to}")]
-    InvalidFeatureTransition {
-        name: String,
-        from: String,
-        to: String,
-    },
-
     #[error("unknown ticket source type: {0}")]
     UnknownSourceType(String),
 
@@ -187,10 +171,6 @@ impl ConductorError {
             Self::TicketNotFound { .. } => 25,
             Self::TicketAlreadyLinked => 26,
             Self::InvalidInput(_) => 27,
-            Self::FeatureNotFound { .. } => 28,
-            Self::FeatureAlreadyExists { .. } => 29,
-            Self::FeatureStillActive { .. } => 33,
-            Self::InvalidFeatureTransition { .. } => 34,
             Self::Git(_) => 30,
             Self::GhCli(_) => 31,
             Self::TicketSync(_) => 32,
@@ -239,17 +219,6 @@ mod tests {
             ConductorError::TicketNotFound { id: "t".into() },
             ConductorError::TicketAlreadyLinked,
             ConductorError::InvalidInput("bad".into()),
-            ConductorError::FeatureNotFound { name: "f".into() },
-            ConductorError::FeatureAlreadyExists { name: "f".into() },
-            ConductorError::FeatureStillActive {
-                repo: "r".into(),
-                name: "f".into(),
-            },
-            ConductorError::InvalidFeatureTransition {
-                name: "f".into(),
-                from: "in_progress".into(),
-                to: "approved".into(),
-            },
             ConductorError::Git(SubprocessFailure::from_message("git", "err".into())),
             ConductorError::GhCli(SubprocessFailure::from_message("gh", "err".into())),
             ConductorError::TicketSync("sync".into()),

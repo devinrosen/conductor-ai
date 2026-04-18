@@ -102,7 +102,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <NavLink to="/repos" className={linkClass}>
           Repos
         </NavLink>
-        <NavLink to="/workflows" className={linkClass}>
+        <NavLink to="/workflows" end className={linkClass}>
           Workflows
         </NavLink>
         <NavLink to="/workflows/analytics" className={linkClass}>
@@ -110,9 +110,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </NavLink>
         <NavLink to="/tickets" className={linkClass}>
           Tickets <ShortcutHint keys="g t" />
-        </NavLink>
-        <NavLink to="/features" className={linkClass}>
-          Features
         </NavLink>
         <div className="pt-3 pb-1 px-2.5">
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">

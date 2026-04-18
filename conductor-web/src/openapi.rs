@@ -8,8 +8,6 @@ use conductor_core::agent::{
 #[allow(unused_imports)]
 use conductor_core::conversation::{Conversation, ConversationScope, ConversationWithRuns};
 #[allow(unused_imports)]
-use conductor_core::feature::{FeatureRow, FeatureStatus};
-#[allow(unused_imports)]
 use conductor_core::github::{DiscoveredRepo, GithubPr};
 #[allow(unused_imports)]
 use conductor_core::issue_source::IssueSource;
@@ -34,8 +32,6 @@ use crate::routes::conversations::{
     CreateConversationRequest, ListConversationsQuery, RespondToFeedbackByIdRequest,
     RespondToFeedbackRequest, SendMessageRequest,
 };
-#[allow(unused_imports)]
-use crate::routes::features::FeaturesResponse;
 #[allow(unused_imports)]
 use crate::routes::hooks::{HookEventEntry, HookSummary, PatchHookOnRequest, TestHookRequest};
 #[allow(unused_imports)]
@@ -105,8 +101,6 @@ use crate::routes::worktrees::{
         crate::routes::tickets::list_tickets,
         crate::routes::tickets::sync_tickets,
         crate::routes::tickets::ticket_detail,
-        // Features
-        crate::routes::features::list_features,
         // Agents
         crate::routes::agents::list_agent_runs,
         crate::routes::agents::list_all_agent_runs,
@@ -259,9 +253,6 @@ use crate::routes::worktrees::{
             NotificationSeverity,
             // Issue source types
             IssueSource,
-            // Feature types
-            FeatureRow,
-            FeatureStatus,
             // Web layer request/response types
             RegisterRepoRequest,
             DiscoverableRepo,
@@ -274,7 +265,6 @@ use crate::routes::worktrees::{
             TicketListResponse,
             SyncResult,
             TicketDetail,
-            FeaturesResponse,
             CreateConversationRequest,
             ListConversationsQuery,
             SendMessageRequest,

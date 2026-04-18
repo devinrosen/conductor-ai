@@ -253,7 +253,6 @@ pub fn run_workflow_on_pr(
         parent_workflow_run_id: None,
         target_label: Some(&pr_target_label),
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,

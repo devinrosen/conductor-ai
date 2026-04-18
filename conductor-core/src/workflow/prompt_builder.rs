@@ -210,7 +210,6 @@ mod tests {
             block_with: Vec::new(),
             resume_ctx: None,
             default_bot_name: None,
-            feature_id: None,
             triggered_by_hook: false,
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],

@@ -45,11 +45,6 @@ import type {
   PendingGateAnalyticsRow,
   HookSummary,
   HookEvent,
-  Feature,
-  FeaturesResponse,
-  FeatureDetailResponse,
-  FeatureSyncResult,
-  FeatureRunSummary,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -373,22 +368,6 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify(data),
     }),
-
-  // Features
-  listFeatures: (repoId: string) =>
-    request<FeaturesResponse>(`/repos/${repoId}/features`),
-  getFeature: (repoId: string, name: string) =>
-    request<FeatureDetailResponse>(`/repos/${repoId}/features/${encodeURIComponent(name)}`),
-  syncFeature: (repoId: string, name: string) =>
-    request<FeatureSyncResult>(`/repos/${repoId}/features/${encodeURIComponent(name)}/sync`, { method: "POST" }),
-  runFeature: (repoId: string, name: string) =>
-    request<FeatureRunSummary>(`/repos/${repoId}/features/${encodeURIComponent(name)}/run`, { method: "POST" }),
-  reviewFeature: (repoId: string, name: string) =>
-    request<Feature>(`/repos/${repoId}/features/${encodeURIComponent(name)}/review`, { method: "POST" }),
-  approveFeature: (repoId: string, name: string) =>
-    request<Feature>(`/repos/${repoId}/features/${encodeURIComponent(name)}/approve`, { method: "POST" }),
-  closeFeature: (repoId: string, name: string) =>
-    request<{ status: string }>(`/repos/${repoId}/features/${encodeURIComponent(name)}/close`, { method: "POST" }),
 
   // Notification Hooks
   listHooks: () => request<HookSummary[]>("/config/hooks"),

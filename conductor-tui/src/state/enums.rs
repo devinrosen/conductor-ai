@@ -332,46 +332,6 @@ pub struct BranchPickerItem {
     pub inferred_from: Option<String>,
 }
 
-impl BranchPickerItem {
-    /// Build the picker list from features (each paired with its pre-computed stale days)
-    /// and unregistered (orphan) branches.
-    /// The first entry is always `None` (repo default branch sentinel).
-    pub fn from_features_and_orphans_with_stale(
-        features: &[(conductor_core::feature::FeatureRow, Option<u64>)],
-        orphans: &[conductor_core::feature::UnregisteredBranch],
-    ) -> Vec<Self> {
-        let mut items = vec![Self {
-            branch: None,
-            worktree_count: 0,
-            ticket_count: 0,
-            base_branch: None,
-            stale_days: None,
-            inferred_from: None,
-        }];
-        for (f, sd) in features {
-            items.push(Self {
-                branch: Some(f.branch.clone()),
-                worktree_count: f.worktree_count,
-                ticket_count: f.ticket_count,
-                base_branch: Some(f.base_branch.clone()),
-                stale_days: *sd,
-                inferred_from: None,
-            });
-        }
-        for orphan in orphans {
-            items.push(Self {
-                branch: Some(orphan.branch.clone()),
-                worktree_count: orphan.worktree_count,
-                ticket_count: 0,
-                base_branch: orphan.base_branch.clone(),
-                stale_days: None,
-                inferred_from: None,
-            });
-        }
-        items
-    }
-}
-
 /// Target context for the generic workflow picker.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]

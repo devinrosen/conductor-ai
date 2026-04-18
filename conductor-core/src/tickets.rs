@@ -749,7 +749,7 @@ impl<'a> TicketSyncer<'a> {
             params![ticket_id],
         )?;
 
-        // Delete the ticket row. Cascades handle ticket_labels and feature_tickets;
+        // Delete the ticket row. Cascades handle ticket_labels;
         // worktrees.ticket_id is ON DELETE SET NULL.
         tx.execute("DELETE FROM tickets WHERE id = ?1", params![ticket_id])?;
 

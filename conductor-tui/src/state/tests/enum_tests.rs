@@ -358,40 +358,6 @@ fn target_filter_post_create_maps_to_worktree() {
     assert_eq!(t.target_filter(), "worktree");
 }
 
-#[test]
-fn branch_picker_item_populates_stale_days() {
-    use conductor_core::feature::{FeatureManager, FeatureRow, FeatureStatus};
-
-    let old_ts = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
-    let feature = FeatureRow {
-        id: "f1".to_string(),
-        repo_id: "r1".to_string(),
-        name: "old-feature".to_string(),
-        branch: "feat/old".to_string(),
-        base_branch: "main".to_string(),
-        status: FeatureStatus::InProgress,
-        created_at: "2024-01-01T00:00:00Z".to_string(),
-        worktree_count: 0,
-        ticket_count: 0,
-        last_commit_at: Some(old_ts),
-        last_worktree_activity: None,
-        tickets_total: 0,
-        tickets_merged: 0,
-    };
-    let stale_threshold: u32 = 14;
-    let sd = if FeatureManager::is_stale(&feature, stale_threshold) {
-        FeatureManager::stale_days(&feature)
-    } else {
-        None
-    };
-    let features_with_stale = vec![(feature, sd)];
-
-    let items = BranchPickerItem::from_features_and_orphans_with_stale(&features_with_stale, &[]);
-    assert!(items[0].stale_days.is_none());
-    let sd = items[1].stale_days.expect("should be stale");
-    assert!(sd >= 29, "expected ~30 stale days, got {sd}");
-}
-
 // --- selected_run_has_error tests ---
 
 #[test]

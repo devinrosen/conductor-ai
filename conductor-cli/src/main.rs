@@ -58,9 +58,6 @@ fn main() -> Result<()> {
         Commands::Tickets { command } => {
             handlers::tickets::handle_tickets(command, &conn, &config)?
         }
-        Commands::Feature { command } => {
-            handlers::feature::handle_feature(command, &conn, &config)?
-        }
         Commands::Workflow { command } => {
             handlers::workflow::handle_workflow(command, &conn, &config)?
         }

@@ -4,13 +4,8 @@ use std::sync::Arc;
 
 use conductor_core::worktree::WorktreeManager;
 
-/// (target_label, ticket_id, repo_slug, wt_slug) resolved from a worktree.
-type WorktreeLabelParts = (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
+/// (target_label, ticket_id) resolved from a worktree.
+type WorktreeLabelParts = (Option<String>, Option<String>);
 
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal, View, WorkflowPickerItem, WorkflowRunDetailFocus};
@@ -75,27 +70,6 @@ use super::helpers::{
 };
 use super::App;
 
-/// Resolve a feature ID for a workflow run in a background thread.
-///
-/// Opens a fresh DB connection and calls `resolve_feature_id_for_run`.
-/// Returns an error string on failure so the caller can surface it to the
-/// user (e.g. via `bg_tx`) instead of silently proceeding without feature
-/// context.
-fn resolve_feature_id_for_bg(
-    config: &conductor_core::config::Config,
-    feature_name: Option<&str>,
-    repo_slug: Option<&str>,
-    ticket_id: Option<&str>,
-    worktree_slug: Option<&str>,
-) -> Result<Option<String>, String> {
-    let db_path = conductor_core::config::db_path();
-    let conn = conductor_core::db::open_database(&db_path)
-        .map_err(|e| format!("feature resolution: failed to open database: {e}"))?;
-    conductor_core::feature::FeatureManager::new(&conn, config)
-        .resolve_feature_id_for_run(feature_name, repo_slug, ticket_id, worktree_slug)
-        .map_err(|e| format!("Feature resolution failed: {e}"))
-}
-
 /// Parameters bundle for the `spawn_*_workflow_in_background` family of methods.
 /// Using a struct avoids `too_many_arguments` violations and keeps call sites readable.
 pub(super) struct SpawnWorkflowParams {
@@ -108,8 +82,6 @@ pub(super) struct SpawnWorkflowParams {
     pub worktree_path: Option<String>,
     pub ticket_id: Option<String>,
     pub target_label: Option<String>,
-    pub repo_slug: Option<String>,
-    pub wt_slug: Option<String>,
     /// Ticket / repo context (`spawn_ticket_workflow_in_background`, `spawn_repo_workflow_in_background`)
     pub repo_id: Option<String>,
     pub extra_plugin_dirs: Vec<String>,
@@ -970,7 +942,7 @@ impl App {
                 // created and the background refresh hasn't fired yet, the
                 // cache will miss and we fall back to a direct DB query so
                 // that target_label is never stored as an empty string.
-                let (wt_target_label, wt_ticket_id, repo_slug, wt_slug) = self
+                let (wt_target_label, wt_ticket_id) = self
                     .state
                     .data
                     .worktrees
@@ -982,14 +954,7 @@ impl App {
                             .repos
                             .iter()
                             .find(|r| r.id == w.repo_id)
-                            .map(|r| {
-                                (
-                                    Some(format!("{}/{}", r.slug, w.slug)),
-                                    w.ticket_id.clone(),
-                                    Some(r.slug.clone()),
-                                    Some(w.slug.clone()),
-                                )
-                            })
+                            .map(|r| (Some(format!("{}/{}", r.slug, w.slug)), w.ticket_id.clone()))
                     })
                     .unwrap_or_else(|| {
                         // Cache miss — query DB directly to avoid storing "".
@@ -1007,14 +972,9 @@ impl App {
                                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                                 )
                                 .ok()?;
-                            Some((
-                                Some(format!("{repo_slug}/{wt_slug}")),
-                                ticket_id,
-                                Some(repo_slug),
-                                Some(wt_slug),
-                            ))
+                            Some((Some(format!("{repo_slug}/{wt_slug}")), ticket_id))
                         })();
-                        label.unwrap_or((None, None, None, None))
+                        label.unwrap_or((None, None))
                     });
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
@@ -1028,8 +988,6 @@ impl App {
                     inputs,
                     target_label: wt_target_label,
                     model,
-                    repo_slug,
-                    wt_slug,
                     repo_id: None,
                     extra_plugin_dirs: vec![],
                 });
@@ -1088,8 +1046,6 @@ impl App {
                     extra_plugin_dirs: extra_dirs,
                     worktree_id: None,
                     worktree_path: None,
-                    repo_slug: None,
-                    wt_slug: None,
                 });
             }
             WorkflowPickerTarget::Repo {
@@ -1109,8 +1065,6 @@ impl App {
                     worktree_id: None,
                     worktree_path: None,
                     ticket_id: None,
-                    repo_slug: None,
-                    wt_slug: None,
                 });
             }
             WorkflowPickerTarget::WorkflowRun {
@@ -1124,22 +1078,13 @@ impl App {
                 run_inputs.insert("workflow_run_id".to_string(), workflow_run_id.clone());
                 let working_dir = worktree_path.unwrap_or_else(|| repo_path.clone());
                 if let Some(wt_id) = worktree_id {
-                    // Look up worktree data for feature auto-detection (resolved off-thread).
-                    let (repo_slug, ticket_id, wt_slug) = self
+                    let ticket_id = self
                         .state
                         .data
                         .worktrees
                         .iter()
                         .find(|w| w.id == wt_id)
-                        .map(|w| {
-                            let repo = self.state.data.repos.iter().find(|r| r.id == w.repo_id);
-                            (
-                                repo.map(|r| r.slug.clone()),
-                                w.ticket_id.clone(),
-                                Some(w.slug.clone()),
-                            )
-                        })
-                        .unwrap_or((None, None, None));
+                        .and_then(|w| w.ticket_id.clone());
                     self.spawn_workflow_in_background(SpawnWorkflowParams {
                         def,
                         worktree_id: Some(wt_id),
@@ -1149,8 +1094,6 @@ impl App {
                         inputs: run_inputs,
                         target_label: Some(format!("workflow_run:{workflow_run_id}")),
                         model,
-                        repo_slug,
-                        wt_slug,
                         repo_id: None,
                         extra_plugin_dirs: vec![],
                     });
@@ -1168,10 +1111,6 @@ impl App {
     }
 
     /// Spawn a workflow execution in a background thread, reporting result via bg_tx.
-    ///
-    /// Feature auto-detection is performed off-thread using `repo_slug`,
-    /// `ticket_id`, and `wt_slug` to avoid blocking the TUI main thread with
-    /// synchronous DB queries.
     pub(super) fn spawn_workflow_in_background(&mut self, p: SpawnWorkflowParams) {
         let SpawnWorkflowParams {
             def,
@@ -1182,8 +1121,6 @@ impl App {
             inputs,
             target_label,
             model,
-            repo_slug,
-            wt_slug,
             ..
         } = p;
         let config = self.config.clone();
@@ -1208,22 +1145,6 @@ impl App {
                 }
             };
 
-            let feature_id = match resolve_feature_id_for_bg(
-                &config,
-                None,
-                repo_slug.as_deref(),
-                ticket_id.as_deref(),
-                wt_slug.as_deref(),
-            ) {
-                Ok(id) => id,
-                Err(e) => {
-                    if let Some(ref tx) = bg_tx {
-                        tx.send(crate::action::Action::BackgroundError { message: e });
-                    }
-                    return;
-                }
-            };
-
             let params = WorkflowExecStandalone {
                 config,
                 workflow: def.clone(),
@@ -1239,7 +1160,6 @@ impl App {
                 },
                 inputs,
                 target_label,
-                feature_id,
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
@@ -1280,17 +1200,6 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
-            let feature_id =
-                match resolve_feature_id_for_bg(&config, None, None, ticket_id.as_deref(), None) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        if let Some(ref tx) = bg_tx {
-                            tx.send(crate::action::Action::BackgroundError { message: e });
-                        }
-                        return;
-                    }
-                };
-
             let working_dir = repo_path.clone();
 
             let params = WorkflowExecStandalone {
@@ -1308,7 +1217,6 @@ impl App {
                 },
                 inputs,
                 target_label,
-                feature_id,
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
@@ -1365,7 +1273,6 @@ impl App {
                 },
                 inputs,
                 target_label,
-                feature_id: None,
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
@@ -1419,7 +1326,6 @@ impl App {
                 },
                 inputs,
                 target_label: Some(target_label),
-                feature_id: None,
                 run_id_notify: None,
                 triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
@@ -2548,8 +2454,6 @@ mod tests {
             inputs: std::collections::HashMap::new(),
             target_label: None,
             model: None,
-            repo_slug: None,
-            wt_slug: None,
             repo_id: None,
             extra_plugin_dirs: vec![],
         });

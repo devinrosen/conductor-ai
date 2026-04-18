@@ -144,14 +144,6 @@ pub enum Action {
 
     // Base branch change (worktree detail)
     SetBaseBranch,
-    BaseBranchesLoaded {
-        repo_slug: String,
-        wt_slug: String,
-        items: Vec<crate::state::BranchPickerItem>,
-    },
-    BaseBranchesFailed {
-        error: String,
-    },
     SelectBaseBranch(Option<usize>),
 
     // Theme picker
@@ -370,19 +362,6 @@ pub enum Action {
     },
 
     // Branch picker (during worktree creation)
-    /// Background result: feature branches loaded for branch picker.
-    FeatureBranchesLoaded {
-        repo_slug: String,
-        wt_name: String,
-        ticket_id: Option<String>,
-        items: Vec<crate::state::BranchPickerItem>,
-        /// Inferred base branch from ticket milestone: (branch_name, milestone_title).
-        inferred_base_branch: Option<(String, String)>,
-    },
-    /// Background result: feature branch load failed.
-    FeatureBranchesFailed {
-        error: String,
-    },
     SelectBranch(Option<usize>),
 
     /// Select a list-picker item by number-key shortcut (0-indexed).

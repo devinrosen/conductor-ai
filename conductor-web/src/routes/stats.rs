@@ -34,20 +34,12 @@ pub async fn theme_unlock_stats(
     // 1. repos_registered — simple count
     let repos_registered: i64 = db.query_row("SELECT COUNT(*) FROM repos", [], |r| r.get(0))?;
 
-    // 2. prs_merged — count merged worktrees + merged features
-    let merged_worktrees: i64 = db.query_row(
+    // 2. prs_merged — count merged worktrees
+    let prs_merged: i64 = db.query_row(
         "SELECT COUNT(*) FROM worktrees WHERE status = 'merged'",
         [],
         |r| r.get(0),
     )?;
-    let merged_features: i64 = db
-        .query_row(
-            "SELECT COUNT(*) FROM features WHERE status = 'merged'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    let prs_merged = merged_worktrees.max(merged_features);
 
     // 3. workflow_streak — longest consecutive run of completed root workflows (no parent)
     let workflow_streak: i64 = db

@@ -34,7 +34,6 @@ pub mod config;
 pub mod conversation;
 pub mod db;
 pub mod error;
-pub mod feature;
 pub(crate) mod git;
 pub mod github;
 pub mod github_app;
