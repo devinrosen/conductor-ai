@@ -1,18 +1,10 @@
 //! Shared runtime helpers for spawning and polling agent runs.
-//!
-//! Used by both `orchestrator.rs` (plan-step orchestration) and
-//! `workflow.rs` (workflow engine execution).
 
 use std::borrow::Cow;
 use std::process::Command;
-use std::thread;
-use std::time::Duration;
 
-use rusqlite::Connection;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-
-use crate::agent::{AgentManager, AgentRun, AgentRunStatus};
 
 /// Resolve the path to the `conductor` binary.
 ///
@@ -30,107 +22,6 @@ fn resolve_conductor_bin() -> String {
         .unwrap_or_else(|| "conductor".to_string());
     tracing::debug!("[conductor] resolved binary: {resolved}");
     resolved
-}
-
-/// Typed error returned by [`poll_child_completion`].
-#[derive(Debug)]
-pub enum PollError {
-    /// The caller's shutdown flag was set; the poll was aborted early.
-    Shutdown,
-    /// The child run did not reach a terminal state within the allotted time.
-    Timeout(String),
-    /// Any other error (DB error, run not found, etc.).
-    Other(String),
-}
-
-impl std::fmt::Display for PollError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PollError::Shutdown => write!(f, "executor shutdown requested"),
-            PollError::Timeout(msg) | PollError::Other(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-/// Poll the database for a child run to reach a terminal status.
-///
-/// If `shutdown` is provided and the flag is set to `true` during polling,
-/// returns [`PollError::Shutdown`] immediately.
-///
-/// Time spent in `WaitingForFeedback` status is excluded from the timeout
-/// calculation so that human response time does not cause step timeouts.
-pub fn poll_child_completion(
-    conn: &Connection,
-    child_run_id: &str,
-    poll_interval: Duration,
-    timeout: Duration,
-    shutdown: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    on_tick: Option<&dyn Fn()>,
-) -> std::result::Result<AgentRun, PollError> {
-    let start = std::time::Instant::now();
-    // Track cumulative time spent waiting for feedback so we can exclude it
-    // from the timeout budget.
-    let mut feedback_wait_total = Duration::ZERO;
-    let mut feedback_wait_start: Option<std::time::Instant> = None;
-
-    loop {
-        if let Some(flag) = shutdown {
-            if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(PollError::Shutdown);
-            }
-        }
-
-        // Effective elapsed = wall time − feedback wait time (including current wait)
-        let current_wait = feedback_wait_start
-            .map(|ws| ws.elapsed())
-            .unwrap_or(Duration::ZERO);
-        let effective_elapsed = start
-            .elapsed()
-            .saturating_sub(feedback_wait_total + current_wait);
-        if effective_elapsed > timeout {
-            return Err(PollError::Timeout(format!(
-                "Child run {} timed out after {:.0}s",
-                child_run_id,
-                timeout.as_secs_f64()
-            )));
-        }
-
-        let mgr = AgentManager::new(conn);
-        match mgr.get_run(child_run_id) {
-            Ok(Some(run)) => match run.status {
-                AgentRunStatus::Completed | AgentRunStatus::Failed | AgentRunStatus::Cancelled => {
-                    return Ok(run)
-                }
-                AgentRunStatus::WaitingForFeedback => {
-                    // Start tracking feedback wait if not already
-                    if feedback_wait_start.is_none() {
-                        feedback_wait_start = Some(std::time::Instant::now());
-                    }
-                }
-                AgentRunStatus::Running => {
-                    // If we were waiting for feedback, accumulate that time
-                    if let Some(wait_start) = feedback_wait_start.take() {
-                        feedback_wait_total += wait_start.elapsed();
-                    }
-                }
-            },
-            Ok(None) => {
-                return Err(PollError::Other(format!(
-                    "Child run {child_run_id} not found in database"
-                )));
-            }
-            Err(e) => {
-                return Err(PollError::Other(format!(
-                    "Database error polling child run: {e}"
-                )));
-            }
-        }
-
-        if let Some(f) = on_tick {
-            f();
-        }
-        thread::sleep(poll_interval);
-    }
 }
 
 /// Maximum number of CLI arguments produced by `build_agent_args`:
@@ -281,42 +172,6 @@ pub fn build_agent_args_with_mode(
     );
 
     Ok(args)
-}
-
-/// Build the `conductor agent orchestrate` argument list.
-///
-/// This function is infallible because orchestrate has no `--prompt` argument
-/// and therefore no risk of exceeding tmux's command-line length limit.
-pub fn build_orchestrate_args(
-    run_id: &str,
-    worktree_path: &str,
-    model: Option<&str>,
-    fail_fast: bool,
-    child_timeout_secs: Option<u64>,
-) -> Vec<Cow<'static, str>> {
-    let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(10);
-    args.push(Cow::Borrowed("agent"));
-    args.push(Cow::Borrowed("orchestrate"));
-    args.push(Cow::Borrowed("--run-id"));
-    args.push(Cow::Owned(run_id.to_string()));
-    args.push(Cow::Borrowed("--worktree-path"));
-    args.push(Cow::Owned(worktree_path.to_string()));
-
-    if let Some(m) = model {
-        args.push(Cow::Borrowed("--model"));
-        args.push(Cow::Owned(m.to_string()));
-    }
-
-    if fail_fast {
-        args.push(Cow::Borrowed("--fail-fast"));
-    }
-
-    if let Some(secs) = child_timeout_secs {
-        args.push(Cow::Borrowed("--child-timeout-secs"));
-        args.push(Cow::Owned(secs.to_string()));
-    }
-
-    args
 }
 
 /// Handle to a headless agent subprocess.
@@ -675,34 +530,6 @@ pub fn drain_stream_json(
     DrainOutcome::NoResult
 }
 
-/// Send SIGTERM to the process group rooted at `pid`, wait up to 5 seconds
-/// for graceful exit, then escalate to SIGKILL if still alive.
-///
-/// The negative PID targets the entire process group (agent + any children it
-/// spawned). `pid_is_alive` checks the positive PID (the group leader); if the
-/// leader is dead the group is effectively terminated.
-///
-/// This call **blocks** for up to 5 seconds. Call from a background thread or
-/// inside `tokio::task::spawn_blocking` — never from the TUI main thread or an
-/// async task directly.
-///
-/// NOTE: per RFC 016 Q2, SIGTERM does NOT cause Claude CLI to flush a `result`
-/// event. The caller must mark the run as `cancelled` in the DB before calling
-/// this function to prevent a concurrent drain from overwriting the status.
-///
-/// Implementation lives in [`crate::process_utils::cancel_subprocess`].
-///
-/// # Deprecated
-/// Use [`crate::process_utils::cancel_subprocess`] directly instead.
-#[deprecated(
-    since = "0.1.0",
-    note = "use conductor_core::process_utils::cancel_subprocess instead"
-)]
-#[cfg(unix)]
-pub fn cancel_subprocess(pid: u32) {
-    crate::process_utils::cancel_subprocess(pid);
-}
-
 /// Build `conductor agent run` args for a headless launch.
 ///
 /// Unlike [`build_agent_args_with_mode`], this always writes the prompt to
@@ -904,34 +731,6 @@ mod tests {
         let _ = std::fs::remove_file(
             std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
         );
-    }
-
-    #[test]
-    fn build_orchestrate_args_basic() {
-        let args = super::build_orchestrate_args("run-o1", "/tmp/wt", None, false, None);
-        assert_eq!(args[0], "agent");
-        assert_eq!(args[1], "orchestrate");
-        let run_id_idx = args.iter().position(|a| a == "--run-id").unwrap();
-        assert_eq!(args[run_id_idx + 1], "run-o1");
-        let wt_idx = args.iter().position(|a| a == "--worktree-path").unwrap();
-        assert_eq!(args[wt_idx + 1], "/tmp/wt");
-        assert!(!args.iter().any(|a| a == "--model"));
-        assert!(!args.iter().any(|a| a == "--fail-fast"));
-        assert!(!args.iter().any(|a| a == "--child-timeout-secs"));
-    }
-
-    #[test]
-    fn build_orchestrate_args_all_flags() {
-        let args =
-            super::build_orchestrate_args("run-o2", "/tmp/wt", Some("claude-3"), true, Some(120));
-        assert!(args.iter().any(|a| a == "--fail-fast"));
-        let model_idx = args.iter().position(|a| a == "--model").unwrap();
-        assert_eq!(args[model_idx + 1], "claude-3");
-        let timeout_idx = args
-            .iter()
-            .position(|a| a == "--child-timeout-secs")
-            .unwrap();
-        assert_eq!(args[timeout_idx + 1], "120");
     }
 
     #[test]
@@ -1544,6 +1343,3 @@ mod tests {
         );
     }
 }
-
-// cancel_subprocess tests have moved to crate::process_utils (the canonical home
-// for OS-level process utilities). See process_utils.rs for the test coverage.

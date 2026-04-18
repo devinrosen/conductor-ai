@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::agent::{AgentManager, AgentRunStatus};
-use crate::agent_runtime;
 use crate::config::Config;
 use crate::error::ConductorError;
 use crate::workflow_dsl::{
@@ -11,86 +10,6 @@ use crate::workflow_dsl::{
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-
-#[test]
-fn test_poll_child_completion_already_completed() {
-    let conn = setup_db();
-    let mgr = AgentManager::new(&conn);
-
-    let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
-    mgr.update_run_completed(
-        &run.id,
-        None,
-        Some("done"),
-        Some(0.05),
-        Some(3),
-        Some(5000),
-        None,
-        None,
-        None,
-        None,
-    )
-    .unwrap();
-
-    let result = agent_runtime::poll_child_completion(
-        &conn,
-        &run.id,
-        Duration::from_millis(10),
-        Duration::from_secs(1),
-        None,
-        None,
-    );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().status, AgentRunStatus::Completed);
-}
-
-#[test]
-fn test_poll_child_completion_timeout() {
-    let conn = setup_db();
-    let mgr = AgentManager::new(&conn);
-
-    let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
-
-    let result = agent_runtime::poll_child_completion(
-        &conn,
-        &run.id,
-        Duration::from_millis(10),
-        Duration::from_millis(50),
-        None,
-        None,
-    );
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        agent_runtime::PollError::Timeout(_)
-    ));
-}
-
-#[test]
-fn test_poll_child_completion_shutdown() {
-    use std::sync::{atomic::AtomicBool, Arc};
-
-    let conn = setup_db();
-    let mgr = AgentManager::new(&conn);
-
-    let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
-    // run stays in Running; flag is already set
-    let flag = Arc::new(AtomicBool::new(true));
-
-    let result = agent_runtime::poll_child_completion(
-        &conn,
-        &run.id,
-        Duration::from_millis(10),
-        Duration::from_secs(5),
-        Some(&flag),
-        None,
-    );
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        agent_runtime::PollError::Shutdown
-    ));
-}
 
 #[test]
 fn test_recover_stuck_steps_syncs_completed() {

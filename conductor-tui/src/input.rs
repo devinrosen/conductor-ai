@@ -515,7 +515,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         match key.code {
             KeyCode::Char('p') => return Action::LaunchAgent,
-            KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
             KeyCode::Char('X') if !is_active => return Action::ClearConversation,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('R') if is_failed => return Action::RestartAgent,
@@ -739,51 +738,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conductor_core::agent::{AgentRun, AgentRunStatus};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())
-    }
-
-    fn make_agent_run(worktree_id: &str, status: AgentRunStatus) -> AgentRun {
-        AgentRun {
-            id: "run-1".into(),
-            worktree_id: Some(worktree_id.to_string()),
-            repo_id: None,
-            claude_session_id: None,
-            prompt: "do stuff".into(),
-            status,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2026-01-01T00:00:00Z".into(),
-            ended_at: None,
-            tmux_window: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-            conversation_id: None,
-            subprocess_pid: None,
-        }
-    }
-
-    fn worktree_detail_state_with_run(status: AgentRunStatus) -> AppState {
-        let mut state = AppState::new();
-        state.view = View::WorktreeDetail;
-        state.selected_worktree_id = Some("wt1".into());
-        state
-            .data
-            .latest_agent_runs
-            .insert("wt1".into(), make_agent_run("wt1", status));
-        state
     }
 
     // --- WorkflowPicker tests (post-create variant) ---
@@ -1067,25 +1025,6 @@ mod tests {
         assert!(!matches!(
             map_key(key(KeyCode::Enter), &state),
             Action::ExpandAgentEvent
-        ));
-    }
-
-    #[test]
-    fn worktree_detail_orchestrate_agent_bound_to_shift_o_when_inactive() {
-        // OrchestrateAgent is only available when no agent is active
-        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
-        assert!(matches!(
-            map_key(key(KeyCode::Char('O')), &state),
-            Action::OrchestrateAgent
-        ));
-    }
-
-    #[test]
-    fn worktree_detail_orchestrate_agent_not_available_when_active() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::Running);
-        assert!(!matches!(
-            map_key(key(KeyCode::Char('O')), &state),
-            Action::OrchestrateAgent
         ));
     }
 

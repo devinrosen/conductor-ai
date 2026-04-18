@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 
 use axum::extract::{Path, Query, State};
@@ -195,36 +194,6 @@ pub(super) async fn spawn_headless_agent(
     };
 
     wire_headless_drain(state, run_id, handle, Some(prompt_file), worktree_id).await
-}
-
-/// Spawn a headless orchestrate subprocess and wire its stdout to the SSE event bus.
-///
-/// Calls [`conductor_core::agent_runtime::spawn_headless`] with pre-built args
-/// from [`conductor_core::agent_runtime::build_orchestrate_args`], then delegates
-/// PID persistence and drain wiring to [`wire_headless_drain`].
-#[cfg(unix)]
-async fn spawn_headless_orchestrate(
-    state: &AppState,
-    run_id: &str,
-    args: Vec<Cow<'static, str>>,
-    wt_path: String,
-    worktree_id: String,
-) -> Result<(), ApiError> {
-    let handle = match conductor_core::agent_runtime::spawn_headless(
-        &args,
-        std::path::Path::new(&wt_path),
-    ) {
-        Err(err) => {
-            let db = state.db.lock().await;
-            if let Err(e) = AgentManager::new(&db).update_run_failed(run_id, &err) {
-                warn!(run_id, %e, "failed to mark run failed after orchestrate spawn error");
-            }
-            return Err(ConductorError::Agent(err).into());
-        }
-        Ok(h) => h,
-    };
-
-    wire_headless_drain(state, run_id, handle, None, Some(worktree_id.as_str())).await
 }
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
@@ -902,98 +871,6 @@ pub async fn list_created_issues(
     let mgr = AgentManager::new(&db);
     let issues = mgr.list_created_issues_for_worktree(&worktree_id)?;
     Ok(Json(issues))
-}
-
-// ── Agent orchestration (auto-spawn child runs) ──────────────────────
-
-#[derive(Deserialize, utoipa::ToSchema)]
-pub struct OrchestrateRequest {
-    pub prompt: String,
-    /// Stop on first child failure.
-    #[serde(default)]
-    pub fail_fast: bool,
-    /// Child run timeout in seconds (default: 1800 = 30 min).
-    #[serde(default = "default_child_timeout_secs")]
-    pub child_timeout_secs: u64,
-}
-
-fn default_child_timeout_secs() -> u64 {
-    1800
-}
-
-/// Start an orchestrated agent run: generate a plan, then spawn child agents
-/// for each step sequentially. The orchestrator runs headless.
-#[utoipa::path(
-    post,
-    path = "/api/worktrees/{id}/agent/orchestrate",
-    params(
-        ("id" = String, Path, description = "Worktree ID"),
-    ),
-    request_body(content = OrchestrateRequest, description = "Orchestration parameters"),
-    responses(
-        (status = 201, description = "Orchestrator agent run created", body = AgentRun),
-        (status = 404, description = "Worktree not found"),
-    ),
-    tag = "agents",
-)]
-pub async fn orchestrate_agent(
-    State(state): State<AppState>,
-    Path(worktree_id): Path<String>,
-    Json(body): Json<OrchestrateRequest>,
-) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
-    // Scope DB + config access so locks are dropped before the blocking spawn.
-    let (run, args, wt_path, wt_id) = {
-        let db = state.db.lock().await;
-        let config = state.config.read().await;
-
-        // Look up the worktree
-        let wt_mgr = WorktreeManager::new(&db, &config);
-        let wt = wt_mgr.get_by_id(&worktree_id)?;
-
-        // Check if there's already a running agent
-        let agent_mgr = AgentManager::new(&db);
-        if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
-            if existing.is_active() {
-                return Err(conductor_core::error::ConductorError::Agent(
-                    "Agent already running for this worktree".to_string(),
-                )
-                .into());
-            }
-        }
-
-        // Resolve model: per-worktree → per-repo config → global config
-        let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
-        let model = wt
-            .model
-            .as_deref()
-            .or(repo.model.as_deref())
-            .or(config.general.model.as_deref())
-            .map(str::to_string);
-
-        // Create parent run record (this is the orchestrator run)
-        let run = agent_mgr.create_run(Some(&worktree_id), &body.prompt, None, model.as_deref())?;
-
-        // Build conductor agent orchestrate command
-        let args = conductor_core::agent_runtime::build_orchestrate_args(
-            &run.id,
-            &wt.path,
-            model.as_deref(),
-            body.fail_fast,
-            Some(body.child_timeout_secs),
-        );
-
-        (run, args, wt.path.clone(), wt.id.clone())
-    };
-    // DB and config locks are now dropped.
-
-    // Spawn headless subprocess and wire stdout to the SSE event bus.
-    spawn_headless_orchestrate(&state, &run.id, args, wt_path, wt_id.clone()).await?;
-
-    state.events.emit(ConductorEvent::AgentStarted {
-        run_id: run.id.clone(),
-        worktree_id: wt_id,
-    });
-    Ok((StatusCode::CREATED, Json(run)))
 }
 
 // ── Feedback (human-in-the-loop) ──────────────────────────────────────

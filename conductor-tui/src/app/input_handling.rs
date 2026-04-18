@@ -607,16 +607,6 @@ impl App {
                     resume_session_id,
                 );
             }
-            InputAction::OrchestratePrompt {
-                worktree_id,
-                worktree_path,
-                worktree_slug,
-            } => {
-                if value.is_empty() {
-                    return;
-                }
-                self.start_orchestrate_headless(value, worktree_id, worktree_path, worktree_slug);
-            }
             InputAction::SetWorktreeModel {
                 worktree_id,
                 repo_slug,

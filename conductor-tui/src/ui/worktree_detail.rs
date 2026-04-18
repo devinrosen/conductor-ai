@@ -309,9 +309,9 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
             }
         } else if has_resumable_wf {
-            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  X=clear conv  w=workflow  r=resume wf  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  p=prompt  x=stop  X=clear conv  w=workflow  r=resume wf  d=del  Esc=back"
         } else {
-            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  X=clear conv  w=workflow  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  p=prompt  x=stop  X=clear conv  w=workflow  d=del  Esc=back"
         }
     } else {
         "Tab=switch panel  y=copy  o=act  X=clear conv  Esc=back  (archived)"

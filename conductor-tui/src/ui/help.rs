@@ -121,7 +121,6 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         )),
         Line::from(""),
         help_line("p", "Prompt Claude agent", theme),
-        help_line("O", "Orchestrate (multi-step child agents)", theme),
         help_line("x", "Stop running agent", theme),
         help_line("f", "Submit feedback to agent", theme),
         help_line("F", "Dismiss feedback request", theme),

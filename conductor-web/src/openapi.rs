@@ -126,7 +126,6 @@ use crate::routes::worktrees::{
         crate::routes::agents::get_run_tree,
         crate::routes::agents::get_run_tree_totals,
         crate::routes::agents::get_prompt,
-        crate::routes::agents::orchestrate_agent,
         crate::routes::agents::list_created_issues,
         crate::routes::agents::get_pending_feedback,
         crate::routes::agents::request_feedback,
