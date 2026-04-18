@@ -172,6 +172,15 @@ impl App {
                 self.sync_selection_arcs();
             }
             View::WorkflowRunDetail => {
+                // If we've drilled into a child workflow, pop back to the parent.
+                if let Some(parent_id) = self.state.workflow_run_nav_stack.pop() {
+                    self.state.selected_workflow_run_id = Some(parent_id);
+                    self.state.workflow_step_index = 0;
+                    self.state.step_agent_event_index = 0;
+                    self.state.error_pane_scroll = 0;
+                    self.reload_workflow_steps();
+                    return;
+                }
                 self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
                 if let Some(prev_wt_id) = self.state.previous_selected_worktree_id.take() {
                     self.state.selected_worktree_id = prev_wt_id;
@@ -437,6 +446,7 @@ impl App {
             self.sync_selection_arcs();
         }
         self.state.selected_workflow_run_id = Some(run_id);
+        self.state.workflow_run_nav_stack.clear();
         self.state.previous_view = Some(self.state.view);
         self.state.view = View::WorkflowRunDetail;
         self.state.workflow_step_index = 0;
@@ -444,6 +454,17 @@ impl App {
         self.state.step_agent_event_index = 0;
         self.state.error_pane_scroll = 0;
         self.state.column_focus = crate::state::ColumnFocus::Content;
+        self.reload_workflow_steps();
+    }
+
+    fn drill_into_child_workflow(&mut self, child_run_id: String) {
+        if let Some(current_id) = self.state.selected_workflow_run_id.take() {
+            self.state.workflow_run_nav_stack.push(current_id);
+        }
+        self.state.selected_workflow_run_id = Some(child_run_id);
+        self.state.workflow_step_index = 0;
+        self.state.step_agent_event_index = 0;
+        self.state.error_pane_scroll = 0;
         self.reload_workflow_steps();
     }
 
@@ -931,6 +952,25 @@ impl App {
                     .workflow_steps
                     .get(self.state.workflow_step_index)
                 {
+                    // [workflow] steps: drill into the child workflow run instead of a modal.
+                    if step.role == conductor_core::workflow::STEP_ROLE_WORKFLOW {
+                        if let Some(ref child_id) = step.child_run_id.clone() {
+                            let exists = self
+                                .state
+                                .data
+                                .workflow_runs
+                                .iter()
+                                .any(|r| &r.id == child_id);
+                            if exists {
+                                self.drill_into_child_workflow(child_id.clone());
+                            } else {
+                                self.state.status_message =
+                                    Some("Child workflow not loaded yet — try again".to_string());
+                                self.state.status_message_at = Some(std::time::Instant::now());
+                            }
+                        }
+                        return;
+                    }
                     if step.child_run_id.is_some() {
                         // Step has an agent run — show agent activity from cached data
                         let events = &self.state.data.step_agent_events;
@@ -1750,6 +1790,50 @@ mod tests {
             "Arc must be synced to None when run has no worktree_id"
         );
         assert_eq!(app.state.view, View::WorkflowRunDetail);
+    }
+
+    // ── drill-into-child / go_back nav stack ──────────────────────────
+
+    #[test]
+    fn go_back_workflow_run_detail_pops_nav_stack() {
+        let mut app = make_test_app();
+        app.state.view = View::WorkflowRunDetail;
+        app.state.previous_view = Some(View::Dashboard);
+        // Stack has parent run; currently viewing child run.
+        app.state.workflow_run_nav_stack = vec!["parent-run".into()];
+        app.state.selected_workflow_run_id = Some("child-run".into());
+        app.go_back();
+        // Should pop stack and restore parent run, not exit the view.
+        assert_eq!(app.state.view, View::WorkflowRunDetail);
+        assert!(app.state.workflow_run_nav_stack.is_empty());
+        assert_eq!(
+            app.state.selected_workflow_run_id.as_deref(),
+            Some("parent-run")
+        );
+    }
+
+    #[test]
+    fn drill_into_child_noop_when_child_not_found() {
+        let mut app = make_test_app();
+        app.state.view = View::WorkflowRunDetail;
+        app.state.selected_workflow_run_id = Some("parent-run".into());
+        // workflow_runs is empty — child run not yet loaded
+        let step = crate::state::tests::make_wf_step("s1", "parent-run", "call-child", 0);
+        app.state.data.workflow_steps = vec![conductor_core::workflow::WorkflowRunStep {
+            role: "workflow".into(),
+            child_run_id: Some("missing-child".into()),
+            ..step
+        }];
+        app.state.workflow_step_index = 0;
+        app.state.data.workflow_runs = vec![];
+        app.select();
+        // No drill should have happened: stack still empty, run unchanged.
+        assert!(app.state.workflow_run_nav_stack.is_empty());
+        assert_eq!(
+            app.state.selected_workflow_run_id.as_deref(),
+            Some("parent-run")
+        );
+        assert!(app.state.status_message.is_some());
     }
 
     #[test]

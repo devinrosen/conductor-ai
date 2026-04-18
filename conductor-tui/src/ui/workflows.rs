@@ -1562,15 +1562,48 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         } else {
             state.theme.border_inactive
         };
-        let info_title = if info_focused {
-            " Info (y=copy, Tab=switch) "
-        } else {
-            " Info "
+        // Build breadcrumb: parent run names from the nav stack + current run.
+        let breadcrumb_title = {
+            let nav_stack = &state.workflow_run_nav_stack;
+            if nav_stack.is_empty() {
+                if info_focused {
+                    " Info (y=copy, Tab=switch) ".to_string()
+                } else {
+                    " Info ".to_string()
+                }
+            } else {
+                let mut parts: Vec<String> = nav_stack
+                    .iter()
+                    .filter_map(|id| {
+                        state
+                            .data
+                            .workflow_runs
+                            .iter()
+                            .find(|r| &r.id == id)
+                            .map(|r| r.display_name().to_string())
+                    })
+                    .collect();
+                parts.push(run.display_name().to_string());
+                let crumb = parts.join(" > ");
+                let max_crumb = area.width.saturating_sub(4) as usize;
+                let crumb = if crumb.chars().count() > max_crumb {
+                    let truncated: String =
+                        crumb.chars().take(max_crumb.saturating_sub(1)).collect();
+                    format!("{truncated}…")
+                } else {
+                    crumb
+                };
+                if info_focused {
+                    format!(" {crumb} (y=copy, Tab=switch) ")
+                } else {
+                    format!(" {crumb} ")
+                }
+            }
         };
         let info_block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(info_border_color))
-            .title(info_title);
+            .title(breadcrumb_title);
         frame.render_widget(Paragraph::new(info_lines).block(info_block), chunks[0]);
 
         // Declared inputs (non-selectable, below info panel)
@@ -1853,20 +1886,42 @@ fn render_step_list(
         .iter()
         .any(|s| s.status.to_string() == "waiting" && s.gate_type.is_some());
 
-    let selected_is_foreach = state
-        .data
-        .workflow_steps
-        .get(state.workflow_step_index)
+    let selected_step = state.data.workflow_steps.get(state.workflow_step_index);
+    let selected_is_foreach = selected_step
         .map(|s| s.role == conductor_core::workflow::STEP_ROLE_FOREACH)
         .unwrap_or(false);
+    let selected_is_workflow = selected_step
+        .map(|s| s.role == conductor_core::workflow::STEP_ROLE_WORKFLOW && s.child_run_id.is_some())
+        .unwrap_or(false);
+    let in_child_workflow = !state.workflow_run_nav_stack.is_empty();
 
-    let title = match (focused, has_waiting_gate, selected_is_foreach) {
-        (true, true, true) => " Steps (Enter=approve gate, Space=expand, Tab=switch) ",
-        (true, true, false) => " Steps (Enter=approve gate, Tab=switch) ",
-        (true, false, true) => " Steps (Enter=detail, Space=expand, Tab=switch) ",
-        (true, false, false) => " Steps (Enter=detail, Tab=switch) ",
-        (false, true, _) => " Steps (Enter=approve gate) ",
-        (false, false, _) => " Steps ",
+    let title = match (
+        focused,
+        has_waiting_gate,
+        selected_is_foreach,
+        selected_is_workflow,
+        in_child_workflow,
+    ) {
+        (true, true, true, _, _) => {
+            " Steps (Esc=back, Enter=approve gate, Space=expand, Tab=switch) ".to_string()
+        }
+        (true, true, false, _, true) => {
+            " Steps (Esc=back, Enter=approve gate, Tab=switch) ".to_string()
+        }
+        (true, true, false, _, false) => " Steps (Enter=approve gate, Tab=switch) ".to_string(),
+        (true, false, true, _, _) => {
+            " Steps (Esc=back, Enter=detail, Space=expand, Tab=switch) ".to_string()
+        }
+        (true, false, false, true, true) => {
+            " Steps (Esc=back, Enter=drill in, Tab=switch) ".to_string()
+        }
+        (true, false, false, true, false) => " Steps (Enter=drill in, Tab=switch) ".to_string(),
+        (true, false, false, false, true) => {
+            " Steps (Esc=back, Enter=detail, Tab=switch) ".to_string()
+        }
+        (true, false, false, false, false) => " Steps (Enter=detail, Tab=switch) ".to_string(),
+        (false, true, _, _, _) => " Steps (Enter=approve gate) ".to_string(),
+        (false, false, _, _, _) => " Steps ".to_string(),
     };
 
     let list = List::new(items)
