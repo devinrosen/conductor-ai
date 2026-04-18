@@ -19,12 +19,16 @@ fi
 echo "Running cargo audit..."
 if cargo audit 2>&1; then
     echo "No vulnerabilities found."
-    echo "CONDUCTOR_OUTPUT"
-    echo "context: clean audit — no advisories"
-    echo "markers: []"
+    cat <<'EOF'
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": [], "context": "clean audit — no advisories"}
+<<<END_CONDUCTOR_OUTPUT>>>
+EOF
 else
     echo "Vulnerabilities found!"
-    echo "CONDUCTOR_OUTPUT"
-    echo "context: cargo audit found advisories"
-    echo "markers: [\"has_vulnerabilities\"]"
+    cat <<'EOF'
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["has_vulnerabilities"], "context": "cargo audit found advisories"}
+<<<END_CONDUCTOR_OUTPUT>>>
+EOF
 fi

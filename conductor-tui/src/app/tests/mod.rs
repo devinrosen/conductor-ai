@@ -141,6 +141,7 @@ fn test_workflow_column_select_run_enters_detail_view() {
     let mut app = make_test_app();
     app.state.selected_worktree_id = Some("w1".into());
     app.state.data.workflow_runs = vec![make_test_run("run1")];
+    app.state.rebuild_workflow_run_rows();
     app.state.column_focus = crate::state::ColumnFocus::Workflow;
     app.state.workflows_focus = WorkflowsFocus::Runs;
     app.state.workflow_run_index = 0;
@@ -158,6 +159,7 @@ fn test_workflow_column_select_header_row_is_noop() {
     let mut run = make_test_run("run1");
     run.worktree_id = None;
     app.state.data.workflow_runs = vec![run];
+    app.state.rebuild_workflow_run_rows();
     app.state.column_focus = crate::state::ColumnFocus::Workflow;
     app.state.workflows_focus = WorkflowsFocus::Runs;
     app.state.workflow_run_index = 0; // points at repo/target header in global mode

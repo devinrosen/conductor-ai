@@ -5,6 +5,7 @@ use conductor_core::workflow::WorkflowRunStatus;
 fn visible_workflow_run_rows_empty() {
     let mut state = AppState::new();
     set_worktree_mode(&mut state);
+    state.rebuild_workflow_run_rows();
     assert!(state.visible_workflow_run_rows().is_empty());
 }
 
@@ -13,6 +14,7 @@ fn visible_workflow_run_rows_single_parent_no_children() {
     let mut state = AppState::new();
     set_worktree_mode(&mut state);
     state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Running, None)];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 1);
     assert!(
@@ -28,6 +30,7 @@ fn visible_workflow_run_rows_parent_with_child_expanded() {
         make_wf_run_full("p1", WorkflowRunStatus::Running, None),
         make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 2);
     assert!(
@@ -45,6 +48,7 @@ fn visible_workflow_run_rows_parent_with_child_collapsed() {
         make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
     ];
     state.collapsed_workflow_run_ids.insert("p1".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 1);
     assert!(
@@ -61,6 +65,7 @@ fn visible_workflow_run_rows_orphaned_child_treated_as_root() {
         WorkflowRunStatus::Running,
         Some("nonexistent"),
     )];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 1);
     assert!(
@@ -113,6 +118,7 @@ fn global_mode_groups_by_repo_then_target() {
         make_wf_run_with_label("r2", Some("repo-a/feat-2"), None),
         make_wf_run_with_label("r3", Some("repo-b/feat-3"), None),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 8);
     assert!(
@@ -137,6 +143,7 @@ fn global_mode_collapsed_repo_hides_children() {
         make_wf_run_with_label("r2", Some("repo-b/feat-2"), None),
     ];
     state.collapsed_repo_headers.insert("repo-a".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 4);
     assert!(
@@ -157,6 +164,7 @@ fn global_mode_collapsed_target_hides_runs() {
     state
         .collapsed_target_headers
         .insert("repo-a/feat-1".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 4);
     assert!(matches!(&rows[0], WorkflowRunRow::RepoHeader { .. }));
@@ -189,6 +197,7 @@ fn global_mode_pr_run_uses_repo_id_fallback() {
         Some("owner/repo#99"),
         Some("repo-id-1"),
     )];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert!(
         matches!(&rows[0], WorkflowRunRow::RepoHeader { repo_slug, .. } if repo_slug == "my-repo")
@@ -199,6 +208,7 @@ fn global_mode_pr_run_uses_repo_id_fallback() {
 fn global_mode_run_without_label_buckets_under_unknown() {
     let mut state = AppState::new();
     state.data.workflow_runs = vec![make_wf_run_with_label("r1", None, None)];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert!(
         matches!(&rows[0], WorkflowRunRow::RepoHeader { repo_slug, .. } if repo_slug == "unknown")
@@ -216,6 +226,7 @@ fn visible_workflow_run_rows_grandchild_expanded() {
         make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
         make_wf_run_full("gc1", WorkflowRunStatus::Running, Some("c1")),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 3);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
@@ -237,6 +248,7 @@ fn visible_workflow_run_rows_intermediate_child_collapsed() {
         make_wf_run_full("gc1", WorkflowRunStatus::Running, Some("c1")),
     ];
     state.collapsed_workflow_run_ids.insert("c1".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 2);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
@@ -255,6 +267,7 @@ fn visible_workflow_run_rows_child_depth_values() {
         make_wf_run_full("c2", WorkflowRunStatus::Running, Some("c1")),
         make_wf_run_full("c3", WorkflowRunStatus::Running, Some("c2")),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 4);
     assert!(matches!(&rows[1], WorkflowRunRow::Child { run_id, depth: 1, .. } if run_id == "c1"));
@@ -270,6 +283,7 @@ fn visible_workflow_run_rows_leaf_child_count_zero() {
         make_wf_run_full("p1", WorkflowRunStatus::Running, None),
         make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 2);
     assert!(
@@ -292,11 +306,13 @@ fn visible_workflow_run_rows_step_rows_appear_when_expanded() {
             make_wf_step("s2", "p1", "test", 1),
         ],
     );
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 1);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
 
     state.expanded_step_run_ids.insert("p1".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 3);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
@@ -319,6 +335,7 @@ fn visible_workflow_run_rows_steps_sorted_by_position() {
         ],
     );
     state.expanded_step_run_ids.insert("p1".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 4);
     assert!(
@@ -346,6 +363,7 @@ fn visible_workflow_run_rows_steps_for_leaf_child_run() {
         .workflow_run_steps
         .insert("c1".into(), vec![make_wf_step("s1", "c1", "review", 0)]);
     state.expanded_step_run_ids.insert("c1".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 3);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
@@ -365,6 +383,7 @@ fn visible_workflow_run_rows_filters_completed_by_default() {
         make_wf_run_full("r3", WorkflowRunStatus::Failed, None),
         make_wf_run_full("r4", WorkflowRunStatus::Running, None),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 2);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r3"));
@@ -372,6 +391,7 @@ fn visible_workflow_run_rows_filters_completed_by_default() {
     assert_eq!(state.hidden_workflow_run_count(), 2);
 
     state.show_completed_workflow_runs = true;
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 4);
     assert_eq!(state.hidden_workflow_run_count(), 0);
@@ -384,6 +404,7 @@ fn visible_workflow_run_rows_no_steps_without_data() {
     state.show_completed_workflow_runs = true;
     state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
     state.expanded_step_run_ids.insert("p1".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 1);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
@@ -408,6 +429,7 @@ fn visible_workflow_run_rows_parallel_group_header_and_members() {
         .insert("p1".into(), vec![lint, test, deploy]);
     state.expanded_step_run_ids.insert("p1".into());
 
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 5);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
@@ -454,6 +476,7 @@ fn repo_detail_mode_emits_slug_labels() {
         make_wf_run_with_target("r1", Some("my-repo/feat-123")),
         make_wf_run_with_target("r2", Some("my-repo/feat-456")),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 4);
     assert!(matches!(&rows[0], WorkflowRunRow::SlugLabel { label } if label == "feat-123"));
@@ -471,6 +494,7 @@ fn repo_detail_mode_consecutive_deduplication() {
         make_wf_run_with_target("r2", Some("my-repo/feat-123")),
         make_wf_run_with_target("r3", Some("my-repo/feat-456")),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 5);
     assert!(matches!(&rows[0], WorkflowRunRow::SlugLabel { label } if label == "feat-123"));
@@ -485,6 +509,7 @@ fn repo_detail_mode_no_slug_label_for_missing_target() {
     let mut state = AppState::new();
     set_repo_detail_mode(&mut state, "repo-1");
     state.data.workflow_runs = vec![make_wf_run_with_target("r1", None)];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 1);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
@@ -495,6 +520,7 @@ fn repo_detail_mode_no_slug_label_for_pr_format_target() {
     let mut state = AppState::new();
     set_repo_detail_mode(&mut state, "repo-1");
     state.data.workflow_runs = vec![make_wf_run_with_target("r1", Some("owner/repo#42"))];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 1);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
@@ -509,6 +535,7 @@ fn worktree_detail_mode_no_slug_labels() {
         make_wf_run_with_target("r1", Some("my-repo/feat-123")),
         make_wf_run_with_target("r2", Some("my-repo/feat-456")),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 2);
     assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
@@ -647,6 +674,7 @@ fn visible_workflow_run_rows_parent_max_iteration_populated() {
             make_iter_step("p1", "step-a", 2, 0),
         ],
     );
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 1);
     match &rows[0] {
@@ -680,6 +708,7 @@ fn visible_workflow_run_rows_child_max_iteration_populated() {
             make_iter_step("c1", "step-x", 1, 0),
         ],
     );
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 2);
     match &rows[1] {
@@ -719,6 +748,7 @@ fn visible_workflow_run_rows_loop_shows_only_latest_iteration_children() {
         make_wf_run_with_iter("d2", WorkflowRunStatus::Running, Some("p1"), "fix-pr", 1),
         make_wf_run_with_iter("d3", WorkflowRunStatus::Running, Some("p1"), "test-pr", 1),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(
         rows.len(),
@@ -752,6 +782,7 @@ fn visible_workflow_run_rows_loop_all_iter_zero_shows_all_children() {
         make_wf_run_full("c1", WorkflowRunStatus::Completed, Some("p1")),
         make_wf_run_full("c2", WorkflowRunStatus::Running, Some("p1")),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(
         rows.len(),
@@ -778,6 +809,7 @@ fn visible_workflow_run_rows_loop_partial_iteration_shows_latest() {
         make_wf_run_with_iter("d1", WorkflowRunStatus::Running, Some("p1"), "review-pr", 1),
         make_wf_run_with_iter("d2", WorkflowRunStatus::Running, Some("p1"), "fix-pr", 1),
     ];
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(rows.len(), 4, "expected parent + 3 children (partial iter)");
     let child_ids: Vec<_> = rows
@@ -812,6 +844,115 @@ fn visible_workflow_run_rows_loop_partial_iteration_shows_latest() {
     );
 }
 
+// --- global mode workflow_name_filter tests ---
+
+#[test]
+fn global_mode_name_filter_includes_matching_run() {
+    let mut state = AppState::new();
+    state.data.workflow_runs = vec![
+        make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+        make_wf_run_with_label("r2", Some("repo-b/feat-2"), None),
+    ];
+    // r1's workflow_name is "test-workflow" (default); filter on substring
+    state.workflow_name_filter = Some("test-workflow".into());
+    state.rebuild_workflow_run_rows();
+    let rows = state.visible_workflow_run_rows();
+    // Both runs match "test-workflow" so both groups appear
+    let run_ids: Vec<_> = rows
+        .iter()
+        .filter_map(|r| {
+            if let WorkflowRunRow::Parent { run_id, .. } = r {
+                Some(run_id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(run_ids.contains(&"r1"));
+    assert!(run_ids.contains(&"r2"));
+}
+
+#[test]
+fn global_mode_name_filter_excludes_non_matching_run() {
+    let mut state = AppState::new();
+    state.data.workflow_runs = vec![
+        make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+        make_wf_run_with_label("r2", Some("repo-a/feat-2"), None),
+    ];
+    state.workflow_name_filter = Some("nonexistent-workflow".into());
+    state.rebuild_workflow_run_rows();
+    let rows = state.visible_workflow_run_rows();
+    assert!(
+        rows.is_empty(),
+        "filter matches nothing; expected no rows, got {rows:?}"
+    );
+}
+
+#[test]
+fn global_mode_name_filter_is_case_insensitive() {
+    let mut state = AppState::new();
+    let mut run = make_wf_run_with_label("r1", Some("repo-a/feat-1"), None);
+    run.workflow_name = "deploy-prod".into();
+    state.data.workflow_runs = vec![run];
+    state.workflow_name_filter = Some("DEPLOY".into());
+    state.rebuild_workflow_run_rows();
+    let rows = state.visible_workflow_run_rows();
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, WorkflowRunRow::Parent { run_id, .. } if run_id == "r1")),
+        "case-insensitive filter should match; rows: {rows:?}"
+    );
+}
+
+#[test]
+fn global_mode_name_filter_none_shows_all() {
+    let mut state = AppState::new();
+    state.data.workflow_runs = vec![
+        make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+        make_wf_run_with_label("r2", Some("repo-b/feat-2"), None),
+    ];
+    state.workflow_name_filter = None;
+    state.rebuild_workflow_run_rows();
+    let rows = state.visible_workflow_run_rows();
+    let run_ids: Vec<_> = rows
+        .iter()
+        .filter_map(|r| {
+            if let WorkflowRunRow::Parent { run_id, .. } = r {
+                Some(run_id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(run_ids.contains(&"r1"));
+    assert!(run_ids.contains(&"r2"));
+}
+
+#[test]
+fn global_mode_name_filter_excludes_whole_target_group() {
+    let mut state = AppState::new();
+    let mut r1 = make_wf_run_with_label("r1", Some("repo-a/feat-1"), None);
+    r1.workflow_name = "deploy-prod".into();
+    let mut r2 = make_wf_run_with_label("r2", Some("repo-a/feat-2"), None);
+    r2.workflow_name = "run-tests".into();
+    state.data.workflow_runs = vec![r1, r2];
+    state.workflow_name_filter = Some("deploy".into());
+    state.rebuild_workflow_run_rows();
+    let rows = state.visible_workflow_run_rows();
+    // r1 matches; r2 does not — the TargetHeader for feat-2 should be absent
+    assert!(
+        !rows
+            .iter()
+            .any(|r| matches!(r, WorkflowRunRow::TargetHeader { label, .. } if label == "feat-2")),
+        "TargetHeader for non-matching run should be absent; rows: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, WorkflowRunRow::TargetHeader { label, .. } if label == "feat-1")),
+        "TargetHeader for matching run should be present; rows: {rows:?}"
+    );
+}
+
 // --- direct-step interleaving tests ---
 
 #[test]
@@ -833,6 +974,7 @@ fn push_children_interleaves_direct_steps_with_child_runs() {
         .workflow_run_steps
         .insert("p1".to_string(), vec![agent_step, wf_step]);
     state.expanded_step_run_ids.insert("p1".to_string());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert_eq!(
         rows.len(),
@@ -877,6 +1019,7 @@ fn push_children_global_max_iter_filters_old_iteration_direct_steps() {
 
     state.expanded_step_run_ids.insert("p1".to_string());
 
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
 
     assert_eq!(

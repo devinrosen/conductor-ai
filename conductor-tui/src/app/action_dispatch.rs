@@ -482,6 +482,7 @@ impl App {
             // Workflow completed/cancelled visibility toggle
             Action::ToggleCompletedRuns => {
                 self.state.show_completed_workflow_runs = !self.state.show_completed_workflow_runs;
+                self.state.rebuild_workflow_run_rows();
                 self.clamp_workflow_indices();
             }
 
@@ -816,6 +817,7 @@ impl App {
                 self.state.data.workflow_run_steps = payload.all_run_steps;
                 self.state.data.fan_out_items = payload.fan_out_items;
                 self.state.init_collapse_state();
+                self.state.rebuild_workflow_run_rows();
                 if let Some(msg) = workflow_parse_warning_message(&payload.workflow_parse_warnings)
                 {
                     self.state.status_message = Some(msg);
@@ -892,6 +894,7 @@ impl App {
                     _ => {}
                 }
                 // Clamp index after visibility change.
+                self.state.rebuild_workflow_run_rows();
                 let new_len = self.state.visible_workflow_run_rows_len();
                 if new_len > 0 && self.state.workflow_run_index >= new_len {
                     self.state.workflow_run_index = new_len - 1;
@@ -1354,6 +1357,7 @@ impl App {
                 self.state.workflow_name_filter = None;
                 self.state.workflow_filter_input = String::new();
                 self.state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+                self.state.rebuild_workflow_run_rows();
             }
 
             Action::ConfirmWorkflowFilter => {
@@ -1361,6 +1365,7 @@ impl App {
                 self.state.workflow_name_filter = if input.is_empty() { None } else { Some(input) };
                 self.state.workflow_filter_input = String::new();
                 self.state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+                self.state.rebuild_workflow_run_rows();
             }
         }
         true
