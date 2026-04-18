@@ -544,7 +544,9 @@ fn test_call_workflow_resume_failure_triggers_on_fail_agent() {
         workflow: "child".into(),
         inputs: HashMap::new(),
         retries: 0,
-        on_fail: Some(crate::workflow_dsl::AgentRef::Name("on-fail-agent".into())),
+        on_fail: Some(crate::workflow_dsl::OnFail::Agent(
+            crate::workflow_dsl::AgentRef::Name("on-fail-agent".into()),
+        )),
         bot_name: None,
     };
 

@@ -191,7 +191,16 @@ pub fn execute_call_workflow(
                 msg
             }
         };
-        return handle_on_fail(state, step_key, &node.workflow, &node.on_fail, msg, 1, iteration, 1);
+        return handle_on_fail(
+            state,
+            step_key,
+            &node.workflow,
+            &node.on_fail,
+            msg,
+            1,
+            iteration,
+            1,
+        );
     }
 
     for attempt in 0..max_attempts {
