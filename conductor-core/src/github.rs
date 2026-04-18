@@ -1292,4 +1292,24 @@ mod tests {
         let result = build_ticket_input(&bad_issue, &url);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_merged_branches_for_repo_empty_branches_returns_empty_map() {
+        let result = merged_branches_for_repo("git@github.com:owner/repo.git", &[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_merged_branches_for_repo_non_github_remote_returns_empty_map() {
+        let branches = vec!["feat/my-branch".to_string()];
+        let result = merged_branches_for_repo("git@gitlab.com:owner/repo.git", &branches);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_merged_branches_for_repo_invalid_remote_returns_empty_map() {
+        let branches = vec!["feat/my-branch".to_string()];
+        let result = merged_branches_for_repo("not-a-url", &branches);
+        assert!(result.is_empty());
+    }
 }
