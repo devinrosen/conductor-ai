@@ -1844,14 +1844,21 @@ fn workflow_name_filter_global_mode_hides_non_matching_runs() {
     let len = app.state.visible_workflow_run_rows_len();
 
     // rows() and rows_len() must agree.
-    assert_eq!(rows.len(), len, "rows() and rows_len() must agree in global mode");
+    assert_eq!(
+        rows.len(),
+        len,
+        "rows() and rows_len() must agree in global mode"
+    );
     // 1 RepoHeader + 1 TargetHeader + 1 Parent (only the release run).
     assert_eq!(len, 3);
     let parent_count = rows
         .iter()
         .filter(|r| matches!(r, crate::state::WorkflowRunRow::Parent { .. }))
         .count();
-    assert_eq!(parent_count, 1, "only the matching run should be a Parent row");
+    assert_eq!(
+        parent_count, 1,
+        "only the matching run should be a Parent row"
+    );
 }
 
 #[test]
@@ -1869,7 +1876,11 @@ fn workflow_name_filter_global_mode_no_filter_shows_all() {
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
 
-    assert_eq!(rows.len(), len, "rows() and rows_len() must agree in global mode");
+    assert_eq!(
+        rows.len(),
+        len,
+        "rows() and rows_len() must agree in global mode"
+    );
     // 1 RepoHeader + 1 TargetHeader + 2 Parent rows.
     assert_eq!(len, 4);
 }
