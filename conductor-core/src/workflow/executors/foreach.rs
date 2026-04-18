@@ -934,9 +934,9 @@ fn dispatch_child_workflow(
     let now = chrono::Utc::now().to_rfc3339();
     state.conn.execute(
         "UPDATE workflow_run_step_fan_out_items \
-         SET status = 'running', dispatched_at = ?1 \
-         WHERE id = ?2",
-        rusqlite::params![now, item.id],
+         SET status = 'running', dispatched_at = :now \
+         WHERE id = :id",
+        rusqlite::named_params![":now": now, ":id": item.id],
     )?;
 
     tracing::info!(
@@ -2305,26 +2305,26 @@ mod tests {
         // Resolve ULIDs (tickets table uses server-generated ULIDs).
         let ticket1_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let ticket2_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
         // Insert two worktrees linked to the tickets.
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
-             VALUES ('wt-1', 'r1', 'feat-1', 'feat/1', '/tmp/1', 'active', '2024-01-01T00:00:00Z', ?1)",
-            rusqlite::params![ticket1_id],
+             VALUES ('wt-1', 'r1', 'feat-1', 'feat/1', '/tmp/1', 'active', '2024-01-01T00:00:00Z', :ticket_id)",
+            rusqlite::named_params![":ticket_id": ticket1_id],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
-             VALUES ('wt-2', 'r1', 'feat-2', 'feat/2', '/tmp/2', 'active', '2024-01-02T00:00:00Z', ?1)",
-            rusqlite::params![ticket2_id],
+             VALUES ('wt-2', 'r1', 'feat-2', 'feat/2', '/tmp/2', 'active', '2024-01-02T00:00:00Z', :ticket_id)",
+            rusqlite::named_params![":ticket_id": ticket2_id],
         )
         .unwrap();
 
@@ -2444,28 +2444,28 @@ mod tests {
             .query_row(
                 "SELECT id FROM tickets WHERE source_id = 'blocker'",
                 [],
-                |row| row.get(0),
+                |row| row.get("id"),
             )
             .unwrap();
         let dep_id: String = conn
             .query_row(
                 "SELECT id FROM tickets WHERE source_id = 'dep'",
                 [],
-                |row| row.get(0),
+                |row| row.get("id"),
             )
             .unwrap();
 
         // wt-1 linked to "dep" ticket, wt-2 linked to "blocker" ticket, wt-3 no ticket
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
-             VALUES ('wt-1', 'r1', 'feat-dep', 'feat/dep', '/tmp/dep', 'active', '2024-01-01T00:00:00Z', ?1)",
-            rusqlite::params![dep_id],
+             VALUES ('wt-1', 'r1', 'feat-dep', 'feat/dep', '/tmp/dep', 'active', '2024-01-01T00:00:00Z', :ticket_id)",
+            rusqlite::named_params![":ticket_id": dep_id],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, ticket_id) \
-             VALUES ('wt-2', 'r1', 'feat-blocker', 'feat/blocker', '/tmp/blocker', 'active', '2024-01-02T00:00:00Z', ?1)",
-            rusqlite::params![blocker_id],
+             VALUES ('wt-2', 'r1', 'feat-blocker', 'feat/blocker', '/tmp/blocker', 'active', '2024-01-02T00:00:00Z', :ticket_id)",
+            rusqlite::named_params![":ticket_id": blocker_id],
         )
         .unwrap();
         conn.execute(
@@ -2537,12 +2537,12 @@ mod tests {
 
         let ticket1_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = 't1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let ticket2_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = 't2'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -2601,14 +2601,14 @@ mod tests {
             .query_row(
                 "SELECT id FROM tickets WHERE source_id = 'nd1'",
                 [],
-                |row| row.get(0),
+                |row| row.get("id"),
             )
             .unwrap();
         let ticket2_id: String = conn
             .query_row(
                 "SELECT id FROM tickets WHERE source_id = 'nd2'",
                 [],
-                |row| row.get(0),
+                |row| row.get("id"),
             )
             .unwrap();
 
@@ -2666,12 +2666,12 @@ mod tests {
 
         let ticket_a_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = 'ta'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let ticket_b_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = 'tb'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -2955,15 +2955,15 @@ mod tests {
             .query_row(
                 "SELECT id FROM tickets WHERE source_id = 't-linked-1' AND repo_id = 'r1'",
                 [],
-                |row| row.get(0),
+                |row| row.get("id"),
             )
             .unwrap();
 
         // Insert a worktree linked to the real ticket.
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch, ticket_id) \
-             VALUES ('wt-linked', 'r1', 'feat-linked', 'feat/linked', '/tmp/linked', 'active', '2024-01-01T00:00:00Z', 'release/1.0', ?1)",
-            rusqlite::params![ticket_id],
+             VALUES ('wt-linked', 'r1', 'feat-linked', 'feat/linked', '/tmp/linked', 'active', '2024-01-01T00:00:00Z', 'release/1.0', :ticket_id)",
+            rusqlite::named_params![":ticket_id": ticket_id],
         )
         .unwrap();
 

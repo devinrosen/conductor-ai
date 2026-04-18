@@ -45,21 +45,25 @@ pub(crate) fn prefix_columns(cols: &str, prefix: &str) -> String {
         .join(", ")
 }
 
-/// Build a comma-separated list of numbered SQLite positional placeholders:
-/// `?1, ?2, …, ?n`.  Returns an empty string when `n == 0`.
+/// Build a comma-separated list of anonymous SQLite positional placeholders:
+/// `?, ?, …`.  Returns an empty string when `n == 0`.
 pub(crate) fn sql_placeholders(n: usize) -> String {
     sql_placeholders_from(n, 1)
 }
 
-/// `?start, ?{start+1}, …, ?{start+n-1}`.  Returns an empty string when `n == 0`.
-pub(crate) fn sql_placeholders_from(n: usize, start: usize) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(n.saturating_mul(4));
-    for i in start..start + n {
-        if i > start {
+/// `?, ?, …` (n anonymous placeholders).  Returns an empty string when `n == 0`.
+/// The `start` parameter is retained for API compatibility but ignored — all
+/// placeholders are anonymous `?` to stay compatible with IN-clause queries.
+pub(crate) fn sql_placeholders_from(n: usize, _start: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let mut s = String::with_capacity(n.saturating_mul(3));
+    for i in 0..n {
+        if i > 0 {
             s.push_str(", ");
         }
-        write!(s, "?{i}").unwrap();
+        s.push('?');
     }
     s
 }
@@ -68,8 +72,8 @@ pub(crate) fn sql_placeholders_from(n: usize, start: usize) -> String {
 /// prepared params slice.
 ///
 /// `prefix` is everything before the `IN (...)` — e.g.
-/// `"SELECT id FROM tickets WHERE repo_id = ?1 AND source_id IN"`.
-/// `leading_params` are bound to `?1..?N`; `items` are bound to `?{N+1}, ?{N+2}, …`
+/// `"SELECT id FROM tickets WHERE repo_id = ? AND source_id IN"`.
+/// `leading_params` are bound first; `items` are bound after as anonymous `?`.
 ///
 /// The closure receives `(&str, &[&dyn ToSql])` — the SQL string and a
 /// ready-to-use params slice — so callers never need to manually convert
@@ -84,8 +88,7 @@ pub(crate) fn with_in_clause<T>(
         !items.is_empty(),
         "with_in_clause called with empty items — produces invalid SQL `IN ()`"
     );
-    let start = leading_params.len() + 1;
-    let placeholders = sql_placeholders_from(items.len(), start);
+    let placeholders = sql_placeholders_from(items.len(), 1);
     let sql = format!("{prefix} ({placeholders})");
     let mut params: Vec<&dyn ToSql> = leading_params.to_vec();
     for item in items {
@@ -105,7 +108,7 @@ pub(crate) fn active_workflow_parent_run_ids(conn: &Connection) -> Result<HashSe
         "SELECT parent_run_id FROM workflow_runs \
          WHERE status IN ('pending', 'running', 'waiting')",
         [],
-        |row| row.get(0),
+        |row| row.get("parent_run_id"),
     )?;
     Ok(ids.into_iter().collect())
 }

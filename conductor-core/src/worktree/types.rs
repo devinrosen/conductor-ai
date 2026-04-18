@@ -98,16 +98,16 @@ pub struct WorktreeWithStatus {
 
 pub(super) fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
     Ok(Worktree {
-        id: row.get(0)?,
-        repo_id: row.get(1)?,
-        slug: row.get(2)?,
-        branch: row.get(3)?,
-        path: row.get(4)?,
-        ticket_id: row.get(5)?,
-        status: row.get::<_, WorktreeStatus>(6)?,
-        created_at: row.get(7)?,
-        completed_at: row.get(8)?,
-        model: row.get(9)?,
-        base_branch: row.get(10)?,
+        id: row.get("id")?,
+        repo_id: row.get("repo_id")?,
+        slug: row.get("slug")?,
+        branch: row.get("branch")?,
+        path: row.get("path")?,
+        ticket_id: row.get("ticket_id")?,
+        status: row.get::<_, WorktreeStatus>("status")?,
+        created_at: row.get("created_at")?,
+        completed_at: row.get("completed_at")?,
+        model: row.get("model")?,
+        base_branch: row.get("base_branch")?,
     })
 }

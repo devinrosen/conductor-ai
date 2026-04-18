@@ -82,17 +82,17 @@ impl<'a> NotificationManager<'a> {
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
             "INSERT INTO notifications (id, kind, title, body, severity, entity_id, entity_type, read, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
-            rusqlite::params![
-                id,
-                params.kind,
-                params.title,
-                params.body,
-                params.severity.to_string(),
-                params.entity_id,
-                params.entity_type,
-                now,
-            ],
+                 VALUES (:id, :kind, :title, :body, :severity, :entity_id, :entity_type, 0, :created_at)",
+            rusqlite::named_params! {
+                ":id": id,
+                ":kind": params.kind,
+                ":title": params.title,
+                ":body": params.body,
+                ":severity": params.severity.to_string(),
+                ":entity_id": params.entity_id,
+                ":entity_type": params.entity_type,
+                ":created_at": now,
+            },
         )?;
         Ok(id)
     }
@@ -115,10 +115,10 @@ impl<'a> NotificationManager<'a> {
     ) -> crate::error::Result<Vec<Notification>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, kind, title, body, severity, entity_id, entity_type, read, created_at, read_at
-                 FROM notifications ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
+                 FROM notifications ORDER BY created_at DESC LIMIT :limit OFFSET :offset",
         )?;
         let rows = stmt.query_map(
-            rusqlite::params![limit as i64, offset as i64],
+            rusqlite::named_params! { ":limit": limit as i64, ":offset": offset as i64 },
             row_to_notification,
         )?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -128,8 +128,8 @@ impl<'a> NotificationManager<'a> {
     pub fn mark_read(&self, id: &str) -> crate::error::Result<bool> {
         let now = chrono::Utc::now().to_rfc3339();
         let rows = self.conn.execute(
-            "UPDATE notifications SET read = 1, read_at = ?1 WHERE id = ?2",
-            rusqlite::params![now, id],
+            "UPDATE notifications SET read = 1, read_at = :now WHERE id = :id",
+            rusqlite::named_params! { ":now": now, ":id": id },
         )?;
         Ok(rows > 0)
     }
@@ -138,8 +138,8 @@ impl<'a> NotificationManager<'a> {
     pub fn mark_all_read(&self) -> crate::error::Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE notifications SET read = 1, read_at = ?1 WHERE read = 0",
-            rusqlite::params![now],
+            "UPDATE notifications SET read = 1, read_at = :now WHERE read = 0",
+            rusqlite::named_params! { ":now": now },
         )?;
         Ok(())
     }
@@ -147,27 +147,27 @@ impl<'a> NotificationManager<'a> {
     /// Count unread notifications.
     pub fn unread_count(&self) -> crate::error::Result<usize> {
         let count = self.conn.query_row(
-            "SELECT COUNT(*) FROM notifications WHERE read = 0",
+            "SELECT COUNT(*) AS cnt FROM notifications WHERE read = 0",
             [],
-            |row| row.get::<_, i64>(0),
+            |row| row.get::<_, i64>("cnt"),
         )?;
         Ok(count as usize)
     }
 }
 
 fn row_to_notification(row: &rusqlite::Row<'_>) -> rusqlite::Result<Notification> {
-    let read_int: i64 = row.get(7)?;
+    let read_int: i64 = row.get("read")?;
     Ok(Notification {
-        id: row.get(0)?,
-        kind: row.get(1)?,
-        title: row.get(2)?,
-        body: row.get(3)?,
-        severity: row.get(4)?,
-        entity_id: row.get(5)?,
-        entity_type: row.get(6)?,
+        id: row.get("id")?,
+        kind: row.get("kind")?,
+        title: row.get("title")?,
+        body: row.get("body")?,
+        severity: row.get("severity")?,
+        entity_id: row.get("entity_id")?,
+        entity_type: row.get("entity_type")?,
         read: read_int != 0,
-        created_at: row.get(8)?,
-        read_at: row.get(9)?,
+        created_at: row.get("created_at")?,
+        read_at: row.get("read_at")?,
     })
 }
 

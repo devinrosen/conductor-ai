@@ -65,8 +65,8 @@ pub fn try_claim_notification(
 ) -> bool {
     let now = chrono::Utc::now().to_rfc3339();
     match conn.execute(
-        "INSERT OR IGNORE INTO notification_log (entity_id, event_type, fired_at) VALUES (?1, ?2, ?3)",
-        rusqlite::params![entity_id, event_type, now],
+        "INSERT OR IGNORE INTO notification_log (entity_id, event_type, fired_at) VALUES (:entity_id, :event_type, :fired_at)",
+        rusqlite::named_params! { ":entity_id": entity_id, ":event_type": event_type, ":fired_at": now },
     ) {
         Ok(rows) => rows == 1,
         Err(e) => {
@@ -944,9 +944,14 @@ pub fn fire_orphan_resumed_notification(
     // Fetch the first run's workflow_name and target_label for the hook event.
     let (workflow_name, target_label) = conn
         .query_row(
-            "SELECT workflow_name, target_label FROM workflow_runs WHERE id = ?1",
-            rusqlite::params![first_run_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            "SELECT workflow_name, target_label FROM workflow_runs WHERE id = :id",
+            rusqlite::named_params! { ":id": first_run_id },
+            |row| {
+                Ok((
+                    row.get::<_, String>("workflow_name")?,
+                    row.get::<_, Option<String>>("target_label")?,
+                ))
+            },
         )
         .unwrap_or_else(|e| {
             tracing::warn!(

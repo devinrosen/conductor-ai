@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::named_params;
 use serde_json;
 
 use crate::agent::AgentManager;
@@ -57,21 +57,23 @@ impl<'a> WorkflowManager<'a> {
             "INSERT INTO workflow_runs (id, workflow_name, worktree_id, ticket_id, repo_id, \
              parent_run_id, status, dry_run, trigger, started_at, definition_snapshot, \
              parent_workflow_run_id, target_label) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                id,
-                workflow_name,
-                worktree_id,
-                ticket_id,
-                repo_id,
-                parent_run_id,
-                "pending",
-                dry_run as i64,
-                trigger,
-                now,
-                definition_snapshot,
-                parent_workflow_run_id,
-                target_label,
+             VALUES (:id, :workflow_name, :worktree_id, :ticket_id, :repo_id, :parent_run_id, \
+             :status, :dry_run, :trigger, :started_at, :definition_snapshot, \
+             :parent_workflow_run_id, :target_label)",
+            named_params![
+                ":id": id,
+                ":workflow_name": workflow_name,
+                ":worktree_id": worktree_id,
+                ":ticket_id": ticket_id,
+                ":repo_id": repo_id,
+                ":parent_run_id": parent_run_id,
+                ":status": "pending",
+                ":dry_run": dry_run as i64,
+                ":trigger": trigger,
+                ":started_at": now,
+                ":definition_snapshot": definition_snapshot,
+                ":parent_workflow_run_id": parent_workflow_run_id,
+                ":target_label": target_label,
             ],
         )?;
 
@@ -112,8 +114,8 @@ impl<'a> WorkflowManager<'a> {
     /// Persist the loop iteration number for a workflow run.
     pub fn set_workflow_run_iteration(&self, run_id: &str, iteration: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE workflow_runs SET iteration = ?1 WHERE id = ?2",
-            params![iteration, run_id],
+            "UPDATE workflow_runs SET iteration = :iteration WHERE id = :id",
+            named_params![":iteration": iteration, ":id": run_id],
         )?;
         Ok(())
     }
@@ -121,8 +123,8 @@ impl<'a> WorkflowManager<'a> {
     /// Persist the default bot name for a workflow run.
     pub fn set_workflow_run_default_bot_name(&self, run_id: &str, bot_name: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE workflow_runs SET default_bot_name = ?1 WHERE id = ?2",
-            params![bot_name, run_id],
+            "UPDATE workflow_runs SET default_bot_name = :bot_name WHERE id = :id",
+            named_params![":bot_name": bot_name, ":id": run_id],
         )?;
         Ok(())
     }
@@ -137,8 +139,8 @@ impl<'a> WorkflowManager<'a> {
             ConductorError::Workflow(format!("Failed to serialize workflow inputs: {e}"))
         })?;
         self.conn.execute(
-            "UPDATE workflow_runs SET inputs = ?1 WHERE id = ?2",
-            params![inputs_json, run_id],
+            "UPDATE workflow_runs SET inputs = :inputs_json WHERE id = :id",
+            named_params![":inputs_json": inputs_json, ":id": run_id],
         )?;
         Ok(())
     }
@@ -175,8 +177,15 @@ impl<'a> WorkflowManager<'a> {
         // Always clear blocked_on — the only way to enter Waiting (which sets
         // blocked_on) is through set_waiting_blocked_on().
         self.conn.execute(
-            "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3, blocked_on = NULL, error = ?5 WHERE id = ?4",
-            params![status, result_summary, ended_at, workflow_run_id, error],
+            "UPDATE workflow_runs SET status = :status, result_summary = :result_summary, \
+             ended_at = :ended_at, blocked_on = NULL, error = :error WHERE id = :id",
+            named_params![
+                ":status": status,
+                ":result_summary": result_summary,
+                ":ended_at": ended_at,
+                ":error": error,
+                ":id": workflow_run_id,
+            ],
         )?;
         Ok(())
     }
@@ -193,8 +202,8 @@ impl<'a> WorkflowManager<'a> {
             ConductorError::Workflow(format!("Failed to serialize blocked_on: {e}"))
         })?;
         self.conn.execute(
-            "UPDATE workflow_runs SET status = ?1, blocked_on = ?2 WHERE id = ?3",
-            params![WorkflowRunStatus::Waiting, json, workflow_run_id],
+            "UPDATE workflow_runs SET status = :status, blocked_on = :blocked_on WHERE id = :id",
+            named_params![":status": WorkflowRunStatus::Waiting, ":blocked_on": json, ":id": workflow_run_id],
         )?;
         Ok(())
     }
@@ -305,25 +314,25 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE workflow_runs SET \
-             total_input_tokens = ?1, \
-             total_output_tokens = ?2, \
-             total_cache_read_input_tokens = ?3, \
-             total_cache_creation_input_tokens = ?4, \
-             total_turns = ?5, \
-             total_cost_usd = ?6, \
-             total_duration_ms = ?7, \
-             model = ?8 \
-             WHERE id = ?9",
-            params![
-                total_input_tokens,
-                total_output_tokens,
-                total_cache_read_input_tokens,
-                total_cache_creation_input_tokens,
-                total_turns,
-                total_cost_usd,
-                total_duration_ms,
-                model,
-                workflow_run_id,
+             total_input_tokens = :total_input_tokens, \
+             total_output_tokens = :total_output_tokens, \
+             total_cache_read_input_tokens = :total_cache_read_input_tokens, \
+             total_cache_creation_input_tokens = :total_cache_creation_input_tokens, \
+             total_turns = :total_turns, \
+             total_cost_usd = :total_cost_usd, \
+             total_duration_ms = :total_duration_ms, \
+             model = :model \
+             WHERE id = :id",
+            named_params![
+                ":total_input_tokens": total_input_tokens,
+                ":total_output_tokens": total_output_tokens,
+                ":total_cache_read_input_tokens": total_cache_read_input_tokens,
+                ":total_cache_creation_input_tokens": total_cache_creation_input_tokens,
+                ":total_turns": total_turns,
+                ":total_cost_usd": total_cost_usd,
+                ":total_duration_ms": total_duration_ms,
+                ":model": model,
+                ":id": workflow_run_id,
             ],
         )?;
         Ok(())
@@ -337,9 +346,9 @@ impl<'a> WorkflowManager<'a> {
     pub fn tick_heartbeat(&self, run_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE workflow_runs SET last_heartbeat = ?1 \
-             WHERE id = ?2 AND status = 'running'",
-            params![now, run_id],
+            "UPDATE workflow_runs SET last_heartbeat = :now \
+             WHERE id = :id AND status = 'running'",
+            named_params![":now": now, ":id": run_id],
         )?;
         Ok(())
     }

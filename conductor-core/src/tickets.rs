@@ -6,7 +6,7 @@ use chrono::Utc;
 const TICKET_COLS: &str = "t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json, t.workflow, t.agent_map";
 /// Ticket columns for SELECT queries without a table alias.
 const TICKET_COLS_BARE: &str = "id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map";
-use rusqlite::{params, Connection};
+use rusqlite::{named_params, Connection};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -174,7 +174,7 @@ pub struct TicketSyncer<'a> {
 const CLOSED_TICKET_ARTIFACTS_SQL: &str = "SELECT r.local_path, w.path, w.branch, r.remote_url
      FROM worktrees w
      JOIN repos r ON r.id = w.repo_id
-     WHERE w.repo_id = ?1
+     WHERE w.repo_id = :repo_id
        AND w.status != 'merged'
        AND w.ticket_id IS NOT NULL
        AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')";
@@ -196,9 +196,9 @@ fn resolve_dep_ticket_id(
         return Ok(Some(id.to_string()));
     }
     match tx.query_row(
-        "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-        params![repo_id, source_type, src],
-        |row| row.get(0),
+        "SELECT id FROM tickets WHERE repo_id = :repo_id AND source_type = :source_type AND source_id = :source_id",
+        named_params! { ":repo_id": repo_id, ":source_type": source_type, ":source_id": src },
+        |row| row.get("id"),
     ) {
         Ok(id) => Ok(Some(id)),
         Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -243,9 +243,9 @@ impl<'a> TicketSyncer<'a> {
                     let mut stmt = tx.prepare(sql)?;
                     let rows = stmt.query_map(params, |row| {
                         Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
+                            row.get::<_, String>("source_type")?,
+                            row.get::<_, String>("source_id")?,
+                            row.get::<_, String>("raw_json")?,
                         ))
                     })?;
                     for row in rows {
@@ -274,7 +274,7 @@ impl<'a> TicketSyncer<'a> {
             };
             let ticket_id: String = tx.query_row(
                 "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                 VALUES (:id, :repo_id, :source_type, :source_id, :title, :body, :state, :labels, :assignee, :priority, :url, :synced_at, :raw_json)
                  ON CONFLICT(repo_id, source_type, source_id) DO UPDATE SET
                      title = excluded.title,
                      body = excluded.body,
@@ -286,31 +286,31 @@ impl<'a> TicketSyncer<'a> {
                      synced_at = excluded.synced_at,
                      raw_json = excluded.raw_json
                  RETURNING id",
-                params![
-                    id,
-                    repo_id,
-                    ticket.source_type,
-                    ticket.source_id,
-                    ticket.title,
-                    ticket.body,
-                    ticket.state,
-                    labels_json,
-                    ticket.assignee,
-                    ticket.priority,
-                    ticket.url,
-                    now,
-                    raw_json,
-                ],
-                |row| row.get(0),
+                named_params! {
+                    ":id": id,
+                    ":repo_id": repo_id,
+                    ":source_type": ticket.source_type,
+                    ":source_id": ticket.source_id,
+                    ":title": ticket.title,
+                    ":body": ticket.body,
+                    ":state": ticket.state,
+                    ":labels": labels_json,
+                    ":assignee": ticket.assignee,
+                    ":priority": ticket.priority,
+                    ":url": ticket.url,
+                    ":synced_at": now,
+                    ":raw_json": raw_json,
+                },
+                |row| row.get("id"),
             )?;
             tx.execute(
-                "DELETE FROM ticket_labels WHERE ticket_id = ?1",
-                params![ticket_id],
+                "DELETE FROM ticket_labels WHERE ticket_id = :ticket_id",
+                named_params! { ":ticket_id": ticket_id },
             )?;
             for ld in &ticket.label_details {
                 tx.execute(
-                    "INSERT OR REPLACE INTO ticket_labels (ticket_id, label, color) VALUES (?1, ?2, ?3)",
-                    params![ticket_id, ld.name, ld.color],
+                    "INSERT OR REPLACE INTO ticket_labels (ticket_id, label, color) VALUES (:ticket_id, :label, :color)",
+                    named_params! { ":ticket_id": ticket_id, ":label": ld.name, ":color": ld.color },
                 )?;
             }
             ticket_ids.push((ticket, ticket_id));
@@ -333,14 +333,14 @@ impl<'a> TicketSyncer<'a> {
             // `parent` does not accidentally wipe existing `blocked_by` or `children`.
             if !ticket.blocked_by.is_empty() {
                 tx.execute(
-                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'blocks'",
-                    params![ticket_id],
+                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = :ticket_id AND dep_type = 'blocks'",
+                    named_params! { ":ticket_id": ticket_id },
                 )?;
             }
             if !ticket.children.is_empty() {
                 tx.execute(
-                    "DELETE FROM ticket_dependencies WHERE from_ticket_id = ?1 AND dep_type = 'parent_of'",
-                    params![ticket_id],
+                    "DELETE FROM ticket_dependencies WHERE from_ticket_id = :ticket_id AND dep_type = 'parent_of'",
+                    named_params! { ":ticket_id": ticket_id },
                 )?;
             }
 
@@ -357,8 +357,8 @@ impl<'a> TicketSyncer<'a> {
                 )?;
                 if let Some(id) = blocker_id {
                     tx.execute(
-                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
-                        params![id, ticket_id],
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (:from_id, :to_id, 'blocks')",
+                        named_params! { ":from_id": id, ":to_id": ticket_id },
                     )?;
                 }
             }
@@ -376,8 +376,8 @@ impl<'a> TicketSyncer<'a> {
                 )?;
                 if let Some(id) = child_id {
                     tx.execute(
-                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
-                        params![ticket_id, id],
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (:from_id, :to_id, 'parent_of')",
+                        named_params! { ":from_id": ticket_id, ":to_id": id },
                     )?;
                 }
             }
@@ -386,8 +386,8 @@ impl<'a> TicketSyncer<'a> {
             if let Some(src) = &ticket.parent {
                 // Replace any existing parent for this ticket
                 tx.execute(
-                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = ?1 AND dep_type = 'parent_of'",
-                    params![ticket_id],
+                    "DELETE FROM ticket_dependencies WHERE to_ticket_id = :ticket_id AND dep_type = 'parent_of'",
+                    named_params! { ":ticket_id": ticket_id },
                 )?;
                 let parent_id = resolve_dep_ticket_id(
                     &id_map,
@@ -400,8 +400,8 @@ impl<'a> TicketSyncer<'a> {
                 )?;
                 if let Some(id) = parent_id {
                     tx.execute(
-                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
-                        params![id, ticket_id],
+                        "INSERT OR IGNORE INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (:from_id, :to_id, 'parent_of')",
+                        named_params! { ":from_id": id, ":to_id": ticket_id },
                     )?;
                 }
             }
@@ -446,9 +446,9 @@ impl<'a> TicketSyncer<'a> {
     /// Returns `None` when no tickets exist for the repo (i.e. never synced).
     pub fn latest_synced_at(&self, repo_id: &str) -> Result<Option<String>> {
         let ts: Option<String> = self.conn.query_row(
-            "SELECT MAX(synced_at) FROM tickets WHERE repo_id = ?1",
-            params![repo_id],
-            |row| row.get(0),
+            "SELECT MAX(synced_at) AS max_synced_at FROM tickets WHERE repo_id = :repo_id",
+            named_params! { ":repo_id": repo_id },
+            |row| row.get("max_synced_at"),
         )?;
         Ok(ts)
     }
@@ -462,7 +462,7 @@ impl<'a> TicketSyncer<'a> {
         let query = match repo_id {
             Some(_) => {
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
-                 FROM tickets WHERE repo_id = ?1 ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
+                 FROM tickets WHERE repo_id = :repo_id ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
             None => {
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
@@ -471,7 +471,12 @@ impl<'a> TicketSyncer<'a> {
         };
 
         let tickets = if let Some(rid) = repo_id {
-            query_collect(self.conn, query, params![rid], map_ticket_row)?
+            query_collect(
+                self.conn,
+                query,
+                rusqlite::named_params! { ":repo_id": rid },
+                map_ticket_row,
+            )?
         } else {
             query_collect(self.conn, query, [], map_ticket_row)?
         };
@@ -563,16 +568,16 @@ impl<'a> TicketSyncer<'a> {
     /// Returns an error if the worktree already has a linked ticket.
     pub fn link_to_worktree(&self, ticket_id: &str, worktree_id: &str) -> Result<()> {
         let existing: Option<String> = self.conn.query_row(
-            "SELECT ticket_id FROM worktrees WHERE id = ?1",
-            params![worktree_id],
-            |row| row.get(0),
+            "SELECT ticket_id FROM worktrees WHERE id = :id",
+            named_params! { ":id": worktree_id },
+            |row| row.get("ticket_id"),
         )?;
         if existing.is_some() {
             return Err(ConductorError::TicketAlreadyLinked);
         }
         self.conn.execute(
-            "UPDATE worktrees SET ticket_id = ?1 WHERE id = ?2",
-            params![ticket_id, worktree_id],
+            "UPDATE worktrees SET ticket_id = :ticket_id WHERE id = :worktree_id",
+            named_params! { ":ticket_id": ticket_id, ":worktree_id": worktree_id },
         )?;
         Ok(())
     }
@@ -583,8 +588,8 @@ impl<'a> TicketSyncer<'a> {
         self.conn
             .query_row(
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
-                 FROM tickets WHERE repo_id = ?1 AND source_id = ?2",
-                params![repo_id, source_id],
+                 FROM tickets WHERE repo_id = :repo_id AND source_id = :source_id",
+                named_params! { ":repo_id": repo_id, ":source_id": source_id },
                 map_ticket_row,
             )
             .map_err(ticket_not_found(source_id))
@@ -596,8 +601,8 @@ impl<'a> TicketSyncer<'a> {
         self.conn
             .query_row(
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
-                 FROM tickets WHERE source_id = ?1 LIMIT 1",
-                params![source_id],
+                 FROM tickets WHERE source_id = :source_id LIMIT 1",
+                named_params! { ":source_id": source_id },
                 map_ticket_row,
             )
             .map_err(ticket_not_found(source_id))
@@ -608,8 +613,8 @@ impl<'a> TicketSyncer<'a> {
         self.conn
             .query_row(
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json, workflow, agent_map
-                 FROM tickets WHERE id = ?1",
-                params![ticket_id],
+                 FROM tickets WHERE id = :id",
+                named_params! { ":id": ticket_id },
                 map_ticket_row,
             )
             .map_err(ticket_not_found(ticket_id))
@@ -707,22 +712,22 @@ impl<'a> TicketSyncer<'a> {
                 )));
             }
             self.conn.execute(
-                "UPDATE tickets SET state = ?1 WHERE id = ?2",
-                rusqlite::params![s, ticket_id],
+                "UPDATE tickets SET state = :state WHERE id = :id",
+                rusqlite::named_params! { ":state": s, ":id": ticket_id },
             )?;
         }
         if let Some(w) = workflow {
             let val: Option<&str> = if w.is_empty() { None } else { Some(w) };
             self.conn.execute(
-                "UPDATE tickets SET workflow = ?1 WHERE id = ?2",
-                rusqlite::params![val, ticket_id],
+                "UPDATE tickets SET workflow = :workflow WHERE id = :id",
+                rusqlite::named_params! { ":workflow": val, ":id": ticket_id },
             )?;
         }
         if let Some(a) = agent_map {
             let val: Option<&str> = if a.is_empty() { None } else { Some(a) };
             self.conn.execute(
-                "UPDATE tickets SET agent_map = ?1 WHERE id = ?2",
-                rusqlite::params![val, ticket_id],
+                "UPDATE tickets SET agent_map = :agent_map WHERE id = :id",
+                rusqlite::named_params! { ":agent_map": val, ":id": ticket_id },
             )?;
         }
         Ok(())
@@ -737,21 +742,24 @@ impl<'a> TicketSyncer<'a> {
         // Look up the ticket id first so we can clean up the FK.
         let ticket_id: String = tx
             .query_row(
-                "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                params![repo_id, source_type, source_id],
-                |row| row.get(0),
+                "SELECT id FROM tickets WHERE repo_id = :repo_id AND source_type = :source_type AND source_id = :source_id",
+                named_params! { ":repo_id": repo_id, ":source_type": source_type, ":source_id": source_id },
+                |row| row.get("id"),
             )
             .map_err(ticket_not_found(format!("{source_type}#{source_id}")))?;
 
         // NULL out workflow_runs.ticket_id (FK lacks ON DELETE SET NULL).
         tx.execute(
-            "UPDATE workflow_runs SET ticket_id = NULL WHERE ticket_id = ?1",
-            params![ticket_id],
+            "UPDATE workflow_runs SET ticket_id = NULL WHERE ticket_id = :ticket_id",
+            named_params! { ":ticket_id": ticket_id },
         )?;
 
         // Delete the ticket row. Cascades handle ticket_labels;
         // worktrees.ticket_id is ON DELETE SET NULL.
-        tx.execute("DELETE FROM tickets WHERE id = ?1", params![ticket_id])?;
+        tx.execute(
+            "DELETE FROM tickets WHERE id = :id",
+            named_params! { ":id": ticket_id },
+        )?;
 
         tx.commit()?;
         Ok(())
@@ -790,13 +798,13 @@ impl<'a> TicketSyncer<'a> {
     pub fn get_labels(&self, ticket_id: &str) -> Result<Vec<TicketLabel>> {
         query_collect(
             self.conn,
-            "SELECT ticket_id, label, color FROM ticket_labels WHERE ticket_id = ?1 ORDER BY label",
-            params![ticket_id],
+            "SELECT ticket_id, label, color FROM ticket_labels WHERE ticket_id = :ticket_id ORDER BY label",
+            named_params! { ":ticket_id": ticket_id },
             |row| {
                 Ok(TicketLabel {
-                    ticket_id: row.get(0)?,
-                    label: row.get(1)?,
-                    color: row.get(2)?,
+                    ticket_id: row.get("ticket_id")?,
+                    label: row.get("label")?,
+                    color: row.get("color")?,
                 })
             },
         )
@@ -812,9 +820,9 @@ impl<'a> TicketSyncer<'a> {
             [],
             |row| {
                 Ok(TicketLabel {
-                    ticket_id: row.get(0)?,
-                    label: row.get(1)?,
-                    color: row.get(2)?,
+                    ticket_id: row.get("ticket_id")?,
+                    label: row.get("label")?,
+                    color: row.get("color")?,
                 })
             },
         )?;
@@ -833,9 +841,9 @@ impl<'a> TicketSyncer<'a> {
             &format!(
                 "SELECT {TICKET_COLS} FROM tickets t
                  JOIN ticket_dependencies d ON d.from_ticket_id = t.id
-                 WHERE d.to_ticket_id = ?1 AND d.dep_type = 'blocks'"
+                 WHERE d.to_ticket_id = :ticket_id AND d.dep_type = 'blocks'"
             ),
-            params![ticket_id],
+            named_params! { ":ticket_id": ticket_id },
             map_ticket_row,
         )?;
 
@@ -845,9 +853,9 @@ impl<'a> TicketSyncer<'a> {
             &format!(
                 "SELECT {TICKET_COLS} FROM tickets t
                  JOIN ticket_dependencies d ON d.to_ticket_id = t.id
-                 WHERE d.from_ticket_id = ?1 AND d.dep_type = 'blocks'"
+                 WHERE d.from_ticket_id = :ticket_id AND d.dep_type = 'blocks'"
             ),
-            params![ticket_id],
+            named_params! { ":ticket_id": ticket_id },
             map_ticket_row,
         )?;
 
@@ -857,9 +865,9 @@ impl<'a> TicketSyncer<'a> {
             &format!(
                 "SELECT {TICKET_COLS} FROM tickets t
                  JOIN ticket_dependencies d ON d.from_ticket_id = t.id
-                 WHERE d.to_ticket_id = ?1 AND d.dep_type = 'parent_of'"
+                 WHERE d.to_ticket_id = :ticket_id AND d.dep_type = 'parent_of'"
             ),
-            params![ticket_id],
+            named_params! { ":ticket_id": ticket_id },
             map_ticket_row,
         )?
         .into_iter()
@@ -871,9 +879,9 @@ impl<'a> TicketSyncer<'a> {
             &format!(
                 "SELECT {TICKET_COLS} FROM tickets t
                  JOIN ticket_dependencies d ON d.to_ticket_id = t.id
-                 WHERE d.from_ticket_id = ?1 AND d.dep_type = 'parent_of'"
+                 WHERE d.from_ticket_id = :ticket_id AND d.dep_type = 'parent_of'"
             ),
-            params![ticket_id],
+            named_params! { ":ticket_id": ticket_id },
             map_ticket_row,
         )?;
 
@@ -958,7 +966,10 @@ impl<'a> TicketSyncer<'a> {
         let mut stmt = self.conn.prepare(&sql).map_err(ConductorError::Database)?;
         let rows = stmt
             .query_map(params.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>("from_ticket_id")?,
+                    row.get::<_, String>("to_ticket_id")?,
+                ))
             })
             .map_err(ConductorError::Database)?;
         rows.map(|r| r.map_err(ConductorError::Database)).collect()
@@ -992,7 +1003,10 @@ impl<'a> TicketSyncer<'a> {
             params_vec.push(id);
         }
         query_collect(self.conn, &sql, params_vec.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>("from_ticket_id")?,
+                row.get::<_, String>("to_ticket_id")?,
+            ))
         })
     }
 
@@ -1017,8 +1031,15 @@ impl<'a> TicketSyncer<'a> {
         let artifacts: Vec<(String, String, String, String)> = query_collect(
             self.conn,
             CLOSED_TICKET_ARTIFACTS_SQL,
-            params![repo_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            named_params! { ":repo_id": repo_id },
+            |row| {
+                Ok((
+                    row.get("local_path")?,
+                    row.get("path")?,
+                    row.get("branch")?,
+                    row.get("remote_url")?,
+                ))
+            },
         )?;
 
         // Group branches by remote_url and batch-check merged status per repo.
@@ -1043,9 +1064,9 @@ impl<'a> TicketSyncer<'a> {
                 continue;
             }
             self.conn.execute(
-                "UPDATE worktrees SET status = 'merged', completed_at = ?1
-                 WHERE path = ?2 AND status != 'merged'",
-                params![now, worktree_path],
+                "UPDATE worktrees SET status = 'merged', completed_at = :now
+                 WHERE path = :path AND status != 'merged'",
+                named_params! { ":now": now, ":path": worktree_path },
             )?;
             count += 1;
             crate::worktree::WorktreeManager::remove_artifacts(repo_path, worktree_path, branch);
@@ -1122,11 +1143,11 @@ impl<'a> TicketSyncer<'a> {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params.as_slice(), |row| {
             Ok(ReadyTicket {
-                id: row.get(0)?,
-                source_id: row.get(1)?,
-                title: row.get(2)?,
-                url: row.get(3)?,
-                dep_type: row.get(4)?,
+                id: row.get("id")?,
+                source_id: row.get("source_id")?,
+                title: row.get("title")?,
+                url: row.get("url")?,
+                dep_type: row.get("dep_type")?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -1214,7 +1235,23 @@ pub fn build_agent_prompt(ticket: &Ticket) -> String {
 }
 
 fn map_ticket_row(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
-    map_ticket_row_at(row, 0)
+    Ok(Ticket {
+        id: row.get("id")?,
+        repo_id: row.get("repo_id")?,
+        source_type: row.get("source_type")?,
+        source_id: row.get("source_id")?,
+        title: row.get("title")?,
+        body: row.get("body")?,
+        state: row.get("state")?,
+        labels: row.get("labels")?,
+        assignee: row.get("assignee")?,
+        priority: row.get("priority")?,
+        url: row.get("url")?,
+        synced_at: row.get("synced_at")?,
+        raw_json: row.get("raw_json")?,
+        workflow: row.get("workflow")?,
+        agent_map: row.get("agent_map")?,
+    })
 }
 
 /// Runs the shared double-join query for a single `dep_type` and returns
@@ -1224,34 +1261,35 @@ fn query_dep_pairs(
     conn: &Connection,
     dep_type: &str,
 ) -> Result<Vec<(String, String, Ticket, Ticket)>> {
-    const FROM_OFFSET: usize = 2;
-    const TO_OFFSET: usize = 17;
-
     // Use LEFT JOIN so orphaned edges (referencing deleted tickets) still
     // produce rows — we detect them via a NULL tf.id / tt.id and return
     // TicketNotFound instead of silently dropping the edge.
     let mut stmt = conn
         .prepare(
             "SELECT d.from_ticket_id, d.to_ticket_id,
-             tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
-             tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
-             tf.workflow, tf.agent_map,
-             tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
-             tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
-             tt.workflow, tt.agent_map
+             tf.id AS tf_id, tf.repo_id AS tf_repo_id, tf.source_type AS tf_source_type, tf.source_id AS tf_source_id,
+             tf.title AS tf_title, tf.body AS tf_body, tf.state AS tf_state,
+             tf.labels AS tf_labels, tf.assignee AS tf_assignee, tf.priority AS tf_priority,
+             tf.url AS tf_url, tf.synced_at AS tf_synced_at, tf.raw_json AS tf_raw_json,
+             tf.workflow AS tf_workflow, tf.agent_map AS tf_agent_map,
+             tt.id AS tt_id, tt.repo_id AS tt_repo_id, tt.source_type AS tt_source_type, tt.source_id AS tt_source_id,
+             tt.title AS tt_title, tt.body AS tt_body, tt.state AS tt_state,
+             tt.labels AS tt_labels, tt.assignee AS tt_assignee, tt.priority AS tt_priority,
+             tt.url AS tt_url, tt.synced_at AS tt_synced_at, tt.raw_json AS tt_raw_json,
+             tt.workflow AS tt_workflow, tt.agent_map AS tt_agent_map
              FROM ticket_dependencies d
              LEFT JOIN tickets tf ON tf.id = d.from_ticket_id
              LEFT JOIN tickets tt ON tt.id = d.to_ticket_id
-             WHERE d.dep_type = ?1",
+             WHERE d.dep_type = :dep_type",
         )
         .map_err(ConductorError::Database)?;
 
     let rows = stmt
-        .query_map(rusqlite::params![dep_type], |row| {
-            let from_id: String = row.get(0)?;
-            let to_id: String = row.get(1)?;
-            let from_exists: Option<String> = row.get(FROM_OFFSET)?;
-            let to_exists: Option<String> = row.get(TO_OFFSET)?;
+        .query_map(rusqlite::named_params! { ":dep_type": dep_type }, |row| {
+            let from_id: String = row.get("from_ticket_id")?;
+            let to_id: String = row.get("to_ticket_id")?;
+            let from_exists: Option<String> = row.get("tf_id")?;
+            let to_exists: Option<String> = row.get("tt_id")?;
             Ok((from_id, to_id, from_exists, to_exists))
         })
         .map_err(ConductorError::Database)?;
@@ -1273,22 +1311,26 @@ fn query_dep_pairs(
     query_collect(
         conn,
         "SELECT d.from_ticket_id, d.to_ticket_id,
-         tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
-         tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
-         tf.workflow, tf.agent_map,
-         tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
-         tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
-         tt.workflow, tt.agent_map
+         tf.id AS tf_id, tf.repo_id AS tf_repo_id, tf.source_type AS tf_source_type, tf.source_id AS tf_source_id,
+         tf.title AS tf_title, tf.body AS tf_body, tf.state AS tf_state,
+         tf.labels AS tf_labels, tf.assignee AS tf_assignee, tf.priority AS tf_priority,
+         tf.url AS tf_url, tf.synced_at AS tf_synced_at, tf.raw_json AS tf_raw_json,
+         tf.workflow AS tf_workflow, tf.agent_map AS tf_agent_map,
+         tt.id AS tt_id, tt.repo_id AS tt_repo_id, tt.source_type AS tt_source_type, tt.source_id AS tt_source_id,
+         tt.title AS tt_title, tt.body AS tt_body, tt.state AS tt_state,
+         tt.labels AS tt_labels, tt.assignee AS tt_assignee, tt.priority AS tt_priority,
+         tt.url AS tt_url, tt.synced_at AS tt_synced_at, tt.raw_json AS tt_raw_json,
+         tt.workflow AS tt_workflow, tt.agent_map AS tt_agent_map
          FROM ticket_dependencies d
          JOIN tickets tf ON tf.id = d.from_ticket_id
          JOIN tickets tt ON tt.id = d.to_ticket_id
-         WHERE d.dep_type = ?1",
-        rusqlite::params![dep_type],
+         WHERE d.dep_type = :dep_type",
+        rusqlite::named_params! { ":dep_type": dep_type },
         |row| {
-            let from_id: String = row.get(0)?;
-            let to_id: String = row.get(1)?;
-            let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
-            let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+            let from_id: String = row.get("from_ticket_id")?;
+            let to_id: String = row.get("to_ticket_id")?;
+            let from_ticket = map_ticket_row_aliased(row, "tf_")?;
+            let to_ticket = map_ticket_row_aliased(row, "tt_")?;
             Ok((from_id, to_id, from_ticket, to_ticket))
         },
     )
@@ -1302,52 +1344,62 @@ fn query_dep_pairs_for_repo(
     dep_type: &str,
     repo_id: &str,
 ) -> Result<Vec<(String, String, Ticket, Ticket)>> {
-    const FROM_OFFSET: usize = 2;
-    const TO_OFFSET: usize = 17;
-
     query_collect(
         conn,
         "SELECT d.from_ticket_id, d.to_ticket_id,
-         tf.id, tf.repo_id, tf.source_type, tf.source_id, tf.title, tf.body, tf.state,
-         tf.labels, tf.assignee, tf.priority, tf.url, tf.synced_at, tf.raw_json,
-         tf.workflow, tf.agent_map,
-         tt.id, tt.repo_id, tt.source_type, tt.source_id, tt.title, tt.body, tt.state,
-         tt.labels, tt.assignee, tt.priority, tt.url, tt.synced_at, tt.raw_json,
-         tt.workflow, tt.agent_map
+         tf.id AS tf_id, tf.repo_id AS tf_repo_id, tf.source_type AS tf_source_type, tf.source_id AS tf_source_id,
+         tf.title AS tf_title, tf.body AS tf_body, tf.state AS tf_state,
+         tf.labels AS tf_labels, tf.assignee AS tf_assignee, tf.priority AS tf_priority,
+         tf.url AS tf_url, tf.synced_at AS tf_synced_at, tf.raw_json AS tf_raw_json,
+         tf.workflow AS tf_workflow, tf.agent_map AS tf_agent_map,
+         tt.id AS tt_id, tt.repo_id AS tt_repo_id, tt.source_type AS tt_source_type, tt.source_id AS tt_source_id,
+         tt.title AS tt_title, tt.body AS tt_body, tt.state AS tt_state,
+         tt.labels AS tt_labels, tt.assignee AS tt_assignee, tt.priority AS tt_priority,
+         tt.url AS tt_url, tt.synced_at AS tt_synced_at, tt.raw_json AS tt_raw_json,
+         tt.workflow AS tt_workflow, tt.agent_map AS tt_agent_map
          FROM ticket_dependencies d
          JOIN tickets tf ON tf.id = d.from_ticket_id
          JOIN tickets tt ON tt.id = d.to_ticket_id
-         WHERE d.dep_type = ?1 AND (tf.repo_id = ?2 OR tt.repo_id = ?2)",
-        rusqlite::params![dep_type, repo_id],
+         WHERE d.dep_type = :dep_type AND (tf.repo_id = :repo_id OR tt.repo_id = :repo_id)",
+        rusqlite::named_params! { ":dep_type": dep_type, ":repo_id": repo_id },
         |row| {
-            let from_id: String = row.get(0)?;
-            let to_id: String = row.get(1)?;
-            let from_ticket = map_ticket_row_at(row, FROM_OFFSET)?;
-            let to_ticket = map_ticket_row_at(row, TO_OFFSET)?;
+            let from_id: String = row.get("from_ticket_id")?;
+            let to_id: String = row.get("to_ticket_id")?;
+            let from_ticket = map_ticket_row_aliased(row, "tf_")?;
+            let to_ticket = map_ticket_row_aliased(row, "tt_")?;
             Ok((from_id, to_id, from_ticket, to_ticket))
         },
     )
 }
 
-/// Like `map_ticket_row` but reads ticket fields starting at the given column `offset`.
-/// Used when ticket columns are preceded by other fields (e.g. join key columns).
-fn map_ticket_row_at(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<Ticket> {
+/// Map a ticket from a row where columns have a prefix alias (e.g. "tf_id", "tf_repo_id").
+/// Used for JOIN queries that select two ticket sets with different table aliases.
+fn map_ticket_row_aliased(row: &rusqlite::Row, prefix: &str) -> rusqlite::Result<Ticket> {
+    let mut col = String::with_capacity(prefix.len() + 16);
+    macro_rules! col {
+        ($name:expr) => {{
+            col.clear();
+            col.push_str(prefix);
+            col.push_str($name);
+            col.as_str()
+        }};
+    }
     Ok(Ticket {
-        id: row.get(offset)?,
-        repo_id: row.get(offset + 1)?,
-        source_type: row.get(offset + 2)?,
-        source_id: row.get(offset + 3)?,
-        title: row.get(offset + 4)?,
-        body: row.get(offset + 5)?,
-        state: row.get(offset + 6)?,
-        labels: row.get(offset + 7)?,
-        assignee: row.get(offset + 8)?,
-        priority: row.get(offset + 9)?,
-        url: row.get(offset + 10)?,
-        synced_at: row.get(offset + 11)?,
-        raw_json: row.get(offset + 12)?,
-        workflow: row.get(offset + 13)?,
-        agent_map: row.get(offset + 14)?,
+        id: row.get(col!("id"))?,
+        repo_id: row.get(col!("repo_id"))?,
+        source_type: row.get(col!("source_type"))?,
+        source_id: row.get(col!("source_id"))?,
+        title: row.get(col!("title"))?,
+        body: row.get(col!("body"))?,
+        state: row.get(col!("state"))?,
+        labels: row.get(col!("labels"))?,
+        assignee: row.get(col!("assignee"))?,
+        priority: row.get(col!("priority"))?,
+        url: row.get(col!("url"))?,
+        synced_at: row.get(col!("synced_at"))?,
+        raw_json: row.get(col!("raw_json"))?,
+        workflow: row.get(col!("workflow"))?,
+        agent_map: row.get(col!("agent_map"))?,
     })
 }
 
@@ -1381,9 +1433,9 @@ mod tests {
 
     fn get_ticket_state(conn: &Connection, source_id: &str) -> String {
         conn.query_row(
-            "SELECT state FROM tickets WHERE source_id = ?1",
-            params![source_id],
-            |row| row.get(0),
+            "SELECT state FROM tickets WHERE source_id = :source_id",
+            rusqlite::named_params! { ":source_id": source_id },
+            |row| row.get("state"),
         )
         .unwrap()
     }
@@ -1481,8 +1533,8 @@ mod tests {
             .unwrap();
         let old_ts = "2020-01-01T00:00:00Z";
         conn.execute(
-            "UPDATE tickets SET synced_at = ?1 WHERE source_id = '1'",
-            rusqlite::params![old_ts],
+            "UPDATE tickets SET synced_at = :ts WHERE source_id = '1'",
+            rusqlite::named_params! { ":ts": old_ts },
         )
         .unwrap();
 
@@ -1531,7 +1583,7 @@ mod tests {
         // Get ticket id for issue 1 and link a worktree to it
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
@@ -1642,7 +1694,7 @@ mod tests {
             .query_row(
                 "SELECT state FROM tickets WHERE repo_id = 'r1' AND source_id = '1'",
                 [],
-                |row| row.get(0),
+                |row| row.get("state"),
             )
             .unwrap();
         assert_eq!(repo1_state, "closed");
@@ -1652,7 +1704,7 @@ mod tests {
             .query_row(
                 "SELECT state FROM tickets WHERE repo_id = 'repo2' AND source_id = '1'",
                 [],
-                |row| row.get(0),
+                |row| row.get("state"),
             )
             .unwrap();
         assert_eq!(repo2_state, "open");
@@ -1665,28 +1717,31 @@ mod tests {
         ticket_id: Option<&str>,
         status: &str,
     ) {
+        let slug = format!("wt-{id}");
+        let branch = format!("feat/{id}");
+        let path = format!("/tmp/wt-{id}");
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                id,
-                repo_id,
-                format!("wt-{id}"),
-                format!("feat/{id}"),
-                format!("/tmp/wt-{id}"),
-                ticket_id,
-                status,
-                "2024-01-01T00:00:00Z",
-            ],
+             VALUES (:id, :repo_id, :slug, :branch, :path, :ticket_id, :status, :created_at)",
+            rusqlite::named_params! {
+                ":id": id,
+                ":repo_id": repo_id,
+                ":slug": slug,
+                ":branch": branch,
+                ":path": path,
+                ":ticket_id": ticket_id,
+                ":status": status,
+                ":created_at": "2024-01-01T00:00:00Z",
+            },
         )
         .unwrap();
     }
 
     fn get_worktree_status(conn: &Connection, id: &str) -> String {
         conn.query_row(
-            "SELECT status FROM worktrees WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
+            "SELECT status FROM worktrees WHERE id = :id",
+            rusqlite::named_params! { ":id": id },
+            |row| row.get("status"),
         )
         .unwrap()
     }
@@ -1707,7 +1762,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
@@ -1732,7 +1787,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "abandoned");
@@ -1769,7 +1824,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
@@ -1791,7 +1846,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
@@ -1803,8 +1858,13 @@ mod tests {
         let artifacts: Vec<(String, String, String, String)> = conn
             .prepare(CLOSED_TICKET_ARTIFACTS_SQL)
             .unwrap()
-            .query_map(rusqlite::params!["r1"], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            .query_map(rusqlite::named_params! { ":repo_id": "r1" }, |row| {
+                Ok((
+                    row.get("local_path")?,
+                    row.get("path")?,
+                    row.get("branch")?,
+                    row.get("remote_url")?,
+                ))
             })
             .unwrap()
             .collect::<rusqlite::Result<_>>()
@@ -1827,7 +1887,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "merged");
@@ -1839,8 +1899,13 @@ mod tests {
         let artifacts: Vec<(String, String, String, String)> = conn
             .prepare(CLOSED_TICKET_ARTIFACTS_SQL)
             .unwrap()
-            .query_map(rusqlite::params!["r1"], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            .query_map(rusqlite::named_params! { ":repo_id": "r1" }, |row| {
+                Ok((
+                    row.get("local_path")?,
+                    row.get("path")?,
+                    row.get("branch")?,
+                    row.get("remote_url")?,
+                ))
             })
             .unwrap()
             .collect::<rusqlite::Result<_>>()
@@ -1862,7 +1927,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
@@ -1886,7 +1951,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
@@ -1896,7 +1961,7 @@ mod tests {
             .query_row(
                 "SELECT completed_at FROM worktrees WHERE id = 'wt1'",
                 [],
-                |row| row.get(0),
+                |row| row.get("completed_at"),
             )
             .unwrap();
         assert!(before.is_none());
@@ -1912,7 +1977,7 @@ mod tests {
             .query_row(
                 "SELECT completed_at FROM worktrees WHERE id = 'wt1'",
                 [],
-                |row| row.get(0),
+                |row| row.get("completed_at"),
             )
             .unwrap();
         assert!(
@@ -1938,7 +2003,7 @@ mod tests {
             .query_row(
                 "SELECT id FROM tickets WHERE source_id = 'cleanup-test'",
                 [],
-                |row| row.get(0),
+                |row| row.get("id"),
             )
             .unwrap();
 
@@ -1975,7 +2040,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "merged");
@@ -2006,14 +2071,14 @@ mod tests {
 
         let tid1: String = conn
             .query_row("SELECT id FROM tickets WHERE repo_id = 'r1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let tid2: String = conn
             .query_row(
                 "SELECT id FROM tickets WHERE repo_id = 'repo2'",
                 [],
-                |row| row.get(0),
+                |row| row.get("id"),
             )
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&tid1), "active");
@@ -2044,7 +2109,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
@@ -2071,7 +2136,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
@@ -2094,7 +2159,7 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", None, "active");
@@ -2105,7 +2170,7 @@ mod tests {
             .query_row(
                 "SELECT ticket_id FROM worktrees WHERE id = 'wt1'",
                 [],
-                |row| row.get(0),
+                |row| row.get("ticket_id"),
             )
             .unwrap();
         assert_eq!(linked, Some(ticket_id));
@@ -2119,12 +2184,12 @@ mod tests {
         syncer.upsert_tickets("r1", &tickets).unwrap();
         let tid1: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let tid2: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&tid1), "active");
@@ -2146,7 +2211,7 @@ mod tests {
 
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -2184,7 +2249,7 @@ mod tests {
 
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -2217,7 +2282,7 @@ mod tests {
 
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         assert_eq!(syncer.get_labels(&ticket_id).unwrap().len(), 2);
@@ -2246,7 +2311,7 @@ mod tests {
 
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         assert_eq!(syncer.get_labels(&ticket_id).unwrap().len(), 0);
@@ -2383,17 +2448,17 @@ mod tests {
 
         let tid1: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let tid2: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let tid3: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '3'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -2687,7 +2752,7 @@ mod tests {
             .unwrap();
         let ulid: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '99'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -2743,14 +2808,14 @@ mod tests {
             .unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '77'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
-             VALUES ('wt1', 'r1', 'wt-1', 'feat/issue-77', '/tmp/wt1', ?1, 'active', '2024-01-01T00:00:00Z')",
-            params![ticket_id],
+             VALUES ('wt1', 'r1', 'wt-1', 'feat/issue-77', '/tmp/wt1', :ticket_id, 'active', '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":ticket_id": ticket_id },
         )
         .unwrap();
 
@@ -2942,15 +3007,23 @@ mod tests {
         conn.query_row(
             "SELECT from_ticket_id, to_ticket_id, dep_type FROM ticket_dependencies LIMIT 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get("from_ticket_id")?,
+                    row.get("to_ticket_id")?,
+                    row.get("dep_type")?,
+                ))
+            },
         )
         .ok()
     }
 
     fn dep_count(conn: &Connection) -> i64 {
-        conn.query_row("SELECT COUNT(*) FROM ticket_dependencies", [], |row| {
-            row.get(0)
-        })
+        conn.query_row(
+            "SELECT COUNT(*) AS cnt FROM ticket_dependencies",
+            [],
+            |row| row.get("cnt"),
+        )
         .unwrap()
     }
 
@@ -2968,12 +3041,12 @@ mod tests {
 
         let id1: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let id2: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -2997,12 +3070,12 @@ mod tests {
 
         let id1: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
         let id2: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -3213,15 +3286,15 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT OR IGNORE INTO agent_runs (id, worktree_id, prompt, status, started_at) \
-             VALUES (?1, 'wt-sys', 'test', 'completed', '2024-01-01T00:00:00Z')",
-            params![ar_id],
+             VALUES (:id, 'wt-sys', 'test', 'completed', '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":id": ar_id },
         )
         .unwrap();
         conn.execute(
             "INSERT INTO workflow_runs \
              (id, workflow_name, parent_run_id, status, started_at, ticket_id, repo_id) \
-             VALUES (?1, 'wf', ?2, ?3, '2024-01-01T00:00:00Z', ?4, 'r1')",
-            params![wf_id, ar_id, status, ticket_id],
+             VALUES (:id, 'wf', :ar_id, :status, '2024-01-01T00:00:00Z', :ticket_id, 'r1')",
+            rusqlite::named_params! { ":id": wf_id, ":ar_id": ar_id, ":status": status, ":ticket_id": ticket_id },
         )
         .unwrap();
     }
@@ -3289,7 +3362,7 @@ mod tests {
             .unwrap();
         let tid: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -3310,7 +3383,7 @@ mod tests {
             .unwrap();
         let tid: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -3335,7 +3408,7 @@ mod tests {
 
         let parent_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -3441,9 +3514,9 @@ mod tests {
 
     fn get_ticket_id(conn: &Connection, source_id: &str) -> String {
         conn.query_row(
-            "SELECT id FROM tickets WHERE source_id = ?1",
-            params![source_id],
-            |row| row.get(0),
+            "SELECT id FROM tickets WHERE source_id = :source_id",
+            rusqlite::named_params! { ":source_id": source_id },
+            |row| row.get("id"),
         )
         .expect("ticket not found")
     }
@@ -3602,9 +3675,9 @@ mod tests {
     /// Helper for dependency tests: look up the internal ULID for a ticket by source_id.
     fn ticket_id_for_source(conn: &Connection, source_id: &str) -> String {
         conn.query_row(
-            "SELECT id FROM tickets WHERE source_id = ?1",
-            params![source_id],
-            |row| row.get(0),
+            "SELECT id FROM tickets WHERE source_id = :source_id",
+            rusqlite::named_params! { ":source_id": source_id },
+            |row| row.get("id"),
         )
         .expect("ticket not found")
     }
@@ -3619,9 +3692,9 @@ mod tests {
             let ticket_id: String = self
                 .conn
                 .query_row(
-                    "SELECT id FROM tickets WHERE source_id = ?1",
-                    params![source_id],
-                    |row| row.get(0),
+                    "SELECT id FROM tickets WHERE source_id = :source_id",
+                    rusqlite::named_params! { ":source_id": source_id },
+                    |row| row.get("id"),
                 )
                 .map_err(ConductorError::Database)?;
             self.get_dependencies(&ticket_id)
@@ -3646,8 +3719,8 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
         conn.execute(
             "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) \
-             VALUES (?1, 'nonexistent-ticket-id', 'blocks')",
-            rusqlite::params![from_id],
+             VALUES (:from_id, 'nonexistent-ticket-id', 'blocks')",
+            rusqlite::named_params! { ":from_id": from_id },
         )
         .unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
@@ -3680,7 +3753,7 @@ mod tests {
             .query_row(
                 "SELECT raw_json FROM tickets WHERE source_id = '42'",
                 [],
-                |row| row.get(0),
+                |row| row.get("raw_json"),
             )
             .unwrap();
         assert_eq!(stored, r#"{"id":42,"number":42,"title":"Real Issue"}"#);
@@ -3695,7 +3768,7 @@ mod tests {
             .query_row(
                 "SELECT raw_json FROM tickets WHERE source_id = '42'",
                 [],
-                |row| row.get(0),
+                |row| row.get("raw_json"),
             )
             .unwrap();
         assert_eq!(
@@ -3708,7 +3781,7 @@ mod tests {
             .query_row(
                 "SELECT title FROM tickets WHERE source_id = '42'",
                 [],
-                |row| row.get(0),
+                |row| row.get("title"),
             )
             .unwrap();
         assert_eq!(title, "Real Issue Updated");
@@ -3746,7 +3819,7 @@ mod tests {
             .query_row(
                 "SELECT raw_json FROM tickets WHERE source_id = 'A'",
                 [],
-                |row| row.get(0),
+                |row| row.get("raw_json"),
             )
             .unwrap();
         assert_eq!(
@@ -3758,7 +3831,7 @@ mod tests {
             .query_row(
                 "SELECT raw_json FROM tickets WHERE source_id = 'B'",
                 [],
-                |row| row.get(0),
+                |row| row.get("raw_json"),
             )
             .unwrap();
         assert_eq!(
@@ -3782,9 +3855,9 @@ mod tests {
         for source_id in &["X", "Y"] {
             let raw: String = conn
                 .query_row(
-                    "SELECT raw_json FROM tickets WHERE source_id = ?1",
-                    params![source_id],
-                    |row| row.get(0),
+                    "SELECT raw_json FROM tickets WHERE source_id = :source_id",
+                    rusqlite::named_params! { ":source_id": source_id },
+                    |row| row.get("raw_json"),
                 )
                 .unwrap();
             assert_eq!(
@@ -3874,7 +3947,7 @@ mod tests {
             .unwrap();
         let id_first: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '99'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -3883,7 +3956,7 @@ mod tests {
             .unwrap();
         let id_second: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '99'", [], |row| {
-                row.get(0)
+                row.get("id")
             })
             .unwrap();
 
@@ -3899,8 +3972,8 @@ mod tests {
         conn.execute(
             "INSERT OR IGNORE INTO tickets \
              (id, repo_id, source_type, source_id, title, state, synced_at, raw_json) \
-             VALUES (?1, ?2, 'github', ?1, 'test', 'open', '2024-01-01T00:00:00Z', '{}')",
-            rusqlite::params![id, repo_id],
+             VALUES (:id, :repo_id, 'github', :id, 'test', 'open', '2024-01-01T00:00:00Z', '{}')",
+            rusqlite::named_params! { ":id": id, ":repo_id": repo_id },
         )
         .unwrap();
     }
@@ -3908,8 +3981,8 @@ mod tests {
     fn insert_blocks_dep(conn: &Connection, from_id: &str, to_id: &str) {
         conn.execute(
             "INSERT OR IGNORE INTO ticket_dependencies \
-             (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
-            rusqlite::params![from_id, to_id],
+             (from_ticket_id, to_ticket_id, dep_type) VALUES (:from_id, :to_id, 'blocks')",
+            rusqlite::named_params! { ":from_id": from_id, ":to_id": to_id },
         )
         .unwrap();
     }
@@ -4000,8 +4073,8 @@ mod tests {
         // Insert a 'parent_of' edge — should NOT be returned
         conn.execute(
             "INSERT OR IGNORE INTO ticket_dependencies \
-             (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
-            rusqlite::params!["parent-1", "child-a"],
+             (from_ticket_id, to_ticket_id, dep_type) VALUES (:from_id, :to_id, 'parent_of')",
+            rusqlite::named_params! { ":from_id": "parent-1", ":to_id": "child-a" },
         )
         .unwrap();
         // Insert a 'blocks' edge — should be returned
@@ -4083,8 +4156,8 @@ mod tests {
         insert_test_ticket(&conn, "c1", "r1");
         conn.execute(
             "INSERT OR IGNORE INTO ticket_dependencies \
-             (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'parent_of')",
-            rusqlite::params!["p1", "c1"],
+             (from_ticket_id, to_ticket_id, dep_type) VALUES (:from_id, :to_id, 'parent_of')",
+            rusqlite::named_params! { ":from_id": "p1", ":to_id": "c1" },
         )
         .unwrap();
 
@@ -4100,8 +4173,8 @@ mod tests {
         conn.execute(
             "INSERT OR IGNORE INTO tickets \
              (id, repo_id, source_type, source_id, title, state, synced_at, raw_json) \
-             VALUES (?1, ?2, 'github', ?3, 'test', 'open', '2024-01-01T00:00:00Z', '{}')",
-            rusqlite::params![id, repo_id, source_id],
+             VALUES (:id, :repo_id, 'github', :source_id, 'test', 'open', '2024-01-01T00:00:00Z', '{}')",
+            rusqlite::named_params! { ":id": id, ":repo_id": repo_id, ":source_id": source_id },
         )
         .unwrap();
     }

@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::{params, Connection};
+use rusqlite::{named_params, Connection};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -498,8 +498,8 @@ fn test_update_status_to_abandoned_sets_completed_at() {
 fn insert_test_worktree(conn: &Connection, id: &str, repo_id: &str, slug: &str, branch: &str) {
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES (?1, ?2, ?3, ?4, '/tmp/ws', 'active', '2024-01-01T00:00:00Z')",
-        params![id, repo_id, slug, branch],
+         VALUES (:id, :repo_id, :slug, :branch, '/tmp/ws', 'active', '2024-01-01T00:00:00Z')",
+        named_params! { ":id": id, ":repo_id": repo_id, ":slug": slug, ":branch": branch },
     )
     .unwrap();
 }
@@ -670,7 +670,7 @@ fn test_reap_stale_worktrees_backfills_completed_at() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'wt-stale'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some());
@@ -712,8 +712,8 @@ fn test_reap_stale_worktrees_removes_existing_path() {
 
     // Update repo to use real local path
     conn.execute(
-        "UPDATE repos SET local_path = ?1 WHERE id = 'r1'",
-        params![local_str],
+        "UPDATE repos SET local_path = :local_path WHERE id = 'r1'",
+        named_params! { ":local_path": local_str },
     )
     .unwrap();
 
@@ -734,8 +734,8 @@ fn test_reap_stale_worktrees_removes_existing_path() {
     // Insert as merged with no completed_at
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES ('wt-real', 'r1', 'feat-stale-wt', 'feat/stale-wt', ?1, 'merged', '2024-01-01T00:00:00Z')",
-        params![wt_path.to_str().unwrap()],
+         VALUES ('wt-real', 'r1', 'feat-stale-wt', 'feat/stale-wt', :wt_path, 'merged', '2024-01-01T00:00:00Z')",
+        named_params! { ":wt_path": wt_path.to_str().unwrap() },
     ).unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
@@ -750,7 +750,7 @@ fn test_reap_stale_worktrees_removes_existing_path() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'wt-real'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some());
@@ -843,7 +843,7 @@ fn test_reap_stale_worktrees_handles_abandoned() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'wt-aband'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some());
@@ -864,8 +864,8 @@ fn test_reap_stale_worktrees_removes_deregistered_path() {
 
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES ('wt-dereg', 'r1', 'feat-dereg', 'feat/dereg', ?1, 'merged', '2024-01-01T00:00:00Z')",
-        params![deregistered_path.to_str().unwrap()],
+         VALUES ('wt-dereg', 'r1', 'feat-dereg', 'feat/dereg', :wt_path, 'merged', '2024-01-01T00:00:00Z')",
+        named_params! { ":wt_path": deregistered_path.to_str().unwrap() },
     )
     .unwrap();
 
@@ -883,7 +883,7 @@ fn test_reap_stale_worktrees_removes_deregistered_path() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'wt-dereg'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some());
@@ -1004,11 +1004,8 @@ fn test_create_from_pr_propagates_fetch_error() {
 
     // Point the test repo at the real local path so clone check passes
     conn.execute(
-        "UPDATE repos SET local_path = ?1, workspace_dir = ?2 WHERE id = 'r1'",
-        params![
-            local_str,
-            local.parent().unwrap().join("ws").to_str().unwrap()
-        ],
+        "UPDATE repos SET local_path = :local_path, workspace_dir = :workspace_dir WHERE id = 'r1'",
+        named_params! { ":local_path": local_str, ":workspace_dir": local.parent().unwrap().join("ws").to_str().unwrap() },
     )
     .unwrap();
 
@@ -1224,7 +1221,7 @@ fn test_set_base_branch() {
         .query_row(
             "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
             [],
-            |row| row.get(0),
+            |row| row.get("base_branch"),
         )
         .unwrap();
     assert!(wt.is_none(), "expected NULL base_branch initially");
@@ -1236,7 +1233,7 @@ fn test_set_base_branch() {
         .query_row(
             "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
             [],
-            |row| row.get(0),
+            |row| row.get("base_branch"),
         )
         .unwrap();
     assert_eq!(wt.as_deref(), Some("develop"));
@@ -1247,7 +1244,7 @@ fn test_set_base_branch() {
         .query_row(
             "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
             [],
-            |row| row.get(0),
+            |row| row.get("base_branch"),
         )
         .unwrap();
     assert!(wt.is_none(), "expected NULL after clearing base_branch");
@@ -1297,7 +1294,7 @@ fn test_cleanup_merged_worktrees_marks_merged() {
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(status, "merged");
@@ -1306,7 +1303,7 @@ fn test_cleanup_merged_worktrees_marks_merged() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'w1'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some(), "completed_at should be set");
@@ -1330,7 +1327,7 @@ fn test_cleanup_merged_worktrees_skips_unmerged() {
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(status, "active");
@@ -1400,12 +1397,12 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
     // Both should be merged
     let s1: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     let s2: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w2'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(s1, "merged");
@@ -1442,7 +1439,7 @@ fn test_cleanup_merged_worktrees_skips_branch_reuse_after_old_merge() {
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(status, "active");
@@ -1473,7 +1470,7 @@ fn test_cleanup_merged_worktrees_cleans_up_genuine_merge() {
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(status, "merged");
@@ -1815,12 +1812,12 @@ fn test_cleanup_merged_worktrees_filters_by_repo() {
     // w1 should still be active, w2 should be merged
     let s1: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     let s2: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w2'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(s1, "active");
@@ -1985,8 +1982,8 @@ fn insert_agent_run(
 ) {
     conn.execute(
         "INSERT INTO agent_runs (id, worktree_id, status, started_at, prompt) \
-         VALUES (?1, ?2, ?3, ?4, 'test prompt')",
-        rusqlite::params![id, worktree_id, status, started_at],
+         VALUES (:id, :worktree_id, :status, :started_at, 'test prompt')",
+        rusqlite::named_params! { ":id": id, ":worktree_id": worktree_id, ":status": status, ":started_at": started_at },
     )
     .unwrap();
 }
@@ -2162,7 +2159,7 @@ fn test_delete_by_id_for_repo_happy_path() {
     // Confirm it is no longer active
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_ne!(status, "active");
@@ -2212,16 +2209,16 @@ fn insert_ticket(
     conn.execute(
         "INSERT INTO tickets \
          (id, repo_id, source_type, source_id, title, url, synced_at) \
-         VALUES (?1, ?2, 'github', ?3, ?4, ?5, '2024-01-01T00:00:00Z')",
-        rusqlite::params![id, repo_id, source_id, title, url],
+         VALUES (:id, :repo_id, 'github', :source_id, :title, :url, '2024-01-01T00:00:00Z')",
+        rusqlite::named_params! { ":id": id, ":repo_id": repo_id, ":source_id": source_id, ":title": title, ":url": url },
     )
     .unwrap();
 }
 
 fn link_ticket(conn: &Connection, worktree_id: &str, ticket_id: &str) {
     conn.execute(
-        "UPDATE worktrees SET ticket_id = ?1 WHERE id = ?2",
-        rusqlite::params![ticket_id, worktree_id],
+        "UPDATE worktrees SET ticket_id = :ticket_id WHERE id = :worktree_id",
+        rusqlite::named_params! { ":ticket_id": ticket_id, ":worktree_id": worktree_id },
     )
     .unwrap();
 }

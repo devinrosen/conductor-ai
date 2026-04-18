@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::named_params;
 
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::GateType;
@@ -22,16 +22,16 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, can_commit, status, position, iteration) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                id,
-                workflow_run_id,
-                step_name,
-                role,
-                can_commit as i64,
-                "pending",
-                position,
-                iteration,
+             VALUES (:id, :workflow_run_id, :step_name, :role, :can_commit, :status, :position, :iteration)",
+            named_params![
+                ":id": id,
+                ":workflow_run_id": workflow_run_id,
+                ":step_name": step_name,
+                ":role": role,
+                ":can_commit": can_commit as i64,
+                ":status": "pending",
+                ":position": position,
+                ":iteration": iteration,
             ],
         )?;
         Ok(id)
@@ -60,17 +60,17 @@ impl<'a> WorkflowManager<'a> {
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, can_commit, status, position, iteration, \
               started_at, retry_count) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9)",
-            params![
-                id,
-                workflow_run_id,
-                step_name,
-                role,
-                can_commit as i64,
-                position,
-                iteration,
-                now,
-                retry_count,
+             VALUES (:id, :workflow_run_id, :step_name, :role, :can_commit, 'running', :position, :iteration, :started_at, :retry_count)",
+            named_params![
+                ":id": id,
+                ":workflow_run_id": workflow_run_id,
+                ":step_name": step_name,
+                ":role": role,
+                ":can_commit": can_commit as i64,
+                ":position": position,
+                ":iteration": iteration,
+                ":started_at": now,
+                ":retry_count": retry_count,
             ],
         )?;
         Ok(id)
@@ -128,33 +128,35 @@ impl<'a> WorkflowManager<'a> {
 
         if is_starting {
             self.conn.execute(
-                "UPDATE workflow_run_steps SET status = ?1, child_run_id = ?2, started_at = ?3 \
-                 WHERE id = ?4",
-                params![status, child_run_id, now, step_id],
+                "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
+                 started_at = :started_at WHERE id = :id",
+                named_params![":status": status, ":child_run_id": child_run_id, ":started_at": now, ":id": step_id],
             )?;
         } else if is_terminal {
             self.conn.execute(
-                "UPDATE workflow_run_steps SET status = ?1, child_run_id = ?2, ended_at = ?3, \
-                 result_text = ?4, context_out = ?5, markers_out = ?6, \
-                 retry_count = COALESCE(?7, retry_count), structured_output = ?8, step_error = ?9 \
-                 WHERE id = ?10",
-                params![
-                    status,
-                    child_run_id,
-                    now,
-                    result_text,
-                    context_out,
-                    markers_out,
-                    retry_count,
-                    structured_output,
-                    step_error,
-                    step_id,
+                "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
+                 ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
+                 markers_out = :markers_out, \
+                 retry_count = COALESCE(:retry_count, retry_count), \
+                 structured_output = :structured_output, step_error = :step_error \
+                 WHERE id = :id",
+                named_params![
+                    ":status": status,
+                    ":child_run_id": child_run_id,
+                    ":ended_at": now,
+                    ":result_text": result_text,
+                    ":context_out": context_out,
+                    ":markers_out": markers_out,
+                    ":retry_count": retry_count,
+                    ":structured_output": structured_output,
+                    ":step_error": step_error,
+                    ":id": step_id,
                 ],
             )?;
         } else {
             self.conn.execute(
-                "UPDATE workflow_run_steps SET status = ?1 WHERE id = ?2",
-                params![status, step_id],
+                "UPDATE workflow_run_steps SET status = :status WHERE id = :id",
+                named_params![":status": status, ":id": step_id],
             )?;
         }
         Ok(())
@@ -167,8 +169,8 @@ impl<'a> WorkflowManager<'a> {
     /// and prevent OS PID reuse from tripping the orphan reaper.
     pub fn set_step_subprocess_pid(&self, step_id: &str, pid: Option<u32>) -> Result<()> {
         self.conn.execute(
-            "UPDATE workflow_run_steps SET subprocess_pid = ?1 WHERE id = ?2",
-            params![pid.map(|p| p as i64), step_id],
+            "UPDATE workflow_run_steps SET subprocess_pid = :pid WHERE id = :id",
+            named_params![":pid": pid.map(|p| p as i64), ":id": step_id],
         )?;
         Ok(())
     }
@@ -176,8 +178,8 @@ impl<'a> WorkflowManager<'a> {
     /// Persist the stdout capture file path for a script step.
     pub fn set_step_output_file(&self, step_id: &str, output_file: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE workflow_run_steps SET output_file = ?1 WHERE id = ?2",
-            params![output_file, step_id],
+            "UPDATE workflow_run_steps SET output_file = :output_file WHERE id = :id",
+            named_params![":output_file": output_file, ":id": step_id],
         )?;
         Ok(())
     }
@@ -191,9 +193,9 @@ impl<'a> WorkflowManager<'a> {
         gate_timeout: &str,
     ) -> Result<()> {
         self.conn.execute(
-            "UPDATE workflow_run_steps SET gate_type = ?1, gate_prompt = ?2, gate_timeout = ?3 \
-             WHERE id = ?4",
-            params![gate_type, gate_prompt, gate_timeout, step_id],
+            "UPDATE workflow_run_steps SET gate_type = :gate_type, gate_prompt = :gate_prompt, \
+             gate_timeout = :gate_timeout WHERE id = :id",
+            named_params![":gate_type": gate_type, ":gate_prompt": gate_prompt, ":gate_timeout": gate_timeout, ":id": step_id],
         )?;
         Ok(())
     }
@@ -201,8 +203,8 @@ impl<'a> WorkflowManager<'a> {
     /// Set parallel_group_id on a step.
     pub fn set_step_parallel_group(&self, step_id: &str, group_id: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE workflow_run_steps SET parallel_group_id = ?1 WHERE id = ?2",
-            params![group_id, step_id],
+            "UPDATE workflow_run_steps SET parallel_group_id = :group_id WHERE id = :id",
+            named_params![":group_id": group_id, ":id": step_id],
         )?;
         Ok(())
     }
@@ -210,8 +212,8 @@ impl<'a> WorkflowManager<'a> {
     /// Store the resolved gate options JSON on a step (called at gate start).
     pub fn set_step_gate_options(&self, step_id: &str, options_json: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE workflow_run_steps SET gate_options = ?1 WHERE id = ?2",
-            params![options_json, step_id],
+            "UPDATE workflow_run_steps SET gate_options = :options_json WHERE id = :id",
+            named_params![":options_json": options_json, ":id": step_id],
         )?;
         Ok(())
     }
@@ -249,16 +251,17 @@ impl<'a> WorkflowManager<'a> {
         });
 
         self.conn.execute(
-            "UPDATE workflow_run_steps SET gate_approved_at = ?1, gate_approved_by = ?2, \
-             gate_feedback = ?3, gate_selections = ?4, context_out = COALESCE(?5, context_out), \
-             status = 'completed', ended_at = ?1 WHERE id = ?6",
-            params![
-                now,
-                approved_by,
-                feedback,
-                selections_json,
-                context_out,
-                step_id
+            "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \
+             gate_feedback = :feedback, gate_selections = :selections_json, \
+             context_out = COALESCE(:context_out, context_out), \
+             status = 'completed', ended_at = :now WHERE id = :id",
+            named_params![
+                ":now": now,
+                ":approved_by": approved_by,
+                ":feedback": feedback,
+                ":selections_json": selections_json,
+                ":context_out": context_out,
+                ":id": step_id,
             ],
         )?;
         Ok(())
@@ -273,9 +276,9 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE workflow_run_steps SET gate_approved_by = ?1, gate_feedback = ?2, status = 'failed', ended_at = ?3 \
-             WHERE id = ?4",
-            params![rejected_by, feedback, now, step_id],
+            "UPDATE workflow_run_steps SET gate_approved_by = :rejected_by, gate_feedback = :feedback, \
+             status = 'failed', ended_at = :ended_at WHERE id = :id",
+            named_params![":rejected_by": rejected_by, ":feedback": feedback, ":ended_at": now, ":id": step_id],
         )?;
         Ok(())
     }
@@ -285,9 +288,11 @@ impl<'a> WorkflowManager<'a> {
         // Get the stored gate options for this step
         let mut stmt = self
             .conn
-            .prepare("SELECT gate_options FROM workflow_run_steps WHERE id = ?1")?;
+            .prepare("SELECT gate_options FROM workflow_run_steps WHERE id = :id")?;
         let gate_options: Option<String> = stmt
-            .query_row(params![step_id], |row| row.get::<_, Option<String>>(0))
+            .query_row(named_params![":id": step_id], |row| {
+                row.get::<_, Option<String>>("gate_options")
+            })
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => {
                     ConductorError::InvalidInput(format!("Step not found: {}", step_id))

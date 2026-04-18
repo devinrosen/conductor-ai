@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{named_params, OptionalExtension};
 
 use crate::agent::status::AgentRunStatus;
 use crate::config::Config;
@@ -81,8 +81,14 @@ impl<'a> WorkflowManager<'a> {
              WHERE status = 'running' \
                AND child_run_id IS NULL \
                AND subprocess_pid IS NOT NULL",
-            params![],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            [],
+            |row| {
+                Ok((
+                    row.get("id")?,
+                    row.get("subprocess_pid")?,
+                    row.get("started_at")?,
+                ))
+            },
         )?;
 
         if candidates.is_empty() {
@@ -170,8 +176,8 @@ impl<'a> WorkflowManager<'a> {
             self.conn,
             "SELECT id, child_run_id FROM workflow_run_steps \
              WHERE status = 'running' AND child_run_id IS NOT NULL",
-            params![],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            [],
+            |row| Ok((row.get("id")?, row.get("child_run_id")?)),
         )?;
 
         if running_steps.is_empty() {
@@ -245,8 +251,8 @@ impl<'a> WorkflowManager<'a> {
             self.conn,
             "SELECT id, parent_run_id FROM workflow_runs \
              WHERE status = 'waiting' AND parent_workflow_run_id IS NULL",
-            params![],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            [],
+            |row| Ok((row.get("id")?, row.get("parent_run_id")?)),
         )?;
 
         if waiting_runs.is_empty() {
@@ -362,9 +368,9 @@ impl<'a> WorkflowManager<'a> {
                AND ( \
                  CAST(strftime('%s', 'now') AS INTEGER) - \
                  CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
-               ) > ?1",
-            params![threshold_secs],
-            |row| row.get(0),
+               ) > :threshold_secs",
+            named_params![":threshold_secs": threshold_secs],
+            |row| row.get("id"),
         )
     }
 
@@ -387,12 +393,12 @@ impl<'a> WorkflowManager<'a> {
         }
         query_collect(
             self.conn,
-            "SELECT wr.id, wr.workflow_name, wr.target_label, \
+            "SELECT wr.id AS run_id, wr.workflow_name, wr.target_label, \
                     wrs.step_name, \
                     (CAST(strftime('%s', 'now') AS INTEGER) \
-                     - CAST(strftime('%s', wrs.started_at) AS INTEGER)) / 60, \
-                    wrs.id, wrs.child_run_id, \
-                    COALESCE(wrs.subprocess_pid, ar.subprocess_pid) \
+                     - CAST(strftime('%s', wrs.started_at) AS INTEGER)) / 60 AS running_minutes, \
+                    wrs.id AS step_id, wrs.child_run_id, \
+                    COALESCE(wrs.subprocess_pid, ar.subprocess_pid) AS subprocess_pid \
              FROM workflow_runs wr \
              JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
              LEFT JOIN agent_runs ar ON ar.id = wrs.child_run_id \
@@ -401,18 +407,18 @@ impl<'a> WorkflowManager<'a> {
                AND wrs.status = 'running' \
                AND wrs.started_at IS NOT NULL \
                AND (CAST(strftime('%s', 'now') AS INTEGER) \
-                    - CAST(strftime('%s', wrs.started_at) AS INTEGER)) > ?1 * 60",
-            params![threshold_minutes],
+                    - CAST(strftime('%s', wrs.started_at) AS INTEGER)) > :threshold_minutes * 60",
+            named_params![":threshold_minutes": threshold_minutes],
             |row| {
                 Ok(StaleWorkflowRun {
-                    run_id: row.get(0)?,
-                    workflow_name: row.get(1)?,
-                    target_label: row.get(2)?,
-                    step_name: row.get(3)?,
-                    running_minutes: row.get(4)?,
-                    step_id: row.get(5)?,
-                    child_run_id: row.get(6)?,
-                    subprocess_pid: row.get(7)?,
+                    run_id: row.get("run_id")?,
+                    workflow_name: row.get("workflow_name")?,
+                    target_label: row.get("target_label")?,
+                    step_name: row.get("step_name")?,
+                    running_minutes: row.get("running_minutes")?,
+                    step_id: row.get("step_id")?,
+                    child_run_id: row.get("child_run_id")?,
+                    subprocess_pid: row.get("subprocess_pid")?,
                 })
             },
         )
@@ -532,8 +538,8 @@ impl<'a> WorkflowManager<'a> {
                 "UPDATE workflow_runs \
                  SET status = 'failed', \
                      error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
-                 WHERE id = ?1 AND status = 'running'",
-                params![run_id],
+                 WHERE id = :id AND status = 'running'",
+                named_params![":id": run_id],
             )?;
             if changed == 1 {
                 flipped_ids.push(run_id.clone());
@@ -603,9 +609,15 @@ impl<'a> WorkflowManager<'a> {
                AND ( \
                  CAST(strftime('%s', 'now') AS INTEGER) - \
                  CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
-               ) > ?1",
-            params![threshold_secs],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+               ) > :threshold_secs",
+            named_params![":threshold_secs": threshold_secs],
+            |row| {
+                Ok((
+                    row.get("id")?,
+                    row.get("workflow_name")?,
+                    row.get("target_label")?,
+                ))
+            },
         )?;
 
         if orphaned.is_empty() {
@@ -622,8 +634,8 @@ impl<'a> WorkflowManager<'a> {
                 "UPDATE workflow_runs \
                  SET status = 'failed', \
                      error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
-                 WHERE id = ?1 AND status = 'running'",
-                params![run_id],
+                 WHERE id = :id AND status = 'running'",
+                named_params![":id": run_id],
             )?;
 
             if changed != 1 {
@@ -743,9 +755,15 @@ impl<'a> WorkflowManager<'a> {
              ) \
              WHERE age_ref IS NOT NULL \
                AND (CAST(strftime('%s', 'now') AS INTEGER) \
-                    - CAST(strftime('%s', age_ref) AS INTEGER)) > ?1",
-            params![threshold_secs],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    - CAST(strftime('%s', age_ref) AS INTEGER)) > :threshold_secs",
+            named_params![":threshold_secs": threshold_secs],
+            |row| {
+                Ok((
+                    row.get("id")?,
+                    row.get("parent_run_id")?,
+                    row.get("has_failure")?,
+                ))
+            },
         )?;
 
         let mut finalized = 0usize;
@@ -805,26 +823,27 @@ impl<'a> WorkflowManager<'a> {
             .query_row(
                 &format!(
                     "SELECT {RUN_COLUMNS} FROM workflow_runs \
-                     WHERE parent_workflow_run_id = ?1 \
-                       AND workflow_name = ?2 \
+                     WHERE parent_workflow_run_id = :parent_workflow_run_id \
+                       AND workflow_name = :child_workflow_name \
                        AND status IN ('failed', 'pending', 'waiting', 'timed_out') \
                      ORDER BY started_at DESC \
                      LIMIT 1"
                 ),
-                params![parent_workflow_run_id, child_workflow_name],
+                named_params![":parent_workflow_run_id": parent_workflow_run_id, ":child_workflow_name": child_workflow_name],
                 row_to_workflow_run,
             )
             .optional()?)
     }
 
-    const SQL_RESET_FAILED: &'static str =
-        reset_sql!("WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')");
+    const SQL_RESET_FAILED: &'static str = reset_sql!(
+        "WHERE workflow_run_id = :run_id AND status IN ('failed', 'running', 'timed_out')"
+    );
 
     const SQL_RESET_COMPLETED: &'static str =
-        reset_sql!("WHERE workflow_run_id = ?1 AND status = 'completed'");
+        reset_sql!("WHERE workflow_run_id = :run_id AND status = 'completed'");
 
     const SQL_RESET_FROM_POS: &'static str =
-        reset_sql!("WHERE workflow_run_id = ?1 AND position >= ?2");
+        reset_sql!("WHERE workflow_run_id = :run_id AND position >= :position");
 
     /// Signal any `running` steps in the given run whose `subprocess_pid` is
     /// recorded.  Must be called before the SQL UPDATE zeroes the column so we
@@ -848,11 +867,11 @@ impl<'a> WorkflowManager<'a> {
             let script_pids: Vec<i64> = query_collect(
                 self.conn,
                 "SELECT subprocess_pid FROM workflow_run_steps \
-                 WHERE workflow_run_id = ?1 AND status = 'running' \
+                 WHERE workflow_run_id = :run_id AND status = 'running' \
                    AND subprocess_pid IS NOT NULL \
-                   AND (?2 IS NULL OR position >= ?2)",
-                params![workflow_run_id, from_position],
-                |row| row.get(0),
+                   AND (:from_pos IS NULL OR position >= :from_pos)",
+                named_params![":run_id": workflow_run_id, ":from_pos": from_position],
+                |row| row.get("subprocess_pid"),
             )?;
 
             // Agent-step PIDs: running steps where the PID lives in agent_runs
@@ -862,13 +881,13 @@ impl<'a> WorkflowManager<'a> {
                 "SELECT ar.subprocess_pid \
                  FROM workflow_run_steps wrs \
                  JOIN agent_runs ar ON ar.id = wrs.child_run_id \
-                 WHERE wrs.workflow_run_id = ?1 \
+                 WHERE wrs.workflow_run_id = :run_id \
                    AND wrs.status = 'running' \
                    AND wrs.subprocess_pid IS NULL \
                    AND ar.subprocess_pid IS NOT NULL \
-                   AND (?2 IS NULL OR wrs.position >= ?2)",
-                params![workflow_run_id, from_position],
-                |row| row.get(0),
+                   AND (:from_pos IS NULL OR wrs.position >= :from_pos)",
+                named_params![":run_id": workflow_run_id, ":from_pos": from_position],
+                |row| row.get("subprocess_pid"),
             )?;
 
             let handles: Vec<_> = script_pids
@@ -894,14 +913,14 @@ impl<'a> WorkflowManager<'a> {
         {
             let pids: Vec<i64> = query_collect(
                 self.conn,
-                "SELECT COALESCE(wrs.subprocess_pid, ar.subprocess_pid) \
+                "SELECT COALESCE(wrs.subprocess_pid, ar.subprocess_pid) AS pid \
                  FROM workflow_run_steps wrs \
                  LEFT JOIN agent_runs ar ON ar.id = wrs.child_run_id \
-                 WHERE wrs.workflow_run_id = ?1 \
+                 WHERE wrs.workflow_run_id = :run_id \
                    AND wrs.status = 'running' \
                    AND COALESCE(wrs.subprocess_pid, ar.subprocess_pid) IS NOT NULL",
-                params![workflow_run_id],
-                |row| row.get(0),
+                named_params![":run_id": workflow_run_id],
+                |row| row.get("pid"),
             )?;
 
             let count = pids
@@ -923,9 +942,10 @@ impl<'a> WorkflowManager<'a> {
     /// the column is nulled, preventing orphaned subprocesses.
     pub fn reset_failed_steps(&self, workflow_run_id: &str) -> Result<u64> {
         self.terminate_subprocesses(workflow_run_id, None)?;
-        let count = self
-            .conn
-            .execute(Self::SQL_RESET_FAILED, params![workflow_run_id])?;
+        let count = self.conn.execute(
+            Self::SQL_RESET_FAILED,
+            named_params![":run_id": workflow_run_id],
+        )?;
         Ok(count as u64)
     }
 
@@ -933,9 +953,10 @@ impl<'a> WorkflowManager<'a> {
     ///
     /// Used for full restart (--restart) to re-run from scratch.
     pub fn reset_completed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        let count = self
-            .conn
-            .execute(Self::SQL_RESET_COMPLETED, params![workflow_run_id])?;
+        let count = self.conn.execute(
+            Self::SQL_RESET_COMPLETED,
+            named_params![":run_id": workflow_run_id],
+        )?;
         Ok(count as u64)
     }
 
@@ -946,9 +967,10 @@ impl<'a> WorkflowManager<'a> {
     /// the column is nulled, preventing orphaned subprocesses.
     pub fn reset_steps_from_position(&self, workflow_run_id: &str, position: i64) -> Result<u64> {
         self.terminate_subprocesses(workflow_run_id, Some(position))?;
-        let count = self
-            .conn
-            .execute(Self::SQL_RESET_FROM_POS, params![workflow_run_id, position])?;
+        let count = self.conn.execute(
+            Self::SQL_RESET_FROM_POS,
+            named_params![":run_id": workflow_run_id, ":position": position],
+        )?;
         Ok(count as u64)
     }
 
@@ -977,8 +999,8 @@ impl<'a> WorkflowManager<'a> {
         let run = self
             .conn
             .query_row(
-                &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = ?1"),
-                params![run_id],
+                &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = :id"),
+                named_params![":id": run_id],
                 row_to_workflow_run,
             )
             .optional()?
@@ -1004,17 +1026,19 @@ impl<'a> WorkflowManager<'a> {
     fn delete_run_recursive(&self, run_id: &str) -> Result<()> {
         let children: Vec<String> = query_collect(
             self.conn,
-            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = ?1",
-            params![run_id],
-            |row| row.get(0),
+            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = :run_id",
+            named_params![":run_id": run_id],
+            |row| row.get("id"),
         )?;
 
         for child_id in children {
             self.delete_run_recursive(&child_id)?;
         }
 
-        self.conn
-            .execute("DELETE FROM workflow_runs WHERE id = ?1", params![run_id])?;
+        self.conn.execute(
+            "DELETE FROM workflow_runs WHERE id = :id",
+            named_params![":id": run_id],
+        )?;
 
         Ok(())
     }
@@ -1034,10 +1058,10 @@ impl<'a> WorkflowManager<'a> {
     pub fn delete_orphaned_pending_steps(&self, workflow_run_id: &str) -> Result<usize> {
         let deleted = self.conn.execute(
             "DELETE FROM workflow_run_steps \
-             WHERE workflow_run_id = ?1 \
+             WHERE workflow_run_id = :run_id \
                AND status = 'pending' \
                AND started_at IS NULL",
-            params![workflow_run_id],
+            named_params![":run_id": workflow_run_id],
         )?;
 
         if deleted > 0 {
@@ -1113,13 +1137,13 @@ impl<'a> WorkflowManager<'a> {
              SET status = 'needs_resume' \
              WHERE status = 'failed' \
                AND error = 'parent agent run reached terminal state without completing the workflow' \
-               AND iteration < ?1 \
+               AND iteration < :limit \
                AND NOT EXISTS ( \
                  SELECT 1 FROM workflow_run_steps \
                  WHERE workflow_run_id = workflow_runs.id \
                    AND status IN ('failed', 'timed_out') \
                )",
-            params![auto_resume_limit],
+            named_params![":limit": auto_resume_limit],
         )?;
 
         if count > 0 {
@@ -1158,8 +1182,14 @@ impl<'a> WorkflowManager<'a> {
             "SELECT id, workflow_name, target_label FROM workflow_runs \
              WHERE status = 'needs_resume' \
                AND parent_workflow_run_id IS NULL",
-            params![],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            [],
+            |row| {
+                Ok((
+                    row.get("id")?,
+                    row.get("workflow_name")?,
+                    row.get("target_label")?,
+                ))
+            },
         )?;
 
         if candidates.is_empty() {
@@ -1176,8 +1206,8 @@ impl<'a> WorkflowManager<'a> {
                 "UPDATE workflow_runs \
                  SET status = 'failed', \
                      error  = 'Orphaned: parent agent run died — auto-resumed by watchdog' \
-                 WHERE id = ?1 AND status = 'needs_resume'",
-                params![run_id],
+                 WHERE id = :id AND status = 'needs_resume'",
+                named_params![":id": run_id],
             )?;
 
             if changed != 1 {
@@ -1237,7 +1267,7 @@ impl<'a> WorkflowManager<'a> {
 
 #[cfg(test)]
 mod tests {
-    use rusqlite::params;
+    use rusqlite::named_params;
 
     use crate::config::Config;
     use crate::workflow::manager::WorkflowManager;
@@ -1253,7 +1283,7 @@ mod tests {
             .query_row(
                 "SELECT id FROM agent_runs WHERE worktree_id = 'w1' LIMIT 1",
                 [],
-                |row| row.get(0),
+                |row| row.get("id"),
             )
             .unwrap();
         (conn, parent_id)
@@ -1272,8 +1302,8 @@ mod tests {
             "INSERT INTO workflow_runs \
              (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
               started_at, iteration, error) \
-             VALUES (?1, 'test-wf', 'w1', ?2, ?3, 0, 'manual', '2024-01-01T00:00:00Z', ?4, ?5)",
-            params![id, parent_id, status, iteration, error],
+             VALUES (:id, 'test-wf', 'w1', :parent_id, :status, 0, 'manual', '2024-01-01T00:00:00Z', :iteration, :error)",
+            named_params![":id": id, ":parent_id": parent_id, ":status": status, ":iteration": iteration, ":error": error],
         )
         .unwrap();
     }
@@ -1283,8 +1313,8 @@ mod tests {
         conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, position, status) \
-             VALUES (?1, ?2, 'step1', 'actor', 0, ?3)",
-            params![step_id, run_id, status],
+             VALUES (:id, :run_id, 'step1', 'actor', 0, :status)",
+            named_params![":id": step_id, ":run_id": run_id, ":status": status],
         )
         .unwrap();
     }
@@ -1292,9 +1322,9 @@ mod tests {
     /// Read the `status` of a workflow_run by ID.
     fn run_status(conn: &rusqlite::Connection, run_id: &str) -> String {
         conn.query_row(
-            "SELECT status FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |row| row.get(0),
+            "SELECT status FROM workflow_runs WHERE id = :id",
+            named_params![":id": run_id],
+            |row| row.get("status"),
         )
         .unwrap()
     }
@@ -1500,9 +1530,9 @@ mod tests {
             "INSERT INTO workflow_runs \
              (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
               started_at, iteration) \
-             VALUES (?1, 'test-wf', 'w1', ?2, 'running', 0, 'manual', \
+             VALUES (:id, 'test-wf', 'w1', :parent_id, 'running', 0, 'manual', \
                      '2024-01-01T00:00:00Z', 0)",
-            rusqlite::params![run_id, parent_id],
+            rusqlite::named_params![":id": run_id, ":parent_id": parent_id],
         )
         .unwrap();
     }
@@ -1515,8 +1545,8 @@ mod tests {
             .unwrap();
         if let Some(p) = pid {
             conn.execute(
-                "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
-                rusqlite::params![p, run.id],
+                "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
+                rusqlite::named_params![":pid": p, ":id": run.id],
             )
             .unwrap();
         }
@@ -1535,9 +1565,9 @@ mod tests {
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, position, status, iteration, \
               child_run_id, started_at) \
-             VALUES (?1, ?2, 'implement', 'actor', ?3, 'running', 0, ?4, \
+             VALUES (:id, :run_id, 'implement', 'actor', :position, 'running', 0, :child_run_id, \
                      '2024-01-01T00:00:00Z')",
-            rusqlite::params![step_id, run_id, position, child_run_id],
+            rusqlite::named_params![":id": step_id, ":run_id": run_id, ":position": position, ":child_run_id": child_run_id],
         )
         .unwrap();
     }
@@ -1577,8 +1607,8 @@ mod tests {
         let status: String = conn
             .query_row(
                 "SELECT status FROM workflow_run_steps WHERE id = 'step1'",
-                rusqlite::params![],
-                |r| r.get(0),
+                [],
+                |r| r.get("status"),
             )
             .unwrap();
         assert_eq!(status, "pending");
@@ -1599,9 +1629,9 @@ mod tests {
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, position, status, iteration, \
               child_run_id, subprocess_pid, started_at) \
-             VALUES ('step2', 'wfrun2', 'script', 'actor', 0, 'running', 0, ?1, 88888, \
+             VALUES ('step2', 'wfrun2', 'script', 'actor', 0, 'running', 0, :agent_run_id, 88888, \
                      '2024-01-01T00:00:00Z')",
-            rusqlite::params![agent_run_id],
+            rusqlite::named_params![":agent_run_id": agent_run_id],
         )
         .unwrap();
 
@@ -1615,8 +1645,8 @@ mod tests {
         let status: String = conn
             .query_row(
                 "SELECT status FROM workflow_run_steps WHERE id = 'step2'",
-                rusqlite::params![],
-                |r| r.get(0),
+                [],
+                |r| r.get("status"),
             )
             .unwrap();
         assert_eq!(status, "pending");
@@ -1643,7 +1673,7 @@ mod tests {
               subprocess_pid, started_at) \
              VALUES ('step-cancel', 'wfrun-cancel', 'script', 'script', 0, 'running', 0, \
                      99999, '2024-01-01T00:00:00Z')",
-            rusqlite::params![],
+            [],
         )
         .unwrap();
 
@@ -1660,8 +1690,8 @@ mod tests {
         let status: String = conn
             .query_row(
                 "SELECT status FROM workflow_run_steps WHERE id = 'step-cancel'",
-                rusqlite::params![],
-                |r| r.get(0),
+                [],
+                |r| r.get("status"),
             )
             .unwrap();
         assert_eq!(

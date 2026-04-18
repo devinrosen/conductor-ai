@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::named_params;
 
 use crate::error::Result;
 
@@ -162,21 +162,22 @@ impl<'a> AgentManager<'a> {
             "INSERT INTO agent_runs \
              (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, \
               parent_run_id, bot_name, log_file, conversation_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                run.id,
-                run.worktree_id,
-                run.repo_id,
-                run.prompt,
-                run.status,
-                run.started_at,
-                run.tmux_window,
-                run.model,
-                run.parent_run_id,
-                run.bot_name,
-                run.log_file,
-                run.conversation_id,
-            ],
+             VALUES (:id, :worktree_id, :repo_id, :prompt, :status, :started_at, :tmux_window, \
+                     :model, :parent_run_id, :bot_name, :log_file, :conversation_id)",
+            named_params! {
+                ":id": run.id,
+                ":worktree_id": run.worktree_id,
+                ":repo_id": run.repo_id,
+                ":prompt": run.prompt,
+                ":status": run.status,
+                ":started_at": run.started_at,
+                ":tmux_window": run.tmux_window,
+                ":model": run.model,
+                ":parent_run_id": run.parent_run_id,
+                ":bot_name": run.bot_name,
+                ":log_file": run.log_file,
+                ":conversation_id": run.conversation_id,
+            },
         )?;
 
         Ok(run)
@@ -198,24 +199,26 @@ impl<'a> AgentManager<'a> {
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'completed', claude_session_id = ?1, \
-             result_text = ?2, cost_usd = ?3, num_turns = ?4, duration_ms = ?5, \
-             ended_at = ?6, input_tokens = ?8, output_tokens = ?9, \
-             cache_read_input_tokens = ?10, cache_creation_input_tokens = ?11 \
-             WHERE id = ?7",
-            params![
-                session_id,
-                result_text,
-                cost_usd,
-                num_turns,
-                duration_ms,
-                now,
-                run_id,
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-            ],
+            "UPDATE agent_runs SET status = 'completed', claude_session_id = :session_id, \
+             result_text = :result_text, cost_usd = :cost_usd, num_turns = :num_turns, \
+             duration_ms = :duration_ms, ended_at = :ended_at, \
+             input_tokens = :input_tokens, output_tokens = :output_tokens, \
+             cache_read_input_tokens = :cache_read_input_tokens, \
+             cache_creation_input_tokens = :cache_creation_input_tokens \
+             WHERE id = :id",
+            named_params! {
+                ":session_id": session_id,
+                ":result_text": result_text,
+                ":cost_usd": cost_usd,
+                ":num_turns": num_turns,
+                ":duration_ms": duration_ms,
+                ":ended_at": now,
+                ":id": run_id,
+                ":input_tokens": input_tokens,
+                ":output_tokens": output_tokens,
+                ":cache_read_input_tokens": cache_read_input_tokens,
+                ":cache_creation_input_tokens": cache_creation_input_tokens,
+            },
         )?;
         Ok(())
     }
@@ -233,10 +236,15 @@ impl<'a> AgentManager<'a> {
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'failed', result_text = ?1, ended_at = ?2, \
-             claude_session_id = COALESCE(?3, claude_session_id) \
-             WHERE id = ?4",
-            params![error, now, session_id, run_id],
+            "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at, \
+             claude_session_id = COALESCE(:session_id, claude_session_id) \
+             WHERE id = :id",
+            named_params! {
+                ":error": error,
+                ":ended_at": now,
+                ":session_id": session_id,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -247,9 +255,13 @@ impl<'a> AgentManager<'a> {
     pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'failed', result_text = ?1, ended_at = ?2 \
-             WHERE id = ?3 AND status IN ('running', 'waiting_for_feedback')",
-            params![error, now, run_id],
+            "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at \
+             WHERE id = :id AND status IN ('running', 'waiting_for_feedback')",
+            named_params! {
+                ":error": error,
+                ":ended_at": now,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -260,9 +272,13 @@ impl<'a> AgentManager<'a> {
     pub fn update_run_completed_if_running(&self, run_id: &str, result_text: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'completed', result_text = ?1, ended_at = ?2 \
-             WHERE id = ?3 AND status = 'running'",
-            params![result_text, now, run_id],
+            "UPDATE agent_runs SET status = 'completed', result_text = :result_text, ended_at = :ended_at \
+             WHERE id = :id AND status = 'running'",
+            named_params! {
+                ":result_text": result_text,
+                ":ended_at": now,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -283,29 +299,29 @@ impl<'a> AgentManager<'a> {
         let result_text = log_result.result_text.as_deref().unwrap_or("");
         self.conn.execute(
             "UPDATE agent_runs \
-             SET status = 'completed', result_text = ?1, ended_at = ?2, \
-                 claude_session_id = COALESCE(?3, claude_session_id), \
-                 cost_usd = COALESCE(?4, cost_usd), \
-                 num_turns = COALESCE(?5, num_turns), \
-                 duration_ms = COALESCE(?6, duration_ms), \
-                 input_tokens = COALESCE(?7, input_tokens), \
-                 output_tokens = COALESCE(?8, output_tokens), \
-                 cache_read_input_tokens = COALESCE(?9, cache_read_input_tokens), \
-                 cache_creation_input_tokens = COALESCE(?10, cache_creation_input_tokens) \
-             WHERE id = ?11 AND status = 'running'",
-            params![
-                result_text,
-                now,
-                log_result.session_id.as_deref(),
-                log_result.cost_usd,
-                log_result.num_turns,
-                log_result.duration_ms,
-                log_result.input_tokens,
-                log_result.output_tokens,
-                log_result.cache_read_input_tokens,
-                log_result.cache_creation_input_tokens,
-                run_id,
-            ],
+             SET status = 'completed', result_text = :result_text, ended_at = :ended_at, \
+                 claude_session_id = COALESCE(:session_id, claude_session_id), \
+                 cost_usd = COALESCE(:cost_usd, cost_usd), \
+                 num_turns = COALESCE(:num_turns, num_turns), \
+                 duration_ms = COALESCE(:duration_ms, duration_ms), \
+                 input_tokens = COALESCE(:input_tokens, input_tokens), \
+                 output_tokens = COALESCE(:output_tokens, output_tokens), \
+                 cache_read_input_tokens = COALESCE(:cache_read_input_tokens, cache_read_input_tokens), \
+                 cache_creation_input_tokens = COALESCE(:cache_creation_input_tokens, cache_creation_input_tokens) \
+             WHERE id = :id AND status = 'running'",
+            named_params! {
+                ":result_text": result_text,
+                ":ended_at": now,
+                ":session_id": log_result.session_id.as_deref(),
+                ":cost_usd": log_result.cost_usd,
+                ":num_turns": log_result.num_turns,
+                ":duration_ms": log_result.duration_ms,
+                ":input_tokens": log_result.input_tokens,
+                ":output_tokens": log_result.output_tokens,
+                ":cache_read_input_tokens": log_result.cache_read_input_tokens,
+                ":cache_creation_input_tokens": log_result.cache_creation_input_tokens,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -313,8 +329,11 @@ impl<'a> AgentManager<'a> {
     pub fn update_run_cancelled(&self, run_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'cancelled', ended_at = ?1 WHERE id = ?2",
-            params![now, run_id],
+            "UPDATE agent_runs SET status = 'cancelled', ended_at = :ended_at WHERE id = :id",
+            named_params! {
+                ":ended_at": now,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -343,8 +362,11 @@ impl<'a> AgentManager<'a> {
     /// This enables resume even if the run fails or is cancelled.
     pub fn update_run_session_id(&self, run_id: &str, session_id: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE agent_runs SET claude_session_id = ?1 WHERE id = ?2",
-            params![session_id, run_id],
+            "UPDATE agent_runs SET claude_session_id = :session_id WHERE id = :id",
+            named_params! {
+                ":session_id": session_id,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -366,16 +388,17 @@ impl<'a> AgentManager<'a> {
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs \
-             SET input_tokens = ?1, output_tokens = ?2, \
-                 cache_read_input_tokens = ?3, cache_creation_input_tokens = ?4 \
-             WHERE id = ?5",
-            rusqlite::params![
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-                run_id,
-            ],
+             SET input_tokens = :input_tokens, output_tokens = :output_tokens, \
+                 cache_read_input_tokens = :cache_read_input_tokens, \
+                 cache_creation_input_tokens = :cache_creation_input_tokens \
+             WHERE id = :id",
+            named_params! {
+                ":input_tokens": input_tokens,
+                ":output_tokens": output_tokens,
+                ":cache_read_input_tokens": cache_read_input_tokens,
+                ":cache_creation_input_tokens": cache_creation_input_tokens,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -383,8 +406,11 @@ impl<'a> AgentManager<'a> {
     /// Store the OS PID for a headless agent run immediately after spawn.
     pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
         self.conn.execute(
-            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
-            params![pid as i64, run_id],
+            "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
+            named_params! {
+                ":pid": pid as i64,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -402,17 +428,24 @@ impl<'a> AgentManager<'a> {
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs \
-             SET model = COALESCE(?1, model), claude_session_id = COALESCE(?2, claude_session_id) \
-             WHERE id = ?3",
-            params![model, session_id, run_id],
+             SET model = COALESCE(:model, model), claude_session_id = COALESCE(:session_id, claude_session_id) \
+             WHERE id = :id",
+            named_params! {
+                ":model": model,
+                ":session_id": session_id,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
 
     pub fn update_run_log_file(&self, run_id: &str, path: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            params![path, run_id],
+            "UPDATE agent_runs SET log_file = :path WHERE id = :id",
+            named_params! {
+                ":path": path,
+                ":id": run_id,
+            },
         )?;
         Ok(())
     }
@@ -423,8 +456,8 @@ impl<'a> AgentManager<'a> {
     /// automatically via their `ON DELETE CASCADE` FK constraints.
     pub fn delete_runs_for_conversation(&self, conversation_id: &str) -> Result<()> {
         self.conn.execute(
-            "DELETE FROM agent_runs WHERE conversation_id = ?1",
-            params![conversation_id],
+            "DELETE FROM agent_runs WHERE conversation_id = :conversation_id",
+            named_params! { ":conversation_id": conversation_id },
         )?;
         Ok(())
     }

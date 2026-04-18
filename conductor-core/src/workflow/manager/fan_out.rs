@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{named_params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{query_collect, sql_placeholders, with_in_clause};
@@ -24,15 +24,15 @@ pub struct FanOutItemRow {
 
 fn fan_out_item_from_row(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow> {
     Ok(FanOutItemRow {
-        id: row.get(0)?,
-        step_run_id: row.get(1)?,
-        item_type: row.get(2)?,
-        item_id: row.get(3)?,
-        item_ref: row.get(4)?,
-        child_run_id: row.get(5)?,
-        status: row.get(6)?,
-        dispatched_at: row.get(7)?,
-        completed_at: row.get(8)?,
+        id: row.get("id")?,
+        step_run_id: row.get("step_run_id")?,
+        item_type: row.get("item_type")?,
+        item_id: row.get("item_id")?,
+        item_ref: row.get("item_ref")?,
+        child_run_id: row.get("child_run_id")?,
+        status: row.get("status")?,
+        dispatched_at: row.get("dispatched_at")?,
+        completed_at: row.get("completed_at")?,
     })
 }
 
@@ -50,8 +50,8 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "INSERT OR IGNORE INTO workflow_run_step_fan_out_items \
              (id, step_run_id, item_type, item_id, item_ref, status) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 'pending')",
-            params![id, step_run_id, item_type, item_id, item_ref],
+             VALUES (:id, :step_run_id, :item_type, :item_id, :item_ref, 'pending')",
+            named_params![":id": id, ":step_run_id": step_run_id, ":item_type": item_type, ":item_id": item_id, ":item_ref": item_ref],
         )?;
         Ok(id)
     }
@@ -92,9 +92,9 @@ impl<'a> WorkflowManager<'a> {
                 "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
                  status, dispatched_at, completed_at \
                  FROM workflow_run_step_fan_out_items \
-                 WHERE step_run_id = ?1 AND status = ?2 \
+                 WHERE step_run_id = :step_run_id AND status = :status \
                  ORDER BY id ASC",
-                params![step_run_id, status],
+                named_params![":step_run_id": step_run_id, ":status": status],
                 fan_out_item_from_row,
             )
         } else {
@@ -103,9 +103,9 @@ impl<'a> WorkflowManager<'a> {
                 "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
                  status, dispatched_at, completed_at \
                  FROM workflow_run_step_fan_out_items \
-                 WHERE step_run_id = ?1 \
+                 WHERE step_run_id = :step_run_id \
                  ORDER BY id ASC",
-                params![step_run_id],
+                named_params![":step_run_id": step_run_id],
                 fan_out_item_from_row,
             )
         }
@@ -146,9 +146,9 @@ impl<'a> WorkflowManager<'a> {
     pub fn get_existing_fan_out_item_ids(&self, step_run_id: &str) -> Result<Vec<String>> {
         query_collect(
             self.conn,
-            "SELECT item_id FROM workflow_run_step_fan_out_items WHERE step_run_id = ?1",
-            params![step_run_id],
-            |row| row.get(0),
+            "SELECT item_id FROM workflow_run_step_fan_out_items WHERE step_run_id = :step_run_id",
+            named_params![":step_run_id": step_run_id],
+            |row| row.get("item_id"),
         )
     }
 
@@ -157,9 +157,9 @@ impl<'a> WorkflowManager<'a> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE workflow_run_step_fan_out_items \
-             SET status = 'running', child_run_id = ?1, dispatched_at = ?2 \
-             WHERE id = ?3",
-            params![child_run_id, now, item_id],
+             SET status = 'running', child_run_id = :child_run_id, dispatched_at = :now \
+             WHERE id = :id",
+            named_params![":child_run_id": child_run_id, ":now": now, ":id": item_id],
         )?;
         Ok(())
     }
@@ -169,9 +169,9 @@ impl<'a> WorkflowManager<'a> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE workflow_run_step_fan_out_items \
-             SET status = ?1, completed_at = ?2 \
-             WHERE id = ?3",
-            params![status, now, item_id],
+             SET status = :status, completed_at = :now \
+             WHERE id = :id",
+            named_params![":status": status, ":now": now, ":id": item_id],
         )?;
         Ok(())
     }
@@ -182,9 +182,9 @@ impl<'a> WorkflowManager<'a> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE workflow_run_step_fan_out_items \
-             SET status = 'skipped', completed_at = ?1 \
-             WHERE step_run_id = ?2 AND status IN ('pending', 'running')",
-            params![now, step_run_id],
+             SET status = 'skipped', completed_at = :now \
+             WHERE step_run_id = :step_run_id AND status IN ('pending', 'running')",
+            named_params![":now": now, ":step_run_id": step_run_id],
         )?;
         Ok(())
     }
@@ -223,13 +223,13 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "UPDATE workflow_run_steps SET \
              fan_out_completed = (SELECT COUNT(*) FROM workflow_run_step_fan_out_items \
-                                  WHERE step_run_id = ?1 AND status = 'completed'), \
+                                  WHERE step_run_id = :step_run_id AND status = 'completed'), \
              fan_out_failed = (SELECT COUNT(*) FROM workflow_run_step_fan_out_items \
-                               WHERE step_run_id = ?1 AND status = 'failed'), \
+                               WHERE step_run_id = :step_run_id AND status = 'failed'), \
              fan_out_skipped = (SELECT COUNT(*) FROM workflow_run_step_fan_out_items \
-                                WHERE step_run_id = ?1 AND status = 'skipped') \
-             WHERE id = ?1",
-            params![step_run_id],
+                                WHERE step_run_id = :step_run_id AND status = 'skipped') \
+             WHERE id = :step_run_id",
+            named_params![":step_run_id": step_run_id],
         )?;
         Ok(())
     }
@@ -237,8 +237,8 @@ impl<'a> WorkflowManager<'a> {
     /// Set the fan_out_total counter on a step row.
     pub fn set_fan_out_total(&self, step_run_id: &str, total: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE workflow_run_steps SET fan_out_total = ?1 WHERE id = ?2",
-            params![total, step_run_id],
+            "UPDATE workflow_run_steps SET fan_out_total = :total WHERE id = :id",
+            named_params![":total": total, ":id": step_run_id],
         )?;
         Ok(())
     }
@@ -248,9 +248,9 @@ impl<'a> WorkflowManager<'a> {
         Ok(self
             .conn
             .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                params![run_id],
-                |row| row.get(0),
+                "SELECT status FROM workflow_runs WHERE id = :id",
+                named_params![":id": run_id],
+                |row| row.get("status"),
             )
             .optional()?)
     }
