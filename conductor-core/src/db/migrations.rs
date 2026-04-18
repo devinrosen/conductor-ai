@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 73;
+pub const LATEST_SCHEMA_VERSION: u32 = 74;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1075,6 +1075,11 @@ pub fn run(conn: &Connection) -> Result<()> {
              DROP TABLE IF EXISTS features;",
         )?;
         bump_version(conn, 73)?;
+    }
+
+    if version < 74 {
+        conn.execute_batch(include_str!("migrations/074_drop_notifications.sql"))?;
+        bump_version(conn, 74)?;
     }
 
     Ok(())

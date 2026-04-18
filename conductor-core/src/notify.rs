@@ -307,19 +307,6 @@ pub fn fire_agent_run_notification(
         "agent_failed"
     };
 
-    let _body = match (worktree_slug, error_msg) {
-        (Some(slug), Some(err)) => format!("{slug}: {err}"),
-        (Some(slug), None) => slug.to_string(),
-        (None, Some(err)) => err.to_string(),
-        (None, None) => {
-            if succeeded {
-                "Agent run completed".to_string()
-            } else {
-                "Agent run failed".to_string()
-            }
-        }
-    };
-
     let label = worktree_slug.unwrap_or(run_id).to_string();
     let hook_event = if succeeded {
         NotificationEvent::AgentRunCompleted {
