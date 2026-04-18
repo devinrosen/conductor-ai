@@ -17,6 +17,12 @@ if [ -n "${WORKTREE_BRANCH:-}" ] && [ "$current_branch" != "$WORKTREE_BRANCH" ];
   exit 1
 fi
 
+# Push base branch to origin if it doesn't exist there yet
+if ! git ls-remote --exit-code --heads origin "$base" > /dev/null 2>&1; then
+  echo "Base branch '$base' not found on origin — pushing it now…"
+  git push -u origin "$base"
+fi
+
 # Fetch latest base ref for accurate comparison
 git fetch origin "$base" --quiet
 
