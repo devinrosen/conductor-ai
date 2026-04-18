@@ -401,21 +401,7 @@ impl App {
                     {
                         let worktree_id = run.worktree_id.clone();
                         let run_id = run.id.clone();
-                        self.state.previous_selected_worktree_id =
-                            Some(self.state.selected_worktree_id.clone());
-                        if self.state.selected_worktree_id.is_none() {
-                            self.state.selected_worktree_id = worktree_id;
-                            self.sync_selection_arcs();
-                        }
-                        self.state.selected_workflow_run_id = Some(run_id);
-                        self.state.previous_view = Some(self.state.view);
-                        self.state.view = View::WorkflowRunDetail;
-                        self.state.workflow_step_index = 0;
-                        self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
-                        self.state.step_agent_event_index = 0;
-                        self.state.error_pane_scroll = 0;
-                        self.state.column_focus = crate::state::ColumnFocus::Content;
-                        self.reload_workflow_steps();
+                        self.enter_workflow_run_detail(run_id, worktree_id);
                     } else {
                         self.state.status_message =
                             Some("Workflow run not found — try refreshing".to_string());
@@ -437,25 +423,28 @@ impl App {
                     {
                         let run_id = run.id.clone();
                         let worktree_id = run.worktree_id.clone();
-                        self.state.previous_selected_worktree_id =
-                            Some(self.state.selected_worktree_id.clone());
-                        if self.state.selected_worktree_id.is_none() {
-                            self.state.selected_worktree_id = worktree_id;
-                            self.sync_selection_arcs();
-                        }
-                        self.state.selected_workflow_run_id = Some(run_id);
-                        self.state.previous_view = Some(self.state.view);
-                        self.state.view = View::WorkflowRunDetail;
-                        self.state.workflow_step_index = 0;
-                        self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
-                        self.state.step_agent_event_index = 0;
-                        self.state.error_pane_scroll = 0;
-                        self.state.column_focus = crate::state::ColumnFocus::Content;
-                        self.reload_workflow_steps();
+                        self.enter_workflow_run_detail(run_id, worktree_id);
                     }
                 }
             }
         }
+    }
+
+    fn enter_workflow_run_detail(&mut self, run_id: String, worktree_id: Option<String>) {
+        self.state.previous_selected_worktree_id = Some(self.state.selected_worktree_id.clone());
+        if self.state.selected_worktree_id.is_none() {
+            self.state.selected_worktree_id = worktree_id;
+            self.sync_selection_arcs();
+        }
+        self.state.selected_workflow_run_id = Some(run_id);
+        self.state.previous_view = Some(self.state.view);
+        self.state.view = View::WorkflowRunDetail;
+        self.state.workflow_step_index = 0;
+        self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
+        self.state.step_agent_event_index = 0;
+        self.state.error_pane_scroll = 0;
+        self.state.column_focus = crate::state::ColumnFocus::Content;
+        self.reload_workflow_steps();
     }
 
     pub(super) fn move_up(&mut self) {

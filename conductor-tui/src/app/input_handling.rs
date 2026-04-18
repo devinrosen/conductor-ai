@@ -334,8 +334,63 @@ impl App {
                     return;
                 }
                 let wt_name = value;
-                // No feature branches — go straight to PR step.
-                self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
+                if let Some(ref tx) = self.bg_tx {
+                    let tx = tx.clone();
+                    let slug = repo_slug.clone();
+                    let name = wt_name.clone();
+                    let tid = ticket_id.clone();
+                    std::thread::spawn(move || {
+                        use crate::action::Action;
+                        use crate::state::BranchPickerItem;
+                        use conductor_core::config::{db_path, load_config};
+                        use conductor_core::db::open_database;
+                        use conductor_core::repo::RepoManager;
+                        use conductor_core::worktree::WorktreeManager;
+
+                        let result = (|| {
+                            let conn = open_database(&db_path())
+                                .map_err(|e| format!("Failed to open database: {e}"))?;
+                            let config =
+                                load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                            let repo = RepoManager::new(&conn, &config)
+                                .get_by_slug(&slug)
+                                .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;
+                            let worktrees = WorktreeManager::new(&conn, &config)
+                                .list_by_repo_id(&repo.id, true)
+                                .map_err(|e| format!("Failed to list worktrees: {e}"))?;
+                            let items = worktrees
+                                .into_iter()
+                                .map(|wt| BranchPickerItem {
+                                    branch: Some(wt.branch),
+                                    worktree_count: 0,
+                                    ticket_count: 0,
+                                    base_branch: None,
+                                    stale_days: None,
+                                    inferred_from: Some(wt.slug),
+                                })
+                                .collect();
+                            Ok::<Vec<BranchPickerItem>, String>(items)
+                        })();
+                        match result {
+                            Ok(items) => {
+                                let _ = tx.send(Action::WorktreeBranchesLoaded {
+                                    repo_slug: slug,
+                                    wt_name: name,
+                                    ticket_id: tid,
+                                    items,
+                                });
+                            }
+                            Err(error) => {
+                                let _ = tx.send(Action::WorktreeBranchesFailed { error });
+                            }
+                        }
+                    });
+                    self.state.modal = Modal::Progress {
+                        message: "Loading worktrees…".into(),
+                    };
+                } else {
+                    self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
+                }
             }
             InputAction::CreateWorktreePrStep {
                 repo_slug,
@@ -805,6 +860,29 @@ impl App {
             // Transition to PR input step, carrying the selected branch.
             self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, from_branch);
         }
+    }
+
+    /// Handle background result: existing worktree branches loaded for the branch picker.
+    pub(super) fn handle_worktree_branches_loaded(
+        &mut self,
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        items: Vec<crate::state::BranchPickerItem>,
+    ) {
+        if items.is_empty() {
+            self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
+            return;
+        }
+        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
+        self.state.modal = Modal::BranchPicker {
+            repo_slug,
+            wt_name,
+            ticket_id,
+            items: ordered,
+            tree_positions,
+            selected: 0,
+        };
     }
 
     /// Spawn a background thread to set the repo model via file I/O,
