@@ -743,7 +743,11 @@ pub(crate) fn parse_merged_branches_json(
     let Ok(prs) = serde_json::from_str::<Vec<PrHead>>(json) else {
         return std::collections::HashMap::new();
     };
-    filter_merged_branches(prs.iter().map(|p| (p.head_ref_name.as_str(), p.merged_at.as_str())), branches)
+    filter_merged_branches(
+        prs.iter()
+            .map(|p| (p.head_ref_name.as_str(), p.merged_at.as_str())),
+        branches,
+    )
 }
 
 /// Close a GitHub issue as completed via the `gh` CLI.
