@@ -1826,6 +1826,54 @@ fn no_workflow_name_filter_shows_all_runs() {
     assert_eq!(len, 2);
 }
 
+#[test]
+fn workflow_name_filter_global_mode_hides_non_matching_runs() {
+    let mut app = make_app();
+    // Global mode: no repo or worktree selected.
+    app.state.selected_repo_id = None;
+    app.state.selected_worktree_id = None;
+    // Two runs under the same target label so they end up in one repo+target group.
+    let mut r1 = make_wf_run_named("r1", "process-release");
+    r1.target_label = Some("my-repo/wt1".to_string());
+    let mut r2 = make_wf_run_named("r2", "process-feature");
+    r2.target_label = Some("my-repo/wt1".to_string());
+    app.state.data.workflow_runs = vec![r1, r2];
+    app.state.workflow_name_filter = Some("release".to_string());
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+
+    // rows() and rows_len() must agree.
+    assert_eq!(rows.len(), len, "rows() and rows_len() must agree in global mode");
+    // 1 RepoHeader + 1 TargetHeader + 1 Parent (only the release run).
+    assert_eq!(len, 3);
+    let parent_count = rows
+        .iter()
+        .filter(|r| matches!(r, crate::state::WorkflowRunRow::Parent { .. }))
+        .count();
+    assert_eq!(parent_count, 1, "only the matching run should be a Parent row");
+}
+
+#[test]
+fn workflow_name_filter_global_mode_no_filter_shows_all() {
+    let mut app = make_app();
+    app.state.selected_repo_id = None;
+    app.state.selected_worktree_id = None;
+    let mut r1 = make_wf_run_named("r1", "process-release");
+    r1.target_label = Some("my-repo/wt1".to_string());
+    let mut r2 = make_wf_run_named("r2", "process-feature");
+    r2.target_label = Some("my-repo/wt1".to_string());
+    app.state.data.workflow_runs = vec![r1, r2];
+    app.state.workflow_name_filter = None;
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+
+    assert_eq!(rows.len(), len, "rows() and rows_len() must agree in global mode");
+    // 1 RepoHeader + 1 TargetHeader + 2 Parent rows.
+    assert_eq!(len, 4);
+}
+
 // active agent run should open the ModelPicker.
 #[test]
 fn workflow_picker_confirm_worktree_target() {
