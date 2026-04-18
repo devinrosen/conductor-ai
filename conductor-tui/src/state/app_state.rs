@@ -537,6 +537,20 @@ impl AppState {
         }
     }
 
+    fn workflow_name_filter_lower(&self) -> Option<String> {
+        self.workflow_name_filter.as_deref().map(str::to_lowercase)
+    }
+
+    fn run_matches_name_filter(
+        filter_lower: &Option<String>,
+        run: &conductor_core::workflow::WorkflowRun,
+    ) -> bool {
+        match filter_lower {
+            None => true,
+            Some(f) => run.workflow_name.to_lowercase().contains(f.as_str()),
+        }
+    }
+
     /// Returns the flat, ordered list of visible workflow run rows.
     /// Roots appear first; their expanded children follow immediately after.
     /// Runs returned DESC by the DB (newest first); children are sorted ASC (oldest first).
@@ -575,6 +589,9 @@ impl AppState {
         // Repo-scoped and worktree-scoped modes both use the flat list.
         let global_mode = self.selected_worktree_id.is_none() && self.selected_repo_id.is_none();
 
+        // Precompute the lowercased filter once to avoid per-run allocations.
+        let name_filter_lower = self.workflow_name_filter_lower();
+
         if !global_mode {
             // Non-global mode: flat list, optionally hiding completed/cancelled root runs.
             // In repo-detail mode (repo selected, no worktree selected), emit SlugLabel rows
@@ -595,14 +612,8 @@ impl AppState {
                 {
                     continue;
                 }
-                if let Some(ref filter) = self.workflow_name_filter {
-                    if !run
-                        .workflow_name
-                        .to_lowercase()
-                        .contains(&filter.to_lowercase())
-                    {
-                        continue;
-                    }
+                if !Self::run_matches_name_filter(&name_filter_lower, run) {
+                    continue;
                 }
 
                 if repo_detail_mode {
@@ -690,14 +701,8 @@ impl AppState {
             {
                 continue;
             }
-            if let Some(ref filter) = self.workflow_name_filter {
-                if !run
-                    .workflow_name
-                    .to_lowercase()
-                    .contains(&filter.to_lowercase())
-                {
-                    continue;
-                }
+            if !Self::run_matches_name_filter(&name_filter_lower, run) {
+                continue;
             }
             let (mut repo_slug, target_key, target_type) = run
                 .target_label
@@ -875,6 +880,8 @@ impl AppState {
 
         let global_mode = self.selected_worktree_id.is_none() && self.selected_repo_id.is_none();
 
+        let name_filter_lower = self.workflow_name_filter_lower();
+
         if !global_mode {
             let repo_detail_mode =
                 self.selected_repo_id.is_some() && self.selected_worktree_id.is_none();
@@ -890,6 +897,9 @@ impl AppState {
                         WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
                     )
                 {
+                    continue;
+                }
+                if !Self::run_matches_name_filter(&name_filter_lower, run) {
                     continue;
                 }
                 if repo_detail_mode {
@@ -959,6 +969,9 @@ impl AppState {
                     WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
                 )
             {
+                continue;
+            }
+            if !Self::run_matches_name_filter(&name_filter_lower, run) {
                 continue;
             }
             let (mut repo_slug, target_key, target_type) = run
