@@ -531,7 +531,6 @@ impl App {
             // Agent
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::PromptRepoAgent => self.handle_prompt_repo_agent(),
-            Action::OrchestrateAgent => self.handle_orchestrate_agent(),
             Action::StopAgent => {
                 if self.is_repo_agent_context() {
                     self.handle_stop_repo_agent();
@@ -1064,7 +1063,6 @@ impl App {
                 self.state.modal = Modal::Error { message };
             }
             Action::AgentLaunchComplete { result }
-            | Action::OrchestrateLaunchComplete { result }
             | Action::AgentRestartComplete { result } => {
                 self.state.modal = Modal::None;
                 match result {

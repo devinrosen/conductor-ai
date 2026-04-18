@@ -186,20 +186,6 @@ export const api = {
     request<RunTreeTotals>(
       `/worktrees/${worktreeId}/agent/runs/${runId}/tree-totals`,
     ),
-  orchestrateAgent: (
-    worktreeId: string,
-    prompt: string,
-    failFast?: boolean,
-    childTimeoutSecs?: number,
-  ) =>
-    request<AgentRun>(`/worktrees/${worktreeId}/agent/orchestrate`, {
-      method: "POST",
-      body: JSON.stringify({
-        prompt,
-        fail_fast: failFast ?? false,
-        child_timeout_secs: childTimeoutSecs ?? 1800,
-      }),
-    }),
   getCreatedIssues: (worktreeId: string) =>
     request<AgentCreatedIssue[]>(`/worktrees/${worktreeId}/agent/created-issues`),
   updateRepoSettings: (repoId: string, settings: { allow_agent_issue_creation?: boolean }) =>

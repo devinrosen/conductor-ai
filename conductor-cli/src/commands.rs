@@ -145,24 +145,6 @@ pub enum AgentCommands {
         #[arg(long = "plugin-dir")]
         plugin_dirs: Vec<String>,
     },
-    /// Orchestrate child agents: spawn a child run for each plan step
-    Orchestrate {
-        /// Parent agent run ID (must have plan steps)
-        #[arg(long)]
-        run_id: String,
-        /// Path to the worktree directory
-        #[arg(long)]
-        worktree_path: String,
-        /// Model to use for child agents
-        #[arg(long)]
-        model: Option<String>,
-        /// Stop on first child failure
-        #[arg(long)]
-        fail_fast: bool,
-        /// Child run timeout in seconds (default: 1800 = 30 min)
-        #[arg(long, default_value = "1800")]
-        child_timeout_secs: u64,
-    },
     /// Create a new GitHub issue (called by agents during a run)
     CreateIssue {
         /// Issue title

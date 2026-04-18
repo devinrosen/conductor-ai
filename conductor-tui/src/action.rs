@@ -175,7 +175,6 @@ pub enum Action {
     // Agent triggers
     LaunchAgent,
     PromptRepoAgent,
-    OrchestrateAgent,
     StopAgent,
     RestartAgent,
     #[allow(dead_code)]
@@ -294,10 +293,6 @@ pub enum Action {
     },
     // Background result for worktree agent launch
     AgentLaunchComplete {
-        result: Result<String, String>,
-    },
-    // Background result for orchestrate agent launch
-    OrchestrateLaunchComplete {
         result: Result<String, String>,
     },
     // Background result for worktree agent stop
