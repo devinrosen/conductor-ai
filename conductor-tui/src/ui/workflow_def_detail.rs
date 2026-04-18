@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use std::collections::HashSet;
 
-use conductor_core::workflow::{AgentRef, WorkflowDef, WorkflowNode};
+use conductor_core::workflow::{AgentRef, OnFail, WorkflowDef, WorkflowNode};
 
 use crate::state::AppState;
 use crate::ui::helpers::format_condition;
@@ -270,8 +270,12 @@ fn build_node_lines(
                     ));
                 }
                 if let Some(ref fail) = c.on_fail {
+                    let fail_display = match fail {
+                        OnFail::Agent(ref r) => agent_ref_display(r),
+                        OnFail::Continue => "continue".to_string(),
+                    };
                     spans.push(Span::styled(
-                        format!("  on_fail={}", agent_ref_display(fail)),
+                        format!("  on_fail={}", fail_display),
                         Style::default().fg(theme.label_secondary),
                     ));
                 }
