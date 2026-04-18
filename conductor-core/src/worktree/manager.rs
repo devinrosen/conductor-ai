@@ -215,12 +215,7 @@ pub fn get_ticket_id_by_branch(
         params![repo_id, branch],
         |row| row.get(0),
     )
-    .map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-            slug: branch.to_string(),
-        },
-        other => ConductorError::Database(other),
-    })
+    .map_err(worktree_not_found(branch))
 }
 
 pub struct WorktreeManager<'a> {
