@@ -234,6 +234,11 @@ where
         for err in report.errors {
             wf_errors.push(err);
         }
+        let mut warnings: Vec<BatchValidationWarning> = report
+            .warnings
+            .into_iter()
+            .map(|msg| BatchValidationWarning { message: msg })
+            .collect();
 
         // --- Script step validation ---
         let script_errors = validate_script_steps(workflow, &script_resolver);
@@ -241,12 +246,9 @@ where
             wf_errors.push(err);
         }
 
-        let warnings: Vec<BatchValidationWarning> = unknown_bots
-            .iter()
-            .map(|b| BatchValidationWarning {
-                message: format!("unknown bot name '{b}' (not in [github.apps])"),
-            })
-            .collect();
+        warnings.extend(unknown_bots.iter().map(|b| BatchValidationWarning {
+            message: format!("unknown bot name '{b}' (not in [github.apps])"),
+        }));
 
         entries.push(WorkflowValidationEntry {
             name: wf_name.clone(),
@@ -399,6 +401,36 @@ mod tests {
                 |w| w.message.contains("unknown bot name") && w.message.contains("unknown-bot")
             ),
             "expected unknown bot warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn batch_semantic_warnings_are_surfaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        // A foreach over worktrees without a scope triggers the "base_branch will be inferred" warning
+        let wf = parse_wf(
+            r#"workflow semantic-warn-test {
+                meta { trigger = "manual" targets = ["worktree"] }
+                foreach fan-out {
+                    over = "worktrees"
+                    max_parallel = 4
+                    workflow = "child-workflow"
+                }
+            }"#,
+        );
+
+        let known_bots = HashSet::new();
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        assert_eq!(result.entries.len(), 1);
+        let warnings = &result.entries[0].warnings;
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("base_branch will be inferred")),
+            "expected semantic warning about base_branch inference, got: {warnings:?}"
         );
     }
 

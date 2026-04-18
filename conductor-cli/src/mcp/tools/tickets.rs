@@ -70,8 +70,6 @@ pub(super) fn tool_sync_tickets(
     use conductor_core::repo::RepoManager;
     use conductor_core::ticket_source::TicketSource;
     use conductor_core::tickets::TicketSyncer;
-    use conductor_core::worktree::WorktreeManager;
-
     let repo_slug = require_arg!(args, "repo");
     let ticket_id_arg = get_arg(args, "ticket_id");
     let (conn, config) = match open_db_and_config(db_path) {
@@ -97,12 +95,10 @@ pub(super) fn tool_sync_tickets(
 
     // Single-ticket sync path
     if let Some(ticket_id_str) = ticket_id_arg {
-        let worktree_mgr = WorktreeManager::new(&conn, &config);
-        let (source_type, source_id) =
-            match syncer.resolve_ticket_id(&worktree_mgr, &repo, ticket_id_str) {
-                Ok(v) => v,
-                Err(e) => return tool_err(e),
-            };
+        let (source_type, source_id) = match syncer.resolve_ticket_id(&repo, ticket_id_str) {
+            Ok(v) => v,
+            Err(e) => return tool_err(e),
+        };
 
         for source in &sources {
             if source.source_type != source_type {

@@ -79,7 +79,7 @@ Commit with a short, descriptive message:
 ```
 git add <changed files>
 git commit -m "fix(ci): <short description of what was fixed>"
-git push --force-with-lease origin HEAD
+git push -u --force-with-lease origin HEAD
 ```
 
 ### 7. Poll until checks complete

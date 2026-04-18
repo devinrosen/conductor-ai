@@ -1430,7 +1430,12 @@ fn test_cleanup_merged_worktrees_marks_merged() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, branches| branches.iter().cloned().collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1463,7 +1468,7 @@ fn test_cleanup_merged_worktrees_skips_unmerged() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, _| std::collections::HashSet::new(),
+            |_, _| std::collections::HashMap::new(),
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1493,7 +1498,12 @@ fn test_cleanup_merged_worktrees_skips_already_merged() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, branches| branches.iter().cloned().collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1522,7 +1532,12 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, branches| branches.iter().cloned().collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1581,7 +1596,12 @@ fn test_cleanup_multi_worktrees_same_feature_triggers_ready_for_review() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             None,
-            |_, branches| branches.iter().cloned().collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();
@@ -1600,6 +1620,73 @@ fn test_cleanup_multi_worktrees_same_feature_triggers_ready_for_review() {
         status, "ready_for_review",
         "feature should transition to ready_for_review after all sub-worktrees merge in one run"
     );
+}
+
+/// A new worktree whose branch name matches an OLD merged PR (branch reuse)
+/// must NOT be cleaned up — the merge happened before the worktree was created.
+#[test]
+fn test_cleanup_merged_worktrees_skips_branch_reuse_after_old_merge() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+
+    // w1 from setup_db has created_at = '2024-01-01T00:00:00Z'.
+    // Simulate a merge_check that returns mergedAt BEFORE the worktree was created.
+    let count = WorktreeManager::new(&conn, &config)
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |_, branches| {
+                // mergedAt is 2023 — before the worktree's 2024 created_at
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), "2023-12-31T23:59:59Z".to_string()))
+                    .collect()
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap();
+
+    assert_eq!(
+        count, 0,
+        "worktree created after old merge should not be cleaned up"
+    );
+
+    let status: String = conn
+        .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(status, "active");
+}
+
+/// A worktree whose branch was merged AFTER the worktree was created (the normal
+/// merge path) must still be cleaned up.
+#[test]
+fn test_cleanup_merged_worktrees_cleans_up_genuine_merge() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+
+    // w1 created_at = '2024-01-01T00:00:00Z'. mergedAt = 2024-06 (after creation).
+    let count = WorktreeManager::new(&conn, &config)
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), "2024-06-01T00:00:00Z".to_string()))
+                    .collect()
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap();
+
+    assert_eq!(count, 1);
+
+    let status: String = conn
+        .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(status, "merged");
 }
 
 // -----------------------------------------------------------------------
@@ -1924,7 +2011,12 @@ fn test_cleanup_merged_worktrees_filters_by_repo() {
     let count = mgr
         .cleanup_merged_worktrees_with_merge_check(
             Some("other-repo"),
-            |_, branches| branches.iter().cloned().collect(),
+            |_, branches| {
+                branches
+                    .iter()
+                    .map(|b| (b.clone(), String::new()))
+                    .collect()
+            },
             |_, _| Ok(()),
         )
         .unwrap();

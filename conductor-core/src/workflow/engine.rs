@@ -240,6 +240,20 @@ pub fn apply_workflow_input_defaults(
 ///
 /// Inserts `feature_id`, `feature_name`, and `feature_branch` from the given
 /// `Feature` (using `or_insert_with` so caller-provided values win).
+fn inject_worktree_variables(
+    wt: &crate::worktree::Worktree,
+    repo_default_branch: &str,
+    merged_inputs: &mut HashMap<String, String>,
+) {
+    let base = wt.effective_base(repo_default_branch);
+    merged_inputs
+        .entry("feature_base_branch".to_string())
+        .or_insert_with(|| base.to_string());
+    merged_inputs
+        .entry("worktree_branch".to_string())
+        .or_insert_with(|| wt.branch.clone());
+}
+
 fn inject_feature_variables(feature: &Feature, merged_inputs: &mut HashMap<String, String>) {
     merged_inputs
         .entry("feature_id".to_string())
@@ -484,10 +498,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     if let Some(wt_id) = input.worktree_id {
         let wt = crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id)?;
         let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&wt.repo_id)?;
-        let base = wt.effective_base(&repo.default_branch);
-        merged_inputs
-            .entry("feature_base_branch".to_string())
-            .or_insert_with(|| base.to_string());
+        inject_worktree_variables(&wt, &repo.default_branch, &mut merged_inputs);
     }
     if let Some(ref f) = feature {
         inject_feature_variables(f, &mut merged_inputs);
@@ -1875,5 +1886,50 @@ mod tests {
         assert_eq!(inputs.get("feature_id").unwrap(), "f1");
         assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
         assert_eq!(inputs.get("feature_base_branch").unwrap(), "main");
+    }
+
+    fn make_test_worktree(branch: &str, base_branch: Option<&str>) -> crate::worktree::Worktree {
+        crate::worktree::Worktree {
+            id: "wt1".to_string(),
+            repo_id: "r1".to_string(),
+            slug: "my-worktree".to_string(),
+            branch: branch.to_string(),
+            path: "/tmp/wt".to_string(),
+            ticket_id: None,
+            status: crate::worktree::WorktreeStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            completed_at: None,
+            model: None,
+            base_branch: base_branch.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_inject_worktree_variables_sets_branch_and_base() {
+        let wt = make_test_worktree("feat/my-feature", Some("release/1.0"));
+        let mut inputs = HashMap::new();
+        inject_worktree_variables(&wt, "main", &mut inputs);
+        assert_eq!(inputs.get("worktree_branch").unwrap(), "feat/my-feature");
+        assert_eq!(inputs.get("feature_base_branch").unwrap(), "release/1.0");
+    }
+
+    #[test]
+    fn test_inject_worktree_variables_falls_back_to_repo_default() {
+        let wt = make_test_worktree("feat/my-feature", None);
+        let mut inputs = HashMap::new();
+        inject_worktree_variables(&wt, "main", &mut inputs);
+        assert_eq!(inputs.get("worktree_branch").unwrap(), "feat/my-feature");
+        assert_eq!(inputs.get("feature_base_branch").unwrap(), "main");
+    }
+
+    #[test]
+    fn test_inject_worktree_variables_does_not_overwrite_caller() {
+        let wt = make_test_worktree("feat/my-feature", Some("release/1.0"));
+        let mut inputs = HashMap::new();
+        inputs.insert("worktree_branch".to_string(), "caller-branch".to_string());
+        inputs.insert("feature_base_branch".to_string(), "caller-base".to_string());
+        inject_worktree_variables(&wt, "main", &mut inputs);
+        assert_eq!(inputs.get("worktree_branch").unwrap(), "caller-branch");
+        assert_eq!(inputs.get("feature_base_branch").unwrap(), "caller-base");
     }
 }

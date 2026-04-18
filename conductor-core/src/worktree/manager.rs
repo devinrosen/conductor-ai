@@ -187,6 +187,37 @@ pub struct WorktreeCreateOptions {
     pub pre_health: Option<super::git_helpers::MainHealthStatus>,
 }
 
+/// Write `branch.<branch>.remote = origin` and `branch.<branch>.merge = refs/heads/<branch>`
+/// into the git config at `path`. This is the non-network equivalent of `git push -u origin <branch>`,
+/// ensuring bare `git push` inside the worktree always targets the correct remote branch.
+pub(crate) fn set_upstream_tracking(path: &Path, branch: &str) -> Result<()> {
+    check_output(git_in(path).args(["config", &format!("branch.{branch}.remote"), "origin"]))?;
+    check_output(git_in(path).args([
+        "config",
+        &format!("branch.{branch}.merge"),
+        &format!("refs/heads/{branch}"),
+    ]))?;
+    Ok(())
+}
+
+/// Look up the `ticket_id` linked to the worktree on `branch` in `repo_id`.
+///
+/// Returns `Ok(Some(ticket_id))` when found, `Ok(None)` when the worktree has
+/// no linked ticket, and `Err(WorktreeNotFound)` when no worktree exists for
+/// that branch.
+pub fn get_ticket_id_by_branch(
+    conn: &Connection,
+    repo_id: &str,
+    branch: &str,
+) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT ticket_id FROM worktrees WHERE repo_id = ?1 AND branch = ?2",
+        params![repo_id, branch],
+        |row| row.get(0),
+    )
+    .map_err(worktree_not_found(branch))
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -349,6 +380,10 @@ impl<'a> WorktreeManager<'a> {
             &wt_path.to_string_lossy(),
             &branch,
         ]))?;
+
+        // Set upstream tracking config so bare `git push` targets the correct remote branch.
+        // This is the non-network equivalent of `git push -u origin <branch>`.
+        set_upstream_tracking(&wt_path, &branch)?;
 
         // Detect and install deps
         install_deps(&wt_path);
@@ -1154,11 +1189,12 @@ impl<'a> WorktreeManager<'a> {
     pub(crate) fn cleanup_merged_worktrees_with_merge_check(
         &self,
         repo_slug: Option<&str>,
-        merge_check: impl Fn(&str, &[String]) -> std::collections::HashSet<String>,
+        // Returns branch → mergedAt (ISO 8601). Empty string means "unknown time, always clean up".
+        merge_check: impl Fn(&str, &[String]) -> std::collections::HashMap<String, String>,
         pull_fn: impl Fn(&str, &str) -> std::result::Result<(), String>,
     ) -> Result<usize> {
         let base_query =
-            "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch
+            "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch, w.created_at
                  FROM worktrees w
                  JOIN repos r ON r.id = w.repo_id
                  WHERE w.status = 'active'";
@@ -1167,7 +1203,7 @@ impl<'a> WorktreeManager<'a> {
             None => base_query.to_string(),
         };
 
-        let mapper = |row: &rusqlite::Row| -> rusqlite::Result<[String; 7]> {
+        let mapper = |row: &rusqlite::Row| -> rusqlite::Result<[String; 8]> {
             Ok([
                 row.get(0)?,
                 row.get(1)?,
@@ -1176,9 +1212,10 @@ impl<'a> WorktreeManager<'a> {
                 row.get(4)?,
                 row.get(5)?,
                 row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(7)?.unwrap_or_default(),
             ])
         };
-        let rows: Vec<[String; 7]> = match repo_slug {
+        let rows: Vec<[String; 8]> = match repo_slug {
             Some(slug) => query_collect(self.conn, &query, params![slug], mapper)?,
             None => query_collect(self.conn, &query, [], mapper)?,
         };
@@ -1192,8 +1229,9 @@ impl<'a> WorktreeManager<'a> {
                 .or_default()
                 .push(row[1].clone());
         }
-        let mut merged_branches: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        // branch → mergedAt (ISO 8601); empty string = unknown, always clean up.
+        let mut merged_branches: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for (remote_url, branches) in &branches_by_remote {
             merged_branches.extend(merge_check(remote_url, branches));
         }
@@ -1213,8 +1251,25 @@ impl<'a> WorktreeManager<'a> {
         let fm = crate::feature::FeatureManager::new(self.conn, self.config);
 
         for row in &rows {
-            let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch] = row;
-            if !merged_branches.contains(branch) {
+            let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch, wt_created_at] =
+                row;
+            let Some(merged_at) = merged_branches.get(branch) else {
+                continue;
+            };
+
+            // If the worktree was created AFTER the PR was merged, the branch name is being
+            // reused for a new worktree — do not clean it up.
+            if !merged_at.is_empty()
+                && !wt_created_at.is_empty()
+                && wt_created_at.as_str() > merged_at.as_str()
+            {
+                tracing::debug!(
+                    worktree = %wt_id,
+                    branch = %branch,
+                    wt_created_at = %wt_created_at,
+                    merged_at = %merged_at,
+                    "skipping cleanup: worktree was created after PR was merged (branch reuse)"
+                );
                 continue;
             }
 
@@ -1497,11 +1552,12 @@ mod tests {
     // ── cleanup_merged_worktrees pull_fn tests ──────────────────────────────
 
     /// Returns a merge_check closure that marks only "feat/sub-task" as merged.
-    fn merged_sub_task_check() -> impl Fn(&str, &[String]) -> std::collections::HashSet<String> {
+    fn merged_sub_task_check(
+    ) -> impl Fn(&str, &[String]) -> std::collections::HashMap<String, String> {
         |_remote_url: &str, _branches: &[String]| {
-            let mut set = std::collections::HashSet::new();
-            set.insert("feat/sub-task".to_string());
-            set
+            let mut map = std::collections::HashMap::new();
+            map.insert("feat/sub-task".to_string(), String::new());
+            map
         }
     }
 
@@ -1881,6 +1937,62 @@ mod tests {
             wt2.base_branch.as_deref(),
             Some(wt1.branch.as_str()),
             "dependent ticket should base off its blocker's branch"
+        );
+    }
+
+    /// Verify set_upstream_tracking writes branch.<branch>.remote and branch.<branch>.merge
+    /// into the git config, which prevents bare `git push` from landing commits on the wrong branch.
+    #[test]
+    fn test_set_upstream_tracking_writes_config() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let repo_dir = TempDir::new().unwrap();
+        let repo_path = repo_dir.path();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(repo_path)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(repo_path)
+            .output()
+            .expect("initial commit");
+
+        set_upstream_tracking(repo_path, "feat/my-branch").unwrap();
+
+        let remote_val = Command::new("git")
+            .args(["config", "--get", "branch.feat/my-branch.remote"])
+            .current_dir(repo_path)
+            .output()
+            .expect("git config --get remote");
+        assert_eq!(
+            String::from_utf8_lossy(&remote_val.stdout).trim(),
+            "origin",
+            "branch.feat/my-branch.remote should be 'origin'"
+        );
+
+        let merge_val = Command::new("git")
+            .args(["config", "--get", "branch.feat/my-branch.merge"])
+            .current_dir(repo_path)
+            .output()
+            .expect("git config --get merge");
+        assert_eq!(
+            String::from_utf8_lossy(&merge_val.stdout).trim(),
+            "refs/heads/feat/my-branch",
+            "branch.feat/my-branch.merge should be 'refs/heads/feat/my-branch'"
         );
     }
 }

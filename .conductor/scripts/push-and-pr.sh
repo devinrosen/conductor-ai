@@ -3,6 +3,20 @@ set -euo pipefail
 
 base="${FEATURE_BASE_BRANCH:-main}"
 
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+# Fail loudly if HEAD is on the base branch — commits landed in the wrong place
+if [ "$current_branch" = "$base" ]; then
+  echo "ERROR: HEAD is on base branch '$base', not a feature branch — aborting to prevent corrupting base" >&2
+  exit 1
+fi
+
+# Optional stricter check: verify against workflow-supplied branch name
+if [ -n "${WORKTREE_BRANCH:-}" ] && [ "$current_branch" != "$WORKTREE_BRANCH" ]; then
+  echo "ERROR: current branch '$current_branch' != expected '$WORKTREE_BRANCH' — aborting" >&2
+  exit 1
+fi
+
 # Fetch latest base ref for accurate comparison
 git fetch origin "$base" --quiet
 
@@ -17,7 +31,7 @@ EOF
   exit 0
 fi
 
-SKIP_E2E=1 git push -u origin HEAD
+SKIP_E2E=1 git push -u origin "$current_branch"
 
 pr_create_err=$(mktemp)
 if pr_url=$(gh pr create --fill --base "$base" 2>"$pr_create_err"); then
