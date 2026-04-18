@@ -855,6 +855,7 @@ fn global_mode_name_filter_includes_matching_run() {
     ];
     // r1's workflow_name is "test-workflow" (default); filter on substring
     state.workflow_name_filter = Some("test-workflow".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     // Both runs match "test-workflow" so both groups appear
     let run_ids: Vec<_> = rows
@@ -879,6 +880,7 @@ fn global_mode_name_filter_excludes_non_matching_run() {
         make_wf_run_with_label("r2", Some("repo-a/feat-2"), None),
     ];
     state.workflow_name_filter = Some("nonexistent-workflow".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert!(
         rows.is_empty(),
@@ -893,6 +895,7 @@ fn global_mode_name_filter_is_case_insensitive() {
     run.workflow_name = "deploy-prod".into();
     state.data.workflow_runs = vec![run];
     state.workflow_name_filter = Some("DEPLOY".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     assert!(
         rows.iter()
@@ -909,6 +912,7 @@ fn global_mode_name_filter_none_shows_all() {
         make_wf_run_with_label("r2", Some("repo-b/feat-2"), None),
     ];
     state.workflow_name_filter = None;
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     let run_ids: Vec<_> = rows
         .iter()
@@ -933,6 +937,7 @@ fn global_mode_name_filter_excludes_whole_target_group() {
     r2.workflow_name = "run-tests".into();
     state.data.workflow_runs = vec![r1, r2];
     state.workflow_name_filter = Some("deploy".into());
+    state.rebuild_workflow_run_rows();
     let rows = state.visible_workflow_run_rows();
     // r1 matches; r2 does not — the TargetHeader for feat-2 should be absent
     assert!(
