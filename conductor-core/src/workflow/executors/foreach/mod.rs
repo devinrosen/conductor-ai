@@ -1191,5 +1191,5 @@ fn is_terminal_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
 
-
-#[cfg(test)] mod tests;
+#[cfg(test)]
+mod tests;
