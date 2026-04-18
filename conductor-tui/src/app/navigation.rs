@@ -174,11 +174,7 @@ impl App {
             View::WorkflowRunDetail => {
                 // If we've drilled into a child workflow, pop back to the parent.
                 if let Some(parent_id) = self.state.workflow_run_nav_stack.pop() {
-                    self.state.selected_workflow_run_id = Some(parent_id);
-                    self.state.workflow_step_index = 0;
-                    self.state.step_agent_event_index = 0;
-                    self.state.error_pane_scroll = 0;
-                    self.reload_workflow_steps();
+                    self.switch_to_workflow_run(parent_id);
                     return;
                 }
                 self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
@@ -457,15 +453,19 @@ impl App {
         self.reload_workflow_steps();
     }
 
-    fn drill_into_child_workflow(&mut self, child_run_id: String) {
-        if let Some(current_id) = self.state.selected_workflow_run_id.take() {
-            self.state.workflow_run_nav_stack.push(current_id);
-        }
-        self.state.selected_workflow_run_id = Some(child_run_id);
+    fn switch_to_workflow_run(&mut self, run_id: String) {
+        self.state.selected_workflow_run_id = Some(run_id);
         self.state.workflow_step_index = 0;
         self.state.step_agent_event_index = 0;
         self.state.error_pane_scroll = 0;
         self.reload_workflow_steps();
+    }
+
+    fn drill_into_child_workflow(&mut self, child_run_id: String) {
+        if let Some(current_id) = self.state.selected_workflow_run_id.take() {
+            self.state.workflow_run_nav_stack.push(current_id);
+        }
+        self.switch_to_workflow_run(child_run_id);
     }
 
     pub(super) fn move_up(&mut self) {
@@ -1810,6 +1810,21 @@ mod tests {
             app.state.selected_workflow_run_id.as_deref(),
             Some("parent-run")
         );
+    }
+
+    #[test]
+    fn enter_workflow_run_detail_clears_nav_stack() {
+        let mut app = make_test_app();
+        // Pre-populate the nav stack as if we had drilled into a child during a prior session.
+        app.state.workflow_run_nav_stack = vec!["old-parent".into(), "old-child".into()];
+        app.state.view = View::Dashboard;
+        app.enter_workflow_run_detail("new-run".into(), None);
+        assert!(
+            app.state.workflow_run_nav_stack.is_empty(),
+            "nav stack must be cleared when entering a new top-level workflow run"
+        );
+        assert_eq!(app.state.selected_workflow_run_id.as_deref(), Some("new-run"));
+        assert_eq!(app.state.view, View::WorkflowRunDetail);
     }
 
     #[test]
