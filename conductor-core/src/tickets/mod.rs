@@ -152,7 +152,9 @@ impl Ticket {
     }
 }
 
-pub(super) fn ticket_not_found(id: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
+pub(super) fn ticket_not_found(
+    id: impl Into<String>,
+) -> impl FnOnce(rusqlite::Error) -> ConductorError {
     let id = id.into();
     move |e| match e {
         rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound { id },

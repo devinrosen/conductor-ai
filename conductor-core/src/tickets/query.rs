@@ -150,7 +150,10 @@ pub(super) fn query_dep_pairs_for_repo(
 
 /// Map a ticket from a row where columns have a prefix alias (e.g. "tf_id", "tf_repo_id").
 /// Used for JOIN queries that select two ticket sets with different table aliases.
-pub(super) fn map_ticket_row_aliased(row: &rusqlite::Row, prefix: &str) -> rusqlite::Result<Ticket> {
+pub(super) fn map_ticket_row_aliased(
+    row: &rusqlite::Row,
+    prefix: &str,
+) -> rusqlite::Result<Ticket> {
     let mut col = String::with_capacity(prefix.len() + 16);
     macro_rules! col {
         ($name:expr) => {{

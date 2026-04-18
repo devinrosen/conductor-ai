@@ -8,19 +8,20 @@ use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
 use crate::github::merged_branches_for_repo;
 
-use super::{
-    ReadyTicket, Ticket, TicketDependencies, TicketFilter, TicketInput, TicketLabel,
-    ticket_not_found, VALID_TICKET_STATES,
-};
 use super::query::{
     map_ticket_row, query_dep_pairs, query_dep_pairs_for_repo, TICKET_COLS, TICKET_COLS_BARE,
+};
+use super::{
+    ticket_not_found, ReadyTicket, Ticket, TicketDependencies, TicketFilter, TicketInput,
+    TicketLabel, VALID_TICKET_STATES,
 };
 
 pub struct TicketSyncer<'a> {
     pub(super) conn: &'a Connection,
 }
 
-pub(in crate::tickets) const CLOSED_TICKET_ARTIFACTS_SQL: &str = "SELECT r.local_path, w.path, w.branch, r.remote_url
+pub(in crate::tickets) const CLOSED_TICKET_ARTIFACTS_SQL: &str =
+    "SELECT r.local_path, w.path, w.branch, r.remote_url
      FROM worktrees w
      JOIN repos r ON r.id = w.repo_id
      WHERE w.repo_id = :repo_id
