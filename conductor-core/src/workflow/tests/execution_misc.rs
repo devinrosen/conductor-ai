@@ -319,6 +319,33 @@ fn make_call_wf_state<'a>(
     }
 }
 
+/// Creates a tempdir with `.conductor/workflows/child.wf` on disk.
+/// Returns `(TempDir, dir_path_string)` — caller must keep `TempDir` alive.
+fn setup_child_wf_dir() -> (tempfile::TempDir, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    let wf_dir = tmp.path().join(".conductor/workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    std::fs::write(
+        wf_dir.join("child.wf"),
+        "workflow child { meta { targets = [\"worktree\"] } }",
+    )
+    .unwrap();
+    let dir = tmp.path().to_str().unwrap().to_string();
+    (tmp, dir)
+}
+
+/// Asserts that exactly one child workflow run exists under `parent_run_id`.
+fn assert_no_new_child_run(conn: &rusqlite::Connection, parent_run_id: &str, msg: &str) {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM workflow_runs WHERE parent_workflow_run_id = ?1",
+            rusqlite::params![parent_run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "{}", msg);
+}
+
 /// Regression: when a resumed call_workflow step's child run fails again
 /// (all_succeeded=false), execute_call_workflow must NOT fall through to the
 /// retry loop. It should record failure and return immediately.
@@ -328,21 +355,13 @@ fn test_call_workflow_resume_failure_stops_without_new_child() {
     let config = Config::default();
 
     // Temp dir with child.wf on disk (needed for load_workflow_by_name).
-    let tmp = tempfile::tempdir().unwrap();
-    let wf_dir = tmp.path().join(".conductor/workflows");
-    std::fs::create_dir_all(&wf_dir).unwrap();
-    std::fs::write(
-        wf_dir.join("child.wf"),
-        "workflow child { meta { targets = [\"worktree\"] } }",
-    )
-    .unwrap();
-    let dir = tmp.path().to_str().unwrap();
+    let (_tmp, dir) = setup_child_wf_dir();
 
     // Register a real repo so the child run is not "ephemeral" and resume_workflow
     // can look up paths. (child.wf calls "nonexistent" → no matching file → body
     // errors → all_succeeded=false, but not an Err from resume_workflow itself.)
     let repo = crate::repo::RepoManager::new(&conn, &config)
-        .register("test-repo-resume-fail", dir, "", None)
+        .register("test-repo-resume-fail", &dir, "", None)
         .unwrap();
 
     // Create parent workflow run.
@@ -401,7 +420,7 @@ fn test_call_workflow_resume_failure_stops_without_new_child() {
     let mut state = make_call_wf_state(
         &conn,
         &config,
-        dir,
+        &dir,
         parent_run.id.clone(),
         parent_agent.id.clone(),
     );
@@ -419,16 +438,11 @@ fn test_call_workflow_resume_failure_stops_without_new_child() {
         !state.all_succeeded,
         "state must be failed after resume failure"
     );
-
-    // No new child run should have been created.
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM workflow_runs WHERE parent_workflow_run_id = ?1",
-            rusqlite::params![parent_run.id],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 1, "resume failure must not spawn a new child run");
+    assert_no_new_child_run(
+        &conn,
+        &parent_run.id,
+        "resume failure must not spawn a new child run",
+    );
 }
 
 /// Regression: when a resumed call_workflow step's child run errors during
@@ -439,16 +453,7 @@ fn test_call_workflow_resume_error_stops_without_new_child() {
     let conn = setup_db();
     let config = Config::default();
 
-    // Temp dir with child.wf on disk.
-    let tmp = tempfile::tempdir().unwrap();
-    let wf_dir = tmp.path().join(".conductor/workflows");
-    std::fs::create_dir_all(&wf_dir).unwrap();
-    std::fs::write(
-        wf_dir.join("child.wf"),
-        "workflow child { meta { targets = [\"worktree\"] } }",
-    )
-    .unwrap();
-    let dir = tmp.path().to_str().unwrap();
+    let (_tmp, dir) = setup_child_wf_dir();
 
     // Create parent workflow run.
     let agent_mgr = crate::agent::AgentManager::new(&conn);
@@ -472,7 +477,7 @@ fn test_call_workflow_resume_error_stops_without_new_child() {
     let mut state = make_call_wf_state(
         &conn,
         &config,
-        dir,
+        &dir,
         parent_run.id.clone(),
         parent_agent.id.clone(),
     );
@@ -490,16 +495,79 @@ fn test_call_workflow_resume_error_stops_without_new_child() {
         !state.all_succeeded,
         "state must be failed after resume error"
     );
+    assert_no_new_child_run(
+        &conn,
+        &parent_run.id,
+        "resume error must not spawn a new child run",
+    );
+}
 
-    // No new child run should have been created.
-    let count: i64 = conn
+/// When a resume fails and the node has `on_fail` set, `run_on_fail_agent` must
+/// be called. Verified by checking that a step for the on_fail agent is inserted
+/// into the DB under the parent run.
+#[test]
+fn test_call_workflow_resume_failure_triggers_on_fail_agent() {
+    let conn = setup_db();
+    let config = Config::default();
+
+    let (tmp, dir) = setup_child_wf_dir();
+
+    // Create the on_fail agent file so load_agent succeeds and insert_step fires.
+    let agents_dir = tmp.path().join(".conductor/agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::write(agents_dir.join("on-fail-agent.md"), "Handle failure.").unwrap();
+
+    // Create parent workflow run.
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent_agent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let parent_run = wf_mgr
+        .create_workflow_run("parent-wf", None, &parent_agent.id, false, "manual", None)
+        .unwrap();
+
+    // Insert an ephemeral child run that causes resume_workflow to return Err.
+    insert_workflow_run(
+        &conn,
+        "child-run-on-fail",
+        "child",
+        "failed",
+        Some(parent_run.id.as_str()),
+    );
+
+    let mut state = make_call_wf_state(
+        &conn,
+        &config,
+        &dir,
+        parent_run.id.clone(),
+        parent_agent.id.clone(),
+    );
+    let node = CallWorkflowNode {
+        workflow: "child".into(),
+        inputs: HashMap::new(),
+        retries: 0,
+        on_fail: Some(crate::workflow_dsl::AgentRef::Name("on-fail-agent".into())),
+        bot_name: None,
+    };
+
+    execute_call_workflow(&mut state, &node, 0).unwrap();
+
+    assert!(
+        !state.all_succeeded,
+        "state must be failed after resume error"
+    );
+
+    // The on_fail agent step must have been inserted under the parent run.
+    let on_fail_step_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM workflow_runs WHERE parent_workflow_run_id = ?1",
+            "SELECT COUNT(*) FROM workflow_run_steps WHERE workflow_run_id = ?1 AND step_name = 'on-fail-agent'",
             rusqlite::params![parent_run.id],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(count, 1, "resume error must not spawn a new child run");
+    assert_eq!(
+        on_fail_step_count, 1,
+        "on_fail agent step must be recorded when resume fails"
+    );
 }
 
 // ---------------------------------------------------------------------------
