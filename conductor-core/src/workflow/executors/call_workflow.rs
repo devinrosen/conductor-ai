@@ -2,12 +2,11 @@ use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::CallWorkflowNode;
 
 use crate::workflow::engine::{
-    fetch_child_completion_data, record_step_failure, record_step_skipped, record_step_success,
-    resolve_child_inputs, restore_step, run_on_fail_agent, should_skip, ExecutionState,
+    fetch_child_completion_data, handle_on_fail, record_step_success, resolve_child_inputs,
+    restore_step, should_skip, ExecutionState,
 };
 use crate::workflow::prompt_builder::build_variable_map;
 use crate::workflow::status::WorkflowStepStatus;
-use crate::workflow_dsl::OnFail;
 
 pub fn execute_call_workflow(
     state: &mut ExecutionState<'_>,
@@ -366,31 +365,5 @@ pub fn execute_call_workflow(
         }
     }
 
-    // All retries exhausted — handle on_fail directive
-    match &node.on_fail {
-        Some(OnFail::Continue) => {
-            record_step_skipped(state, step_key, &node.workflow);
-            return Ok(());
-        }
-        Some(OnFail::Agent(ref on_fail_agent)) => {
-            run_on_fail_agent(
-                state,
-                &node.workflow,
-                on_fail_agent,
-                &last_error,
-                node.retries,
-                iteration,
-            );
-        }
-        None => {}
-    }
-
-    record_step_failure(
-        state,
-        step_key,
-        &node.workflow,
-        last_error,
-        max_attempts,
-        true,
-    )
+    handle_on_fail(state, step_key, &node.workflow, &node.on_fail, last_error, node.retries, iteration, max_attempts)
 }
