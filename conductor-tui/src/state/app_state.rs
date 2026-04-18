@@ -118,7 +118,7 @@ pub struct AppState {
     pub show_completed_workflow_runs: bool,
 
     /// Cached result of `rebuild_workflow_run_rows()`. Invalidated at every mutation site.
-    pub cached_workflow_run_rows: Vec<WorkflowRunRow>,
+    cached_workflow_run_rows: Vec<WorkflowRunRow>,
 
     /// Semantic colour theme — centralises all Color constants used by the UI.
     pub theme: Theme,
@@ -560,8 +560,8 @@ impl AppState {
     }
 
     /// Returns the cached flat, ordered list of visible workflow run rows.
-    pub fn visible_workflow_run_rows(&self) -> Vec<WorkflowRunRow> {
-        self.cached_workflow_run_rows.clone()
+    pub fn visible_workflow_run_rows(&self) -> &[WorkflowRunRow] {
+        &self.cached_workflow_run_rows
     }
 
     fn compute_workflow_run_rows(&self) -> Vec<WorkflowRunRow> {
