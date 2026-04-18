@@ -1070,10 +1070,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         if has_feature_id {
             conn.execute_batch("ALTER TABLE workflow_runs DROP COLUMN feature_id;")?;
         }
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS feature_tickets;
-             DROP TABLE IF EXISTS features;",
-        )?;
+        conn.execute_batch(include_str!("migrations/073_drop_features.sql"))?;
         bump_version(conn, 73)?;
     }
 
