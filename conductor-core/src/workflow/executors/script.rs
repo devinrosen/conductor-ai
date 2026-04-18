@@ -423,5 +423,14 @@ pub fn execute_script(
         }
     }
 
-    handle_on_fail(state, step_key, step_label, &node.on_fail, last_error, node.retries, iteration, max_attempts)
+    handle_on_fail(
+        state,
+        step_key,
+        step_label,
+        &node.on_fail,
+        last_error,
+        node.retries,
+        iteration,
+        max_attempts,
+    )
 }

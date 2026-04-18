@@ -1414,7 +1414,14 @@ pub(super) fn handle_on_fail(
             return Ok(());
         }
         Some(OnFail::Agent(ref on_fail_agent)) => {
-            run_on_fail_agent(state, step_label, on_fail_agent, &last_error, retries, iteration);
+            run_on_fail_agent(
+                state,
+                step_label,
+                on_fail_agent,
+                &last_error,
+                retries,
+                iteration,
+            );
         }
         None => {}
     }

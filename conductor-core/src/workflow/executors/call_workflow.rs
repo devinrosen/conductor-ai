@@ -365,5 +365,14 @@ pub fn execute_call_workflow(
         }
     }
 
-    handle_on_fail(state, step_key, &node.workflow, &node.on_fail, last_error, node.retries, iteration, max_attempts)
+    handle_on_fail(
+        state,
+        step_key,
+        &node.workflow,
+        &node.on_fail,
+        last_error,
+        node.retries,
+        iteration,
+        max_attempts,
+    )
 }

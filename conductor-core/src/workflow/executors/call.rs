@@ -586,5 +586,14 @@ fn execute_call_with_schema(
         }
     }
 
-    handle_on_fail(state, step_key, agent_label, &node.on_fail, last_error, node.retries, iteration, max_attempts)
+    handle_on_fail(
+        state,
+        step_key,
+        agent_label,
+        &node.on_fail,
+        last_error,
+        node.retries,
+        iteration,
+        max_attempts,
+    )
 }
