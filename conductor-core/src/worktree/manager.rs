@@ -200,6 +200,30 @@ pub(crate) fn set_upstream_tracking(path: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Look up the `ticket_id` linked to the worktree on `branch` in `repo_id`.
+///
+/// Returns `Ok(Some(ticket_id))` when found, `Ok(None)` when the worktree has
+/// no linked ticket, and `Err(TicketSync(...))` when no worktree exists for
+/// that branch.
+pub fn get_ticket_id_by_branch(
+    conn: &Connection,
+    repo_id: &str,
+    branch: &str,
+) -> Result<Option<String>> {
+    conn.query_row(
+        &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND branch = ?2"),
+        params![repo_id, branch],
+        map_worktree_row,
+    )
+    .map(|wt: Worktree| wt.ticket_id)
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            ConductorError::TicketSync(format!("no worktree found for branch {branch}"))
+        }
+        other => ConductorError::Database(other),
+    })
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,

@@ -1153,19 +1153,7 @@ impl<'a> TicketSyncer<'a> {
                 ))
             })?;
             let branch = github::get_pr_head_branch(&repo.remote_url, pr_number)?;
-            let ticket_id: Option<String> = self
-                .conn
-                .query_row(
-                    "SELECT ticket_id FROM worktrees WHERE repo_id = ?1 AND branch = ?2",
-                    params![repo.id, branch],
-                    |row| row.get(0),
-                )
-                .map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        ConductorError::TicketSync(format!("no worktree found for branch {branch}"))
-                    }
-                    other => ConductorError::Database(other),
-                })?;
+            let ticket_id = crate::worktree::get_ticket_id_by_branch(self.conn, &repo.id, &branch)?;
             let ticket_id = ticket_id.ok_or_else(|| {
                 ConductorError::TicketSync(format!(
                     "worktree for branch {branch} has no linked ticket"
@@ -2742,6 +2730,46 @@ mod tests {
             result.unwrap_err(),
             ConductorError::TicketNotFound { .. }
         ));
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_worktree_branch_lookup() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let repo = make_repo();
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("77", "Issue 77")])
+            .unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '77'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
+             VALUES ('wt1', 'r1', 'wt-1', 'feat/issue-77', '/tmp/wt1', ?1, 'active', '2024-01-01T00:00:00Z')",
+            params![ticket_id],
+        )
+        .unwrap();
+
+        let result =
+            crate::worktree::get_ticket_id_by_branch(&conn, &repo.id, "feat/issue-77").unwrap();
+        assert_eq!(result, Some(ticket_id));
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_worktree_branch_not_found() {
+        let conn = setup_db();
+        let repo = make_repo();
+
+        let err =
+            crate::worktree::get_ticket_id_by_branch(&conn, &repo.id, "feat/missing").unwrap_err();
+        assert!(
+            matches!(err, ConductorError::TicketSync(_)),
+            "expected TicketSync error, got: {err:?}"
+        );
     }
 
     #[test]
