@@ -2932,4 +2932,124 @@ mod tests {
             Some("feat-linked")
         );
     }
+
+    /// build_item_vars for Worktrees with a non-existent worktree ID falls back to
+    /// minimal vars (item.id, item.slug) without hard-failing.
+    #[test]
+    fn test_build_item_vars_worktrees_missing_worktree_falls_back() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            None,
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Worktrees);
+        let item = make_minimal_item("nonexistent-wt", "some-slug", "worktree");
+
+        let vars = build_item_vars(&mut state, &node, &item).unwrap();
+        assert_eq!(
+            vars.get("item.id").map(|s| s.as_str()),
+            Some("nonexistent-wt")
+        );
+        assert_eq!(vars.get("item.slug").map(|s| s.as_str()), Some("some-slug"));
+        assert!(!vars.contains_key("item.branch"));
+        assert!(!vars.contains_key("item.path"));
+        assert!(!vars.contains_key("item.base_branch"));
+        assert!(!vars.contains_key("item.ticket_id"));
+    }
+
+    /// build_item_vars for Tickets with a non-existent ticket ID falls back to
+    /// minimal vars (item.id, item.source_id) without hard-failing.
+    #[test]
+    fn test_build_item_vars_tickets_missing_ticket_falls_back() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = make_execution_state_with_worktree(
+            &conn,
+            config,
+            run.id,
+            parent.id,
+            None,
+            Some("r1".to_string()),
+            None,
+        );
+
+        let node = make_foreach_node_for(ForeachOver::Tickets);
+        let item = make_minimal_item("nonexistent-ticket", "ISSUE-99", "ticket");
+
+        let vars = build_item_vars(&mut state, &node, &item).unwrap();
+        assert_eq!(
+            vars.get("item.id").map(|s| s.as_str()),
+            Some("nonexistent-ticket")
+        );
+        assert_eq!(
+            vars.get("item.source_id").map(|s| s.as_str()),
+            Some("ISSUE-99")
+        );
+        assert!(!vars.contains_key("item.title"));
+        assert!(!vars.contains_key("item.url"));
+        assert!(!vars.contains_key("item.state"));
+        assert!(!vars.contains_key("item.labels"));
+    }
+
+    /// build_item_vars for Repos with a non-existent repo ID falls back to
+    /// minimal vars (item.id, item.slug) without hard-failing.
+    #[test]
+    fn test_build_item_vars_repos_missing_repo_falls_back() {
+        let conn = setup_db();
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state =
+            make_execution_state_with_worktree(&conn, config, run.id, parent.id, None, None, None);
+
+        let node = make_foreach_node_for(ForeachOver::Repos);
+        let item = make_minimal_item("nonexistent-repo", "my-repo", "repo");
+
+        let vars = build_item_vars(&mut state, &node, &item).unwrap();
+        assert_eq!(
+            vars.get("item.id").map(|s| s.as_str()),
+            Some("nonexistent-repo")
+        );
+        assert_eq!(vars.get("item.slug").map(|s| s.as_str()), Some("my-repo"));
+        assert!(!vars.contains_key("item.local_path"));
+        assert!(!vars.contains_key("item.remote_url"));
+    }
 }
