@@ -512,19 +512,6 @@ export interface FeedbackRequest {
   timeout_secs?: number;
 }
 
-export interface Notification {
-  id: string;
-  kind: string;
-  title: string;
-  body: string;
-  severity: "info" | "warning" | "action_required";
-  entity_id: string | null;
-  entity_type: string | null;
-  read: boolean;
-  created_at: string;
-  read_at: string | null;
-}
-
 export interface ThemeUnlockStats {
   repos_registered: number;
   prs_merged: number;

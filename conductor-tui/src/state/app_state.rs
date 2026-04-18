@@ -132,9 +132,6 @@ pub struct AppState {
     /// True while a background thread is loading workflow defs for the picker.
     pub loading_workflow_picker_defs: bool,
 
-    /// Number of unread in-app notifications (updated from background poller).
-    pub unread_notification_count: usize,
-
     /// Cached home directory path for `~` substitution in path display. Never changes.
     pub home_dir: Option<String>,
 
@@ -253,7 +250,6 @@ impl AppState {
             loading_workflow_picker_defs: false,
             column_focus: ColumnFocus::Content,
             workflow_column_visible: true,
-            unread_notification_count: 0,
             home_dir: dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
             theme: Theme::default(),
             selected_workflow_def: None,

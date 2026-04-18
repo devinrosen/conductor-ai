@@ -103,26 +103,10 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     };
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
-
-    // Notification indicator
-    if state.unread_notification_count > 0 {
-        spans.push(Span::styled(
-            format!("\u{1F514} {} ", state.unread_notification_count),
-            Style::default()
-                .fg(state.theme.label_warning)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " ",
-            Style::default().fg(state.theme.label_secondary),
-        ));
-    }
-
-    spans.push(Span::styled(
+    let spans: Vec<Span<'static>> = vec![Span::styled(
         msg,
         Style::default().fg(state.theme.label_secondary),
-    ));
+    )];
 
     let bar = Paragraph::new(Line::from(spans));
     frame.render_widget(bar, area);

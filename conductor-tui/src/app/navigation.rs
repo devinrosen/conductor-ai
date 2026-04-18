@@ -535,15 +535,6 @@ impl App {
                 wrap_decrement(focused_option, options.len());
                 return;
             }
-            Modal::Notifications {
-                ref notifications,
-                ref mut selected,
-            } => {
-                if !notifications.is_empty() {
-                    wrap_decrement(selected, notifications.len());
-                }
-                return;
-            }
             _ => {}
         }
         // When workflow column has focus, navigate workflow panes.
@@ -703,15 +694,6 @@ impl App {
                 ..
             } if !options.is_empty() => {
                 wrap_increment(focused_option, options.len());
-                return;
-            }
-            Modal::Notifications {
-                ref notifications,
-                ref mut selected,
-            } => {
-                if !notifications.is_empty() {
-                    wrap_increment(selected, notifications.len());
-                }
                 return;
             }
             _ => {}

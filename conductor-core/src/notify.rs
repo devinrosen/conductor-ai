@@ -2,23 +2,9 @@ use crate::agent::{AgentRun, AgentRunStatus};
 use crate::config::{HookConfig, NotificationConfig};
 use crate::notification_event::NotificationEvent;
 use crate::notification_hooks::HookRunner;
-use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
 use crate::workflow::WorkflowRun;
 use crate::workflow::WorkflowRunStatus;
 use crate::workflow_dsl::GateType;
-
-/// Persist an in-app notification record. Logs a warning on failure.
-fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
-    let mgr = NotificationManager::new(conn);
-    if let Err(e) = mgr.create_notification(params) {
-        tracing::warn!(
-            kind = params.kind,
-            entity_id = params.entity_id,
-            entity_type = params.entity_type,
-            "persist notification failed: {e}"
-        );
-    }
-}
 
 /// Returns `true` if a notification should fire given the config and run outcome.
 ///
@@ -76,20 +62,18 @@ pub fn try_claim_notification(
     }
 }
 
-/// Parameters for the common 3-step notification dispatch pattern.
+/// Parameters for the common 2-step notification dispatch pattern.
 struct DispatchParams<'a> {
     dedup_entity_id: &'a str,
     dedup_event_type: &'a str,
-    notification: &'a CreateNotification<'a>,
     hooks: &'a [HookConfig],
     event: Option<&'a NotificationEvent>,
 }
 
-/// Dispatch a notification using the common 3-step pattern.
+/// Dispatch a notification using the common 2-step pattern.
 ///
 /// 1. Try to claim notification for deduplication
-/// 2. Persist in-app notification
-/// 3. Fire user-configured notification hooks (shell/HTTP)
+/// 2. Fire user-configured notification hooks (shell/HTTP)
 ///
 /// Returns `true` if the notification was dispatched, `false` if deduplicated.
 fn dispatch_notification(conn: &rusqlite::Connection, params: &DispatchParams<'_>) -> bool {
@@ -98,10 +82,7 @@ fn dispatch_notification(conn: &rusqlite::Connection, params: &DispatchParams<'_
         return false;
     }
 
-    // Step 2: Persist in-app notification
-    persist_notification(conn, params.notification);
-
-    // Step 3: Fire user-configured notification hooks (fire-and-forget)
+    // Step 2: Fire user-configured notification hooks (fire-and-forget)
     if let Some(evt) = params.event {
         HookRunner::new(params.hooks).fire(evt);
     }
@@ -213,31 +194,7 @@ pub fn fire_workflow_notification(
     );
 
     let event_type = if succeeded { "completed" } else { "failed" };
-    let title = if succeeded {
-        "Conductor \u{2014} Workflow Finished"
-    } else {
-        "Conductor \u{2014} Workflow Failed"
-    };
     let body = notification_body(workflow_name, target_label);
-    let severity = if succeeded {
-        NotificationSeverity::Info
-    } else {
-        NotificationSeverity::ActionRequired
-    };
-    let kind = if succeeded {
-        "workflow_completed"
-    } else {
-        "workflow_failed"
-    };
-
-    let notification = CreateNotification {
-        kind,
-        title,
-        body: &body,
-        severity,
-        entity_id: Some(run_id),
-        entity_type: Some("workflow_run"),
-    };
 
     let hook_event = if succeeded {
         NotificationEvent::WorkflowRunCompleted {
@@ -273,7 +230,6 @@ pub fn fire_workflow_notification(
         &DispatchParams {
             dedup_entity_id: run_id,
             dedup_event_type: event_type,
-            notification: &notification,
             hooks: notify_hooks,
             event: Some(&hook_event),
         },
@@ -297,16 +253,6 @@ pub fn fire_feedback_notification(
         return;
     }
 
-    let title = "Conductor \u{2014} Agent Needs Input";
-    let notification = CreateNotification {
-        kind: "feedback_requested",
-        title,
-        body: params.prompt_preview,
-        severity: NotificationSeverity::Warning,
-        entity_id: Some(params.request_id),
-        entity_type: Some("agent_run"),
-    };
-
     let hook_event = NotificationEvent::FeedbackRequested {
         run_id: params.request_id.to_string(),
         label: params.prompt_preview.to_string(),
@@ -324,7 +270,6 @@ pub fn fire_feedback_notification(
         &DispatchParams {
             dedup_entity_id: params.request_id,
             dedup_event_type: "feedback_requested",
-            notification: &notification,
             hooks: notify_hooks,
             event: Some(&hook_event),
         },
@@ -362,40 +307,6 @@ pub fn fire_agent_run_notification(
         "agent_failed"
     };
 
-    let title = if succeeded {
-        "Conductor \u{2014} Agent Run Finished"
-    } else {
-        "Conductor \u{2014} Agent Run Failed"
-    };
-
-    let body = match (worktree_slug, error_msg) {
-        (Some(slug), Some(err)) => format!("{slug}: {err}"),
-        (Some(slug), None) => slug.to_string(),
-        (None, Some(err)) => err.to_string(),
-        (None, None) => {
-            if succeeded {
-                "Agent run completed".to_string()
-            } else {
-                "Agent run failed".to_string()
-            }
-        }
-    };
-
-    let severity = if succeeded {
-        NotificationSeverity::Info
-    } else {
-        NotificationSeverity::ActionRequired
-    };
-
-    let notification = CreateNotification {
-        kind: event_type,
-        title,
-        body: &body,
-        severity,
-        entity_id: Some(run_id),
-        entity_type: Some("agent_run"),
-    };
-
     let label = worktree_slug.unwrap_or(run_id).to_string();
     let hook_event = if succeeded {
         NotificationEvent::AgentRunCompleted {
@@ -427,7 +338,6 @@ pub fn fire_agent_run_notification(
         &DispatchParams {
             dedup_entity_id: run_id,
             dedup_event_type: event_type,
-            notification: &notification,
             hooks: notify_hooks,
             event: Some(&hook_event),
         },
@@ -539,30 +449,6 @@ pub fn fire_gate_notification(
         return;
     }
 
-    let (title, body) = gate_notification_text(
-        params.gate_type,
-        params.step_name,
-        params.workflow_name,
-        params.target_label,
-        params.gate_prompt,
-    );
-
-    let severity = match params.gate_type {
-        Some(GateType::HumanApproval | GateType::HumanReview) => {
-            NotificationSeverity::ActionRequired
-        }
-        _ => NotificationSeverity::Warning,
-    };
-
-    let notification = CreateNotification {
-        kind: "gate_waiting",
-        title,
-        body: &body,
-        severity,
-        entity_id: Some(params.step_id),
-        entity_type: Some("workflow_step"),
-    };
-
     let wf_label = match params.target_label {
         Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
         None => params.workflow_name.to_string(),
@@ -584,7 +470,6 @@ pub fn fire_gate_notification(
         &DispatchParams {
             dedup_entity_id: params.step_id,
             dedup_event_type: "gate_waiting",
-            notification: &notification,
             hooks: notify_hooks,
             event: Some(&hook_event),
         },
@@ -667,22 +552,6 @@ pub fn fire_grouped_gate_notification(
         return;
     }
 
-    let (title, body) = grouped_gate_notification_text(
-        &params.gate_types,
-        params.workflow_name,
-        params.target_label,
-        params.count,
-    );
-
-    let notification = CreateNotification {
-        kind: "gate_waiting",
-        title,
-        body: &body,
-        severity: NotificationSeverity::ActionRequired,
-        entity_id: Some(params.run_id),
-        entity_type: Some("workflow_run"),
-    };
-
     let wf_label = match params.target_label {
         Some(lbl) => format!("{} on {}", params.workflow_name, lbl),
         None => params.workflow_name.to_string(),
@@ -704,7 +573,6 @@ pub fn fire_grouped_gate_notification(
         &DispatchParams {
             dedup_entity_id: params.run_id,
             dedup_event_type: "gates_grouped",
-            notification: &notification,
             hooks: notify_hooks,
             event: Some(&hook_event),
         },
@@ -853,56 +721,6 @@ pub fn detect_agent_terminal_transitions<'a>(
     transitions
 }
 
-/// Fire a notification when a workflow step has been running longer than the
-/// configured threshold (stale watchdog).
-///
-/// Uses `(run_id, "workflow_stale")` as the dedup key so each stale run fires
-/// at most one notification per process lifetime.
-pub fn fire_stale_workflow_notification(
-    conn: &rusqlite::Connection,
-    config: &NotificationConfig,
-    run_id: &str,
-    workflow_name: &str,
-    target_label: Option<&str>,
-    step_name: &str,
-    running_minutes: i64,
-) {
-    let Some(wf) = &config.workflows else {
-        return;
-    };
-    if !config.enabled || !wf.on_stale {
-        return;
-    }
-
-    let title = "Conductor \u{2014} Workflow Stale";
-    let body = match target_label {
-        Some(label) => format!(
-            "{workflow_name} on {label}: step \"{step_name}\" running for {running_minutes}m with no progress"
-        ),
-        None => format!(
-            "{workflow_name}: step \"{step_name}\" running for {running_minutes}m with no progress"
-        ),
-    };
-
-    dispatch_notification(
-        conn,
-        &DispatchParams {
-            dedup_entity_id: run_id,
-            dedup_event_type: "workflow_stale",
-            notification: &CreateNotification {
-                kind: "workflow_stale",
-                title,
-                body: &body,
-                severity: NotificationSeverity::Warning,
-                entity_id: Some(run_id),
-                entity_type: Some("workflow_run"),
-            },
-            hooks: &[],
-            event: None,
-        },
-    );
-}
-
 /// Returns true if stale/orphan workflow notifications should be dispatched.
 /// Centralises the gate check shared by orphan-resumed and heartbeat-stuck-failed.
 fn stale_notifications_active(config: &NotificationConfig, notify_hooks: &[HookConfig]) -> bool {
@@ -934,7 +752,6 @@ pub fn fire_orphan_resumed_notification(
     let dedup_key = format!("orphan_resumed_{first_run_id}");
 
     let n = run_ids.len();
-    let title = "Conductor \u{2014} Orphaned Workflows Recovered";
     let body = if n == 1 {
         "1 stuck workflow run was automatically resumed".to_string()
     } else {
@@ -980,14 +797,6 @@ pub fn fire_orphan_resumed_notification(
         &DispatchParams {
             dedup_entity_id: &dedup_key,
             dedup_event_type: "workflow_orphan_resumed",
-            notification: &CreateNotification {
-                kind: "workflow_orphan_resumed",
-                title,
-                body: &body,
-                severity: NotificationSeverity::Warning,
-                entity_id: None,
-                entity_type: None,
-            },
             hooks: notify_hooks,
             event: Some(&hook_event),
         },
@@ -1035,14 +844,6 @@ pub fn fire_heartbeat_stuck_failed_notification(
         &DispatchParams {
             dedup_entity_id: run_id,
             dedup_event_type: "workflow_run.reaped",
-            notification: &CreateNotification {
-                kind: "workflow_reaped",
-                title: "Conductor \u{2014} Workflow Auto-Resume Failed",
-                body: &body,
-                severity: NotificationSeverity::ActionRequired,
-                entity_id: Some(run_id),
-                entity_type: Some("workflow_run"),
-            },
             hooks: notify_hooks,
             event: Some(&hook_event),
         },
@@ -1075,13 +876,9 @@ pub fn fire_cost_spike_notification(
     notify_hooks: &[HookConfig],
     params: &CostSpikeArgs<'_>,
 ) {
-    const DEFAULT_THRESHOLD: f64 = 3.0;
-
-    let in_app =
-        params.multiple >= DEFAULT_THRESHOLD && (config.workflows.is_none() || config.enabled);
     let has_hooks = !notify_hooks.is_empty();
 
-    if !in_app && !has_hooks {
+    if !has_hooks {
         return;
     }
 
@@ -1090,10 +887,6 @@ pub fn fire_cost_spike_notification(
     }
 
     let label = notification_body(params.workflow_name, params.target_label);
-    let title = format!(
-        "Conductor \u{2014} Cost Spike: {} ({:.1}\u{d7})",
-        params.workflow_name, params.multiple
-    );
     let deep_link = build_workflow_deep_link(
         config.web_url.as_deref(),
         params.repo_id,
@@ -1101,21 +894,7 @@ pub fn fire_cost_spike_notification(
         params.run_id,
     );
 
-    if in_app {
-        persist_notification(
-            conn,
-            &CreateNotification {
-                kind: "workflow_run.cost_spike",
-                title: &title,
-                body: &label,
-                severity: NotificationSeverity::Warning,
-                entity_id: Some(params.run_id),
-                entity_type: Some("workflow_run"),
-            },
-        );
-    }
-
-    if has_hooks {
+    {
         let hook_event = NotificationEvent::WorkflowRunCostSpike {
             run_id: params.run_id.to_string(),
             label: label.clone(),
@@ -1159,13 +938,9 @@ pub fn fire_duration_spike_notification(
     notify_hooks: &[HookConfig],
     params: &DurationSpikeArgs<'_>,
 ) {
-    const DEFAULT_THRESHOLD: f64 = 2.0;
-
-    let in_app =
-        params.multiple >= DEFAULT_THRESHOLD && (config.workflows.is_none() || config.enabled);
     let has_hooks = !notify_hooks.is_empty();
 
-    if !in_app && !has_hooks {
+    if !has_hooks {
         return;
     }
 
@@ -1174,10 +949,6 @@ pub fn fire_duration_spike_notification(
     }
 
     let label = notification_body(params.workflow_name, params.target_label);
-    let title = format!(
-        "Conductor \u{2014} Duration Spike: {} ({:.1}\u{d7})",
-        params.workflow_name, params.multiple
-    );
     let deep_link = build_workflow_deep_link(
         config.web_url.as_deref(),
         params.repo_id,
@@ -1185,21 +956,7 @@ pub fn fire_duration_spike_notification(
         params.run_id,
     );
 
-    if in_app {
-        persist_notification(
-            conn,
-            &CreateNotification {
-                kind: "workflow_run.duration_spike",
-                title: &title,
-                body: &label,
-                severity: NotificationSeverity::Warning,
-                entity_id: Some(params.run_id),
-                entity_type: Some("workflow_run"),
-            },
-        );
-    }
-
-    if has_hooks {
+    {
         let hook_event = NotificationEvent::WorkflowRunDurationSpike {
             run_id: params.run_id.to_string(),
             label: label.clone(),
@@ -1246,13 +1003,11 @@ pub fn fire_gate_pending_too_long_notification(
 ) {
     const DEFAULT_THRESHOLD_MS: u64 = 1_800_000; // 30 minutes
 
-    let in_app =
-        params.pending_ms >= DEFAULT_THRESHOLD_MS && (config.workflows.is_none() || config.enabled);
     let has_hooks = notify_hooks
         .iter()
         .any(|h| params.pending_ms >= h.gate_pending_ms.unwrap_or(DEFAULT_THRESHOLD_MS));
 
-    if !in_app && !has_hooks {
+    if !has_hooks {
         return;
     }
 
@@ -1261,7 +1016,6 @@ pub fn fire_gate_pending_too_long_notification(
     }
 
     let label = notification_body(params.workflow_name, params.target_label);
-    let title = "Conductor \u{2014} Gate Pending Too Long";
     let deep_link = build_workflow_deep_link(
         config.web_url.as_deref(),
         params.repo_id,
@@ -1269,21 +1023,7 @@ pub fn fire_gate_pending_too_long_notification(
         params.workflow_run_id,
     );
 
-    if in_app {
-        persist_notification(
-            conn,
-            &CreateNotification {
-                kind: "gate.pending_too_long",
-                title,
-                body: &label,
-                severity: NotificationSeverity::Warning,
-                entity_id: Some(params.step_id),
-                entity_type: Some("workflow_step"),
-            },
-        );
-    }
-
-    if has_hooks {
+    {
         let hook_event = NotificationEvent::GatePendingTooLong {
             run_id: params.workflow_run_id.to_string(),
             label: label.clone(),
@@ -1300,60 +1040,11 @@ pub fn fire_gate_pending_too_long_notification(
     }
 }
 
-/// Fire a notification when a stale workflow run's agent was confirmed dead
-/// and the run was marked as failed (and optionally auto-restarted).
-pub fn fire_stale_reaped_notification(
-    conn: &rusqlite::Connection,
-    config: &NotificationConfig,
-    run_id: &str,
-    workflow_name: &str,
-    target_label: Option<&str>,
-    step_name: &str,
-    auto_restarted: bool,
-) {
-    let Some(wf) = &config.workflows else {
-        return;
-    };
-    if !config.enabled || !wf.on_stale {
-        return;
-    }
-
-    let action = if auto_restarted {
-        "marked as failed and auto-restarted"
-    } else {
-        "marked as failed"
-    };
-    let title = "Conductor \u{2014} Dead Workflow Detected";
-    let body = match target_label {
-        Some(label) => format!(
-            "{workflow_name} on {label}: agent for step \"{step_name}\" was dead — {action}"
-        ),
-        None => format!("{workflow_name}: agent for step \"{step_name}\" was dead — {action}"),
-    };
-
-    dispatch_notification(
-        conn,
-        &DispatchParams {
-            dedup_entity_id: run_id,
-            dedup_event_type: "workflow_stale_reaped",
-            notification: &CreateNotification {
-                kind: "workflow_stale_reaped",
-                title,
-                body: &body,
-                severity: NotificationSeverity::Warning,
-                entity_id: Some(run_id),
-                entity_type: Some("workflow_run"),
-            },
-            hooks: &[],
-            event: None,
-        },
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{NotificationConfig, SlackConfig, WorkflowNotificationConfig};
+    #[allow(unused_imports)]
     use rusqlite::Connection;
 
     fn config(enabled: bool, on_success: bool, on_failure: bool) -> NotificationConfig {
@@ -1404,8 +1095,6 @@ mod tests {
             );",
         )
         .unwrap();
-        conn.execute_batch(include_str!("db/migrations/046_notifications.sql"))
-            .unwrap();
         conn
     }
 
@@ -1712,13 +1401,6 @@ mod tests {
             count, 1,
             "notification_log must contain exactly one row for dedup"
         );
-
-        // Verify notification was persisted in notifications table
-        let mgr = NotificationManager::new(&conn);
-        let unread = mgr.list_unread().unwrap();
-        assert_eq!(unread.len(), 1, "one notification must be persisted");
-        assert_eq!(unread[0].kind, "workflow_completed");
-        assert_eq!(unread[0].entity_id.as_deref(), Some("run-3"));
     }
 
     #[test]
@@ -2010,13 +1692,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "notification_log must contain exactly one row");
-
-        // Verify notification was persisted
-        let mgr = NotificationManager::new(&conn);
-        let unread = mgr.list_unread().unwrap();
-        assert_eq!(unread.len(), 1, "one notification must be persisted");
-        assert_eq!(unread[0].kind, "feedback_requested");
-        assert_eq!(unread[0].entity_id.as_deref(), Some("req-2"));
     }
 
     // --- gate_notification_text ---
@@ -2551,12 +2226,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
-
-        let mgr = NotificationManager::new(&conn);
-        let unread = mgr.list_unread().unwrap();
-        assert_eq!(unread.len(), 1);
-        assert_eq!(unread[0].kind, "agent_completed");
-        assert_eq!(unread[0].entity_id.as_deref(), Some("agent-2"));
     }
 
     #[test]
@@ -2601,11 +2270,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
-
-        let mgr = NotificationManager::new(&conn);
-        let unread = mgr.list_unread().unwrap();
-        assert_eq!(unread.len(), 1);
-        assert_eq!(unread[0].kind, "agent_failed");
     }
 
     #[test]
@@ -3646,228 +3310,6 @@ mod tests {
         assert_eq!(count, 0, "should not fire when notifications disabled");
     }
 
-    #[test]
-    fn heartbeat_stuck_failed_notification_action_required_severity() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-
-        fire_heartbeat_stuck_failed_notification(
-            &conn,
-            &cfg,
-            &[],
-            "run-stuck-sev",
-            "deploy",
-            None,
-            "some error",
-        );
-
-        let severity: String = conn
-            .query_row(
-                "SELECT severity FROM notifications WHERE entity_id = 'run-stuck-sev'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            severity, "action_required",
-            "reaped notification should be action_required severity"
-        );
-    }
-
-    // --- fire_stale_reaped_notification tests ---
-
-    #[test]
-    fn stale_reaped_notification_persists() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-
-        fire_stale_reaped_notification(
-            &conn,
-            &cfg,
-            "run-reaped-1",
-            "deploy",
-            Some("repo/branch"),
-            "build",
-            false,
-        );
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-reaped-1' AND event_type = 'workflow_stale_reaped'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1, "stale reaped notification should be persisted");
-    }
-
-    #[test]
-    fn stale_reaped_notification_auto_restart_variant() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-
-        fire_stale_reaped_notification(
-            &conn,
-            &cfg,
-            "run-reaped-restart",
-            "deploy",
-            None,
-            "build",
-            true, // auto_restarted
-        );
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-reaped-restart' AND event_type = 'workflow_stale_reaped'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 1,
-            "auto-restart stale reaped notification should be persisted"
-        );
-
-        // Verify notification body references auto-restart
-        let body: String = conn
-            .query_row(
-                "SELECT body FROM notifications WHERE entity_id = 'run-reaped-restart'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(
-            body.contains("auto-restarted"),
-            "notification body should mention auto-restart"
-        );
-    }
-
-    #[test]
-    fn stale_reaped_notification_deduplicates() {
-        let conn = in_memory_db();
-        let cfg = config(true, true, true);
-
-        fire_stale_reaped_notification(
-            &conn,
-            &cfg,
-            "run-reaped-dup",
-            "deploy",
-            None,
-            "build",
-            false,
-        );
-        fire_stale_reaped_notification(
-            &conn,
-            &cfg,
-            "run-reaped-dup",
-            "deploy",
-            None,
-            "build",
-            false,
-        );
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-reaped-dup' AND event_type = 'workflow_stale_reaped'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 1,
-            "duplicate stale reaped notification should be deduped"
-        );
-    }
-
-    #[test]
-    fn orphan_resumed_notification_skipped_when_disabled() {
-        let conn = in_memory_db();
-        let cfg = config(false, true, true); // enabled=false
-        let ids = vec!["run-orphan-disabled".to_string()];
-
-        fire_orphan_resumed_notification(&conn, &cfg, &[], &ids);
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_orphan_resumed'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 0,
-            "orphan resumed notification should not fire when notifications disabled"
-        );
-    }
-
-    #[test]
-    fn stale_reaped_notification_skipped_when_disabled() {
-        let conn = in_memory_db();
-        let cfg = config(false, true, true); // enabled=false
-
-        fire_stale_reaped_notification(
-            &conn,
-            &cfg,
-            "run-reaped-disabled",
-            "deploy",
-            Some("repo/branch"),
-            "build",
-            false,
-        );
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_stale_reaped'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 0,
-            "stale reaped notification should not fire when notifications disabled"
-        );
-    }
-
-    #[test]
-    fn stale_reaped_notification_skipped_when_on_stale_false() {
-        let conn = in_memory_db();
-        let cfg = NotificationConfig {
-            enabled: true,
-            workflows: Some(WorkflowNotificationConfig {
-                on_success: true,
-                on_failure: true,
-                on_gate_human: true,
-                on_gate_ci: false,
-                on_gate_pr_review: true,
-                on_stale: false,
-            }),
-            slack: SlackConfig::default(),
-            web_url: None,
-        };
-
-        fire_stale_reaped_notification(
-            &conn,
-            &cfg,
-            "run-reaped-no-stale",
-            "deploy",
-            Some("repo/branch"),
-            "build",
-            false,
-        );
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM notification_log WHERE event_type = 'workflow_stale_reaped'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            count, 0,
-            "stale reaped notification should not fire when on_stale=false"
-        );
-    }
-
     // ── fire_cost_spike_notification ──────────────────────────────────────
 
     fn config_no_legacy() -> NotificationConfig {
@@ -3879,14 +3321,43 @@ mod tests {
         }
     }
 
+    fn hook_cost_spike() -> HookConfig {
+        HookConfig {
+            on: "workflow_run.cost_spike".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }
+    }
+
+    fn hook_duration_spike() -> HookConfig {
+        HookConfig {
+            on: "workflow_run.duration_spike".to_string(),
+            run: None,
+            url: None,
+            ..Default::default()
+        }
+    }
+
+    fn hook_gate_pending() -> HookConfig {
+        HookConfig {
+            on: "gate.pending_too_long".to_string(),
+            run: None,
+            url: None,
+            gate_pending_ms: Some(1_000_000), // 1s - fires for anything > 1ms
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn cost_spike_fires_when_above_threshold() {
         let conn = in_memory_db();
         let cfg = config_no_legacy();
+        let hooks = vec![hook_cost_spike()];
         fire_cost_spike_notification(
             &conn,
             &cfg,
-            &[],
+            &hooks,
             &CostSpikeArgs {
                 run_id: "run-cost-1",
                 workflow_name: "deploy",
@@ -3915,11 +3386,12 @@ mod tests {
     fn cost_spike_deduped_on_second_call() {
         let conn = in_memory_db();
         let cfg = config_no_legacy();
+        let hooks = vec![hook_cost_spike()];
         for _ in 0..2 {
             fire_cost_spike_notification(
                 &conn,
                 &cfg,
-                &[],
+                &hooks,
                 &CostSpikeArgs {
                     run_id: "run-cost-dup",
                     workflow_name: "deploy",
@@ -3983,10 +3455,11 @@ mod tests {
     fn duration_spike_fires_when_above_threshold() {
         let conn = in_memory_db();
         let cfg = config_no_legacy();
+        let hooks = vec![hook_duration_spike()];
         fire_duration_spike_notification(
             &conn,
             &cfg,
-            &[],
+            &hooks,
             &DurationSpikeArgs {
                 run_id: "run-dur-1",
                 workflow_name: "deploy",
@@ -4047,17 +3520,18 @@ mod tests {
     fn gate_pending_fires_when_above_threshold() {
         let conn = in_memory_db();
         let cfg = config_no_legacy();
+        let hooks = vec![hook_gate_pending()];
         fire_gate_pending_too_long_notification(
             &conn,
             &cfg,
-            &[],
+            &hooks,
             &GatePendingTooLongArgs {
                 step_id: "step-gate-1",
                 step_name: "approval-gate",
                 workflow_run_id: "run-gate-1",
                 workflow_name: "deploy",
                 target_label: None,
-                pending_ms: 2_000_000, // ~33 min > 30 min default
+                pending_ms: 2_000_000, // ~33 min > 1s hook threshold
                 duration_ms: None,
                 repo_slug: "myrepo",
                 branch: "main",
@@ -4114,11 +3588,12 @@ mod tests {
     fn gate_pending_deduped_on_second_call() {
         let conn = in_memory_db();
         let cfg = config_no_legacy();
+        let hooks = vec![hook_gate_pending()];
         for _ in 0..2 {
             fire_gate_pending_too_long_notification(
                 &conn,
                 &cfg,
-                &[],
+                &hooks,
                 &GatePendingTooLongArgs {
                     step_id: "step-gate-dup",
                     step_name: "approval-gate",

@@ -305,16 +305,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             // Non-dismissable: swallow all keys while operation is in progress.
             return Action::None;
         }
-        Modal::Notifications { .. } => {
-            return match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
-                KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-                KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
-                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
-                _ => Action::None,
-            };
-        }
         Modal::GraphView { .. } => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
@@ -719,9 +709,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         // Open the in-TUI theme picker
         KeyCode::Char('T') => Action::ShowThemePicker,
-
-        // Open notification list
-        KeyCode::Char('N') => Action::ShowNotifications,
 
         // CRUD actions
         KeyCode::Char('a') => Action::RegisterRepo,

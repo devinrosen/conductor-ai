@@ -1,6 +1,5 @@
 import { NavLink } from "react-router";
 import { useRepos } from "./AppShell";
-import { NotificationBell } from "../notifications/NotificationBell";
 import { StationClock } from "../shared/StationClock";
 import { ThemeLogo } from "../shared/ThemeLogo";
 import { useThemeId } from "../../themes/useTheme";
@@ -80,9 +79,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <StationClock size={20} />
           <ThemeLogo size={24} />
           <h1 className="text-base font-bold text-gray-900">Conductor</h1>
-        </div>
-        <div className="hidden md:block">
-          <NotificationBell />
         </div>
         {/* Close button only shown on mobile */}
         <button
