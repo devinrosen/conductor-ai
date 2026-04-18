@@ -355,10 +355,9 @@ impl App {
                             let repo = RepoManager::new(&conn, &config)
                                 .get_by_slug(&slug)
                                 .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;
-                            let worktrees =
-                                WorktreeManager::new(&conn, &config)
-                                    .list_by_repo_id(&repo.id, true)
-                                    .map_err(|e| format!("Failed to list worktrees: {e}"))?;
+                            let worktrees = WorktreeManager::new(&conn, &config)
+                                .list_by_repo_id(&repo.id, true)
+                                .map_err(|e| format!("Failed to list worktrees: {e}"))?;
                             let items = worktrees
                                 .into_iter()
                                 .map(|wt| BranchPickerItem {
