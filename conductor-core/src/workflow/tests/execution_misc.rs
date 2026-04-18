@@ -263,6 +263,246 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
 }
 
 // ---------------------------------------------------------------------------
+// call_workflow resume regression tests
+// ---------------------------------------------------------------------------
+
+/// Build a minimal ExecutionState for a given parent workflow run.
+fn make_call_wf_state<'a>(
+    conn: &'a rusqlite::Connection,
+    config: &'a Config,
+    working_dir: &str,
+    workflow_run_id: String,
+    parent_run_id: String,
+) -> ExecutionState<'a> {
+    ExecutionState {
+        conn,
+        config,
+        workflow_run_id,
+        workflow_name: "parent-wf".into(),
+        worktree_id: None,
+        working_dir: working_dir.to_string(),
+        worktree_slug: String::new(),
+        repo_path: working_dir.to_string(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: WorkflowExecConfig {
+            fail_fast: false,
+            ..WorkflowExecConfig::default()
+        },
+        inputs: HashMap::new(),
+        agent_mgr: crate::agent::AgentManager::new(conn),
+        wf_mgr: WorkflowManager::new(conn),
+        parent_run_id,
+        depth: 0,
+        target_label: None,
+        step_results: HashMap::new(),
+        contexts: Vec::new(),
+        position: 0,
+        all_succeeded: true,
+        total_cost: 0.0,
+        total_turns: 0,
+        total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
+        last_gate_feedback: None,
+        block_output: None,
+        block_with: Vec::new(),
+        resume_ctx: None,
+        default_bot_name: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
+        last_heartbeat_at: ExecutionState::new_heartbeat(),
+    }
+}
+
+/// Regression: when a resumed call_workflow step's child run fails again
+/// (all_succeeded=false), execute_call_workflow must NOT fall through to the
+/// retry loop. It should record failure and return immediately.
+#[test]
+fn test_call_workflow_resume_failure_stops_without_new_child() {
+    let conn = setup_db();
+    let config = Config::default();
+
+    // Temp dir with child.wf on disk (needed for load_workflow_by_name).
+    let tmp = tempfile::tempdir().unwrap();
+    let wf_dir = tmp.path().join(".conductor/workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    std::fs::write(
+        wf_dir.join("child.wf"),
+        "workflow child { meta { targets = [\"worktree\"] } }",
+    )
+    .unwrap();
+    let dir = tmp.path().to_str().unwrap();
+
+    // Register a real repo so the child run is not "ephemeral" and resume_workflow
+    // can look up paths. (child.wf calls "nonexistent" → no matching file → body
+    // errors → all_succeeded=false, but not an Err from resume_workflow itself.)
+    let repo = crate::repo::RepoManager::new(&conn, &config)
+        .register("test-repo-resume-fail", dir, "", None)
+        .unwrap();
+
+    // Create parent workflow run.
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent_agent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let parent_run = wf_mgr
+        .create_workflow_run("parent-wf", None, &parent_agent.id, false, "manual", None)
+        .unwrap();
+
+    // Build a definition_snapshot for the child that calls a non-existent
+    // sub-workflow. When resumed, the body will error → all_succeeded=false.
+    let child_snap = WorkflowDef {
+        name: "child".into(),
+        title: None,
+        description: String::new(),
+        trigger: WorkflowTrigger::Manual,
+        targets: vec![],
+        group: None,
+        inputs: vec![],
+        body: vec![WorkflowNode::CallWorkflow(CallWorkflowNode {
+            workflow: "nonexistent".into(),
+            inputs: HashMap::new(),
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        })],
+        always: vec![],
+        source_path: "child.wf".into(),
+    };
+    let child_snapshot = serde_json::to_string(&child_snap).unwrap();
+
+    // Create child workflow run linked to the parent, with repo_id set.
+    let child_agent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let child_run = wf_mgr
+        .create_workflow_run_with_targets(
+            "child",
+            None,
+            None,
+            Some(repo.id.as_str()),
+            &child_agent.id,
+            false,
+            "manual",
+            Some(&child_snapshot),
+            Some(parent_run.id.as_str()),
+            None,
+        )
+        .unwrap();
+    // Mark it failed so find_resumable_child_run picks it up.
+    conn.execute(
+        "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
+        rusqlite::params![child_run.id],
+    )
+    .unwrap();
+
+    let mut state = make_call_wf_state(
+        &conn,
+        &config,
+        dir,
+        parent_run.id.clone(),
+        parent_agent.id.clone(),
+    );
+    let node = CallWorkflowNode {
+        workflow: "child".into(),
+        inputs: HashMap::new(),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+    };
+
+    execute_call_workflow(&mut state, &node, 0).unwrap();
+
+    assert!(
+        !state.all_succeeded,
+        "state must be failed after resume failure"
+    );
+
+    // No new child run should have been created.
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM workflow_runs WHERE parent_workflow_run_id = ?1",
+            rusqlite::params![parent_run.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "resume failure must not spawn a new child run");
+}
+
+/// Regression: when a resumed call_workflow step's child run errors during
+/// resume (Err from resume_workflow), execute_call_workflow must NOT fall
+/// through to the retry loop. It should record failure and return immediately.
+#[test]
+fn test_call_workflow_resume_error_stops_without_new_child() {
+    let conn = setup_db();
+    let config = Config::default();
+
+    // Temp dir with child.wf on disk.
+    let tmp = tempfile::tempdir().unwrap();
+    let wf_dir = tmp.path().join(".conductor/workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    std::fs::write(
+        wf_dir.join("child.wf"),
+        "workflow child { meta { targets = [\"worktree\"] } }",
+    )
+    .unwrap();
+    let dir = tmp.path().to_str().unwrap();
+
+    // Create parent workflow run.
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent_agent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let parent_run = wf_mgr
+        .create_workflow_run("parent-wf", None, &parent_agent.id, false, "manual", None)
+        .unwrap();
+
+    // Insert a child run with no worktree/repo/ticket (ephemeral). When
+    // resume_workflow is called on it, it returns Err immediately ("ephemeral PR
+    // run with no registered worktree — cannot resume").
+    insert_workflow_run(
+        &conn,
+        "child-run-resume-err",
+        "child",
+        "failed",
+        Some(parent_run.id.as_str()),
+    );
+
+    let mut state = make_call_wf_state(
+        &conn,
+        &config,
+        dir,
+        parent_run.id.clone(),
+        parent_agent.id.clone(),
+    );
+    let node = CallWorkflowNode {
+        workflow: "child".into(),
+        inputs: HashMap::new(),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+    };
+
+    execute_call_workflow(&mut state, &node, 0).unwrap();
+
+    assert!(
+        !state.all_succeeded,
+        "state must be failed after resume error"
+    );
+
+    // No new child run should have been created.
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM workflow_runs WHERE parent_workflow_run_id = ?1",
+            rusqlite::params![parent_run.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "resume error must not spawn a new child run");
+}
+
+// ---------------------------------------------------------------------------
 // evaluate_hooks integration tests
 // ---------------------------------------------------------------------------
 

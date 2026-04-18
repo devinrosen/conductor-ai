@@ -20,7 +20,8 @@ pub(super) use super::engine::{
     ExecutionState, ResumeContext,
 };
 pub(super) use super::executors::{
-    execute_call, execute_do, execute_do_while, execute_unless, execute_while, handle_gate_timeout,
+    execute_call, execute_call_workflow, execute_do, execute_do_while, execute_unless,
+    execute_while, handle_gate_timeout,
 };
 pub(super) use super::helpers::{build_workflow_summary, find_max_completed_while_iteration};
 pub(super) use super::manager::WorkflowManager;

@@ -170,8 +170,10 @@ pub fn execute_call_workflow(
                     None,
                     Some(0),
                 )?;
-                last_error = msg;
-                // Fall through to the retry loop
+                if let Some(ref on_fail_agent) = node.on_fail {
+                    run_on_fail_agent(state, &node.workflow, on_fail_agent, &msg, 1, iteration);
+                }
+                return record_step_failure(state, step_key, &node.workflow, msg, 1, true);
             }
             Err(e) => {
                 let msg = format!("Sub-workflow '{}' resume error: {e}", node.workflow);
@@ -189,8 +191,10 @@ pub fn execute_call_workflow(
                     None,
                     Some(0),
                 )?;
-                last_error = msg;
-                // Fall through to the retry loop
+                if let Some(ref on_fail_agent) = node.on_fail {
+                    run_on_fail_agent(state, &node.workflow, on_fail_agent, &msg, 1, iteration);
+                }
+                return record_step_failure(state, step_key, &node.workflow, msg, 1, true);
             }
         }
     }
