@@ -13,7 +13,6 @@ use tracing::warn;
 use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
 use crate::github::merged_branches_for_repo;
-use crate::worktree::WorktreeManager;
 
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1141,7 +1140,6 @@ impl<'a> TicketSyncer<'a> {
     /// - Anything else — treated as an external source ID (GitHub issue number or Jira key)
     pub fn resolve_ticket_id(
         &self,
-        worktree_mgr: &WorktreeManager<'_>,
         repo: &crate::repo::Repo,
         ticket_id_str: &str,
     ) -> Result<(String, String)> {
@@ -1155,8 +1153,8 @@ impl<'a> TicketSyncer<'a> {
                 ))
             })?;
             let branch = github::get_pr_head_branch(&repo.remote_url, pr_number)?;
-            let wt = worktree_mgr.get_by_branch(&repo.id, &branch)?;
-            let ticket_id = wt.ticket_id.ok_or_else(|| {
+            let ticket_id = crate::worktree::get_ticket_id_by_branch(self.conn, &repo.id, &branch)?;
+            let ticket_id = ticket_id.ok_or_else(|| {
                 ConductorError::TicketSync(format!(
                     "worktree for branch {branch} has no linked ticket"
                 ))
@@ -2666,16 +2664,14 @@ mod tests {
     #[test]
     fn test_resolve_ticket_id_by_source_id() {
         let conn = setup_db();
-        let config = crate::config::Config::default();
         let syncer = TicketSyncer::new(&conn);
-        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
         let repo = make_repo();
 
         syncer
             .upsert_tickets("r1", &[make_ticket("42", "Issue 42")])
             .unwrap();
 
-        let (source_type, source_id) = syncer.resolve_ticket_id(&wt_mgr, &repo, "42").unwrap();
+        let (source_type, source_id) = syncer.resolve_ticket_id(&repo, "42").unwrap();
         assert_eq!(source_type, "github");
         assert_eq!(source_id, "42");
     }
@@ -2683,9 +2679,7 @@ mod tests {
     #[test]
     fn test_resolve_ticket_id_by_ulid() {
         let conn = setup_db();
-        let config = crate::config::Config::default();
         let syncer = TicketSyncer::new(&conn);
-        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
         let repo = make_repo();
 
         syncer
@@ -2697,7 +2691,7 @@ mod tests {
             })
             .unwrap();
 
-        let (source_type, source_id) = syncer.resolve_ticket_id(&wt_mgr, &repo, &ulid).unwrap();
+        let (source_type, source_id) = syncer.resolve_ticket_id(&repo, &ulid).unwrap();
         assert_eq!(source_type, "github");
         assert_eq!(source_id, "99");
     }
@@ -2705,9 +2699,7 @@ mod tests {
     #[test]
     fn test_resolve_ticket_id_ulid_not_found_falls_through() {
         let conn = setup_db();
-        let config = crate::config::Config::default();
         let syncer = TicketSyncer::new(&conn);
-        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
         let repo = make_repo();
 
         // Insert a ticket with source_id that is exactly 26 chars (ULID-length)
@@ -2721,7 +2713,7 @@ mod tests {
             )
             .unwrap();
 
-        let (source_type, source_id) = syncer.resolve_ticket_id(&wt_mgr, &repo, fake_ulid).unwrap();
+        let (source_type, source_id) = syncer.resolve_ticket_id(&repo, fake_ulid).unwrap();
         assert_eq!(source_type, "github");
         assert_eq!(source_id, fake_ulid);
     }
@@ -2729,17 +2721,72 @@ mod tests {
     #[test]
     fn test_resolve_ticket_id_not_found() {
         let conn = setup_db();
-        let config = crate::config::Config::default();
         let syncer = TicketSyncer::new(&conn);
-        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
         let repo = make_repo();
 
-        let result = syncer.resolve_ticket_id(&wt_mgr, &repo, "nonexistent");
+        let result = syncer.resolve_ticket_id(&repo, "nonexistent");
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
             ConductorError::TicketNotFound { .. }
         ));
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_worktree_branch_lookup() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let repo = make_repo();
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("77", "Issue 77")])
+            .unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '77'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
+             VALUES ('wt1', 'r1', 'wt-1', 'feat/issue-77', '/tmp/wt1', ?1, 'active', '2024-01-01T00:00:00Z')",
+            params![ticket_id],
+        )
+        .unwrap();
+
+        let result =
+            crate::worktree::get_ticket_id_by_branch(&conn, &repo.id, "feat/issue-77").unwrap();
+        assert_eq!(result, Some(ticket_id));
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_worktree_branch_not_found() {
+        let conn = setup_db();
+        let repo = make_repo();
+
+        let err =
+            crate::worktree::get_ticket_id_by_branch(&conn, &repo.id, "feat/missing").unwrap_err();
+        assert!(
+            matches!(err, ConductorError::WorktreeNotFound { .. }),
+            "expected WorktreeNotFound error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_worktree_no_linked_ticket() {
+        let conn = setup_db();
+        let repo = make_repo();
+
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
+             VALUES ('wt2', 'r1', 'wt-2', 'feat/no-ticket', '/tmp/wt2', NULL, 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let result =
+            crate::worktree::get_ticket_id_by_branch(&conn, &repo.id, "feat/no-ticket").unwrap();
+        assert_eq!(result, None);
     }
 
     #[test]
