@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rusqlite::{named_params, OptionalExtension};
 
 use crate::config::Config;
-use crate::db::{query_collect, sql_placeholders, sql_placeholders_from};
+use crate::db::{query_collect, sql_placeholders};
 use crate::error::{ConductorError, Result};
 
 use super::helpers::{
@@ -257,11 +257,11 @@ impl<'a> WorkflowManager<'a> {
     /// Return the first active (pending/running/waiting) top-level workflow run for a worktree,
     /// or `None` if none exist.
     pub fn get_active_run_for_worktree(&self, worktree_id: &str) -> Result<Option<WorkflowRun>> {
-        let placeholders = sql_placeholders_from(WorkflowRunStatus::ACTIVE.len(), 2);
+        let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
         let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
             "SELECT {RUN_COLUMNS} FROM workflow_runs \
-             WHERE worktree_id = ?1 AND status IN ({placeholders}) \
+             WHERE worktree_id = ? AND status IN ({placeholders}) \
              LIMIT 1"
         );
         let mut all_params: Vec<rusqlite::types::Value> =
@@ -623,13 +623,13 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<Vec<WorkflowRun>> {
         let effective = Self::effective_statuses(statuses);
 
-        let placeholders = sql_placeholders_from(effective.len(), 2);
+        let placeholders = sql_placeholders(effective.len());
 
         let sql = format!(
             "SELECT DISTINCT workflow_runs.* \
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE (workflow_runs.repo_id = ?1 OR worktrees.repo_id = ?1) \
+             WHERE (workflow_runs.repo_id = ? OR worktrees.repo_id = ?) \
                AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
                AND workflow_runs.status IN ({placeholders}) \
              ORDER BY workflow_runs.started_at DESC \
@@ -637,8 +637,10 @@ impl<'a> WorkflowManager<'a> {
         );
 
         let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();
-        let mut all_params: Vec<rusqlite::types::Value> =
-            vec![rusqlite::types::Value::Text(repo_id.to_owned())];
+        let mut all_params: Vec<rusqlite::types::Value> = vec![
+            rusqlite::types::Value::Text(repo_id.to_owned()),
+            rusqlite::types::Value::Text(repo_id.to_owned()),
+        ];
         all_params.extend(status_strings.into_iter().map(rusqlite::types::Value::Text));
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(

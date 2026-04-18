@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent::AgentManager;
-use crate::db::{sql_placeholders, sql_placeholders_from};
+use crate::db::sql_placeholders;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{TimeGranularity, WorkflowRun};
 use crate::workflow_dsl::GateType;
@@ -364,13 +364,6 @@ fn test_sql_placeholders() {
     assert_eq!(sql_placeholders(0), "");
     assert_eq!(sql_placeholders(1), "?");
     assert_eq!(sql_placeholders(3), "?, ?, ?");
-}
-
-#[test]
-fn test_sql_placeholders_from_non_one_start() {
-    assert_eq!(sql_placeholders_from(0, 5), "");
-    assert_eq!(sql_placeholders_from(1, 2), "?");
-    assert_eq!(sql_placeholders_from(3, 4), "?, ?, ?");
 }
 
 #[test]

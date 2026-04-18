@@ -658,9 +658,9 @@ impl<'a> TicketSyncer<'a> {
         // Query 2: batch-fetch misses by source_id (scoped to the repo).
         let mut by_source_id: HashMap<String, Ticket> = HashMap::new();
         if !fallback_ids.is_empty() {
-            let ph2 = crate::db::sql_placeholders_from(fallback_ids.len(), 2);
+            let ph2 = crate::db::sql_placeholders(fallback_ids.len());
             let sql2 = format!(
-                "SELECT {TICKET_COLS_BARE} FROM tickets WHERE repo_id = ?1 AND source_id IN ({ph2})"
+                "SELECT {TICKET_COLS_BARE} FROM tickets WHERE repo_id = ? AND source_id IN ({ph2})"
             );
             let mut p2: Vec<&dyn rusqlite::ToSql> = vec![&repo_id];
             p2.extend(fallback_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
@@ -987,7 +987,7 @@ impl<'a> TicketSyncer<'a> {
         }
         let n = ticket_ids.len();
         let from_ph = sql_placeholders(n);
-        let to_ph = crate::db::sql_placeholders_from(n, n + 1);
+        let to_ph = crate::db::sql_placeholders(n);
         let sql = format!(
             "SELECT from_ticket_id, to_ticket_id \
              FROM ticket_dependencies \
