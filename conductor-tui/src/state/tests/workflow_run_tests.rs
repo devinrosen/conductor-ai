@@ -848,7 +848,10 @@ fn global_mode_name_filter_excludes_non_matching_run() {
     ];
     state.workflow_name_filter = Some("nonexistent-workflow".into());
     let rows = state.visible_workflow_run_rows();
-    assert!(rows.is_empty(), "filter matches nothing; expected no rows, got {rows:?}");
+    assert!(
+        rows.is_empty(),
+        "filter matches nothing; expected no rows, got {rows:?}"
+    );
 }
 
 #[test]
@@ -860,7 +863,8 @@ fn global_mode_name_filter_is_case_insensitive() {
     state.workflow_name_filter = Some("DEPLOY".into());
     let rows = state.visible_workflow_run_rows();
     assert!(
-        rows.iter().any(|r| matches!(r, WorkflowRunRow::Parent { run_id, .. } if run_id == "r1")),
+        rows.iter()
+            .any(|r| matches!(r, WorkflowRunRow::Parent { run_id, .. } if run_id == "r1")),
         "case-insensitive filter should match; rows: {rows:?}"
     );
 }
@@ -900,11 +904,14 @@ fn global_mode_name_filter_excludes_whole_target_group() {
     let rows = state.visible_workflow_run_rows();
     // r1 matches; r2 does not — the TargetHeader for feat-2 should be absent
     assert!(
-        !rows.iter().any(|r| matches!(r, WorkflowRunRow::TargetHeader { label, .. } if label == "feat-2")),
+        !rows
+            .iter()
+            .any(|r| matches!(r, WorkflowRunRow::TargetHeader { label, .. } if label == "feat-2")),
         "TargetHeader for non-matching run should be absent; rows: {rows:?}"
     );
     assert!(
-        rows.iter().any(|r| matches!(r, WorkflowRunRow::TargetHeader { label, .. } if label == "feat-1")),
+        rows.iter()
+            .any(|r| matches!(r, WorkflowRunRow::TargetHeader { label, .. } if label == "feat-1")),
         "TargetHeader for matching run should be present; rows: {rows:?}"
     );
 }
