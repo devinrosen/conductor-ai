@@ -794,14 +794,7 @@ impl App {
         wt_slug: String,
         items: Vec<BranchPickerItem>,
     ) {
-        let mut items_with_sentinel = vec![BranchPickerItem {
-            branch: None,
-            worktree_count: 0,
-            ticket_count: 0,
-            base_branch: None,
-            stale_days: None,
-            inferred_from: None,
-        }];
+        let mut items_with_sentinel = vec![BranchPickerItem::default()];
         items_with_sentinel.extend(items);
         let (ordered, tree_positions) =
             crate::state::build_branch_picker_tree(&items_with_sentinel);
@@ -870,14 +863,7 @@ impl App {
         ticket_id: Option<String>,
         items: Vec<crate::state::BranchPickerItem>,
     ) {
-        let mut items_with_sentinel = vec![crate::state::BranchPickerItem {
-            branch: None,
-            worktree_count: 0,
-            ticket_count: 0,
-            base_branch: None,
-            stale_days: None,
-            inferred_from: None,
-        }];
+        let mut items_with_sentinel = vec![crate::state::BranchPickerItem::default()];
         items_with_sentinel.extend(items);
         let (ordered, tree_positions) =
             crate::state::build_branch_picker_tree(&items_with_sentinel);
@@ -1069,21 +1055,11 @@ mod tests {
 
     fn branch_picker_items() -> Vec<crate::state::BranchPickerItem> {
         vec![
-            crate::state::BranchPickerItem {
-                branch: None,
-                worktree_count: 0,
-                ticket_count: 0,
-                base_branch: None,
-                stale_days: None,
-                inferred_from: None,
-            },
+            crate::state::BranchPickerItem::default(),
             crate::state::BranchPickerItem {
                 branch: Some("feat/notifications".to_string()),
-                worktree_count: 0,
-                ticket_count: 0,
                 base_branch: Some("main".to_string()),
-                stale_days: None,
-                inferred_from: None,
+                ..Default::default()
             },
         ]
     }
@@ -1186,11 +1162,8 @@ mod tests {
         let mut app = make_app();
         let worktree_items = vec![crate::state::BranchPickerItem {
             branch: Some("feat/notifications".to_string()),
-            worktree_count: 0,
-            ticket_count: 0,
-            base_branch: None,
-            stale_days: None,
             inferred_from: Some("feat-notifications".to_string()),
+            ..Default::default()
         }];
         app.handle_worktree_branches_loaded(
             "repo".to_string(),

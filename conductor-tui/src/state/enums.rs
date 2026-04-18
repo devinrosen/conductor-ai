@@ -316,7 +316,7 @@ impl WorkflowPickerItem {
 }
 
 /// One selectable row in the branch picker modal.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BranchPickerItem {
     /// `None` → repo default branch; `Some(branch)` → feature branch name.
     pub branch: Option<String>,
