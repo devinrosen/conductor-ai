@@ -106,9 +106,9 @@ fn test_execute_script_success() {
     let step_id = &steps[0].id;
     let pid: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            rusqlite::params![step_id],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            rusqlite::named_params! { ":id": step_id },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(
@@ -167,9 +167,9 @@ fn test_execute_script_failure_captures_stdout() {
     let step_id = &steps[0].id;
     let pid: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            rusqlite::params![step_id],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            rusqlite::named_params! { ":id": step_id },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(pid.is_none(), "subprocess_pid should be NULL after Failed");
@@ -473,9 +473,9 @@ fn test_execute_script_timeout() {
     let step_id = &steps[0].id;
     let pid: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            rusqlite::params![step_id],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            rusqlite::named_params! { ":id": step_id },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(
@@ -537,9 +537,9 @@ fn test_execute_script_cancelled() {
     let step_id = &steps[0].id;
     let pid: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            rusqlite::params![step_id],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            rusqlite::named_params! { ":id": step_id },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(

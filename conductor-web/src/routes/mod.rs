@@ -1,12 +1,10 @@
 pub mod agents;
 pub mod conversations;
 pub mod events;
-pub mod features;
 pub mod health;
 pub mod hooks;
 pub mod issue_sources;
 pub mod model_config;
-pub mod notifications;
 pub mod push;
 pub mod repos;
 pub mod slack;
@@ -87,32 +85,6 @@ pub fn api_router() -> Router<AppState> {
             get(workflows::list_repo_workflow_defs),
         )
         .route("/api/tickets/{id}", get(tickets::ticket_detail))
-        // Features
-        .route("/api/repos/{id}/features", get(features::list_features))
-        .route(
-            "/api/repos/{id}/features/{name}",
-            get(features::get_feature),
-        )
-        .route(
-            "/api/repos/{id}/features/{name}/sync",
-            post(features::sync_feature),
-        )
-        .route(
-            "/api/repos/{id}/features/{name}/run",
-            post(features::run_feature),
-        )
-        .route(
-            "/api/repos/{id}/features/{name}/review",
-            post(features::review_feature),
-        )
-        .route(
-            "/api/repos/{id}/features/{name}/approve",
-            post(features::approve_feature),
-        )
-        .route(
-            "/api/repos/{id}/features/{name}/close",
-            post(features::close_feature),
-        )
         // Agent stats (aggregates)
         .route(
             "/api/worktrees/{id}/agent-runs",
@@ -206,10 +178,6 @@ pub fn api_router() -> Router<AppState> {
             get(agents::get_run_tree_totals),
         )
         .route("/api/worktrees/{id}/agent/prompt", get(agents::get_prompt))
-        .route(
-            "/api/worktrees/{id}/agent/orchestrate",
-            post(agents::orchestrate_agent),
-        )
         .route(
             "/api/worktrees/{id}/agent/created-issues",
             get(agents::list_created_issues),
@@ -344,20 +312,6 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/repos/{id}/sources/{source_id}",
             delete(issue_sources::delete_issue_source),
-        )
-        // Notifications
-        .route("/api/notifications", get(notifications::list_notifications))
-        .route(
-            "/api/notifications/unread-count",
-            get(notifications::unread_count),
-        )
-        .route(
-            "/api/notifications/read",
-            post(notifications::mark_all_read),
-        )
-        .route(
-            "/api/notifications/{id}/read",
-            post(notifications::mark_read),
         )
         // Stats
         .route("/api/stats/theme-unlocks", get(stats::theme_unlock_stats))

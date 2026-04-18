@@ -67,7 +67,6 @@ export function WorktreeDetailPage() {
   });
   const [agentLoading, setAgentLoading] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
-  const [orchestrateModalOpen, setOrchestrateModalOpen] = useState(false);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
 
   // Error state
@@ -80,7 +79,7 @@ export function WorktreeDetailPage() {
   // Sidebar collapsed state
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  const noModalsOpen = !deleteConfirm && !promptModalOpen && !stopConfirm && !orchestrateModalOpen;
+  const noModalsOpen = !deleteConfirm && !promptModalOpen && !stopConfirm;
 
   useHotkeys([
     { key: "d", handler: () => setDeleteConfirm(true), description: "Delete worktree", enabled: noModalsOpen },
@@ -216,34 +215,6 @@ export function WorktreeDetailPage() {
     }
   }
 
-  async function handleOrchestrateClick() {
-    if (!worktreeId) return;
-    try {
-      const info = await api.getAgentPrompt(worktreeId);
-      setPromptInfo({ prompt: info.prompt, resumeSessionId: null });
-      setOrchestrateModalOpen(true);
-    } catch {
-      setPromptInfo({ prompt: "", resumeSessionId: null });
-      setOrchestrateModalOpen(true);
-    }
-  }
-
-  async function handleOrchestrateSubmit(prompt: string) {
-    if (!worktreeId) return;
-    setOrchestrateModalOpen(false);
-    setAgentLoading(true);
-    setPageError(null);
-    try {
-      await api.orchestrateAgent(worktreeId, prompt);
-      await refreshAgent();
-    } catch (e) {
-      const msg = getErrorMessage(e, "Failed to start orchestration");
-      setPageError({ message: msg, retry: () => handleOrchestrateSubmit(prompt) });
-    } finally {
-      setAgentLoading(false);
-    }
-  }
-
   async function handleStopAgent() {
     if (!worktreeId) return;
     setStopConfirm(false);
@@ -367,13 +338,6 @@ export function WorktreeDetailPage() {
                     className="px-3 py-1.5 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 hover:brightness-110 active:scale-95 transition-transform disabled:opacity-50"
                   >
                     Launch Agent
-                  </button>
-                  <button
-                    onClick={handleOrchestrateClick}
-                    disabled={agentLoading}
-                    className="px-3 py-1.5 text-sm font-medium rounded-md border border-indigo-300 text-indigo-700 hover:bg-indigo-50 active:scale-95 transition-transform disabled:opacity-50"
-                  >
-                    Orchestrate
                   </button>
                 </>
               )}
@@ -591,15 +555,6 @@ export function WorktreeDetailPage() {
         resumeSessionId={promptInfo.resumeSessionId}
         onSubmit={handleAgentSubmit}
         onCancel={() => setPromptModalOpen(false)}
-      />
-
-      <AgentPromptModal
-        open={orchestrateModalOpen}
-        title="Orchestrate (Multi-Step)"
-        initialPrompt={promptInfo.prompt}
-        resumeSessionId={null}
-        onSubmit={(prompt) => handleOrchestrateSubmit(prompt)}
-        onCancel={() => setOrchestrateModalOpen(false)}
       />
 
       <ConfirmDialog

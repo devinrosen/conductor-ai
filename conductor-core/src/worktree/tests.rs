@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::{params, Connection};
+use rusqlite::{named_params, Connection};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -498,8 +498,8 @@ fn test_update_status_to_abandoned_sets_completed_at() {
 fn insert_test_worktree(conn: &Connection, id: &str, repo_id: &str, slug: &str, branch: &str) {
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES (?1, ?2, ?3, ?4, '/tmp/ws', 'active', '2024-01-01T00:00:00Z')",
-        params![id, repo_id, slug, branch],
+         VALUES (:id, :repo_id, :slug, :branch, '/tmp/ws', 'active', '2024-01-01T00:00:00Z')",
+        named_params! { ":id": id, ":repo_id": repo_id, ":slug": slug, ":branch": branch },
     )
     .unwrap();
 }
@@ -670,7 +670,7 @@ fn test_reap_stale_worktrees_backfills_completed_at() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'wt-stale'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some());
@@ -712,8 +712,8 @@ fn test_reap_stale_worktrees_removes_existing_path() {
 
     // Update repo to use real local path
     conn.execute(
-        "UPDATE repos SET local_path = ?1 WHERE id = 'r1'",
-        params![local_str],
+        "UPDATE repos SET local_path = :local_path WHERE id = 'r1'",
+        named_params! { ":local_path": local_str },
     )
     .unwrap();
 
@@ -734,8 +734,8 @@ fn test_reap_stale_worktrees_removes_existing_path() {
     // Insert as merged with no completed_at
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES ('wt-real', 'r1', 'feat-stale-wt', 'feat/stale-wt', ?1, 'merged', '2024-01-01T00:00:00Z')",
-        params![wt_path.to_str().unwrap()],
+         VALUES ('wt-real', 'r1', 'feat-stale-wt', 'feat/stale-wt', :wt_path, 'merged', '2024-01-01T00:00:00Z')",
+        named_params! { ":wt_path": wt_path.to_str().unwrap() },
     ).unwrap();
 
     let mgr = WorktreeManager::new(&conn, &config);
@@ -750,7 +750,7 @@ fn test_reap_stale_worktrees_removes_existing_path() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'wt-real'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some());
@@ -843,7 +843,7 @@ fn test_reap_stale_worktrees_handles_abandoned() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'wt-aband'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some());
@@ -864,8 +864,8 @@ fn test_reap_stale_worktrees_removes_deregistered_path() {
 
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES ('wt-dereg', 'r1', 'feat-dereg', 'feat/dereg', ?1, 'merged', '2024-01-01T00:00:00Z')",
-        params![deregistered_path.to_str().unwrap()],
+         VALUES ('wt-dereg', 'r1', 'feat-dereg', 'feat/dereg', :wt_path, 'merged', '2024-01-01T00:00:00Z')",
+        named_params! { ":wt_path": deregistered_path.to_str().unwrap() },
     )
     .unwrap();
 
@@ -883,7 +883,7 @@ fn test_reap_stale_worktrees_removes_deregistered_path() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'wt-dereg'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some());
@@ -1004,11 +1004,8 @@ fn test_create_from_pr_propagates_fetch_error() {
 
     // Point the test repo at the real local path so clone check passes
     conn.execute(
-        "UPDATE repos SET local_path = ?1, workspace_dir = ?2 WHERE id = 'r1'",
-        params![
-            local_str,
-            local.parent().unwrap().join("ws").to_str().unwrap()
-        ],
+        "UPDATE repos SET local_path = :local_path, workspace_dir = :workspace_dir WHERE id = 'r1'",
+        named_params! { ":local_path": local_str, ":workspace_dir": local.parent().unwrap().join("ws").to_str().unwrap() },
     )
     .unwrap();
 
@@ -1214,97 +1211,6 @@ fn belongs_to_feature_none_base_branch() {
 }
 
 #[test]
-fn test_create_non_default_base_branch_does_not_register_feature() {
-    // Since RFC-018 explicit lifecycle, creating a worktree on a non-default
-    // branch should NOT auto-register a feature. Features must be created
-    // explicitly via `conductor feature create`.
-    let (tmp, remote, local) = setup_repo_with_remote();
-
-    // Create a feature branch in the repo to use as a non-default base
-    git(&["checkout", "-b", "feat/parent"], &local);
-    let file = local.join("feature.txt");
-    fs::write(&file, "feature work").unwrap();
-    git(&["add", "feature.txt"], &local);
-    git(&["commit", "-m", "feature commit"], &local);
-    git(&["push", "-u", "origin", "feat/parent"], &local);
-    git(&["checkout", "main"], &local);
-
-    let conn = crate::test_helpers::setup_db();
-    let mut config = Config::default();
-    config.general.workspace_root = tmp.path().to_path_buf();
-
-    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
-    repo_mgr
-        .register(
-            "myrepo",
-            local.to_str().unwrap(),
-            remote.to_str().unwrap(),
-            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
-        )
-        .unwrap();
-
-    let mgr = WorktreeManager::new(&conn, &config);
-    let (wt, _warnings) = mgr
-        .create(
-            "myrepo",
-            "feat-child",
-            WorktreeCreateOptions {
-                from_branch: Some("feat/parent".to_string()),
-                ..Default::default()
-            },
-        )
-        .expect("create should succeed");
-
-    // Worktree should have feat/parent as its base branch
-    assert_eq!(wt.base_branch.as_deref(), Some("feat/parent"));
-
-    // No feature should be auto-registered — explicit lifecycle enforced.
-    let fm = crate::feature::FeatureManager::new(&conn, &config);
-    let features = fm.list_active("myrepo").unwrap();
-    assert!(
-        features.is_empty(),
-        "no feature should be auto-registered under explicit lifecycle, got: {features:?}"
-    );
-}
-
-#[test]
-fn test_create_default_branch_does_not_register_feature() {
-    // Creating a worktree from the default branch should not register a feature.
-    let (tmp, remote, local) = setup_repo_with_remote();
-
-    let conn = crate::test_helpers::setup_db();
-    let mut config = Config::default();
-    config.general.workspace_root = tmp.path().to_path_buf();
-
-    let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
-    repo_mgr
-        .register(
-            "myrepo",
-            local.to_str().unwrap(),
-            remote.to_str().unwrap(),
-            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
-        )
-        .unwrap();
-
-    // Create a worktree from main (default branch)
-    let mgr = WorktreeManager::new(&conn, &config);
-    let (wt, _warnings) = mgr
-        .create("myrepo", "feat-on-main", Default::default())
-        .expect("create should succeed");
-
-    assert!(
-        wt.base_branch.is_none() || wt.base_branch.as_deref() == Some("main"),
-        "expected no non-default base_branch"
-    );
-    let fm = crate::feature::FeatureManager::new(&conn, &config);
-    let features = fm.list_active("myrepo").unwrap();
-    assert!(
-        features.is_empty(),
-        "should not have any features for default branch, got: {features:?}"
-    );
-}
-
-#[test]
 fn test_set_base_branch() {
     let conn = crate::test_helpers::setup_db();
     let config = Config::default();
@@ -1315,7 +1221,7 @@ fn test_set_base_branch() {
         .query_row(
             "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
             [],
-            |row| row.get(0),
+            |row| row.get("base_branch"),
         )
         .unwrap();
     assert!(wt.is_none(), "expected NULL base_branch initially");
@@ -1327,7 +1233,7 @@ fn test_set_base_branch() {
         .query_row(
             "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
             [],
-            |row| row.get(0),
+            |row| row.get("base_branch"),
         )
         .unwrap();
     assert_eq!(wt.as_deref(), Some("develop"));
@@ -1338,7 +1244,7 @@ fn test_set_base_branch() {
         .query_row(
             "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
             [],
-            |row| row.get(0),
+            |row| row.get("base_branch"),
         )
         .unwrap();
     assert!(wt.is_none(), "expected NULL after clearing base_branch");
@@ -1358,61 +1264,6 @@ fn test_set_base_branch_not_found() {
         }
         other => panic!("expected WorktreeNotFound, got: {other}"),
     }
-}
-
-/// Integration: deleting the last active worktree for a feature whose
-/// branch is gone should auto-close the feature automatically (the
-/// auto-close call is inside `delete_internal`).
-#[test]
-fn test_delete_then_auto_close_orphaned_feature() {
-    let (_tmp, _remote, local) = setup_repo_with_remote();
-    let local_str = local.to_str().unwrap();
-
-    let conn = crate::test_helpers::create_test_conn();
-    let repo_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-         VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-        rusqlite::params![repo_id, local_str],
-    ).unwrap();
-
-    // Create a feature branch, then delete it so the branch is gone
-    git(&["branch", "feat/ephemeral", "main"], &local);
-    git(&["branch", "-D", "feat/ephemeral"], &local);
-
-    let feature_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-         VALUES (?1, ?2, 'ephemeral', 'feat/ephemeral', 'main', 'in_progress', '2024-01-01T00:00:00Z')",
-        rusqlite::params![feature_id, repo_id],
-    )
-    .unwrap();
-
-    // Create a worktree record pointing at that feature branch (use a
-    // fake path — delete_internal's remove_git_artifacts will just no-op)
-    let wt_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
-         VALUES (?1, ?2, 'wt-eph', 'wt-eph-branch', 'feat/ephemeral', '/tmp/nonexistent-wt', 'active', '2024-01-01T00:00:00Z')",
-        rusqlite::params![wt_id, repo_id],
-    ).unwrap();
-
-    let config = Config::default();
-    let wt_mgr = WorktreeManager::new(&conn, &config);
-    let _wt = wt_mgr.delete("test-repo", "wt-eph").unwrap();
-
-    // The feature should now be auto-closed by delete_internal
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM features WHERE id = ?1",
-            rusqlite::params![feature_id],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        status, "closed",
-        "feature should be auto-closed after last worktree deleted and branch gone"
-    );
 }
 
 // -----------------------------------------------------------------------
@@ -1443,7 +1294,7 @@ fn test_cleanup_merged_worktrees_marks_merged() {
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(status, "merged");
@@ -1452,7 +1303,7 @@ fn test_cleanup_merged_worktrees_marks_merged() {
         .query_row(
             "SELECT completed_at FROM worktrees WHERE id = 'w1'",
             [],
-            |row| row.get(0),
+            |row| row.get("completed_at"),
         )
         .unwrap();
     assert!(completed_at.is_some(), "completed_at should be set");
@@ -1476,7 +1327,7 @@ fn test_cleanup_merged_worktrees_skips_unmerged() {
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(status, "active");
@@ -1546,80 +1397,16 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
     // Both should be merged
     let s1: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     let s2: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w2'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(s1, "merged");
     assert_eq!(s2, "merged");
-}
-
-/// When two sub-worktrees for the same feature branch both merge in a single
-/// cleanup run, auto_ready_for_review_if_complete must fire AFTER all worktrees
-/// are marked merged — otherwise it would see sibling worktrees as still active
-/// and skip the transition.
-#[test]
-fn test_cleanup_multi_worktrees_same_feature_triggers_ready_for_review() {
-    let conn = crate::test_helpers::setup_db();
-    // auto_ready_for_review defaults to true in Config::default()
-    let config = Config::default();
-
-    // Insert a feature tracked on branch "feat/epic"
-    conn.execute(
-        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
-         VALUES ('feat1', 'r1', 'epic', 'feat/epic', 'main', 'in_progress', '2024-01-01T00:00:00Z')",
-        [],
-    )
-    .unwrap();
-
-    // Two sub-worktrees whose base_branch = "feat/epic" (both active initially)
-    conn.execute(
-        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
-         VALUES ('sub1', 'r1', 'sub-a', 'feat/sub-a', 'feat/epic', '/tmp/sub-a', 'active', '2024-01-01T00:00:00Z')",
-        [],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
-         VALUES ('sub2', 'r1', 'sub-b', 'feat/sub-b', 'feat/epic', '/tmp/sub-b', 'active', '2024-01-01T00:00:00Z')",
-        [],
-    )
-    .unwrap();
-
-    let mgr = WorktreeManager::new(&conn, &config);
-    // Both sub-worktrees merge in the same cleanup run (w1 from setup_db is also "merged" here
-    // but it has no base_branch so it won't affect the feature check)
-    let count = mgr
-        .cleanup_merged_worktrees_with_merge_check(
-            None,
-            |_, branches| {
-                branches
-                    .iter()
-                    .map(|b| (b.clone(), String::new()))
-                    .collect()
-            },
-            |_, _| Ok(()),
-        )
-        .unwrap();
-    // w1 + sub1 + sub2 all get cleaned up
-    assert_eq!(count, 3);
-
-    // Feature should have transitioned to ready_for_review because both sub-worktrees are merged
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM features WHERE id = 'feat1'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        status, "ready_for_review",
-        "feature should transition to ready_for_review after all sub-worktrees merge in one run"
-    );
 }
 
 /// A new worktree whose branch name matches an OLD merged PR (branch reuse)
@@ -1652,7 +1439,7 @@ fn test_cleanup_merged_worktrees_skips_branch_reuse_after_old_merge() {
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(status, "active");
@@ -1683,7 +1470,7 @@ fn test_cleanup_merged_worktrees_cleans_up_genuine_merge() {
 
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(status, "merged");
@@ -2025,12 +1812,12 @@ fn test_cleanup_merged_worktrees_filters_by_repo() {
     // w1 should still be active, w2 should be merged
     let s1: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     let s2: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w2'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_eq!(s1, "active");
@@ -2195,8 +1982,8 @@ fn insert_agent_run(
 ) {
     conn.execute(
         "INSERT INTO agent_runs (id, worktree_id, status, started_at, prompt) \
-         VALUES (?1, ?2, ?3, ?4, 'test prompt')",
-        rusqlite::params![id, worktree_id, status, started_at],
+         VALUES (:id, :worktree_id, :status, :started_at, 'test prompt')",
+        rusqlite::named_params! { ":id": id, ":worktree_id": worktree_id, ":status": status, ":started_at": started_at },
     )
     .unwrap();
 }
@@ -2372,7 +2159,7 @@ fn test_delete_by_id_for_repo_happy_path() {
     // Confirm it is no longer active
     let status: String = conn
         .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
-            row.get(0)
+            row.get("status")
         })
         .unwrap();
     assert_ne!(status, "active");
@@ -2422,16 +2209,16 @@ fn insert_ticket(
     conn.execute(
         "INSERT INTO tickets \
          (id, repo_id, source_type, source_id, title, url, synced_at) \
-         VALUES (?1, ?2, 'github', ?3, ?4, ?5, '2024-01-01T00:00:00Z')",
-        rusqlite::params![id, repo_id, source_id, title, url],
+         VALUES (:id, :repo_id, 'github', :source_id, :title, :url, '2024-01-01T00:00:00Z')",
+        rusqlite::named_params! { ":id": id, ":repo_id": repo_id, ":source_id": source_id, ":title": title, ":url": url },
     )
     .unwrap();
 }
 
 fn link_ticket(conn: &Connection, worktree_id: &str, ticket_id: &str) {
     conn.execute(
-        "UPDATE worktrees SET ticket_id = ?1 WHERE id = ?2",
-        rusqlite::params![ticket_id, worktree_id],
+        "UPDATE worktrees SET ticket_id = :ticket_id WHERE id = :worktree_id",
+        rusqlite::named_params! { ":ticket_id": ticket_id, ":worktree_id": worktree_id },
     )
     .unwrap();
 }

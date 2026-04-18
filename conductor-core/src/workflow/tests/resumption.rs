@@ -561,8 +561,8 @@ fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
 
     // Directly write invalid JSON into the inputs column to simulate corruption
     conn.execute(
-        "UPDATE workflow_runs SET inputs = ?1 WHERE id = ?2",
-        rusqlite::params!["not-valid-json", &run.id],
+        "UPDATE workflow_runs SET inputs = :inputs WHERE id = :id",
+        rusqlite::named_params! { ":inputs": "not-valid-json", ":id": &run.id },
     )
     .unwrap();
 
@@ -952,7 +952,6 @@ fn test_resume_workflow_repo_target() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -1013,7 +1012,6 @@ fn test_resume_workflow_ticket_target() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        feature_id: None,
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
@@ -1046,91 +1044,6 @@ fn test_resume_workflow_ticket_target() {
         resume_result.is_ok(),
         "resume of ticket-targeted run should succeed: {:?}",
         resume_result.err()
-    );
-}
-
-#[test]
-fn test_resume_workflow_preserves_feature_id() {
-    let conn = setup_db();
-    let config = Config::default();
-    let exec_config = WorkflowExecConfig::default();
-    let workflow = make_empty_workflow();
-
-    // Insert a feature so the engine can look it up during execute_workflow.
-    conn.execute(
-        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
-         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'in_progress', '2025-01-01T00:00:00Z')",
-        [],
-    )
-    .unwrap();
-
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: Some("r1"),
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        feature_id: Some("f1"),
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-        extra_plugin_dirs: vec![],
-    };
-    let result = execute_workflow(&input).unwrap();
-
-    let wf_mgr = WorkflowManager::new(&conn);
-    // Verify feature_id was persisted on the original run.
-    let run = wf_mgr
-        .get_workflow_run(&result.workflow_run_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(run.feature_id.as_deref(), Some("f1"));
-
-    wf_mgr
-        .update_workflow_status(
-            &result.workflow_run_id,
-            WorkflowRunStatus::Failed,
-            Some("step failed"),
-            None,
-        )
-        .unwrap();
-
-    let resume_result = resume_workflow(&WorkflowResumeInput {
-        conn: &conn,
-        config: &config,
-        workflow_run_id: &result.workflow_run_id,
-        model: None,
-        from_step: None,
-        restart: false,
-        conductor_bin_dir: None,
-    });
-    assert!(
-        resume_result.is_ok(),
-        "resume with feature_id should succeed: {:?}",
-        resume_result.err()
-    );
-
-    // After resume, the feature_id should still be on the run record.
-    let resumed_run = wf_mgr
-        .get_workflow_run(&result.workflow_run_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        resumed_run.feature_id.as_deref(),
-        Some("f1"),
-        "feature_id should be preserved across resume"
     );
 }
 

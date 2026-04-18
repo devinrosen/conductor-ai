@@ -27,7 +27,6 @@ import type {
   FanOutItem,
   RunWorkflowRequest,
   FeedbackRequest,
-  Notification,
   ThemeUnlockStats,
   PushSubscribeRequest,
   VapidPublicKeyResponse,
@@ -45,11 +44,6 @@ import type {
   PendingGateAnalyticsRow,
   HookSummary,
   HookEvent,
-  Feature,
-  FeaturesResponse,
-  FeatureDetailResponse,
-  FeatureSyncResult,
-  FeatureRunSummary,
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
@@ -191,20 +185,6 @@ export const api = {
     request<RunTreeTotals>(
       `/worktrees/${worktreeId}/agent/runs/${runId}/tree-totals`,
     ),
-  orchestrateAgent: (
-    worktreeId: string,
-    prompt: string,
-    failFast?: boolean,
-    childTimeoutSecs?: number,
-  ) =>
-    request<AgentRun>(`/worktrees/${worktreeId}/agent/orchestrate`, {
-      method: "POST",
-      body: JSON.stringify({
-        prompt,
-        fail_fast: failFast ?? false,
-        child_timeout_secs: childTimeoutSecs ?? 1800,
-      }),
-    }),
   getCreatedIssues: (worktreeId: string) =>
     request<AgentCreatedIssue[]>(`/worktrees/${worktreeId}/agent/created-issues`),
   updateRepoSettings: (repoId: string, settings: { allow_agent_issue_creation?: boolean }) =>
@@ -344,18 +324,6 @@ export const api = {
   getPendingGates: () =>
     request<PendingGateAnalyticsRow[]>("/workflows/analytics/gates/pending"),
 
-  // Notifications
-  listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>
-    request<Notification[]>(
-      `/notifications?unread_only=${unreadOnly}&limit=${limit}&offset=${offset}`,
-    ),
-  unreadNotificationCount: () =>
-    request<{ count: number }>("/notifications/unread-count"),
-  markNotificationRead: (id: string) =>
-    request<void>(`/notifications/${id}/read`, { method: "POST" }),
-  markAllNotificationsRead: () =>
-    request<void>("/notifications/read", { method: "POST" }),
-
   // Stats
   getThemeUnlockStats: () =>
     request<ThemeUnlockStats>("/stats/theme-unlocks"),
@@ -373,22 +341,6 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify(data),
     }),
-
-  // Features
-  listFeatures: (repoId: string) =>
-    request<FeaturesResponse>(`/repos/${repoId}/features`),
-  getFeature: (repoId: string, name: string) =>
-    request<FeatureDetailResponse>(`/repos/${repoId}/features/${encodeURIComponent(name)}`),
-  syncFeature: (repoId: string, name: string) =>
-    request<FeatureSyncResult>(`/repos/${repoId}/features/${encodeURIComponent(name)}/sync`, { method: "POST" }),
-  runFeature: (repoId: string, name: string) =>
-    request<FeatureRunSummary>(`/repos/${repoId}/features/${encodeURIComponent(name)}/run`, { method: "POST" }),
-  reviewFeature: (repoId: string, name: string) =>
-    request<Feature>(`/repos/${repoId}/features/${encodeURIComponent(name)}/review`, { method: "POST" }),
-  approveFeature: (repoId: string, name: string) =>
-    request<Feature>(`/repos/${repoId}/features/${encodeURIComponent(name)}/approve`, { method: "POST" }),
-  closeFeature: (repoId: string, name: string) =>
-    request<{ status: string }>(`/repos/${repoId}/features/${encodeURIComponent(name)}/close`, { method: "POST" }),
 
   // Notification Hooks
   listHooks: () => request<HookSummary[]>("/config/hooks"),

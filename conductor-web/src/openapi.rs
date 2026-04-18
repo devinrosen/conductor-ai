@@ -8,13 +8,9 @@ use conductor_core::agent::{
 #[allow(unused_imports)]
 use conductor_core::conversation::{Conversation, ConversationScope, ConversationWithRuns};
 #[allow(unused_imports)]
-use conductor_core::feature::{FeatureRow, FeatureStatus};
-#[allow(unused_imports)]
 use conductor_core::github::{DiscoveredRepo, GithubPr};
 #[allow(unused_imports)]
 use conductor_core::issue_source::IssueSource;
-#[allow(unused_imports)]
-use conductor_core::notification_manager::{Notification, NotificationSeverity};
 #[allow(unused_imports)]
 use conductor_core::repo::Repo;
 #[allow(unused_imports)]
@@ -35,8 +31,6 @@ use crate::routes::conversations::{
     RespondToFeedbackRequest, SendMessageRequest,
 };
 #[allow(unused_imports)]
-use crate::routes::features::FeaturesResponse;
-#[allow(unused_imports)]
 use crate::routes::hooks::{HookEventEntry, HookSummary, PatchHookOnRequest, TestHookRequest};
 #[allow(unused_imports)]
 use crate::routes::issue_sources::CreateIssueSourceRequest;
@@ -45,8 +39,6 @@ use crate::routes::model_config::{
     GlobalModelResponse, KnownModelResponse, SetGlobalModelRequest, SuggestModelRequest,
     SuggestModelResponse,
 };
-#[allow(unused_imports)]
-use crate::routes::notifications::{ListNotificationsQuery, UnreadCountResponse};
 #[allow(unused_imports)]
 use crate::routes::push::{PushSubscribeRequest, VapidPublicKeyResponse};
 #[allow(unused_imports)]
@@ -105,8 +97,6 @@ use crate::routes::worktrees::{
         crate::routes::tickets::list_tickets,
         crate::routes::tickets::sync_tickets,
         crate::routes::tickets::ticket_detail,
-        // Features
-        crate::routes::features::list_features,
         // Agents
         crate::routes::agents::list_agent_runs,
         crate::routes::agents::list_all_agent_runs,
@@ -132,7 +122,6 @@ use crate::routes::worktrees::{
         crate::routes::agents::get_run_tree,
         crate::routes::agents::get_run_tree_totals,
         crate::routes::agents::get_prompt,
-        crate::routes::agents::orchestrate_agent,
         crate::routes::agents::list_created_issues,
         crate::routes::agents::get_pending_feedback,
         crate::routes::agents::request_feedback,
@@ -180,11 +169,6 @@ use crate::routes::worktrees::{
         crate::routes::issue_sources::list_issue_sources,
         crate::routes::issue_sources::create_issue_source,
         crate::routes::issue_sources::delete_issue_source,
-        // Notifications
-        crate::routes::notifications::list_notifications,
-        crate::routes::notifications::unread_count,
-        crate::routes::notifications::mark_all_read,
-        crate::routes::notifications::mark_read,
         // Stats
         crate::routes::stats::theme_unlock_stats,
         // Push Notifications
@@ -254,14 +238,8 @@ use crate::routes::worktrees::{
             Worktree,
             WorktreeStatus,
             WorktreeWithStatus,
-            // Notification types
-            Notification,
-            NotificationSeverity,
             // Issue source types
             IssueSource,
-            // Feature types
-            FeatureRow,
-            FeatureStatus,
             // Web layer request/response types
             RegisterRepoRequest,
             DiscoverableRepo,
@@ -274,7 +252,6 @@ use crate::routes::worktrees::{
             TicketListResponse,
             SyncResult,
             TicketDetail,
-            FeaturesResponse,
             CreateConversationRequest,
             ListConversationsQuery,
             SendMessageRequest,
@@ -287,8 +264,6 @@ use crate::routes::worktrees::{
             PostWorkflowRunRequest,
             InstantiateTemplateRequest,
             CreateIssueSourceRequest,
-            ListNotificationsQuery,
-            UnreadCountResponse,
             ThemeUnlockStats,
             VapidPublicKeyResponse,
             PushSubscribeRequest,

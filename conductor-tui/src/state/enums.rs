@@ -6,17 +6,6 @@ pub enum View {
     WorkflowRunDetail,
     WorkflowDefDetail,
     Settings,
-    /// Feature list view (repo-scoped or all repos).
-    Features,
-    /// Feature detail view: metadata + linked tickets + active worktrees.
-    FeatureDetail,
-}
-
-/// Which panel of the Features list view has keyboard focus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FeaturesFocus {
-    #[default]
-    List,
 }
 
 /// Which pane of the Settings view has keyboard focus.
@@ -102,6 +91,8 @@ pub enum WorkflowsFocus {
     Defs,
     Gates,
     Runs,
+    /// Inline workflow-name filter bar is active (/ key).
+    Filter,
 }
 
 /// Whether a target header row represents a worktree or a PR.
@@ -124,6 +115,7 @@ impl WorkflowsFocus {
                     Self::Runs
                 }
             }
+            Self::Filter => Self::Runs,
         }
     }
 
@@ -139,6 +131,7 @@ impl WorkflowsFocus {
                 }
             }
             Self::Gates => Self::Defs,
+            Self::Filter => Self::Runs,
         }
     }
 }
@@ -323,7 +316,7 @@ impl WorkflowPickerItem {
 }
 
 /// One selectable row in the branch picker modal.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BranchPickerItem {
     /// `None` → repo default branch; `Some(branch)` → feature branch name.
     pub branch: Option<String>,
@@ -337,46 +330,6 @@ pub struct BranchPickerItem {
     pub stale_days: Option<u64>,
     /// Milestone title when this item was inferred from ticket metadata (`None` otherwise).
     pub inferred_from: Option<String>,
-}
-
-impl BranchPickerItem {
-    /// Build the picker list from features (each paired with its pre-computed stale days)
-    /// and unregistered (orphan) branches.
-    /// The first entry is always `None` (repo default branch sentinel).
-    pub fn from_features_and_orphans_with_stale(
-        features: &[(conductor_core::feature::FeatureRow, Option<u64>)],
-        orphans: &[conductor_core::feature::UnregisteredBranch],
-    ) -> Vec<Self> {
-        let mut items = vec![Self {
-            branch: None,
-            worktree_count: 0,
-            ticket_count: 0,
-            base_branch: None,
-            stale_days: None,
-            inferred_from: None,
-        }];
-        for (f, sd) in features {
-            items.push(Self {
-                branch: Some(f.branch.clone()),
-                worktree_count: f.worktree_count,
-                ticket_count: f.ticket_count,
-                base_branch: Some(f.base_branch.clone()),
-                stale_days: *sd,
-                inferred_from: None,
-            });
-        }
-        for orphan in orphans {
-            items.push(Self {
-                branch: Some(orphan.branch.clone()),
-                worktree_count: orphan.worktree_count,
-                ticket_count: 0,
-                base_branch: orphan.base_branch.clone(),
-                stale_days: None,
-                inferred_from: None,
-            });
-        }
-        items
-    }
 }
 
 /// Target context for the generic workflow picker.
@@ -532,11 +485,6 @@ pub enum InputAction {
         worktree_path: String,
         worktree_slug: String,
         resume_session_id: Option<String>,
-    },
-    OrchestratePrompt {
-        worktree_id: String,
-        worktree_path: String,
-        worktree_slug: String,
     },
     /// Second step: optionally override the model for this run.
     /// `resolved_default` is the already-resolved model (worktree → repo → global config).

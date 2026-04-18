@@ -94,39 +94,19 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
             View::WorktreeDetail => "Worktree Detail",
             View::WorkflowRunDetail => "Workflow Run",
             View::WorkflowDefDetail => "Workflow Definition",
-            View::Features => "Features",
-            View::FeatureDetail => "Feature Detail",
             View::Settings => "Settings",
         };
         if state.view == View::Settings {
             format!("[{view_name}]  Tab:pane  j/k:nav  Enter:edit  c:cycle  Esc:back")
-        } else if matches!(state.view, View::Features | View::FeatureDetail) {
-            format!("[{view_name}]  r=run  v=ready  a=approve  x=close  Enter=detail  Esc=back")
         } else {
             format!("[{view_name}]  Tab:panel  [/]:column  \\:workflows  [S]:settings  q:quit")
         }
     };
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
-
-    // Notification indicator
-    if state.unread_notification_count > 0 {
-        spans.push(Span::styled(
-            format!("\u{1F514} {} ", state.unread_notification_count),
-            Style::default()
-                .fg(state.theme.label_warning)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " ",
-            Style::default().fg(state.theme.label_secondary),
-        ));
-    }
-
-    spans.push(Span::styled(
+    let spans: Vec<Span<'static>> = vec![Span::styled(
         msg,
         Style::default().fg(state.theme.label_secondary),
-    ));
+    )];
 
     let bar = Paragraph::new(Line::from(spans));
     frame.render_widget(bar, area);

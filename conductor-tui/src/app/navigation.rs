@@ -192,14 +192,6 @@ impl App {
                 self.state.column_focus = crate::state::ColumnFocus::Workflow;
                 self.state.workflows_focus = WorkflowsFocus::Defs;
             }
-            View::Features => {
-                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
-            }
-            View::FeatureDetail => {
-                self.state.detail_feature_tickets = Vec::new();
-                self.state.detail_feature_ticket_index = 0;
-                self.state.view = View::Features;
-            }
         }
     }
 
@@ -229,7 +221,6 @@ impl App {
                     self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
                 }
                 View::WorkflowDefDetail => {} // single panel — Tab is a no-op
-                View::Features | View::FeatureDetail => {} // single panel — Tab is a no-op
             },
         }
     }
@@ -261,7 +252,6 @@ impl App {
                     self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
                 }
                 View::WorkflowDefDetail => {} // single panel — Tab is a no-op
-                View::Features | View::FeatureDetail => {} // single panel — Tab is a no-op
             },
         }
     }
@@ -311,7 +301,7 @@ impl App {
             WorkflowsFocus::Gates => {
                 self.state.detail_gate_index = self.state.detail_gate_index.saturating_sub(1);
             }
-            WorkflowsFocus::Runs => {
+            WorkflowsFocus::Runs | WorkflowsFocus::Filter => {
                 self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
             }
         }
@@ -355,7 +345,7 @@ impl App {
                     self.state.detail_gates.len(),
                 );
             }
-            WorkflowsFocus::Runs => {
+            WorkflowsFocus::Runs | WorkflowsFocus::Filter => {
                 let visible_len = self.state.visible_workflow_run_rows_len();
                 clamp_increment(&mut self.state.workflow_run_index, visible_len);
             }
@@ -411,28 +401,14 @@ impl App {
                     {
                         let worktree_id = run.worktree_id.clone();
                         let run_id = run.id.clone();
-                        self.state.previous_selected_worktree_id =
-                            Some(self.state.selected_worktree_id.clone());
-                        if self.state.selected_worktree_id.is_none() {
-                            self.state.selected_worktree_id = worktree_id;
-                            self.sync_selection_arcs();
-                        }
-                        self.state.selected_workflow_run_id = Some(run_id);
-                        self.state.previous_view = Some(self.state.view);
-                        self.state.view = View::WorkflowRunDetail;
-                        self.state.workflow_step_index = 0;
-                        self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
-                        self.state.step_agent_event_index = 0;
-                        self.state.error_pane_scroll = 0;
-                        self.state.column_focus = crate::state::ColumnFocus::Content;
-                        self.reload_workflow_steps();
+                        self.enter_workflow_run_detail(run_id, worktree_id);
                     } else {
                         self.state.status_message =
                             Some("Workflow run not found — try refreshing".to_string());
                     }
                 }
             }
-            WorkflowsFocus::Runs => {
+            WorkflowsFocus::Runs | WorkflowsFocus::Filter => {
                 let visible = self.state.visible_workflow_run_rows();
                 if let Some(row) = visible.get(self.state.workflow_run_index) {
                     let Some(target_id) = row.run_id().map(|s| s.to_string()) else {
@@ -447,25 +423,28 @@ impl App {
                     {
                         let run_id = run.id.clone();
                         let worktree_id = run.worktree_id.clone();
-                        self.state.previous_selected_worktree_id =
-                            Some(self.state.selected_worktree_id.clone());
-                        if self.state.selected_worktree_id.is_none() {
-                            self.state.selected_worktree_id = worktree_id;
-                            self.sync_selection_arcs();
-                        }
-                        self.state.selected_workflow_run_id = Some(run_id);
-                        self.state.previous_view = Some(self.state.view);
-                        self.state.view = View::WorkflowRunDetail;
-                        self.state.workflow_step_index = 0;
-                        self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
-                        self.state.step_agent_event_index = 0;
-                        self.state.error_pane_scroll = 0;
-                        self.state.column_focus = crate::state::ColumnFocus::Content;
-                        self.reload_workflow_steps();
+                        self.enter_workflow_run_detail(run_id, worktree_id);
                     }
                 }
             }
         }
+    }
+
+    fn enter_workflow_run_detail(&mut self, run_id: String, worktree_id: Option<String>) {
+        self.state.previous_selected_worktree_id = Some(self.state.selected_worktree_id.clone());
+        if self.state.selected_worktree_id.is_none() {
+            self.state.selected_worktree_id = worktree_id;
+            self.sync_selection_arcs();
+        }
+        self.state.selected_workflow_run_id = Some(run_id);
+        self.state.previous_view = Some(self.state.view);
+        self.state.view = View::WorkflowRunDetail;
+        self.state.workflow_step_index = 0;
+        self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
+        self.state.step_agent_event_index = 0;
+        self.state.error_pane_scroll = 0;
+        self.state.column_focus = crate::state::ColumnFocus::Content;
+        self.reload_workflow_steps();
     }
 
     pub(super) fn move_up(&mut self) {
@@ -556,15 +535,6 @@ impl App {
                 wrap_decrement(focused_option, options.len());
                 return;
             }
-            Modal::Notifications {
-                ref notifications,
-                ref mut selected,
-            } => {
-                if !notifications.is_empty() {
-                    wrap_decrement(selected, notifications.len());
-                }
-                return;
-            }
             _ => {}
         }
         // When workflow column has focus, navigate workflow panes.
@@ -629,14 +599,6 @@ impl App {
             View::WorkflowDefDetail => {
                 self.state.workflow_def_detail_scroll =
                     self.state.workflow_def_detail_scroll.saturating_sub(1);
-            }
-            View::Features => {
-                self.state.features_index = self.state.features_index.saturating_sub(1);
-                self.sync_selected_feature();
-            }
-            View::FeatureDetail => {
-                self.state.detail_feature_ticket_index =
-                    self.state.detail_feature_ticket_index.saturating_sub(1);
             }
             View::Settings => {
                 self.settings_move_up();
@@ -734,15 +696,6 @@ impl App {
                 wrap_increment(focused_option, options.len());
                 return;
             }
-            Modal::Notifications {
-                ref notifications,
-                ref mut selected,
-            } => {
-                if !notifications.is_empty() {
-                    wrap_increment(selected, notifications.len());
-                }
-                return;
-            }
             _ => {}
         }
         // When workflow column has focus, navigate workflow panes.
@@ -835,19 +788,6 @@ impl App {
             View::WorkflowDefDetail => {
                 self.state.workflow_def_detail_scroll =
                     self.state.workflow_def_detail_scroll.saturating_add(1);
-            }
-            View::Features => {
-                clamp_increment(
-                    &mut self.state.features_index,
-                    self.state.detail_features.len(),
-                );
-                self.sync_selected_feature();
-            }
-            View::FeatureDetail => {
-                clamp_increment(
-                    &mut self.state.detail_feature_ticket_index,
-                    self.state.detail_feature_tickets.len(),
-                );
             }
             View::Settings => {
                 self.settings_move_down();
@@ -1070,49 +1010,6 @@ impl App {
             View::WorktreeDetail => {}
             View::WorkflowDefDetail => {}
             View::Settings => {}
-            View::Features => {
-                // Enter on a feature row: load its tickets and navigate to FeatureDetail.
-                if let Some(feature) = self
-                    .state
-                    .detail_features
-                    .get(self.state.features_index)
-                    .cloned()
-                {
-                    self.state.selected_feature_id = Some(feature.id.clone());
-                    self.state.selected_feature_name = Some(feature.name.clone());
-                    // Fetch linked tickets inline (fast indexed DB read).
-                    use conductor_core::feature::FeatureManager;
-                    let mgr = FeatureManager::new(&self.conn, &self.config);
-                    match mgr.linked_tickets(&feature.id) {
-                        Ok(tickets) => {
-                            self.state.detail_feature_tickets = tickets;
-                        }
-                        Err(e) => {
-                            self.state.modal = Modal::Error {
-                                message: format!("Failed to load linked tickets: {e}"),
-                            };
-                            return;
-                        }
-                    }
-                    self.state.detail_feature_ticket_index = 0;
-                    // Rebuild worktrees for this feature's repo using repo_id from the row.
-                    let feature_repo_id = feature.repo_id.clone();
-                    self.state.rebuild_detail_worktree_tree(&feature_repo_id);
-                    self.state.view = View::FeatureDetail;
-                }
-            }
-            View::FeatureDetail => {} // Enter on ticket row is a no-op for now
-        }
-    }
-
-    /// Sync `selected_feature_id`/`selected_feature_name` from the current `features_index`.
-    pub(super) fn sync_selected_feature(&mut self) {
-        if let Some(f) = self.state.detail_features.get(self.state.features_index) {
-            self.state.selected_feature_id = Some(f.id.clone());
-            self.state.selected_feature_name = Some(f.name.clone());
-        } else {
-            self.state.selected_feature_id = None;
-            self.state.selected_feature_name = None;
         }
     }
 }

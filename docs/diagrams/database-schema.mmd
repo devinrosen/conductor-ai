@@ -1,4 +1,4 @@
-%% Updated 2026-04-18 — Entity-relationship diagram for conductor.db (75 migrations)
+%% Updated 2026-04-18 — Entity-relationship diagram for conductor.db (77 migrations)
 erDiagram
 
     _conductor_meta {
@@ -73,27 +73,6 @@ erDiagram
         text last_active_at
     }
 
-    feature_tickets {
-        text feature_id FK
-        text ticket_id FK
-    }
-
-    features {
-        text id PK
-        text repo_id FK
-        text name
-        text branch
-        text base_branch
-        text status
-        text created_at
-        text merged_at
-        text last_commit_at
-        text source_type
-        text source_id
-        int tickets_total
-        int tickets_merged
-    }
-
     feedback_requests {
         text id PK
         text run_id FK
@@ -111,19 +90,6 @@ erDiagram
         text entity_id PK
         text event_type PK
         text fired_at
-    }
-
-    notifications {
-        text id PK
-        text kind
-        text title
-        text body
-        text severity
-        text entity_id
-        text entity_type
-        bool read
-        text created_at
-        text read_at
     }
 
     push_subscriptions {

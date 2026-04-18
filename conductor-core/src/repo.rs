@@ -2,7 +2,7 @@ use crate::config::{Config, RepoConfig};
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{named_params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -75,8 +75,8 @@ impl<'a> RepoManager<'a> {
     ) -> Result<Repo> {
         // Check for duplicates
         let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM repos WHERE slug = ?1)",
-            params![slug],
+            "SELECT EXISTS(SELECT 1 FROM repos WHERE slug = :slug)",
+            named_params! { ":slug": slug },
             |row| row.get(0),
         )?;
         if exists {
@@ -110,15 +110,15 @@ impl<'a> RepoManager<'a> {
 
         self.conn.execute(
             "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                repo.id,
-                repo.slug,
-                repo.local_path,
-                repo.remote_url,
-                repo.workspace_dir,
-                repo.created_at,
-            ],
+             VALUES (:id, :slug, :local_path, :remote_url, :workspace_dir, :created_at)",
+            named_params! {
+                ":id": repo.id,
+                ":slug": repo.slug,
+                ":local_path": repo.local_path,
+                ":remote_url": repo.remote_url,
+                ":workspace_dir": repo.workspace_dir,
+                ":created_at": repo.created_at,
+            },
         )?;
 
         Ok(repo.enrich(self.config))
@@ -133,15 +133,17 @@ impl<'a> RepoManager<'a> {
             [],
             |row| {
                 Ok(Repo {
-                    id: row.get(0)?,
-                    slug: row.get(1)?,
-                    local_path: row.get(2)?,
-                    remote_url: row.get(3)?,
+                    id: row.get("id")?,
+                    slug: row.get("slug")?,
+                    local_path: row.get("local_path")?,
+                    remote_url: row.get("remote_url")?,
                     default_branch: String::new(),
-                    workspace_dir: row.get(4)?,
-                    created_at: row.get(5)?,
+                    workspace_dir: row.get("workspace_dir")?,
+                    created_at: row.get("created_at")?,
                     model: None,
-                    allow_agent_issue_creation: row.get::<_, i64>(6).map(|v| v != 0)?,
+                    allow_agent_issue_creation: row
+                        .get::<_, i64>("allow_agent_issue_creation")
+                        .map(|v| v != 0)?,
                 })
             },
         )?;
@@ -154,19 +156,21 @@ impl<'a> RepoManager<'a> {
                 "SELECT id, slug, local_path, remote_url, workspace_dir, \
                  created_at, \
                  COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
-                 FROM repos WHERE id = ?1",
-                params![id],
+                 FROM repos WHERE id = :id",
+                named_params! { ":id": id },
                 |row| {
                     Ok(Repo {
-                        id: row.get(0)?,
-                        slug: row.get(1)?,
-                        local_path: row.get(2)?,
-                        remote_url: row.get(3)?,
+                        id: row.get("id")?,
+                        slug: row.get("slug")?,
+                        local_path: row.get("local_path")?,
+                        remote_url: row.get("remote_url")?,
                         default_branch: String::new(),
-                        workspace_dir: row.get(4)?,
-                        created_at: row.get(5)?,
+                        workspace_dir: row.get("workspace_dir")?,
+                        created_at: row.get("created_at")?,
                         model: None,
-                        allow_agent_issue_creation: row.get::<_, i64>(6).map(|v| v != 0)?,
+                        allow_agent_issue_creation: row
+                            .get::<_, i64>("allow_agent_issue_creation")
+                            .map(|v| v != 0)?,
                     })
                 },
             )
@@ -180,19 +184,21 @@ impl<'a> RepoManager<'a> {
                 "SELECT id, slug, local_path, remote_url, workspace_dir, \
                  created_at, \
                  COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
-                 FROM repos WHERE slug = ?1",
-                params![slug],
+                 FROM repos WHERE slug = :slug",
+                named_params! { ":slug": slug },
                 |row| {
                     Ok(Repo {
-                        id: row.get(0)?,
-                        slug: row.get(1)?,
-                        local_path: row.get(2)?,
-                        remote_url: row.get(3)?,
+                        id: row.get("id")?,
+                        slug: row.get("slug")?,
+                        local_path: row.get("local_path")?,
+                        remote_url: row.get("remote_url")?,
                         default_branch: String::new(),
-                        workspace_dir: row.get(4)?,
-                        created_at: row.get(5)?,
+                        workspace_dir: row.get("workspace_dir")?,
+                        created_at: row.get("created_at")?,
                         model: None,
-                        allow_agent_issue_creation: row.get::<_, i64>(6).map(|v| v != 0)?,
+                        allow_agent_issue_creation: row
+                            .get::<_, i64>("allow_agent_issue_creation")
+                            .map(|v| v != 0)?,
                     })
                 },
             )
@@ -203,8 +209,8 @@ impl<'a> RepoManager<'a> {
     /// Set whether agents can create issues for this repo.
     pub fn set_allow_agent_issue_creation(&self, repo_id: &str, allow: bool) -> Result<()> {
         let affected = self.conn.execute(
-            "UPDATE repos SET allow_agent_issue_creation = ?1 WHERE id = ?2",
-            params![allow as i64, repo_id],
+            "UPDATE repos SET allow_agent_issue_creation = :allow WHERE id = :id",
+            named_params! { ":allow": allow as i64, ":id": repo_id },
         )?;
         if affected == 0 {
             return Err(ConductorError::RepoNotFound {
@@ -226,9 +232,10 @@ impl<'a> RepoManager<'a> {
     }
 
     pub fn unregister(&self, slug: &str) -> Result<()> {
-        let affected = self
-            .conn
-            .execute("DELETE FROM repos WHERE slug = ?1", params![slug])?;
+        let affected = self.conn.execute(
+            "DELETE FROM repos WHERE slug = :slug",
+            named_params! { ":slug": slug },
+        )?;
         if affected == 0 {
             return Err(ConductorError::RepoNotFound {
                 slug: slug.to_string(),
@@ -238,9 +245,10 @@ impl<'a> RepoManager<'a> {
     }
 
     pub fn unregister_by_id(&self, id: &str) -> Result<()> {
-        let affected = self
-            .conn
-            .execute("DELETE FROM repos WHERE id = ?1", params![id])?;
+        let affected = self.conn.execute(
+            "DELETE FROM repos WHERE id = :id",
+            named_params! { ":id": id },
+        )?;
         if affected == 0 {
             return Err(ConductorError::RepoNotFound {
                 slug: id.to_string(),

@@ -305,16 +305,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             // Non-dismissable: swallow all keys while operation is in progress.
             return Action::None;
         }
-        Modal::Notifications { .. } => {
-            return match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
-                KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-                KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
-                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
-                _ => Action::None,
-            };
-        }
         Modal::GraphView { .. } => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
@@ -390,6 +380,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('D') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
                 return Action::DeleteWorkflowRun;
             }
+            // / key: open inline workflow name filter when Runs pane is focused.
+            KeyCode::Char('/')
+                if state.workflows_focus == crate::state::WorkflowsFocus::Runs
+                    && state.column_focus == crate::state::ColumnFocus::Workflow =>
+            {
+                return Action::OpenWorkflowFilter;
+            }
+            // Filter-bar input handling when filter is active.
+            KeyCode::Esc if state.workflows_focus == crate::state::WorkflowsFocus::Filter => {
+                return Action::ClearWorkflowFilter;
+            }
+            KeyCode::Enter if state.workflows_focus == crate::state::WorkflowsFocus::Filter => {
+                return Action::ConfirmWorkflowFilter;
+            }
+            KeyCode::Backspace if state.workflows_focus == crate::state::WorkflowsFocus::Filter => {
+                return Action::WorkflowFilterBackspace;
+            }
+            KeyCode::Char(c) if state.workflows_focus == crate::state::WorkflowsFocus::Filter => {
+                return Action::WorkflowFilterInput(c);
+            }
             // Right / l: enter or exit the step tree pane when viewing defs.
             KeyCode::Right | KeyCode::Char('l')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>
@@ -464,33 +474,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         };
     }
 
-    // View-specific keybindings (Features list view)
-    if state.view == View::Features {
-        return match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => Action::Back,
-            KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-            KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-            KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
-            KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
-            KeyCode::Enter => Action::Select,
-            KeyCode::Char('r') => Action::FeatureRunFanOut,
-            KeyCode::Char('v') => Action::FeatureTransitionReady,
-            KeyCode::Char('a') => Action::FeatureTransitionApprove,
-            KeyCode::Char('x') => Action::FeatureClose,
-            _ => Action::None,
-        };
-    }
-
-    // View-specific keybindings (Feature detail view)
-    if state.view == View::FeatureDetail {
-        return match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => Action::Back,
-            KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-            KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-            _ => Action::None,
-        };
-    }
-
     // View-specific keybindings (Dashboard)
     if state.view == View::Dashboard {
         match key.code {
@@ -522,7 +505,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         match key.code {
             KeyCode::Char('p') => return Action::LaunchAgent,
-            KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
             KeyCode::Char('X') if !is_active => return Action::ClearConversation,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('R') if is_failed => return Action::RestartAgent,
@@ -696,9 +678,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         if let KeyCode::Char('I') = key.code {
             return Action::ToggleAgentIssues;
         }
-        if let KeyCode::Char('f') = key.code {
-            return Action::OpenFeatures;
-        }
     }
 
     // Normal keybindings
@@ -731,12 +710,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         // Open the in-TUI theme picker
         KeyCode::Char('T') => Action::ShowThemePicker,
 
-        // Open notification list
-        KeyCode::Char('N') => Action::ShowNotifications,
-
-        // Open Features view (global shortcut)
-        KeyCode::Char('F') => Action::OpenFeatures,
-
         // CRUD actions
         KeyCode::Char('a') => Action::RegisterRepo,
         KeyCode::Char('c') => Action::Create,
@@ -752,51 +725,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conductor_core::agent::{AgentRun, AgentRunStatus};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())
-    }
-
-    fn make_agent_run(worktree_id: &str, status: AgentRunStatus) -> AgentRun {
-        AgentRun {
-            id: "run-1".into(),
-            worktree_id: Some(worktree_id.to_string()),
-            repo_id: None,
-            claude_session_id: None,
-            prompt: "do stuff".into(),
-            status,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2026-01-01T00:00:00Z".into(),
-            ended_at: None,
-            tmux_window: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-            conversation_id: None,
-            subprocess_pid: None,
-        }
-    }
-
-    fn worktree_detail_state_with_run(status: AgentRunStatus) -> AppState {
-        let mut state = AppState::new();
-        state.view = View::WorktreeDetail;
-        state.selected_worktree_id = Some("wt1".into());
-        state
-            .data
-            .latest_agent_runs
-            .insert("wt1".into(), make_agent_run("wt1", status));
-        state
     }
 
     // --- WorkflowPicker tests (post-create variant) ---
@@ -1080,25 +1012,6 @@ mod tests {
         assert!(!matches!(
             map_key(key(KeyCode::Enter), &state),
             Action::ExpandAgentEvent
-        ));
-    }
-
-    #[test]
-    fn worktree_detail_orchestrate_agent_bound_to_shift_o_when_inactive() {
-        // OrchestrateAgent is only available when no agent is active
-        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
-        assert!(matches!(
-            map_key(key(KeyCode::Char('O')), &state),
-            Action::OrchestrateAgent
-        ));
-    }
-
-    #[test]
-    fn worktree_detail_orchestrate_agent_not_available_when_active() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::Running);
-        assert!(!matches!(
-            map_key(key(KeyCode::Char('O')), &state),
-            Action::OrchestrateAgent
         ));
     }
 

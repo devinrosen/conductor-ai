@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use conductor_core::agent::{
     AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals,
 };
-use conductor_core::feature::FeatureRow;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
@@ -74,9 +73,6 @@ pub struct DataCache {
     /// Live turn counts for running agents, keyed by worktree_id.
     /// Populated by the background poller each tick.
     pub live_turns_by_worktree: HashMap<String, i64>,
-    /// Active features per repo (repo_id → active FeatureRows).
-    /// Populated by the background poller each tick.
-    pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
     /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
     pub latest_repo_agent_runs: HashMap<String, AgentRun>,
     /// Persisted agent events for the currently viewed repo's repo-scoped agent (from DB)

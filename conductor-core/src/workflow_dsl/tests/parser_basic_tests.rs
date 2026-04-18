@@ -100,7 +100,10 @@ fn test_parse_full_workflow() {
         WorkflowNode::Call(c) => {
             assert_eq!(c.agent, AgentRef::Name("implement".to_string()));
             assert_eq!(c.retries, 2);
-            assert_eq!(c.on_fail, Some(AgentRef::Name("diagnose".to_string())));
+            assert_eq!(
+                c.on_fail,
+                Some(OnFail::Agent(AgentRef::Name("diagnose".to_string())))
+            );
         }
         _ => panic!("Expected Call node"),
     }

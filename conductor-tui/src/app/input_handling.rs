@@ -334,8 +334,6 @@ impl App {
                     return;
                 }
                 let wt_name = value;
-
-                // Load active feature branches off-thread (DB call must not block the TUI).
                 if let Some(ref tx) = self.bg_tx {
                     let tx = tx.clone();
                     let slug = repo_slug.clone();
@@ -346,103 +344,51 @@ impl App {
                         use crate::state::BranchPickerItem;
                         use conductor_core::config::{db_path, load_config};
                         use conductor_core::db::open_database;
-                        use conductor_core::feature::FeatureManager;
                         use conductor_core::repo::RepoManager;
-                        use conductor_core::tickets::TicketSyncer;
+                        use conductor_core::worktree::WorktreeManager;
 
-                        let db = db_path();
                         let result = (|| {
-                            let conn = open_database(&db)
+                            let conn = open_database(&db_path())
                                 .map_err(|e| format!("Failed to open database: {e}"))?;
                             let config =
                                 load_config().map_err(|e| format!("Failed to load config: {e}"))?;
-                            let fm = FeatureManager::new(&conn, &config);
-                            let features = fm
-                                .list_active(&slug)
-                                .map_err(|e| format!("Failed to list features: {e}"))?;
-
-                            // Also fetch unregistered branches (orphan worktree branches).
                             let repo = RepoManager::new(&conn, &config)
                                 .get_by_slug(&slug)
                                 .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;
-                            let orphans = fm
-                                .list_unregistered_branches(&repo.id, &repo.default_branch)
-                                .map_err(|e| {
-                                    format!("Failed to list unregistered branches: {e}")
-                                })?;
-
-                            // Infer base branch from ticket milestone metadata (off-thread,
-                            // since git ls-remote is a blocking network call).
-                            let inferred = tid.as_deref().and_then(|ticket_id| {
-                                let ticket = TicketSyncer::new(&conn).get_by_id(ticket_id).ok()?;
-                                conductor_core::infer::infer_base_branch(
-                                    &ticket.raw_json,
-                                    &repo.local_path,
-                                )
-                            });
-
-                            // Convert core types to TUI types off the main thread.
-                            if features.is_empty() && orphans.is_empty() {
-                                if inferred.is_none() {
-                                    // No branches and no inference — skip to PR step.
-                                    return Ok((Vec::new(), None));
-                                }
-                                // Inference succeeded but no existing feature branches:
-                                // return just the default-branch sentinel so the picker
-                                // can show inferred + default as the two choices.
-                                let sentinel = vec![BranchPickerItem {
-                                    branch: None,
+                            let worktrees = WorktreeManager::new(&conn, &config)
+                                .list_by_repo_id(&repo.id, true)
+                                .map_err(|e| format!("Failed to list worktrees: {e}"))?;
+                            let items = worktrees
+                                .into_iter()
+                                .map(|wt| BranchPickerItem {
+                                    branch: Some(wt.branch),
                                     worktree_count: 0,
                                     ticket_count: 0,
                                     base_branch: None,
                                     stale_days: None,
-                                    inferred_from: None,
-                                }];
-                                return Ok((sentinel, inferred));
-                            }
-                            let stale_threshold = config.defaults.stale_feature_days;
-                            let features_with_stale: Vec<(
-                                conductor_core::feature::FeatureRow,
-                                Option<u64>,
-                            )> = features
-                                .into_iter()
-                                .map(|f| {
-                                    let sd = if FeatureManager::is_stale(&f, stale_threshold) {
-                                        FeatureManager::stale_days(&f)
-                                    } else {
-                                        None
-                                    };
-                                    (f, sd)
+                                    inferred_from: Some(wt.slug),
                                 })
                                 .collect();
-                            let items = BranchPickerItem::from_features_and_orphans_with_stale(
-                                &features_with_stale,
-                                &orphans,
-                            );
-                            Ok::<(Vec<BranchPickerItem>, Option<(String, String)>), String>((
-                                items, inferred,
-                            ))
+                            Ok::<Vec<BranchPickerItem>, String>(items)
                         })();
                         match result {
-                            Ok((items, inferred_base_branch)) => {
-                                let _ = tx.send(Action::FeatureBranchesLoaded {
+                            Ok(items) => {
+                                let _ = tx.send(Action::WorktreeBranchesLoaded {
                                     repo_slug: slug,
                                     wt_name: name,
                                     ticket_id: tid,
                                     items,
-                                    inferred_base_branch,
                                 });
                             }
                             Err(error) => {
-                                let _ = tx.send(Action::FeatureBranchesFailed { error });
+                                let _ = tx.send(Action::WorktreeBranchesFailed { error });
                             }
                         }
                     });
                     self.state.modal = Modal::Progress {
-                        message: "Loading feature branches…".into(),
+                        message: "Loading worktrees…".into(),
                     };
                 } else {
-                    // No background sender — skip branch picker, go straight to PR step.
                     self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
                 }
             }
@@ -661,16 +607,6 @@ impl App {
                     resume_session_id,
                 );
             }
-            InputAction::OrchestratePrompt {
-                worktree_id,
-                worktree_path,
-                worktree_slug,
-            } => {
-                if value.is_empty() {
-                    return;
-                }
-                self.start_orchestrate_headless(value, worktree_id, worktree_path, worktree_slug);
-            }
             InputAction::SetWorktreeModel {
                 worktree_id,
                 repo_slug,
@@ -820,50 +756,10 @@ impl App {
         }
     }
 
-    /// Handle background result: feature branches loaded for branch picker.
-    pub(super) fn handle_feature_branches_loaded(
-        &mut self,
-        repo_slug: String,
-        wt_name: String,
-        ticket_id: Option<String>,
-        mut items: Vec<BranchPickerItem>,
-        inferred_base_branch: Option<(String, String)>,
-    ) {
-        if items.is_empty() && inferred_base_branch.is_none() {
-            // No features and no inference → skip branch picker, go straight to PR step.
-            self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
-            return;
-        }
-        // If inference succeeded, prepend the inferred branch as index 0 so it is
-        // pre-selected and the user can scroll down to override.
-        if let Some((branch, milestone_title)) = inferred_base_branch {
-            items.insert(
-                0,
-                BranchPickerItem {
-                    branch: Some(branch),
-                    worktree_count: 0,
-                    ticket_count: 0,
-                    base_branch: None,
-                    stale_days: None,
-                    inferred_from: Some(milestone_title),
-                },
-            );
-        }
-        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
-        self.state.modal = Modal::BranchPicker {
-            repo_slug,
-            wt_name,
-            ticket_id,
-            items: ordered,
-            tree_positions,
-            selected: 0,
-        };
-    }
-
     /// Handle branch selection from the BranchPicker modal.
     /// `index = None` means use the modal's `selected` field (Enter key);
     /// `index = Some(i)` means a direct numeric pick.
-    /// Trigger the base branch change flow: fetch branches off-thread, then open picker.
+    /// Trigger the base branch change flow: open picker with empty items list.
     pub(super) fn handle_set_base_branch(&mut self) {
         // Only valid in WorktreeDetail view
         if self.state.view != crate::state::View::WorktreeDetail {
@@ -887,75 +783,8 @@ impl App {
             .cloned()
             .unwrap_or_default();
 
-        if let Some(ref tx) = self.bg_tx {
-            let tx = tx.clone();
-            let slug = repo_slug.clone();
-            let wt_slug = wt.slug.clone();
-            std::thread::spawn(move || {
-                use crate::action::Action;
-                use crate::state::BranchPickerItem;
-                use conductor_core::config::{db_path, load_config};
-                use conductor_core::db::open_database;
-                use conductor_core::feature::FeatureManager;
-                use conductor_core::repo::RepoManager;
-
-                let db = db_path();
-                let result = (|| {
-                    let conn =
-                        open_database(&db).map_err(|e| format!("Failed to open database: {e}"))?;
-                    let config =
-                        load_config().map_err(|e| format!("Failed to load config: {e}"))?;
-                    let fm = FeatureManager::new(&conn, &config);
-                    let features = fm
-                        .list_active(&slug)
-                        .map_err(|e| format!("Failed to list features: {e}"))?;
-
-                    let repo = RepoManager::new(&conn, &config)
-                        .get_by_slug(&slug)
-                        .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;
-                    let orphans = fm
-                        .list_unregistered_branches(&repo.id, &repo.default_branch)
-                        .map_err(|e| format!("Failed to list unregistered branches: {e}"))?;
-
-                    let stale_threshold = config.defaults.stale_feature_days;
-                    let features_with_stale: Vec<(
-                        conductor_core::feature::FeatureRow,
-                        Option<u64>,
-                    )> = features
-                        .into_iter()
-                        .map(|f| {
-                            let sd = if FeatureManager::is_stale(&f, stale_threshold) {
-                                FeatureManager::stale_days(&f)
-                            } else {
-                                None
-                            };
-                            (f, sd)
-                        })
-                        .collect();
-                    Ok::<Vec<BranchPickerItem>, String>(
-                        BranchPickerItem::from_features_and_orphans_with_stale(
-                            &features_with_stale,
-                            &orphans,
-                        ),
-                    )
-                })();
-                match result {
-                    Ok(items) => {
-                        let _ = tx.send(Action::BaseBranchesLoaded {
-                            repo_slug: slug,
-                            wt_slug,
-                            items,
-                        });
-                    }
-                    Err(error) => {
-                        let _ = tx.send(Action::BaseBranchesFailed { error });
-                    }
-                }
-            });
-            self.state.modal = Modal::Progress {
-                message: "Loading branches…".into(),
-            };
-        }
+        // No feature branches — open picker with empty items (just the default branch sentinel).
+        self.handle_base_branches_loaded(repo_slug, wt.slug, vec![]);
     }
 
     /// Handle the result of loading branches for base branch change.
@@ -965,7 +794,10 @@ impl App {
         wt_slug: String,
         items: Vec<BranchPickerItem>,
     ) {
-        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
+        let mut items_with_sentinel = vec![BranchPickerItem::default()];
+        items_with_sentinel.extend(items);
+        let (ordered, tree_positions) =
+            crate::state::build_branch_picker_tree(&items_with_sentinel);
         self.state.modal = Modal::BaseBranchPicker {
             repo_slug,
             wt_slug,
@@ -1021,6 +853,28 @@ impl App {
             // Transition to PR input step, carrying the selected branch.
             self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, from_branch);
         }
+    }
+
+    /// Handle background result: existing worktree branches loaded for the branch picker.
+    pub(super) fn handle_worktree_branches_loaded(
+        &mut self,
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        items: Vec<crate::state::BranchPickerItem>,
+    ) {
+        let mut items_with_sentinel = vec![crate::state::BranchPickerItem::default()];
+        items_with_sentinel.extend(items);
+        let (ordered, tree_positions) =
+            crate::state::build_branch_picker_tree(&items_with_sentinel);
+        self.state.modal = Modal::BranchPicker {
+            repo_slug,
+            wt_name,
+            ticket_id,
+            items: ordered,
+            tree_positions,
+            selected: 0,
+        };
     }
 
     /// Spawn a background thread to set the repo model via file I/O,
@@ -1201,21 +1055,11 @@ mod tests {
 
     fn branch_picker_items() -> Vec<crate::state::BranchPickerItem> {
         vec![
-            crate::state::BranchPickerItem {
-                branch: None,
-                worktree_count: 0,
-                ticket_count: 0,
-                base_branch: None,
-                stale_days: None,
-                inferred_from: None,
-            },
+            crate::state::BranchPickerItem::default(),
             crate::state::BranchPickerItem {
                 branch: Some("feat/notifications".to_string()),
-                worktree_count: 0,
-                ticket_count: 0,
                 base_branch: Some("main".to_string()),
-                stale_days: None,
-                inferred_from: None,
+                ..Default::default()
             },
         ]
     }
@@ -1313,145 +1157,40 @@ mod tests {
         assert!(matches!(app.state.modal, Modal::None));
     }
 
-    // ---------- handle_feature_branches_loaded tests ----------
-
     #[test]
-    fn feature_branches_loaded_empty_skips_to_pr_step() {
+    fn worktree_branches_loaded_always_has_default_branch_sentinel() {
         let mut app = make_app();
-        app.handle_feature_branches_loaded(
-            "test-repo".to_string(),
+        let worktree_items = vec![crate::state::BranchPickerItem {
+            branch: Some("feat/notifications".to_string()),
+            inferred_from: Some("feat-notifications".to_string()),
+            ..Default::default()
+        }];
+        app.handle_worktree_branches_loaded(
+            "repo".to_string(),
             "my-wt".to_string(),
             None,
-            vec![],
-            None,
+            worktree_items,
         );
         match &app.state.modal {
-            Modal::Input { on_submit, .. } => match on_submit {
-                InputAction::CreateWorktreePrStep {
-                    from_branch,
-                    wt_name,
-                    ..
-                } => {
-                    assert!(from_branch.is_none());
-                    assert_eq!(wt_name, "my-wt");
-                }
-                other => panic!("expected CreateWorktreePrStep, got {:?}", other),
-            },
-            other => panic!("expected Input modal, got {:?}", other),
+            Modal::BranchPicker { items, .. } => {
+                assert!(
+                    items[0].branch.is_none(),
+                    "first item must be the default-branch sentinel (branch: None)"
+                );
+                assert_eq!(items.len(), 2, "sentinel + one worktree branch");
+            }
+            other => panic!("expected BranchPicker modal, got {:?}", other),
         }
     }
 
     #[test]
-    fn feature_branches_loaded_shows_branch_picker() {
+    fn worktree_branches_loaded_no_worktrees_shows_picker_with_only_sentinel() {
         let mut app = make_app();
-        let items = vec![
-            BranchPickerItem {
-                branch: None,
-                worktree_count: 0,
-                ticket_count: 0,
-                base_branch: None,
-                stale_days: None,
-                inferred_from: None,
-            },
-            BranchPickerItem {
-                branch: Some("feat/notifications".to_string()),
-                worktree_count: 2,
-                ticket_count: 1,
-                base_branch: Some("main".to_string()),
-                stale_days: None,
-                inferred_from: None,
-            },
-        ];
-        app.handle_feature_branches_loaded(
-            "test-repo".to_string(),
-            "my-wt".to_string(),
-            Some("t1".to_string()),
-            items,
-            None,
-        );
+        app.handle_worktree_branches_loaded("repo".to_string(), "my-wt".to_string(), None, vec![]);
         match &app.state.modal {
-            Modal::BranchPicker {
-                items, selected, ..
-            } => {
-                assert_eq!(*selected, 0);
-                assert_eq!(items.len(), 2); // default + 1 feature
+            Modal::BranchPicker { items, .. } => {
+                assert_eq!(items.len(), 1, "only the default-branch sentinel");
                 assert!(items[0].branch.is_none());
-                assert_eq!(items[1].branch.as_deref(), Some("feat/notifications"));
-                assert_eq!(items[1].worktree_count, 2);
-                assert_eq!(items[1].ticket_count, 1);
-            }
-            other => panic!("expected BranchPicker modal, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn feature_branches_loaded_empty_items_with_inferred_branch_shows_picker() {
-        // When items is empty but an inferred branch is provided, we must NOT skip
-        // straight to the PR step — the inferred branch should be shown in the picker.
-        let mut app = make_app();
-        let inferred = Some(("release/0.5.0".to_string(), "0.5.0".to_string()));
-        app.handle_feature_branches_loaded(
-            "test-repo".to_string(),
-            "my-wt".to_string(),
-            None,
-            vec![],
-            inferred,
-        );
-        match &app.state.modal {
-            Modal::BranchPicker {
-                items, selected, ..
-            } => {
-                assert_eq!(*selected, 0);
-                // The inferred branch is prepended as index 0.
-                assert_eq!(items[0].branch.as_deref(), Some("release/0.5.0"));
-                assert_eq!(items[0].inferred_from.as_deref(), Some("0.5.0"));
-            }
-            other => panic!("expected BranchPicker modal, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn feature_branches_loaded_inferred_branch_prepended_at_index_zero() {
-        // When both regular items and an inferred branch are present, the inferred
-        // branch must appear at index 0 so it is pre-selected in the picker.
-        let mut app = make_app();
-        let items = vec![
-            BranchPickerItem {
-                branch: None,
-                worktree_count: 0,
-                ticket_count: 0,
-                base_branch: None,
-                stale_days: None,
-                inferred_from: None,
-            },
-            BranchPickerItem {
-                branch: Some("feat/other".to_string()),
-                worktree_count: 1,
-                ticket_count: 0,
-                base_branch: Some("main".to_string()),
-                stale_days: None,
-                inferred_from: None,
-            },
-        ];
-        let inferred = Some(("release/0.5.1".to_string(), "0.5.1".to_string()));
-        app.handle_feature_branches_loaded(
-            "test-repo".to_string(),
-            "my-wt".to_string(),
-            Some("t2".to_string()),
-            items,
-            inferred,
-        );
-        match &app.state.modal {
-            Modal::BranchPicker {
-                items, selected, ..
-            } => {
-                assert_eq!(*selected, 0);
-                // Inferred branch is at index 0.
-                assert_eq!(items[0].branch.as_deref(), Some("release/0.5.1"));
-                assert_eq!(items[0].inferred_from.as_deref(), Some("0.5.1"));
-                assert_eq!(items[0].worktree_count, 0);
-                // Remaining items follow.
-                assert!(items.len() > 1);
             }
             other => panic!("expected BranchPicker modal, got {:?}", other),
         }

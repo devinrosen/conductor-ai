@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{named_params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
@@ -13,7 +13,7 @@ use crate::tickets::TicketSyncer;
 
 use super::git_helpers::*;
 use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
-use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W, WORKTREE_COLUMN_COUNT};
+use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W};
 
 /// Map a ticket label to the conventional-commit branch prefix it implies.
 ///
@@ -45,7 +45,7 @@ fn worktree_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -
 
 /// SQL fragment that LEFT JOINs the latest agent run per worktree.
 ///
-/// Adds one extra column: `latest.status AS agent_status` (at index `WORKTREE_COLUMN_COUNT`).
+/// Adds one extra column: `latest.status AS agent_status`.
 /// Must be used together with `map_enriched_row`.
 const AGENT_LATEST_JOIN: &str = "LEFT JOIN (\
         SELECT a.worktree_id, a.status \
@@ -75,20 +75,13 @@ fn enriched_worktree_base() -> String {
 }
 
 /// Map a row that contains the standard worktree columns followed by
-/// `agent_status`, `ticket_title`, `ticket_number`, and `ticket_url` (in that order).
-///
-/// Column layout:
-/// - `[0 .. WORKTREE_COLUMN_COUNT)`: mapped by `map_worktree_row`
-/// - `WORKTREE_COLUMN_COUNT + 0`: `agent_status`
-/// - `WORKTREE_COLUMN_COUNT + 1`: `ticket_title`
-/// - `WORKTREE_COLUMN_COUNT + 2`: `ticket_number`
-/// - `WORKTREE_COLUMN_COUNT + 3`: `ticket_url`
+/// `agent_status`, `ticket_title`, `ticket_number`, and `ticket_url`.
 fn map_enriched_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeWithStatus> {
     let worktree = map_worktree_row(row)?;
-    let agent_status: Option<crate::agent::AgentRunStatus> = row.get(WORKTREE_COLUMN_COUNT)?;
-    let ticket_title: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 1)?;
-    let ticket_number: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 2)?;
-    let ticket_url: Option<String> = row.get(WORKTREE_COLUMN_COUNT + 3)?;
+    let agent_status: Option<crate::agent::AgentRunStatus> = row.get("agent_status")?;
+    let ticket_title: Option<String> = row.get("ticket_title")?;
+    let ticket_number: Option<String> = row.get("ticket_number")?;
+    let ticket_url: Option<String> = row.get("ticket_url")?;
     Ok(WorktreeWithStatus {
         worktree,
         agent_status,
@@ -211,9 +204,9 @@ pub fn get_ticket_id_by_branch(
     branch: &str,
 ) -> Result<Option<String>> {
     conn.query_row(
-        "SELECT ticket_id FROM worktrees WHERE repo_id = ?1 AND branch = ?2",
-        params![repo_id, branch],
-        |row| row.get(0),
+        "SELECT ticket_id FROM worktrees WHERE repo_id = :repo_id AND branch = :branch",
+        named_params![":repo_id": repo_id, ":branch": branch],
+        |row| row.get("ticket_id"),
     )
     .map_err(worktree_not_found(branch))
 }
@@ -302,9 +295,9 @@ impl<'a> WorktreeManager<'a> {
         let existing_status: Option<WorktreeStatus> = self
             .conn
             .query_row(
-                "SELECT status FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
-                params![repo.id, wt_slug],
-                |row| row.get(0),
+                "SELECT status FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
+                named_params![":repo_id": repo.id, ":slug": wt_slug],
+                |row| row.get("status"),
             )
             .optional()?;
 
@@ -317,8 +310,8 @@ impl<'a> WorktreeManager<'a> {
             Some(_) => {
                 // Purge the completed record to allow slug reuse
                 self.conn.execute(
-                    "DELETE FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
-                    params![repo.id, wt_slug],
+                    "DELETE FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
+                    named_params![":repo_id": repo.id, ":slug": wt_slug],
                 )?;
             }
             None => {}
@@ -412,17 +405,17 @@ impl<'a> WorktreeManager<'a> {
 
         self.conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at, base_branch)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                worktree.id,
-                worktree.repo_id,
-                worktree.slug,
-                worktree.branch,
-                worktree.path,
-                worktree.ticket_id,
-                worktree.status,
-                worktree.created_at,
-                worktree.base_branch,
+             VALUES (:id, :repo_id, :slug, :branch, :path, :ticket_id, :status, :created_at, :base_branch)",
+            named_params![
+                ":id": worktree.id,
+                ":repo_id": worktree.repo_id,
+                ":slug": worktree.slug,
+                ":branch": worktree.branch,
+                ":path": worktree.path,
+                ":ticket_id": worktree.ticket_id,
+                ":status": worktree.status,
+                ":created_at": worktree.created_at,
+                ":base_branch": worktree.base_branch,
             ],
         )?;
 
@@ -567,8 +560,8 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_id(&self, id: &str) -> Result<Worktree> {
         self.conn
             .query_row(
-                &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = :id"),
+                named_params![":id": id],
                 map_worktree_row,
             )
             .map_err(worktree_not_found(id))
@@ -579,8 +572,8 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_id_for_repo(&self, id: &str, repo_id: &str) -> Result<Worktree> {
         self.conn
             .query_row(
-                &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = ?1 AND repo_id = ?2"),
-                params![id, repo_id],
+                &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = :id AND repo_id = :repo_id"),
+                named_params![":id": id, ":repo_id": repo_id],
                 map_worktree_row,
             )
             .map_err(worktree_not_found(id))
@@ -606,9 +599,9 @@ impl<'a> WorktreeManager<'a> {
         self.conn
             .query_row(
                 &format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND slug = ?2"
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = :repo_id AND slug = :slug"
                 ),
-                params![repo_id, slug],
+                named_params![":repo_id": repo_id, ":slug": slug],
                 map_worktree_row,
             )
             .map_err(worktree_not_found(slug))
@@ -618,9 +611,9 @@ impl<'a> WorktreeManager<'a> {
         self.conn
             .query_row(
                 &format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND branch = ?2"
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = :repo_id AND branch = :branch"
                 ),
-                params![repo_id, branch],
+                named_params![":repo_id": repo_id, ":branch": branch],
                 map_worktree_row,
             )
             .map_err(worktree_not_found(branch))
@@ -657,8 +650,8 @@ impl<'a> WorktreeManager<'a> {
     pub fn list_by_ticket(&self, ticket_id: &str) -> Result<Vec<Worktree>> {
         query_collect(
             self.conn,
-            &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
-            params![ticket_id],
+            &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = :ticket_id ORDER BY created_at DESC"),
+            named_params![":ticket_id": ticket_id],
             map_worktree_row,
         )
     }
@@ -670,10 +663,15 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let query = format!(
-            "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
+            "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = :repo_id{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
             status_filter
         );
-        query_collect(self.conn, &query, params![repo_id], map_worktree_row)
+        query_collect(
+            self.conn,
+            &query,
+            named_params![":repo_id": repo_id],
+            map_worktree_row,
+        )
     }
 
     pub fn list_by_repo_id_and_base_branch(
@@ -682,12 +680,12 @@ impl<'a> WorktreeManager<'a> {
         base_branch: &str,
     ) -> Result<Vec<Worktree>> {
         let query = format!(
-            "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND base_branch = ?2 AND status = 'active' ORDER BY created_at"
+            "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = :repo_id AND base_branch = :base_branch AND status = 'active' ORDER BY created_at"
         );
         query_collect(
             self.conn,
             &query,
-            params![repo_id, base_branch],
+            named_params![":repo_id": repo_id, ":base_branch": base_branch],
             map_worktree_row,
         )
     }
@@ -709,7 +707,7 @@ impl<'a> WorktreeManager<'a> {
 
         let base_query = match repo_slug {
             Some(_) => format!(
-                "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+                "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = :slug{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
                 &*WORKTREE_COLUMNS_W,
                 status_filter,
             ),
@@ -721,23 +719,26 @@ impl<'a> WorktreeManager<'a> {
 
         match (repo_slug, pagination) {
             (Some(slug), Some((limit, offset))) => {
-                let query = format!("{base_query} LIMIT ?2 OFFSET ?3");
+                let query = format!("{base_query} LIMIT :limit OFFSET :offset");
                 query_collect(
                     self.conn,
                     &query,
-                    params![slug, limit as i64, offset as i64],
+                    named_params![":slug": slug, ":limit": limit as i64, ":offset": offset as i64],
                     map_worktree_row,
                 )
             }
-            (Some(slug), None) => {
-                query_collect(self.conn, &base_query, params![slug], map_worktree_row)
-            }
+            (Some(slug), None) => query_collect(
+                self.conn,
+                &base_query,
+                named_params![":slug": slug],
+                map_worktree_row,
+            ),
             (None, Some((limit, offset))) => {
-                let query = format!("{base_query} LIMIT ?1 OFFSET ?2");
+                let query = format!("{base_query} LIMIT :limit OFFSET :offset");
                 query_collect(
                     self.conn,
                     &query,
-                    params![limit as i64, offset as i64],
+                    named_params![":limit": limit as i64, ":offset": offset as i64],
                     map_worktree_row,
                 )
             }
@@ -784,8 +785,8 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_id_enriched(&self, id: &str) -> Result<WorktreeWithStatus> {
         self.conn
             .query_row(
-                &format!("{base} WHERE w.id = ?1", base = enriched_worktree_base(),),
-                params![id],
+                &format!("{base} WHERE w.id = :id", base = enriched_worktree_base()),
+                named_params![":id": id],
                 map_enriched_row,
             )
             .map_err(worktree_not_found(id))
@@ -801,10 +802,10 @@ impl<'a> WorktreeManager<'a> {
         self.conn
             .query_row(
                 &format!(
-                    "{base} WHERE w.id = ?1 AND w.repo_id = ?2",
+                    "{base} WHERE w.id = :id AND w.repo_id = :repo_id",
                     base = enriched_worktree_base(),
                 ),
-                params![id, repo_id],
+                named_params![":id": id, ":repo_id": repo_id],
                 map_enriched_row,
             )
             .map_err(worktree_not_found(id))
@@ -824,12 +825,17 @@ impl<'a> WorktreeManager<'a> {
         };
         let sql = format!(
             "{base} \
-             WHERE w.repo_id = ?1{status_filter} \
+             WHERE w.repo_id = :repo_id{status_filter} \
              ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
             base = enriched_worktree_base(),
             status_filter = status_filter,
         );
-        query_collect(self.conn, &sql, params![repo_id], map_enriched_row)
+        query_collect(
+            self.conn,
+            &sql,
+            named_params![":repo_id": repo_id],
+            map_enriched_row,
+        )
     }
 
     /// Walk up from `cwd` and return the worktree whose `path` is a prefix of (or equals) `cwd`.
@@ -855,9 +861,9 @@ impl<'a> WorktreeManager<'a> {
             .conn
             .query_row(
                 &format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND slug = ?2"
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = :repo_id AND slug = :slug"
                 ),
-                params![repo.id, name],
+                named_params![":repo_id": repo.id, ":slug": name],
                 map_worktree_row,
             )
             .map_err(worktree_not_found(name))?;
@@ -899,8 +905,8 @@ impl<'a> WorktreeManager<'a> {
                 .map(|tid| {
                     self.conn
                         .query_row(
-                            "SELECT state = 'closed' FROM tickets WHERE id = ?1",
-                            params![tid],
+                            "SELECT state = 'closed' FROM tickets WHERE id = :id",
+                            named_params![":id": tid],
                             |row| row.get::<_, bool>(0),
                         )
                         .unwrap_or(false)
@@ -924,8 +930,8 @@ impl<'a> WorktreeManager<'a> {
 
         // Soft-delete: update status + completed_at instead of deleting the row
         self.conn.execute(
-            "UPDATE worktrees SET status = ?1, completed_at = ?2 WHERE id = ?3",
-            params![new_status.as_str(), now, worktree.id],
+            "UPDATE worktrees SET status = :status, completed_at = :completed_at WHERE id = :id",
+            named_params![":status": new_status.as_str(), ":completed_at": now, ":id": worktree.id],
         )?;
 
         let deleted_wt = Worktree {
@@ -933,16 +939,6 @@ impl<'a> WorktreeManager<'a> {
             completed_at: Some(now),
             ..worktree
         };
-
-        // Auto-close orphaned feature if the branch is gone.
-        // Best-effort: log but don't propagate errors so the delete itself succeeds.
-        let fm = crate::feature::FeatureManager::new(self.conn, self.config);
-        if let Err(e) = fm.auto_close_after_worktree_delete(
-            &deleted_wt.repo_id,
-            deleted_wt.base_branch.as_deref(),
-        ) {
-            tracing::warn!(error = %e, "failed to auto-close orphaned feature");
-        }
 
         Ok(deleted_wt)
     }
@@ -965,8 +961,8 @@ impl<'a> WorktreeManager<'a> {
             None
         };
         self.conn.execute(
-            "UPDATE worktrees SET status = ?1, completed_at = ?2 WHERE id = ?3",
-            params![status.as_str(), completed_at, worktree_id],
+            "UPDATE worktrees SET status = :status, completed_at = :completed_at WHERE id = :id",
+            named_params![":status": status.as_str(), ":completed_at": completed_at, ":id": worktree_id],
         )?;
         Ok(())
     }
@@ -977,8 +973,8 @@ impl<'a> WorktreeManager<'a> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
         let updated = self.conn.execute(
-            "UPDATE worktrees SET model = ?1 WHERE repo_id = ?2 AND slug = ?3",
-            params![model, repo.id, name],
+            "UPDATE worktrees SET model = :model WHERE repo_id = :repo_id AND slug = :slug",
+            named_params![":model": model, ":repo_id": repo.id, ":slug": name],
         )?;
         if updated == 0 {
             return Err(ConductorError::WorktreeNotFound {
@@ -1000,8 +996,8 @@ impl<'a> WorktreeManager<'a> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
         let updated = self.conn.execute(
-            "UPDATE worktrees SET base_branch = ?1 WHERE repo_id = ?2 AND slug = ?3",
-            params![base_branch, repo.id, name],
+            "UPDATE worktrees SET base_branch = :base_branch WHERE repo_id = :repo_id AND slug = :slug",
+            named_params![":base_branch": base_branch, ":repo_id": repo.id, ":slug": name],
         )?;
         if updated == 0 {
             return Err(ConductorError::WorktreeNotFound {
@@ -1016,19 +1012,6 @@ impl<'a> WorktreeManager<'a> {
         let (_repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
         check_output(git_in(&worktree.path).args(["push", "-u", "origin", &worktree.branch]))?;
-
-        // If this worktree targets a feature branch, refresh its last_commit_at
-        // cache so staleness detection stays up to date on the most common write path.
-        if let Some(ref base_branch) = worktree.base_branch {
-            let feat_mgr = crate::feature::FeatureManager::new(self.conn, self.config);
-            if let Some(fid) =
-                feat_mgr.get_active_id_by_repo_and_branch(&worktree.repo_id, base_branch)?
-            {
-                if let Err(e) = feat_mgr.refresh_last_commit(&fid) {
-                    tracing::warn!("failed to refresh last_commit_at for feature {fid}: {e}");
-                }
-            }
-        }
 
         Ok(format!(
             "Pushed {} to origin/{}",
@@ -1098,11 +1081,11 @@ impl<'a> WorktreeManager<'a> {
             [],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
+                    row.get("id")?,
+                    row.get("local_path")?,
+                    row.get("path")?,
+                    row.get("branch")?,
+                    row.get("completed_at")?,
                 ))
             },
         )?;
@@ -1142,8 +1125,8 @@ impl<'a> WorktreeManager<'a> {
     fn backfill_completed_at(&self, wt_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE worktrees SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
-            params![now, wt_id],
+            "UPDATE worktrees SET completed_at = :now WHERE id = :id AND completed_at IS NULL",
+            named_params! { ":now": now, ":id": wt_id },
         )?;
         Ok(())
     }
@@ -1155,13 +1138,13 @@ impl<'a> WorktreeManager<'a> {
 
         let count = if let Some(slug) = name {
             self.conn.execute(
-                "DELETE FROM worktrees WHERE repo_id = ?1 AND slug = ?2 AND status != 'active'",
-                params![repo.id, slug],
+                "DELETE FROM worktrees WHERE repo_id = :repo_id AND slug = :slug AND status != 'active'",
+                named_params! { ":repo_id": repo.id, ":slug": slug },
             )?
         } else {
             self.conn.execute(
-                "DELETE FROM worktrees WHERE repo_id = ?1 AND status != 'active'",
-                params![repo.id],
+                "DELETE FROM worktrees WHERE repo_id = :repo_id AND status != 'active'",
+                named_params! { ":repo_id": repo.id },
             )?
         };
 
@@ -1199,24 +1182,28 @@ impl<'a> WorktreeManager<'a> {
                  JOIN repos r ON r.id = w.repo_id
                  WHERE w.status = 'active'";
         let query = match repo_slug {
-            Some(_) => format!("{base_query} AND r.slug = ?1"),
+            Some(_) => format!("{base_query} AND r.slug = :slug"),
             None => base_query.to_string(),
         };
 
         let mapper = |row: &rusqlite::Row| -> rusqlite::Result<[String; 8]> {
             Ok([
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                row.get("id")?,
+                row.get("branch")?,
+                row.get("path")?,
+                row.get("local_path")?,
+                row.get("remote_url")?,
+                row.get("repo_id")?,
+                row.get::<_, Option<String>>("base_branch")?
+                    .unwrap_or_default(),
+                row.get::<_, Option<String>>("created_at")?
+                    .unwrap_or_default(),
             ])
         };
         let rows: Vec<[String; 8]> = match repo_slug {
-            Some(slug) => query_collect(self.conn, &query, params![slug], mapper)?,
+            Some(slug) => {
+                query_collect(self.conn, &query, named_params! { ":slug": slug }, mapper)?
+            }
             None => query_collect(self.conn, &query, [], mapper)?,
         };
 
@@ -1242,13 +1229,6 @@ impl<'a> WorktreeManager<'a> {
         // Track (repo_id, base_branch) pairs already pulled to avoid redundant subprocesses
         let mut pulled_bases: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
-        // Collect (repo_id, base_branch) pairs to check for auto-ready-for-review after the loop.
-        // Checked after all worktrees are marked merged so the active-count query sees the final state.
-        let mut pending_ready_check: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
-        // Shared FeatureManager instance used both inside the loop (auto-close) and after it
-        // (auto-ready-for-review). The constructor only stores references so hoisting is safe.
-        let fm = crate::feature::FeatureManager::new(self.conn, self.config);
 
         for row in &rows {
             let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch, wt_created_at] =
@@ -1281,8 +1261,8 @@ impl<'a> WorktreeManager<'a> {
 
             // Mark as merged
             self.conn.execute(
-                "UPDATE worktrees SET status = 'merged', completed_at = ?1 WHERE id = ?2",
-                params![now, wt_id],
+                "UPDATE worktrees SET status = 'merged', completed_at = :now WHERE id = :id",
+                named_params! { ":now": now, ":id": wt_id },
             )?;
 
             // Remove local git artifacts
@@ -1292,23 +1272,6 @@ impl<'a> WorktreeManager<'a> {
             delete_remote_branch(repo_path, branch);
 
             pruned_repos.insert(repo_path.as_str());
-
-            // Auto-close orphaned features
-            let base = if base_branch.is_empty() {
-                None
-            } else {
-                Some(base_branch.as_str())
-            };
-            if let Err(e) = fm.auto_close_after_worktree_delete(repo_id, base) {
-                tracing::warn!(error = %e, "failed to auto-close orphaned feature during cleanup");
-            }
-
-            // Collect this (repo_id, base_branch) pair for post-loop auto-ready-for-review check.
-            // We defer until after the loop so all worktrees are marked merged before the
-            // active-count query fires — otherwise an early call sees sibling worktrees still active.
-            if self.config.general.auto_ready_for_review && !base_branch.is_empty() {
-                pending_ready_check.insert((repo_id.clone(), base_branch.clone()));
-            }
 
             // Auto-pull base branch worktree if tracked and active
             let pull_key = (repo_id.clone(), base_branch.clone());
@@ -1341,16 +1304,6 @@ impl<'a> WorktreeManager<'a> {
             cleaned += 1;
         }
 
-        // Auto-transition features to ready_for_review now that all worktrees are marked merged.
-        // Deferred from the loop so the active-count query sees the final DB state.
-        if !pending_ready_check.is_empty() {
-            for (repo_id, base_branch) in &pending_ready_check {
-                if let Err(e) = fm.auto_ready_for_review_if_complete(repo_id, base_branch) {
-                    tracing::warn!(error = %e, "failed to auto-transition feature to ready_for_review");
-                }
-            }
-        }
-
         // Run git worktree prune once per unique repo path
         for repo_path in &pruned_repos {
             let _ = git_in(repo_path).args(["worktree", "prune"]).output();
@@ -1368,8 +1321,8 @@ mod tests {
     fn insert_ticket(conn: &Connection, id: &str, repo_id: &str, source_id: &str, raw_json: &str) {
         conn.execute(
             "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
-             VALUES (?1, ?2, 'vantage', ?3, 'Test', '', 'open', '[]', '', '2024-01-01T00:00:00Z', ?4)",
-            rusqlite::params![id, repo_id, source_id, raw_json],
+             VALUES (:id, :repo_id, 'vantage', :source_id, 'Test', '', 'open', '[]', '', '2024-01-01T00:00:00Z', :raw_json)",
+            rusqlite::named_params! { ":id": id, ":repo_id": repo_id, ":source_id": source_id, ":raw_json": raw_json },
         ).unwrap();
     }
 
@@ -1382,8 +1335,8 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, ticket_id, created_at) \
-             VALUES (?1, ?2, ?1, 'feat/dep', '/tmp/dep', ?3, ?4, '2024-01-01T00:00:00Z')",
-            rusqlite::params![id, repo_id, status, ticket_id],
+             VALUES (:id, :repo_id, :id, 'feat/dep', '/tmp/dep', :status, :ticket_id, '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":id": id, ":repo_id": repo_id, ":status": status, ":ticket_id": ticket_id },
         ).unwrap();
     }
 
@@ -1398,8 +1351,8 @@ mod tests {
     fn insert_wt(conn: &Connection, id: &str, slug: &str, created_at: &str) {
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-             VALUES (?1, 'r1', ?2, 'feat/test', '/tmp/ws', 'active', ?3)",
-            rusqlite::params![id, slug, created_at],
+             VALUES (:id, 'r1', :slug, 'feat/test', '/tmp/ws', 'active', :created_at)",
+            rusqlite::named_params! { ":id": id, ":slug": slug, ":created_at": created_at },
         )
         .unwrap();
     }
@@ -1571,8 +1524,8 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, base_branch, created_at) \
-             VALUES (?1, 'r1', ?1, ?2, ?3, ?4, ?5, '2024-01-01T00:00:00Z')",
-            rusqlite::params![id, branch, path, status, base_branch],
+             VALUES (:id, 'r1', :id, :branch, :path, :status, :base_branch, '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":id": id, ":branch": branch, ":path": path, ":status": status, ":base_branch": base_branch },
         ).unwrap();
     }
 
@@ -1760,15 +1713,15 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
-             VALUES (?1, ?2, 'github', ?3, ?4, '', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
-            rusqlite::params![id, repo_id, source_id, title],
+             VALUES (:id, :repo_id, 'github', :source_id, :title, '', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            rusqlite::named_params! { ":id": id, ":repo_id": repo_id, ":source_id": source_id, ":title": title },
         ).unwrap();
     }
 
     fn insert_dep(conn: &Connection, from_id: &str, to_id: &str) {
         conn.execute(
-            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (?1, ?2, 'blocks')",
-            rusqlite::params![from_id, to_id],
+            "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (:from_id, :to_id, 'blocks')",
+            rusqlite::named_params! { ":from_id": from_id, ":to_id": to_id },
         ).unwrap();
     }
 
@@ -1900,8 +1853,8 @@ mod tests {
 
         conn.execute(
             "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-             VALUES ('repo-hp','hp-repo',?1,'',?2,'2024-01-01T00:00:00Z')",
-            rusqlite::params![repo_path, ws_path],
+             VALUES ('repo-hp','hp-repo',:repo_path,'', :ws_path,'2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":repo_path": repo_path, ":ws_path": ws_path },
         )
         .unwrap();
 

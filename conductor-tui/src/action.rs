@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use conductor_core::agent::{AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals};
-use conductor_core::feature::FeatureRow;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
@@ -66,10 +65,6 @@ pub struct DataRefreshedPayload {
     /// Live turn count for currently running agents, keyed by worktree_id.
     /// Computed in the background poller to avoid blocking the main thread.
     pub live_turns_by_worktree: HashMap<String, i64>,
-    /// Active features per repo (repo_id → active FeatureRows).
-    pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
-    /// Number of unread in-app notifications.
-    pub unread_notification_count: usize,
     /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
     pub latest_repo_agent_runs: HashMap<String, AgentRun>,
     /// Agent events for the currently-selected worktree (populated by background poller).
@@ -147,14 +142,6 @@ pub enum Action {
 
     // Base branch change (worktree detail)
     SetBaseBranch,
-    BaseBranchesLoaded {
-        repo_slug: String,
-        wt_slug: String,
-        items: Vec<crate::state::BranchPickerItem>,
-    },
-    BaseBranchesFailed {
-        error: String,
-    },
     SelectBaseBranch(Option<usize>),
 
     // Theme picker
@@ -186,7 +173,6 @@ pub enum Action {
     // Agent triggers
     LaunchAgent,
     PromptRepoAgent,
-    OrchestrateAgent,
     StopAgent,
     RestartAgent,
     #[allow(dead_code)]
@@ -224,7 +210,6 @@ pub enum Action {
 
     // Modal
     ShowHelp,
-    ShowNotifications,
     DismissModal,
     OpenTicketUrl,
     CopyErrorMessage,
@@ -307,10 +292,6 @@ pub enum Action {
     AgentLaunchComplete {
         result: Result<String, String>,
     },
-    // Background result for orchestrate agent launch
-    OrchestrateLaunchComplete {
-        result: Result<String, String>,
-    },
     // Background result for worktree agent stop
     AgentStopComplete {
         result: Result<String, String>,
@@ -373,20 +354,18 @@ pub enum Action {
     },
 
     // Branch picker (during worktree creation)
-    /// Background result: feature branches loaded for branch picker.
-    FeatureBranchesLoaded {
+    SelectBranch(Option<usize>),
+    /// Background result: existing worktree branches loaded for the branch picker.
+    WorktreeBranchesLoaded {
         repo_slug: String,
         wt_name: String,
         ticket_id: Option<String>,
         items: Vec<crate::state::BranchPickerItem>,
-        /// Inferred base branch from ticket milestone: (branch_name, milestone_title).
-        inferred_base_branch: Option<(String, String)>,
     },
-    /// Background result: feature branch load failed.
-    FeatureBranchesFailed {
+    /// Background result: failed to load worktree branches.
+    WorktreeBranchesFailed {
         error: String,
     },
-    SelectBranch(Option<usize>),
 
     /// Select a list-picker item by number-key shortcut (0-indexed).
     /// Used by both WorkflowPicker and TemplatePicker modals.
@@ -450,11 +429,6 @@ pub enum Action {
     GateToggleOption,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
 
-    // Notification modal loaded
-    NotificationsLoaded {
-        notifications: Vec<conductor_core::notification_manager::Notification>,
-    },
-
     /// Background result: workflow defs loaded from disk for a picker.
     WorkflowPickerDefsLoaded {
         target: crate::state::WorkflowPickerTarget,
@@ -492,25 +466,17 @@ pub enum Action {
     #[allow(dead_code)]
     SettingsToggleBool,
 
-    // ── Features view actions ──────────────────────────────────────────────
-    /// Navigate to View::Features (global key `F`, or `f` from RepoDetail).
-    OpenFeatures,
-    /// User pressed `r` — dispatch fan-out in background thread.
-    FeatureRunFanOut,
-    /// Background result from fan-out (`r` key).
-    FeatureRunFanOutComplete {
-        result: Result<conductor_core::feature::RunSummary, String>,
-    },
-    /// User pressed `v` — transition selected feature to ReadyForReview (inline SQL).
-    FeatureTransitionReady,
-    /// User pressed `a` — transition selected feature to Approved (inline SQL).
-    FeatureTransitionApprove,
-    /// User pressed `x` — close the selected feature (off-thread: calls git for merge detection).
-    FeatureClose,
-    /// Background result from `x` close action.
-    FeatureCloseComplete {
-        result: Result<(), String>,
-    },
+    // ── Workflow name filter actions ───────────────────────────────────────
+    /// Open the inline workflow name filter bar (/ key in Runs focus).
+    OpenWorkflowFilter,
+    /// A printable character typed into the workflow filter bar.
+    WorkflowFilterInput(char),
+    /// Backspace in the workflow filter bar.
+    WorkflowFilterBackspace,
+    /// Clear the active workflow name filter (Esc while filter is active).
+    ClearWorkflowFilter,
+    /// Confirm the typed filter and apply it (Enter in filter bar).
+    ConfirmWorkflowFilter,
 
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,

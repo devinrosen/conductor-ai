@@ -147,6 +147,7 @@ pub enum Modal {
         message: String,
     },
     /// Branch picker shown during worktree creation: select a target branch.
+    #[allow(dead_code)]
     BranchPicker {
         repo_slug: String,
         wt_name: String,
@@ -179,11 +180,6 @@ pub enum Modal {
         /// used to restore the correct highlighted row if the picker is
         /// re-opened after an Esc cancel.
         original_name: String,
-    },
-    /// In-app notification list modal.
-    Notifications {
-        notifications: Vec<conductor_core::notification_manager::Notification>,
-        selected: usize,
     },
     /// Full-screen DAG graph view for ticket dependencies or workflow step graphs.
     GraphView {
@@ -249,9 +245,6 @@ impl fmt::Debug for Modal {
                     f,
                     "Modal::ThemePicker(selected={selected}, original={original_name:?})"
                 )
-            }
-            Modal::Notifications { selected, .. } => {
-                write!(f, "Modal::Notifications(selected={selected})")
             }
             Modal::GraphView { ref title, .. } => {
                 write!(f, "Modal::GraphView(title={title:?})")

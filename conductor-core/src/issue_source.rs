@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{named_params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::db::query_collect;
@@ -53,8 +53,8 @@ impl<'a> IssueSourceManager<'a> {
     ) -> Result<IssueSource> {
         // Check for existing source of same type for this repo
         let exists: bool = self.conn.query_row(
-            "SELECT COUNT(*) > 0 FROM repo_issue_sources WHERE repo_id = ?1 AND source_type = ?2",
-            params![repo_id, source_type],
+            "SELECT COUNT(*) > 0 FROM repo_issue_sources WHERE repo_id = :repo_id AND source_type = :source_type",
+            named_params! { ":repo_id": repo_id, ":source_type": source_type },
             |row| row.get(0),
         )?;
 
@@ -67,8 +67,8 @@ impl<'a> IssueSourceManager<'a> {
 
         let id = crate::new_id();
         self.conn.execute(
-            "INSERT INTO repo_issue_sources (id, repo_id, source_type, config_json) VALUES (?1, ?2, ?3, ?4)",
-            params![id, repo_id, source_type, config_json],
+            "INSERT INTO repo_issue_sources (id, repo_id, source_type, config_json) VALUES (:id, :repo_id, :source_type, :config_json)",
+            named_params! { ":id": id, ":repo_id": repo_id, ":source_type": source_type, ":config_json": config_json },
         )?;
 
         Ok(IssueSource {
@@ -83,14 +83,14 @@ impl<'a> IssueSourceManager<'a> {
     pub fn list(&self, repo_id: &str) -> Result<Vec<IssueSource>> {
         query_collect(
             self.conn,
-            "SELECT id, repo_id, source_type, config_json FROM repo_issue_sources WHERE repo_id = ?1",
-            params![repo_id],
+            "SELECT id, repo_id, source_type, config_json FROM repo_issue_sources WHERE repo_id = :repo_id",
+            named_params! { ":repo_id": repo_id },
             |row| {
                 Ok(IssueSource {
-                    id: row.get(0)?,
-                    repo_id: row.get(1)?,
-                    source_type: row.get(2)?,
-                    config_json: row.get(3)?,
+                    id: row.get("id")?,
+                    repo_id: row.get("repo_id")?,
+                    source_type: row.get("source_type")?,
+                    config_json: row.get("config_json")?,
                 })
             },
         )
@@ -98,16 +98,18 @@ impl<'a> IssueSourceManager<'a> {
 
     /// Remove an issue source by ID.
     pub fn remove(&self, id: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM repo_issue_sources WHERE id = ?1", params![id])?;
+        self.conn.execute(
+            "DELETE FROM repo_issue_sources WHERE id = :id",
+            named_params! { ":id": id },
+        )?;
         Ok(())
     }
 
     /// Remove an issue source by repo_id and source_type.
     pub fn remove_by_type(&self, repo_id: &str, source_type: &str) -> Result<bool> {
         let count = self.conn.execute(
-            "DELETE FROM repo_issue_sources WHERE repo_id = ?1 AND source_type = ?2",
-            params![repo_id, source_type],
+            "DELETE FROM repo_issue_sources WHERE repo_id = :repo_id AND source_type = :source_type",
+            named_params! { ":repo_id": repo_id, ":source_type": source_type },
         )?;
         Ok(count > 0)
     }

@@ -512,19 +512,6 @@ export interface FeedbackRequest {
   timeout_secs?: number;
 }
 
-export interface Notification {
-  id: string;
-  kind: string;
-  title: string;
-  body: string;
-  severity: "info" | "warning" | "action_required";
-  entity_id: string | null;
-  entity_type: string | null;
-  read: boolean;
-  created_at: string;
-  read_at: string | null;
-}
-
 export interface ThemeUnlockStats {
   repos_registered: number;
   prs_merged: number;
@@ -572,61 +559,3 @@ export interface HookEvent {
   is_workflow: boolean;
 }
 
-// Features
-export type FeatureStatus =
-  | "InProgress"
-  | "ReadyForReview"
-  | "Approved"
-  | "Merged"
-  | "Closed";
-
-export interface Feature {
-  id: string;
-  repo_id: string;
-  name: string;
-  branch: string;
-  base_branch: string;
-  status: FeatureStatus;
-  created_at: string;
-  merged_at: string | null;
-  source_type: string | null;
-  source_id: string | null;
-  tickets_total: number;
-  tickets_merged: number;
-}
-
-export interface FeatureRow {
-  id: string;
-  repo_id: string;
-  name: string;
-  branch: string;
-  base_branch: string;
-  status: FeatureStatus;
-  created_at: string;
-  worktree_count: number;
-  ticket_count: number;
-  last_commit_at: string | null;
-  last_worktree_activity: string | null;
-  tickets_total: number;
-  tickets_merged: number;
-}
-
-export interface FeaturesResponse {
-  features: FeatureRow[];
-  stale_feature_days: number;
-}
-
-export interface FeatureDetailResponse {
-  feature: Feature;
-  tickets: Ticket[];
-}
-
-export interface FeatureSyncResult {
-  added: number;
-  removed: number;
-}
-
-export interface FeatureRunSummary {
-  dispatched: number;
-  failed: number;
-}

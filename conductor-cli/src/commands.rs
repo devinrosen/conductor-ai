@@ -42,11 +42,6 @@ pub enum Commands {
         #[command(subcommand)]
         command: SetupCommands,
     },
-    /// Manage features (multi-worktree coordination branches)
-    Feature {
-        #[command(subcommand)]
-        command: FeatureCommands,
-    },
     /// Model Context Protocol server (stdio transport for Claude Code integration)
     Mcp {
         #[command(subcommand)]
@@ -150,24 +145,6 @@ pub enum AgentCommands {
         #[arg(long = "plugin-dir")]
         plugin_dirs: Vec<String>,
     },
-    /// Orchestrate child agents: spawn a child run for each plan step
-    Orchestrate {
-        /// Parent agent run ID (must have plan steps)
-        #[arg(long)]
-        run_id: String,
-        /// Path to the worktree directory
-        #[arg(long)]
-        worktree_path: String,
-        /// Model to use for child agents
-        #[arg(long)]
-        model: Option<String>,
-        /// Stop on first child failure
-        #[arg(long)]
-        fail_fast: bool,
-        /// Child run timeout in seconds (default: 1800 = 30 min)
-        #[arg(long, default_value = "1800")]
-        child_timeout_secs: u64,
-    },
     /// Create a new GitHub issue (called by agents during a run)
     CreateIssue {
         /// Issue title
@@ -245,11 +222,6 @@ pub enum WorkflowCommands {
         /// Input variables (key=value pairs)
         #[arg(long = "input", value_name = "KEY=VALUE")]
         inputs: Vec<String>,
-        /// Feature name — sets the feature context for the workflow run.
-        /// When provided, feature_name and feature_branch become available as
-        /// template variables. Auto-detected from the ticket when omitted.
-        #[arg(long)]
-        feature: Option<String>,
         /// Run the workflow in the background: print the run ID and exit immediately
         #[arg(long)]
         background: bool,
@@ -469,14 +441,11 @@ pub enum WorktreeCommands {
         /// Worktree name (e.g., smart-playlists, fix-scan-crash)
         name: String,
         /// Base branch
-        #[arg(long, short, conflicts_with_all = &["from_pr", "feature"])]
+        #[arg(long, short, conflicts_with_all = &["from_pr"])]
         from: Option<String>,
         /// Checkout an existing PR branch by PR number
-        #[arg(long, conflicts_with_all = &["from", "feature"])]
+        #[arg(long, conflicts_with_all = &["from"])]
         from_pr: Option<u32>,
-        /// Create worktree based on a feature branch
-        #[arg(long, conflicts_with_all = &["from", "from_pr"])]
-        feature: Option<String>,
         /// Link to a ticket ID
         #[arg(long)]
         ticket: Option<String>,
@@ -656,106 +625,5 @@ pub enum TicketCommands {
         /// Set agent map JSON (empty string clears)
         #[arg(long)]
         agent_map: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum FeatureCommands {
-    /// Create a new feature branch
-    #[command(
-        after_help = "Examples:\n  conductor feature create my-repo notification-improvements\n  conductor feature create my-repo notification-improvements --from develop\n  conductor feature create my-repo notification-improvements --tickets 1262,1263\n  conductor feature create my-repo notification-improvements --milestone 42"
-    )]
-    Create {
-        /// Repo slug
-        repo: String,
-        /// Feature name (e.g., notification-improvements)
-        name: String,
-        /// Base branch (defaults to repo's default branch)
-        #[arg(long)]
-        from: Option<String>,
-        /// Comma-separated ticket source IDs to link
-        #[arg(long)]
-        tickets: Option<String>,
-        /// GitHub milestone number to link as source (sets source_type=github_milestone)
-        #[arg(long)]
-        milestone: Option<u64>,
-    },
-    /// List features for a repo
-    List {
-        /// Repo slug
-        repo: String,
-    },
-    /// Link tickets to a feature
-    Link {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-        /// Comma-separated ticket source IDs
-        tickets: String,
-    },
-    /// Unlink tickets from a feature
-    Unlink {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-        /// Comma-separated ticket source IDs
-        tickets: String,
-    },
-    /// Create a pull request for the feature branch
-    Pr {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-        /// Create as draft PR
-        #[arg(long)]
-        draft: bool,
-    },
-    /// Transition a feature from in_progress → ready_for_review
-    Review {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-    },
-    /// Transition a feature from ready_for_review → approved
-    Approve {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-    },
-    /// Close a feature (marks as merged if branch was merged, otherwise closed)
-    Close {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-    },
-    /// Permanently delete a closed feature (removes DB record, feature_tickets, and git branch)
-    Delete {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-    },
-    /// Sync tickets from the feature's configured GitHub milestone
-    Sync {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-    },
-    /// Fan-out: create worktrees and launch agents for all eligible tickets in this feature
-    Run {
-        /// Repo slug
-        repo: String,
-        /// Feature name
-        name: String,
-        /// Override max_feature_parallelism from config
-        #[arg(long)]
-        parallel: Option<u32>,
     },
 }

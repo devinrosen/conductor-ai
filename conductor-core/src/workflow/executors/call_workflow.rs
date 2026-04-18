@@ -2,8 +2,8 @@ use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::CallWorkflowNode;
 
 use crate::workflow::engine::{
-    fetch_child_completion_data, record_step_failure, record_step_success, resolve_child_inputs,
-    restore_step, run_on_fail_agent, should_skip, ExecutionState,
+    fetch_child_completion_data, handle_on_fail, record_step_success, resolve_child_inputs,
+    restore_step, should_skip, ExecutionState,
 };
 use crate::workflow::prompt_builder::build_variable_map;
 use crate::workflow::status::WorkflowStepStatus;
@@ -101,7 +101,7 @@ pub fn execute_call_workflow(
             conductor_bin_dir: state.conductor_bin_dir.clone(),
         };
 
-        match crate::workflow::engine::resume_workflow(&resume_input) {
+        let msg = match crate::workflow::engine::resume_workflow(&resume_input) {
             Ok(result) if result.all_succeeded => {
                 tracing::info!(
                     "Sub-workflow '{}' resumed and completed: cost=${:.4}, {} turns",
@@ -170,8 +170,7 @@ pub fn execute_call_workflow(
                     None,
                     Some(0),
                 )?;
-                last_error = msg;
-                // Fall through to the retry loop
+                msg
             }
             Err(e) => {
                 let msg = format!("Sub-workflow '{}' resume error: {e}", node.workflow);
@@ -189,10 +188,19 @@ pub fn execute_call_workflow(
                     None,
                     Some(0),
                 )?;
-                last_error = msg;
-                // Fall through to the retry loop
+                msg
             }
-        }
+        };
+        return handle_on_fail(
+            state,
+            step_key,
+            &node.workflow,
+            &node.on_fail,
+            msg,
+            1,
+            iteration,
+            1,
+        );
     }
 
     for attempt in 0..max_attempts {
@@ -266,7 +274,6 @@ pub fn execute_call_workflow(
                 .bot_name
                 .clone()
                 .or_else(|| state.default_bot_name.clone()),
-            feature_id: state.feature_id.as_deref(),
             iteration,
             run_id_notify: None,
             triggered_by_hook: state.triggered_by_hook,
@@ -366,24 +373,14 @@ pub fn execute_call_workflow(
         }
     }
 
-    // All retries exhausted — run on_fail agent if specified
-    if let Some(ref on_fail_agent) = node.on_fail {
-        run_on_fail_agent(
-            state,
-            &node.workflow,
-            on_fail_agent,
-            &last_error,
-            node.retries,
-            iteration,
-        );
-    }
-
-    record_step_failure(
+    handle_on_fail(
         state,
         step_key,
         &node.workflow,
+        &node.on_fail,
         last_error,
+        node.retries,
+        iteration,
         max_attempts,
-        true,
     )
 }

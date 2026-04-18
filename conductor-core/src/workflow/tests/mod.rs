@@ -10,17 +10,19 @@ mod execution_workflow;
 mod gates;
 mod helpers;
 mod manager;
+mod on_fail_continue;
 mod output;
 mod resumption;
 mod types;
 
 pub(super) use super::engine::{
     bubble_up_child_step_results, completed_keys_from_steps, execute_nodes,
-    fetch_child_final_output, record_step_failure, resolve_child_inputs, restore_completed_step,
-    ExecutionState, ResumeContext,
+    fetch_child_final_output, record_step_failure, record_step_skipped, resolve_child_inputs,
+    restore_completed_step, ExecutionState, ResumeContext,
 };
 pub(super) use super::executors::{
-    execute_call, execute_do, execute_do_while, execute_unless, execute_while, handle_gate_timeout,
+    execute_call, execute_call_workflow, execute_do, execute_do_while, execute_unless,
+    execute_while, handle_gate_timeout,
 };
 pub(super) use super::helpers::{build_workflow_summary, find_max_completed_while_iteration};
 pub(super) use super::manager::WorkflowManager;

@@ -64,7 +64,6 @@ fn create_repo_run(conn: &rusqlite::Connection, repo_id: &str) -> WorkflowRun {
             None,
             None,
             None,
-            None,
         )
         .unwrap()
 }
@@ -108,7 +107,6 @@ fn test_list_workflow_runs_for_repo_distinct_no_duplicates() {
             &parent_id,
             false,
             "manual",
-            None,
             None,
             None,
             None,
@@ -364,15 +362,15 @@ fn test_list_active_workflow_runs_multiple_statuses_dynamic_placeholders() {
 #[test]
 fn test_sql_placeholders() {
     assert_eq!(sql_placeholders(0), "");
-    assert_eq!(sql_placeholders(1), "?1");
-    assert_eq!(sql_placeholders(3), "?1, ?2, ?3");
+    assert_eq!(sql_placeholders(1), "?");
+    assert_eq!(sql_placeholders(3), "?, ?, ?");
 }
 
 #[test]
 fn test_sql_placeholders_from_non_one_start() {
     assert_eq!(sql_placeholders_from(0, 5), "");
-    assert_eq!(sql_placeholders_from(1, 2), "?2");
-    assert_eq!(sql_placeholders_from(3, 4), "?4, ?5, ?6");
+    assert_eq!(sql_placeholders_from(1, 2), "?");
+    assert_eq!(sql_placeholders_from(3, 4), "?, ?, ?");
 }
 
 #[test]
@@ -818,8 +816,8 @@ fn test_list_all_waiting_gate_steps_excludes_approved_gate_steps() {
         .unwrap();
     // Mark as completed (approved) — must not appear in waiting list.
     conn.execute(
-        "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![step_id],
+        "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": step_id },
     ).unwrap();
 
     let steps = mgr.list_all_waiting_gate_steps().unwrap();
@@ -846,7 +844,6 @@ fn test_list_all_waiting_gate_steps_includes_target_label() {
             None,
             None,
             Some("conductor-ai/feat-123"),
-            None,
         )
         .unwrap();
 
@@ -1040,8 +1037,8 @@ fn test_list_waiting_gate_steps_for_repo_excludes_completed_gate_steps() {
     mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
-        "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![step_id],
+        "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": step_id },
     ).unwrap();
 
     let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
@@ -1288,7 +1285,6 @@ fn test_get_step_summaries_for_runs_child_chain_traversal() {
             None,
             Some(&root.id), // parent_workflow_run_id
             None,
-            None,
         )
         .unwrap();
     mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None, None)
@@ -1336,7 +1332,6 @@ fn test_get_step_summaries_for_runs_deep_chain() {
             None,
             Some(&root.id),
             None,
-            None,
         )
         .unwrap();
     mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None, None)
@@ -1354,7 +1349,6 @@ fn test_get_step_summaries_for_runs_deep_chain() {
             "manual",
             None,
             Some(&child.id),
-            None,
             None,
         )
         .unwrap();
@@ -1461,7 +1455,6 @@ fn test_get_step_summaries_for_runs_multiple_roots_with_chains() {
             "manual",
             None,
             Some(&root_a.id),
-            None,
             None,
         )
         .unwrap();
@@ -1870,7 +1863,6 @@ fn test_list_active_workflow_runs_for_repo_distinct_no_duplicates() {
             None,
             None,
             None,
-            None,
         )
         .unwrap();
     let runs = WorkflowManager::new(&conn)
@@ -1907,7 +1899,6 @@ fn create_named_repo_run(conn: &rusqlite::Connection, repo_id: &str, wf_name: &s
             &parent_id,
             false,
             "manual",
-            None,
             None,
             None,
             None,
@@ -2164,13 +2155,13 @@ fn test_token_trend_daily_granularity() {
 
     // Force both runs onto the same specific day
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
-        rusqlite::params![run1.id],
+        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run1.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-03-15T18:00:00Z' WHERE id = ?1",
-        rusqlite::params![run2.id],
+        "UPDATE workflow_runs SET started_at = '2024-03-15T18:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run2.id },
     )
     .unwrap();
 
@@ -2194,13 +2185,13 @@ fn test_token_trend_daily_multiple_periods_ordered_desc() {
     complete_with_metrics(&conn, &run2.id, 50, 80);
 
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-03-14T10:00:00Z' WHERE id = ?1",
-        rusqlite::params![run1.id],
+        "UPDATE workflow_runs SET started_at = '2024-03-14T10:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run1.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
-        rusqlite::params![run2.id],
+        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run2.id },
     )
     .unwrap();
 
@@ -2225,13 +2216,13 @@ fn test_token_trend_weekly_granularity() {
 
     // Both in same ISO week (2024-W11)
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-03-11T10:00:00Z' WHERE id = ?1",
-        rusqlite::params![run1.id],
+        "UPDATE workflow_runs SET started_at = '2024-03-11T10:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run1.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-03-13T10:00:00Z' WHERE id = ?1",
-        rusqlite::params![run2.id],
+        "UPDATE workflow_runs SET started_at = '2024-03-13T10:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run2.id },
     )
     .unwrap();
 
@@ -2267,8 +2258,8 @@ fn insert_agent_run_with_tokens(
     conn.execute(
         "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, \
          input_tokens, output_tokens, cache_read_input_tokens) \
-         VALUES (?1, 'w1', 'test', 'completed', '2024-01-01T00:00:00Z', ?2, ?3, ?4)",
-        rusqlite::params![id, input, output, cache_read],
+         VALUES (:id, 'w1', 'test', 'completed', '2024-01-01T00:00:00Z', :input, :output, :cache_read)",
+        rusqlite::named_params! { ":id": id, ":input": input, ":output": output, ":cache_read": cache_read },
     )
     .unwrap();
 }
@@ -2285,8 +2276,8 @@ fn insert_workflow_step(
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, child_run_id) \
-         VALUES (?1, ?2, ?3, 'actor', ?4, ?5)",
-        rusqlite::params![step_id, run_id, step_name, position, child_run_id],
+         VALUES (:step_id, :run_id, :step_name, 'actor', :position, :child_run_id)",
+        rusqlite::named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name, ":position": position, ":child_run_id": child_run_id },
     )
     .unwrap();
 }
@@ -2340,18 +2331,18 @@ fn test_step_heatmap_limit_runs_respected() {
 
     // Force started_at so ordering is deterministic: run1 oldest, run3 newest
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run1.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run1.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run2.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run2.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run3.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run3.id },
     )
     .unwrap();
 
@@ -2482,8 +2473,8 @@ fn test_run_metrics_excludes_null_metric_runs() {
     mgr.update_workflow_status(&dur_run.id, WorkflowRunStatus::Completed, None, None)
         .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET total_duration_ms = 3000 WHERE id = ?1",
-        rusqlite::params![dur_run.id],
+        "UPDATE workflow_runs SET total_duration_ms = 3000 WHERE id = :id",
+        rusqlite::named_params! { ":id": dur_run.id },
     )
     .unwrap();
 
@@ -2592,8 +2583,8 @@ fn test_failure_rate_trend_completed_only_period() {
         .unwrap();
     // Pin started_at to a known date so period is deterministic
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
-        rusqlite::params![run.id],
+        "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run.id },
     )
     .unwrap();
 
@@ -2618,8 +2609,8 @@ fn test_failure_rate_trend_mixed_completed_and_failed() {
         mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
             .unwrap();
         conn.execute(
-            "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = ?1",
-            rusqlite::params![run.id],
+            "UPDATE workflow_runs SET started_at = '2024-03-15T10:00:00Z' WHERE id = :id",
+            rusqlite::named_params! { ":id": run.id },
         )
         .unwrap();
     }
@@ -2627,8 +2618,8 @@ fn test_failure_rate_trend_mixed_completed_and_failed() {
     mgr.update_workflow_status(&failed.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-03-15T12:00:00Z' WHERE id = ?1",
-        rusqlite::params![failed.id],
+        "UPDATE workflow_runs SET started_at = '2024-03-15T12:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": failed.id },
     )
     .unwrap();
 
@@ -2674,8 +2665,8 @@ fn test_failure_rate_trend_weekly_granularity() {
         mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
             .unwrap();
         conn.execute(
-            "UPDATE workflow_runs SET started_at = ?1 WHERE id = ?2",
-            rusqlite::params![ts, run.id],
+            "UPDATE workflow_runs SET started_at = :ts WHERE id = :id",
+            rusqlite::named_params! { ":ts": ts, ":id": run.id },
         )
         .unwrap();
     }
@@ -2701,8 +2692,8 @@ fn insert_step_with_status(
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status) \
-         VALUES (?1, ?2, ?3, 'actor', ?4, ?5)",
-        rusqlite::params![step_id, run_id, step_name, position, status],
+         VALUES (:step_id, :run_id, :step_name, 'actor', :position, :status)",
+        rusqlite::named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name, ":position": position, ":status": status },
     )
     .unwrap();
 }
@@ -2777,18 +2768,18 @@ fn test_step_failure_heatmap_limit_runs_respected() {
 
     // Force deterministic ordering: run1 oldest, run3 newest
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run1.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run1.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run2.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run2.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run3.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run3.id },
     )
     .unwrap();
 
@@ -2839,8 +2830,8 @@ fn insert_step_with_retries(
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, retry_count) \
-         VALUES (?1, ?2, ?3, 'actor', ?4, ?5, ?6)",
-        rusqlite::params![step_id, run_id, step_name, position, status, retry_count],
+         VALUES (:step_id, :run_id, :step_name, 'actor', :position, :status, :retry_count)",
+        rusqlite::named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name, ":position": position, ":status": status, ":retry_count": retry_count },
     )
     .unwrap();
 }
@@ -2945,18 +2936,18 @@ fn test_step_retry_analytics_limit_runs() {
     }
 
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run1.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-01T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run1.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run2.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-02T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run2.id },
     )
     .unwrap();
     conn.execute(
-        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = ?1",
-        rusqlite::params![run3.id],
+        "UPDATE workflow_runs SET started_at = '2024-01-03T00:00:00Z' WHERE id = :id",
+        rusqlite::named_params! { ":id": run3.id },
     )
     .unwrap();
 
@@ -3099,8 +3090,8 @@ fn insert_terminal_gate_step(
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, gate_type, status, started_at, ended_at, gate_feedback) \
-         VALUES (?1, ?2, ?3, 'gate', 0, 'human_approval', ?4, ?5, ?6, ?7)",
-        rusqlite::params![step_id, run_id, step_name, status, started_at, ended_at, feedback],
+         VALUES (:step_id, :run_id, :step_name, 'gate', 0, 'human_approval', :status, :started_at, :ended_at, :feedback)",
+        rusqlite::named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name, ":status": status, ":started_at": started_at, ":ended_at": ended_at, ":feedback": feedback },
     )
     .unwrap();
 }
@@ -3417,8 +3408,8 @@ fn test_get_all_pending_gates_null_started_at() {
     // Force status to 'waiting' without going through update_step_status_full
     // so that started_at stays NULL (simulating pre-fix rows).
     conn.execute(
-        "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = ?1",
-        rusqlite::params![step_id],
+        "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = :id",
+        rusqlite::named_params! { ":id": step_id },
     )
     .unwrap();
 
@@ -3439,8 +3430,8 @@ fn test_get_all_pending_gates_null_started_at() {
 /// Backdate a run's `started_at` to N days ago (required for time-window filtering).
 fn backdate_run(conn: &rusqlite::Connection, run_id: &str, days_ago: i64) {
     conn.execute(
-        "UPDATE workflow_runs SET started_at = datetime('now', '-' || ?1 || ' days') WHERE id = ?2",
-        rusqlite::params![days_ago, run_id],
+        "UPDATE workflow_runs SET started_at = datetime('now', '-' || :days_ago || ' days') WHERE id = :run_id",
+        rusqlite::named_params! { ":days_ago": days_ago, ":run_id": run_id },
     )
     .unwrap();
 }
@@ -3924,7 +3915,6 @@ fn test_spike_baseline_excludes_sub_workflow_runs() {
                 "manual",
                 None,
                 Some(&root_run.id),
-                None,
                 None,
             )
             .unwrap();

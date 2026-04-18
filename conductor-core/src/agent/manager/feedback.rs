@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::named_params;
 
 use crate::db::{query_collect, sql_placeholders};
 use crate::error::{ConductorError, Result};
@@ -108,8 +108,8 @@ impl<'a> AgentManager<'a> {
 
         // Update run status
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'waiting_for_feedback' WHERE id = ?1",
-            params![run_id],
+            "UPDATE agent_runs SET status = 'waiting_for_feedback' WHERE id = :id",
+            named_params! { ":id": run_id },
         )?;
 
         let req = FeedbackRequest {
@@ -128,17 +128,17 @@ impl<'a> AgentManager<'a> {
         self.conn.execute(
             "INSERT INTO feedback_requests \
              (id, run_id, prompt, status, created_at, feedback_type, options_json, timeout_secs) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                req.id,
-                req.run_id,
-                req.prompt,
-                req.status,
-                req.created_at,
-                feedback_type,
-                options_json,
-                timeout_secs,
-            ],
+             VALUES (:id, :run_id, :prompt, :status, :created_at, :feedback_type, :options_json, :timeout_secs)",
+            named_params! {
+                ":id": req.id,
+                ":run_id": req.run_id,
+                ":prompt": req.prompt,
+                ":status": req.status,
+                ":created_at": req.created_at,
+                ":feedback_type": feedback_type,
+                ":options_json": options_json,
+                ":timeout_secs": timeout_secs,
+            },
         )?;
 
         Ok(req)
@@ -151,9 +151,13 @@ impl<'a> AgentManager<'a> {
 
         // Update feedback request
         let rows_affected = self.conn.execute(
-            "UPDATE feedback_requests SET status = 'responded', response = ?1, responded_at = ?2 \
-             WHERE id = ?3 AND status = 'pending'",
-            params![response, now, feedback_id],
+            "UPDATE feedback_requests SET status = 'responded', response = :response, responded_at = :responded_at \
+             WHERE id = :id AND status = 'pending'",
+            named_params! {
+                ":response": response,
+                ":responded_at": now,
+                ":id": feedback_id,
+            },
         )?;
 
         if rows_affected == 0 {
@@ -164,8 +168,8 @@ impl<'a> AgentManager<'a> {
 
         // Return updated feedback request
         let req = self.conn.query_row(
-            &format!("{FEEDBACK_SELECT} WHERE id = ?1"),
-            params![feedback_id],
+            &format!("{FEEDBACK_SELECT} WHERE id = :id"),
+            named_params! { ":id": feedback_id },
             row_to_feedback_request,
         )?;
 
@@ -177,9 +181,12 @@ impl<'a> AgentManager<'a> {
         let now = Utc::now().to_rfc3339();
 
         let rows_affected = self.conn.execute(
-            "UPDATE feedback_requests SET status = 'dismissed', responded_at = ?1 \
-             WHERE id = ?2 AND status = 'pending'",
-            params![now, feedback_id],
+            "UPDATE feedback_requests SET status = 'dismissed', responded_at = :responded_at \
+             WHERE id = :id AND status = 'pending'",
+            named_params! {
+                ":responded_at": now,
+                ":id": feedback_id,
+            },
         )?;
 
         if rows_affected == 0 {
@@ -209,9 +216,9 @@ impl<'a> AgentManager<'a> {
     fn resume_run_after_feedback(&self, feedback_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs SET status = 'running' \
-             WHERE id = (SELECT run_id FROM feedback_requests WHERE id = ?1) \
+             WHERE id = (SELECT run_id FROM feedback_requests WHERE id = :id) \
              AND status = 'waiting_for_feedback'",
-            params![feedback_id],
+            named_params! { ":id": feedback_id },
         )?;
         Ok(())
     }
@@ -220,10 +227,10 @@ impl<'a> AgentManager<'a> {
     pub fn pending_feedback_for_run(&self, run_id: &str) -> Result<Option<FeedbackRequest>> {
         let result = self.conn.query_row(
             &format!(
-                "{FEEDBACK_SELECT} WHERE run_id = ?1 AND status = 'pending' \
+                "{FEEDBACK_SELECT} WHERE run_id = :run_id AND status = 'pending' \
                  ORDER BY created_at DESC LIMIT 1"
             ),
-            params![run_id],
+            named_params! { ":run_id": run_id },
             row_to_feedback_request,
         );
 
@@ -347,8 +354,8 @@ impl<'a> AgentManager<'a> {
     /// Get a feedback request by ID.
     pub fn get_feedback(&self, feedback_id: &str) -> Result<Option<FeedbackRequest>> {
         let result = self.conn.query_row(
-            &format!("{FEEDBACK_SELECT} WHERE id = ?1"),
-            params![feedback_id],
+            &format!("{FEEDBACK_SELECT} WHERE id = :id"),
+            named_params! { ":id": feedback_id },
             row_to_feedback_request,
         );
 
@@ -359,8 +366,8 @@ impl<'a> AgentManager<'a> {
     pub fn list_feedback_for_run(&self, run_id: &str) -> Result<Vec<FeedbackRequest>> {
         query_collect(
             self.conn,
-            &format!("{FEEDBACK_SELECT} WHERE run_id = ?1 ORDER BY created_at DESC"),
-            params![run_id],
+            &format!("{FEEDBACK_SELECT} WHERE run_id = :run_id ORDER BY created_at DESC"),
+            named_params! { ":run_id": run_id },
             row_to_feedback_request,
         )
     }
@@ -373,10 +380,10 @@ impl<'a> AgentManager<'a> {
         let result = self.conn.query_row(
             &format!(
                 "{FEEDBACK_SELECT} WHERE run_id IN \
-                 (SELECT id FROM agent_runs WHERE worktree_id = ?1) \
+                 (SELECT id FROM agent_runs WHERE worktree_id = :worktree_id) \
                  AND status = 'pending' ORDER BY created_at DESC LIMIT 1"
             ),
-            params![worktree_id],
+            named_params! { ":worktree_id": worktree_id },
             row_to_feedback_request,
         );
 
@@ -408,9 +415,9 @@ impl<'a> AgentManager<'a> {
             &format!(
                 "{FEEDBACK_SELECT} WHERE status = 'pending' \
                  AND timeout_secs IS NOT NULL \
-                 AND datetime(created_at, '+' || timeout_secs || ' seconds') <= datetime(?1)"
+                 AND datetime(created_at, '+' || timeout_secs || ' seconds') <= datetime(:now)"
             ),
-            params![now],
+            named_params! { ":now": now },
             row_to_feedback_request,
         )?;
 
@@ -441,8 +448,8 @@ mod tests {
     fn insert_conversation(conn: &rusqlite::Connection, id: &str, scope_id: &str) {
         conn.execute(
             "INSERT INTO conversations (id, scope, scope_id, created_at, last_active_at) \
-             VALUES (?1, 'worktree', ?2, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
-            rusqlite::params![id, scope_id],
+             VALUES (:id, 'worktree', :scope_id, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":id": id, ":scope_id": scope_id },
         )
         .unwrap();
     }
@@ -591,8 +598,8 @@ mod tests {
         let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
         conn.execute(
-            "DELETE FROM agent_runs WHERE id = ?1",
-            rusqlite::params![run.id],
+            "DELETE FROM agent_runs WHERE id = :id",
+            rusqlite::named_params! { ":id": run.id },
         )
         .unwrap();
 

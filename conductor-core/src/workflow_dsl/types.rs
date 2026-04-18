@@ -324,12 +324,23 @@ pub struct ScriptNode {
     /// Number of retry attempts after the first failure (0 = no retries).
     #[serde(default)]
     pub retries: u32,
-    /// Agent to invoke if all attempts fail.
-    pub on_fail: Option<AgentRef>,
+    /// Action to take if all attempts fail.
+    pub on_fail: Option<OnFail>,
     /// Named GitHub App bot identity to use for this script (matches `[github.apps.<name>]`).
     /// When set, the resolved installation token is injected as `GH_TOKEN` so the script
     /// uses that bot identity for all `gh` CLI calls.
     pub bot_name: Option<String>,
+}
+
+/// The action to take when all retries for a `call`, `script`, or `call workflow` step exhaust.
+///
+/// - `Agent`: invoke a fallback agent (existing behaviour).
+/// - `Continue`: skip the step without marking the workflow failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum OnFail {
+    Agent(AgentRef),
+    Continue,
 }
 
 /// Reference to an agent — either a short name or an explicit file path.
@@ -381,7 +392,7 @@ pub struct CallNode {
     pub agent: AgentRef,
     #[serde(default)]
     pub retries: u32,
-    pub on_fail: Option<AgentRef>,
+    pub on_fail: Option<OnFail>,
     /// Optional output schema reference for structured output.
     pub output: Option<String>,
     /// Prompt snippet references to append to the agent prompt.
@@ -404,7 +415,7 @@ pub struct CallWorkflowNode {
     pub inputs: HashMap<String, String>,
     #[serde(default)]
     pub retries: u32,
-    pub on_fail: Option<AgentRef>,
+    pub on_fail: Option<OnFail>,
     /// Named GitHub App bot identity inherited by child call nodes.
     pub bot_name: Option<String>,
 }
@@ -652,20 +663,18 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
         match node {
             WorkflowNode::Call(n) => {
                 refs.push(n.agent.clone());
-                if let Some(ref f) = n.on_fail {
-                    refs.push(f.clone());
+                if let Some(OnFail::Agent(ref a)) = n.on_fail {
+                    refs.push(a.clone());
                 }
             }
             WorkflowNode::CallWorkflow(n) => {
-                // on_fail agents are still agent refs
-                if let Some(ref f) = n.on_fail {
-                    refs.push(f.clone());
+                if let Some(OnFail::Agent(ref a)) = n.on_fail {
+                    refs.push(a.clone());
                 }
             }
             WorkflowNode::Script(n) => {
-                // on_fail agent ref (the script itself is not an agent)
-                if let Some(ref f) = n.on_fail {
-                    refs.push(f.clone());
+                if let Some(OnFail::Agent(ref a)) = n.on_fail {
+                    refs.push(a.clone());
                 }
             }
             WorkflowNode::If(n) => refs.extend(collect_agent_names(&n.body)),

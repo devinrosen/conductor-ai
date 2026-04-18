@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::named_params;
 
 use crate::db::query_collect;
 use crate::error::Result;
@@ -33,15 +33,15 @@ impl<'a> AgentManager<'a> {
         };
         self.conn.execute(
             "INSERT INTO agent_run_events (id, run_id, kind, summary, started_at, metadata) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                event.id,
-                event.run_id,
-                event.kind,
-                event.summary,
-                event.started_at,
-                event.metadata
-            ],
+             VALUES (:id, :run_id, :kind, :summary, :started_at, :metadata)",
+            named_params! {
+                ":id": event.id,
+                ":run_id": event.run_id,
+                ":kind": event.kind,
+                ":summary": event.summary,
+                ":started_at": event.started_at,
+                ":metadata": event.metadata,
+            },
         )?;
         Ok(event)
     }
@@ -49,8 +49,8 @@ impl<'a> AgentManager<'a> {
     /// Set the ended_at timestamp for a previously created event span.
     pub fn update_event_ended_at(&self, event_id: &str, ended_at: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE agent_run_events SET ended_at = ?1 WHERE id = ?2",
-            params![ended_at, event_id],
+            "UPDATE agent_run_events SET ended_at = :ended_at WHERE id = :id",
+            named_params! { ":ended_at": ended_at, ":id": event_id },
         )?;
         Ok(())
     }
@@ -67,8 +67,8 @@ impl<'a> AgentManager<'a> {
     ) -> Result<Vec<AgentRunEvent>> {
         query_collect(
             self.conn,
-            &format!("{AGENT_RUN_EVENTS_SELECT} WHERE run_id = ?1 AND id > ?2 ORDER BY id ASC"),
-            params![run_id, after_id],
+            &format!("{AGENT_RUN_EVENTS_SELECT} WHERE run_id = :run_id AND id > :after_id ORDER BY id ASC"),
+            named_params! { ":run_id": run_id, ":after_id": after_id },
             row_to_agent_run_event,
         )
     }
@@ -85,9 +85,9 @@ impl<'a> AgentManager<'a> {
         query_collect(
             self.conn,
             &format!(
-                "{AGENT_RUN_EVENTS_SELECT} WHERE run_id = ?1 AND id > ?2 AND kind != 'result' ORDER BY id ASC"
+                "{AGENT_RUN_EVENTS_SELECT} WHERE run_id = :run_id AND id > :after_id AND kind != 'result' ORDER BY id ASC"
             ),
-            params![run_id, after_id],
+            named_params! { ":run_id": run_id, ":after_id": after_id },
             row_to_agent_run_event,
         )
     }
@@ -96,8 +96,8 @@ impl<'a> AgentManager<'a> {
     pub fn list_events_for_run(&self, run_id: &str) -> Result<Vec<AgentRunEvent>> {
         query_collect(
             self.conn,
-            &format!("{AGENT_RUN_EVENTS_SELECT} WHERE run_id = ?1 ORDER BY started_at ASC"),
-            params![run_id],
+            &format!("{AGENT_RUN_EVENTS_SELECT} WHERE run_id = :run_id ORDER BY started_at ASC"),
+            named_params! { ":run_id": run_id },
             row_to_agent_run_event,
         )
     }
@@ -110,9 +110,9 @@ impl<'a> AgentManager<'a> {
             "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata \
              FROM agent_run_events e \
              JOIN agent_runs r ON e.run_id = r.id \
-             WHERE r.worktree_id = ?1 \
+             WHERE r.worktree_id = :worktree_id \
              ORDER BY e.started_at ASC",
-            params![worktree_id],
+            named_params! { ":worktree_id": worktree_id },
             row_to_agent_run_event,
         )
     }
@@ -132,7 +132,7 @@ impl<'a> AgentManager<'a> {
             [],
             |row| {
                 let event = row_to_agent_run_event(row)?;
-                let wt_id: String = row.get(7)?;
+                let wt_id: String = row.get("worktree_id")?;
                 Ok((wt_id, event))
             },
         )?;
@@ -159,7 +159,7 @@ impl<'a> AgentManager<'a> {
             [],
             |row| {
                 let event = row_to_agent_run_event(row)?;
-                let repo_id: String = row.get(7)?;
+                let repo_id: String = row.get("repo_id")?;
                 Ok((repo_id, event))
             },
         )?;
@@ -179,9 +179,9 @@ impl<'a> AgentManager<'a> {
             "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata \
              FROM agent_run_events e \
              JOIN agent_runs r ON e.run_id = r.id \
-             WHERE r.repo_id = ?1 AND r.worktree_id IS NULL \
+             WHERE r.repo_id = :repo_id AND r.worktree_id IS NULL \
              ORDER BY e.started_at ASC",
-            params![repo_id],
+            named_params! { ":repo_id": repo_id },
             row_to_agent_run_event,
         )
     }
@@ -213,17 +213,17 @@ impl<'a> AgentManager<'a> {
         self.conn.execute(
             "INSERT INTO agent_created_issues \
              (id, agent_run_id, repo_id, source_type, source_id, title, url, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                issue.id,
-                issue.agent_run_id,
-                issue.repo_id,
-                issue.source_type,
-                issue.source_id,
-                issue.title,
-                issue.url,
-                issue.created_at,
-            ],
+             VALUES (:id, :agent_run_id, :repo_id, :source_type, :source_id, :title, :url, :created_at)",
+            named_params! {
+                ":id": issue.id,
+                ":agent_run_id": issue.agent_run_id,
+                ":repo_id": issue.repo_id,
+                ":source_type": issue.source_type,
+                ":source_id": issue.source_id,
+                ":title": issue.title,
+                ":url": issue.url,
+                ":created_at": issue.created_at,
+            },
         )?;
 
         Ok(issue)
@@ -237,9 +237,9 @@ impl<'a> AgentManager<'a> {
         query_collect(
             self.conn,
             &format!(
-                "{AGENT_CREATED_ISSUES_SELECT} WHERE agent_run_id = ?1 ORDER BY created_at ASC"
+                "{AGENT_CREATED_ISSUES_SELECT} WHERE agent_run_id = :agent_run_id ORDER BY created_at ASC"
             ),
-            params![agent_run_id],
+            named_params! { ":agent_run_id": agent_run_id },
             row_to_agent_created_issue,
         )
     }
@@ -256,9 +256,9 @@ impl<'a> AgentManager<'a> {
              aci.source_id, aci.title, aci.url, aci.created_at \
              FROM agent_created_issues aci \
              JOIN agent_runs ar ON aci.agent_run_id = ar.id \
-             WHERE ar.worktree_id = ?1 \
+             WHERE ar.worktree_id = :worktree_id \
              ORDER BY aci.created_at ASC",
-            params![worktree_id],
+            named_params! { ":worktree_id": worktree_id },
             row_to_agent_created_issue,
         )
     }
@@ -479,8 +479,8 @@ mod tests {
             .unwrap();
 
         conn.execute(
-            "DELETE FROM agent_runs WHERE id = ?1",
-            rusqlite::params![run.id],
+            "DELETE FROM agent_runs WHERE id = :id",
+            rusqlite::named_params! { ":id": run.id },
         )
         .unwrap();
 

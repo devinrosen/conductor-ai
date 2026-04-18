@@ -50,7 +50,9 @@ workflow test {
             assert_eq!(c.retries, 1);
             assert_eq!(
                 c.on_fail,
-                Some(AgentRef::Path(".claude/agents/diagnose.md".to_string()))
+                Some(OnFail::Agent(AgentRef::Path(
+                    ".claude/agents/diagnose.md".to_string()
+                )))
             );
         }
         _ => panic!("Expected Call node"),
@@ -129,7 +131,9 @@ workflow parent {
             assert_eq!(n.retries, 1);
             assert_eq!(
                 n.on_fail,
-                Some(AgentRef::Name("notify-lint-failure".to_string()))
+                Some(OnFail::Agent(AgentRef::Name(
+                    "notify-lint-failure".to_string()
+                )))
             );
         }
         _ => panic!("Expected CallWorkflow node"),

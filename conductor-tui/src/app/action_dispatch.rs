@@ -162,42 +162,6 @@ impl App {
             Action::ShowHelp => {
                 self.state.modal = Modal::Help;
             }
-            Action::ShowNotifications => {
-                // Load recent notifications from DB off-thread to avoid blocking.
-                if let Some(ref bg_tx) = self.bg_tx {
-                    let tx = bg_tx.clone();
-                    std::thread::spawn(move || {
-                        use conductor_core::config::db_path;
-                        use conductor_core::db::open_database;
-                        use conductor_core::notification_manager::NotificationManager;
-                        match open_database(&db_path()) {
-                            Ok(conn) => {
-                                let mgr = NotificationManager::new(&conn);
-                                let notifications = mgr.list_recent(50, 0).unwrap_or_default();
-                                // Mark all as read when viewing
-                                let _ = mgr.mark_all_read();
-                                let _ = tx.send(Action::NotificationsLoaded { notifications });
-                            }
-                            Err(e) => {
-                                let _ = tx.send(Action::NotificationsLoaded {
-                                    notifications: vec![],
-                                });
-                                tracing::warn!("failed to open database for notifications: {e}");
-                            }
-                        }
-                    });
-                    self.state.modal = Modal::Progress {
-                        message: "Loading notifications\u{2026}".into(),
-                    };
-                }
-            }
-            Action::NotificationsLoaded { notifications } => {
-                self.state.unread_notification_count = 0;
-                self.state.modal = Modal::Notifications {
-                    notifications,
-                    selected: 0,
-                };
-            }
             Action::DismissModal => {
                 if matches!(self.state.modal, Modal::Progress { .. }) {
                     return true;
@@ -357,27 +321,16 @@ impl App {
                     );
                 }
             },
-            Action::FeatureBranchesLoaded {
+            Action::SelectBranch(index) => self.handle_branch_pick(index),
+            Action::WorktreeBranchesLoaded {
                 repo_slug,
                 wt_name,
                 ticket_id,
                 items,
-                inferred_base_branch,
-            } => {
-                self.handle_feature_branches_loaded(
-                    repo_slug,
-                    wt_name,
-                    ticket_id,
-                    items,
-                    inferred_base_branch,
-                );
+            } => self.handle_worktree_branches_loaded(repo_slug, wt_name, ticket_id, items),
+            Action::WorktreeBranchesFailed { error } => {
+                self.state.modal = crate::state::Modal::Error { message: error };
             }
-            Action::FeatureBranchesFailed { error } => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to load feature branches: {error}"),
-                };
-            }
-            Action::SelectBranch(index) => self.handle_branch_pick(index),
             Action::SelectListItem(index) => {
                 if let Modal::WorkflowPicker {
                     ref items,
@@ -460,18 +413,6 @@ impl App {
 
             // Base branch change
             Action::SetBaseBranch => self.handle_set_base_branch(),
-            Action::BaseBranchesLoaded {
-                repo_slug,
-                wt_slug,
-                items,
-            } => {
-                self.handle_base_branches_loaded(repo_slug, wt_slug, items);
-            }
-            Action::BaseBranchesFailed { error } => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to load branches: {error}"),
-                };
-            }
             Action::SelectBaseBranch(index) => self.handle_base_branch_pick(index),
 
             // Theme picker
@@ -554,7 +495,6 @@ impl App {
             // Agent
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::PromptRepoAgent => self.handle_prompt_repo_agent(),
-            Action::OrchestrateAgent => self.handle_orchestrate_agent(),
             Action::StopAgent => {
                 if self.is_repo_agent_context() {
                     self.handle_stop_repo_agent();
@@ -648,9 +588,6 @@ impl App {
                 }
                 | Modal::IssueSourceManager {
                     ref mut selected, ..
-                }
-                | Modal::Notifications {
-                    ref mut selected, ..
                 } => {
                     *selected = 0;
                 }
@@ -734,12 +671,6 @@ impl App {
                     ..
                 } => {
                     *selected = sources.len().saturating_sub(1);
-                }
-                Modal::Notifications {
-                    ref notifications,
-                    ref mut selected,
-                } => {
-                    *selected = notifications.len().saturating_sub(1);
                 }
                 _ => {
                     let (_, len) = self.state.focused_index_and_len();
@@ -1020,7 +951,6 @@ impl App {
                 self.state.data.active_non_worktree_workflow_runs =
                     payload.active_non_worktree_workflow_runs;
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
-                self.state.data.features_by_repo = payload.features_by_repo;
                 self.state.data.latest_repo_agent_runs = payload.latest_repo_agent_runs;
                 // Apply scoped event payloads only if they are still for the current selection
                 // (guards against a race where navigation changed between poll-fire and dispatch).
@@ -1033,7 +963,6 @@ impl App {
                 self.state.data.workflow_run_estimates = payload.workflow_run_estimates;
                 self.state.data.completed_token_totals_by_worktree =
                     payload.completed_token_totals_by_worktree;
-                self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
                 self.refresh_pending_repo_feedback();
                 self.state.data.rebuild_maps();
@@ -1041,10 +970,6 @@ impl App {
                 self.reload_repo_agent_events();
                 self.state.rebuild_filtered_tickets();
                 self.clamp_indices();
-                // Rebuild feature list if the Features or FeatureDetail view is active.
-                if matches!(self.state.view, View::Features | View::FeatureDetail) {
-                    self.rebuild_detail_features();
-                }
                 // Always redraw since workflow column is persistent across all views.
                 return true;
             }
@@ -1091,9 +1016,7 @@ impl App {
             Action::WorktreeCreateFailed { message } => {
                 self.state.modal = Modal::Error { message };
             }
-            Action::AgentLaunchComplete { result }
-            | Action::OrchestrateLaunchComplete { result }
-            | Action::AgentRestartComplete { result } => {
+            Action::AgentLaunchComplete { result } | Action::AgentRestartComplete { result } => {
                 self.state.modal = Modal::None;
                 match result {
                     Ok(msg) => {
@@ -1408,209 +1331,39 @@ impl App {
                 }
             }
 
-            // ── Features view actions ──────────────────────────────────────────
-            Action::OpenFeatures => {
-                self.state.previous_view = Some(self.state.view);
-                // Rebuild detail_features from the data cache.
-                // If a repo is selected, scope to that repo; otherwise flatten all.
-                self.rebuild_detail_features();
-                self.state.features_index = 0;
-                self.state.view = View::Features;
+            // ── Workflow name filter actions ───────────────────────────────────
+            Action::OpenWorkflowFilter => {
+                self.state.workflows_focus = crate::state::WorkflowsFocus::Filter;
+                self.state.workflow_filter_input =
+                    self.state.workflow_name_filter.clone().unwrap_or_default();
             }
 
-            Action::FeatureRunFanOut => {
-                let Some(feature_name) = self.state.selected_feature_name.clone() else {
-                    self.state.status_message = Some("No feature selected".to_string());
-                    return true;
-                };
-                let repo_slug = self.selected_feature_repo_slug();
-                if repo_slug.is_empty() {
-                    self.state.status_message =
-                        Some("No repo slug for selected feature".to_string());
-                    return true;
-                }
-                let Some(ref tx) = self.bg_tx else {
-                    return true;
-                };
-                let tx = tx.clone();
-                let config = self.config.clone();
-                self.state.modal = Modal::Progress {
-                    message: format!("Running fan-out for \"{}\"…", feature_name),
-                };
-                std::thread::spawn(move || {
-                    use conductor_core::config::db_path;
-                    use conductor_core::db::open_database;
-                    use conductor_core::feature::FeatureManager;
-                    let result = (|| {
-                        let conn = open_database(&db_path()).map_err(|e| e.to_string())?;
-                        let mgr = FeatureManager::new(&conn, &config);
-                        #[cfg(unix)]
-                        return mgr
-                            .run(&repo_slug, &feature_name, None)
-                            .map_err(|e| e.to_string());
-                        #[cfg(not(unix))]
-                        return Err("Fan-out is only supported on Unix".to_string());
-                    })();
-                    let _ = tx.send(Action::FeatureRunFanOutComplete { result });
-                });
-            }
-
-            Action::FeatureRunFanOutComplete { result } => {
-                self.state.modal = Modal::None;
-                match result {
-                    Ok(summary) => {
-                        self.state.status_message = Some(format!(
-                            "Fan-out complete: dispatched {}, failed {}",
-                            summary.dispatched, summary.failed
-                        ));
-                        self.state.status_message_at = Some(std::time::Instant::now());
-                        self.rebuild_detail_features();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error { message: e };
-                    }
+            Action::WorkflowFilterInput(c) => {
+                if self.state.workflows_focus == crate::state::WorkflowsFocus::Filter {
+                    self.state.workflow_filter_input.push(c);
                 }
             }
 
-            Action::FeatureTransitionReady => {
-                use conductor_core::feature::FeatureStatus;
-                self.handle_feature_transition(
-                    FeatureStatus::ReadyForReview,
-                    "Feature transitioned to Ready for Review",
-                );
-            }
-
-            Action::FeatureTransitionApprove => {
-                use conductor_core::feature::FeatureStatus;
-                self.handle_feature_transition(FeatureStatus::Approved, "Feature approved");
-            }
-
-            Action::FeatureClose => {
-                let Some(feature_name) = self.state.selected_feature_name.clone() else {
-                    self.state.status_message = Some("No feature selected".to_string());
-                    return true;
-                };
-                let repo_slug = self.selected_feature_repo_slug();
-                if repo_slug.is_empty() {
-                    self.state.status_message =
-                        Some("No repo slug for selected feature".to_string());
-                    return true;
+            Action::WorkflowFilterBackspace => {
+                if self.state.workflows_focus == crate::state::WorkflowsFocus::Filter {
+                    self.state.workflow_filter_input.pop();
                 }
-                let Some(ref tx) = self.bg_tx else {
-                    return true;
-                };
-                let tx = tx.clone();
-                let config = self.config.clone();
-                self.state.modal = Modal::Progress {
-                    message: format!("Closing \"{}\"… (checking git merge status)", feature_name),
-                };
-                std::thread::spawn(move || {
-                    use conductor_core::config::db_path;
-                    use conductor_core::db::open_database;
-                    use conductor_core::feature::FeatureManager;
-                    let result = (|| {
-                        let conn = open_database(&db_path()).map_err(|e| e.to_string())?;
-                        let mgr = FeatureManager::new(&conn, &config);
-                        mgr.close(&repo_slug, &feature_name)
-                            .map_err(|e| e.to_string())
-                    })();
-                    let _ = tx.send(Action::FeatureCloseComplete { result });
-                });
             }
 
-            Action::FeatureCloseComplete { result } => {
-                self.state.modal = Modal::None;
-                match result {
-                    Ok(()) => {
-                        self.state.status_message = Some("Feature closed".to_string());
-                        self.state.status_message_at = Some(std::time::Instant::now());
-                        self.state.selected_feature_id = None;
-                        self.state.selected_feature_name = None;
-                        self.rebuild_detail_features();
-                        if self.state.view == View::FeatureDetail {
-                            self.state.view = View::Features;
-                        }
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error { message: e };
-                    }
-                }
+            Action::ClearWorkflowFilter => {
+                self.state.workflow_name_filter = None;
+                self.state.workflow_filter_input = String::new();
+                self.state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+            }
+
+            Action::ConfirmWorkflowFilter => {
+                let input = self.state.workflow_filter_input.trim().to_string();
+                self.state.workflow_name_filter = if input.is_empty() { None } else { Some(input) };
+                self.state.workflow_filter_input = String::new();
+                self.state.workflows_focus = crate::state::WorkflowsFocus::Runs;
             }
         }
         true
-    }
-
-    /// Rebuild `detail_features` from the current data cache.
-    /// When a repo is selected, scopes to that repo; otherwise flattens all repos.
-    fn rebuild_detail_features(&mut self) {
-        let mut features: Vec<conductor_core::feature::FeatureRow> = Vec::new();
-
-        if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
-            if let Some(rows) = self.state.data.features_by_repo.get(repo_id) {
-                features.extend(rows.iter().cloned());
-            }
-        } else {
-            // Global mode: iterate repos in order (avoid cloning the whole vec).
-            let repo_ids: Vec<String> =
-                self.state.data.repos.iter().map(|r| r.id.clone()).collect();
-            for repo_id in &repo_ids {
-                if let Some(rows) = self.state.data.features_by_repo.get(repo_id) {
-                    features.extend(rows.iter().cloned());
-                }
-            }
-        }
-
-        // Clamp features_index to new length.
-        if !features.is_empty() && self.state.features_index >= features.len() {
-            self.state.features_index = features.len() - 1;
-        }
-
-        self.state.detail_features = features;
-
-        // Update selected_feature_id/name from current features_index.
-        if let Some(f) = self.state.detail_features.get(self.state.features_index) {
-            self.state.selected_feature_id = Some(f.id.clone());
-            self.state.selected_feature_name = Some(f.name.clone());
-        } else {
-            self.state.selected_feature_id = None;
-            self.state.selected_feature_name = None;
-        }
-    }
-
-    /// Look up the repo slug for the feature at `features_index`.
-    fn selected_feature_repo_slug(&self) -> String {
-        self.state
-            .detail_features
-            .get(self.state.features_index)
-            .and_then(|f| self.state.data.repos.iter().find(|r| r.id == f.repo_id))
-            .map(|r| r.slug.clone())
-            .unwrap_or_default()
-    }
-
-    /// Transition the selected feature to `target_status` and refresh the list.
-    fn handle_feature_transition(
-        &mut self,
-        target_status: conductor_core::feature::FeatureStatus,
-        success_msg: &str,
-    ) {
-        use conductor_core::feature::FeatureManager;
-        let Some(feature_name) = self.state.selected_feature_name.clone() else {
-            return;
-        };
-        let repo_slug = self.selected_feature_repo_slug();
-        let mgr = FeatureManager::new(&self.conn, &self.config);
-        match mgr.transition(&repo_slug, &feature_name, target_status) {
-            Ok(_) => {
-                self.state.status_message = Some(success_msg.to_string());
-                self.state.status_message_at = Some(std::time::Instant::now());
-                self.rebuild_detail_features();
-            }
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: e.to_string(),
-                };
-            }
-        }
     }
 
     /// Build and open the ticket dependency graph for the current repo.

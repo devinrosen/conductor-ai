@@ -30,9 +30,9 @@ pub(super) fn purge_where_clause(
 pub(in crate::workflow) fn row_to_workflow_run(
     row: &rusqlite::Row,
 ) -> rusqlite::Result<WorkflowRun> {
-    let id: String = row.get(0)?;
-    let dry_run_int: i64 = row.get(5)?;
-    let inputs_json: Option<String> = row.get(11)?;
+    let id: String = row.get("id")?;
+    let dry_run_int: i64 = row.get("dry_run")?;
+    let inputs_json: Option<String> = row.get("inputs")?;
     let inputs: std::collections::HashMap<String, String> = inputs_json
         .as_deref()
         .map(|s| {
@@ -42,42 +42,42 @@ pub(in crate::workflow) fn row_to_workflow_run(
             })
         })
         .unwrap_or_default();
-    let ticket_id: Option<String> = row.get(12)?;
-    let repo_id: Option<String> = row.get(13)?;
-    let parent_workflow_run_id: Option<String> = row.get(14)?;
-    let target_label: Option<String> = row.get(15)?;
-    let default_bot_name: Option<String> = row.get(16)?;
-    let iteration: i64 = row.get(17)?;
-    let blocked_on_json: Option<String> = row.get(18)?;
+    let ticket_id: Option<String> = row.get("ticket_id")?;
+    let repo_id: Option<String> = row.get("repo_id")?;
+    let parent_workflow_run_id: Option<String> = row.get("parent_workflow_run_id")?;
+    let target_label: Option<String> = row.get("target_label")?;
+    let default_bot_name: Option<String> = row.get("default_bot_name")?;
+    let iteration: i64 = row.get("iteration")?;
+    let blocked_on_json: Option<String> = row.get("blocked_on")?;
     let blocked_on: Option<BlockedOn> = blocked_on_json.as_deref().and_then(|s| {
         serde_json::from_str(s).unwrap_or_else(|e| {
             tracing::warn!("Malformed blocked_on JSON in workflow run {id}: {e}");
             None
         })
     });
-    let feature_id: Option<String> = row.get(19)?;
-    let total_input_tokens: Option<i64> = row.get(20)?;
-    let total_output_tokens: Option<i64> = row.get(21)?;
-    let total_cache_read_input_tokens: Option<i64> = row.get(22)?;
-    let total_cache_creation_input_tokens: Option<i64> = row.get(23)?;
-    let total_turns: Option<i64> = row.get(24)?;
-    let total_cost_usd: Option<f64> = row.get(25)?;
-    let total_duration_ms: Option<i64> = row.get(26)?;
-    let model: Option<String> = row.get(27)?;
-    let error: Option<String> = row.get(28)?;
-    let definition_snapshot: Option<String> = row.get(10)?;
+    let total_input_tokens: Option<i64> = row.get("total_input_tokens")?;
+    let total_output_tokens: Option<i64> = row.get("total_output_tokens")?;
+    let total_cache_read_input_tokens: Option<i64> = row.get("total_cache_read_input_tokens")?;
+    let total_cache_creation_input_tokens: Option<i64> =
+        row.get("total_cache_creation_input_tokens")?;
+    let total_turns: Option<i64> = row.get("total_turns")?;
+    let total_cost_usd: Option<f64> = row.get("total_cost_usd")?;
+    let total_duration_ms: Option<i64> = row.get("total_duration_ms")?;
+    let model: Option<String> = row.get("model")?;
+    let error: Option<String> = row.get("error")?;
+    let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
     let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
     Ok(WorkflowRun {
         id,
-        workflow_name: row.get(1)?,
-        worktree_id: row.get::<_, Option<String>>(2)?,
-        parent_run_id: row.get(3)?,
-        status: row.get(4)?,
+        workflow_name: row.get("workflow_name")?,
+        worktree_id: row.get::<_, Option<String>>("worktree_id")?,
+        parent_run_id: row.get("parent_run_id")?,
+        status: row.get("status")?,
         dry_run: dry_run_int != 0,
-        trigger: row.get(6)?,
-        started_at: row.get(7)?,
-        ended_at: row.get(8)?,
-        result_summary: row.get(9)?,
+        trigger: row.get("trigger")?,
+        started_at: row.get("started_at")?,
+        ended_at: row.get("ended_at")?,
+        result_summary: row.get("result_summary")?,
         error,
         definition_snapshot,
         inputs,
@@ -88,7 +88,6 @@ pub(in crate::workflow) fn row_to_workflow_run(
         default_bot_name,
         iteration,
         blocked_on,
-        feature_id,
         workflow_title,
         total_input_tokens,
         total_output_tokens,

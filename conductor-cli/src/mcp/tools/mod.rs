@@ -125,13 +125,6 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                     }),
                 );
                 props.insert(
-                    "feature".into(),
-                    json!({
-                        "type": "string",
-                        "description": "Feature name to associate with the workflow run. When omitted, auto-detects from the worktree's linked ticket."
-                    }),
-                );
-                props.insert(
                     "dry_run".into(),
                     json!({
                         "type": "boolean",
