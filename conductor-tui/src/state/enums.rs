@@ -6,17 +6,6 @@ pub enum View {
     WorkflowRunDetail,
     WorkflowDefDetail,
     Settings,
-    /// Feature list view (repo-scoped or all repos).
-    Features,
-    /// Feature detail view: metadata + linked tickets + active worktrees.
-    FeatureDetail,
-}
-
-/// Which panel of the Features list view has keyboard focus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FeaturesFocus {
-    #[default]
-    List,
 }
 
 /// Which pane of the Settings view has keyboard focus.
@@ -102,6 +91,8 @@ pub enum WorkflowsFocus {
     Defs,
     Gates,
     Runs,
+    /// Inline workflow-name filter bar is active (/ key).
+    Filter,
 }
 
 /// Whether a target header row represents a worktree or a PR.
@@ -124,6 +115,7 @@ impl WorkflowsFocus {
                     Self::Runs
                 }
             }
+            Self::Filter => Self::Runs,
         }
     }
 
@@ -139,6 +131,7 @@ impl WorkflowsFocus {
                 }
             }
             Self::Gates => Self::Defs,
+            Self::Filter => Self::Runs,
         }
     }
 }

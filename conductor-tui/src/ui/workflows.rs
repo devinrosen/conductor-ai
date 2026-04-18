@@ -962,13 +962,33 @@ pub(crate) fn get_def_step_node_at(
 }
 
 pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
+    let filter_active = state.workflows_focus == WorkflowsFocus::Filter;
     let focused = state.column_focus == ColumnFocus::Workflow
-        && state.workflows_focus == WorkflowsFocus::Runs;
+        && (state.workflows_focus == WorkflowsFocus::Runs || filter_active);
     let border_color = if focused {
         state.theme.border_focused
     } else {
         state.theme.border_inactive
     };
+
+    // If filter bar is open, carve off 1 line at the top for it.
+    let (filter_area_opt, area) = if filter_active {
+        let v = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(area);
+        (Some(v[0]), v[1])
+    } else {
+        (None, area)
+    };
+
+    // Render filter input bar.
+    if let Some(fa) = filter_area_opt {
+        let prompt = Span::styled("/", Style::default().fg(state.theme.label_accent));
+        let input = Span::raw(state.workflow_filter_input.as_str());
+        let cursor = Span::styled("█", Style::default().fg(state.theme.label_accent));
+        frame.render_widget(Paragraph::new(Line::from(vec![prompt, input, cursor])), fa);
+    }
 
     let context = workflow_context_label(state);
     // In global mode (no worktree or repo selected), show target context on each run row.
@@ -1297,12 +1317,19 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         String::new()
     };
+    let filter_suffix = if let Some(ref f) = state.workflow_name_filter {
+        format!("  [/{}]", f)
+    } else if filter_active {
+        "  [/…]".to_string()
+    } else {
+        String::new()
+    };
     let runs_title = if global_mode {
-        format!(" All Workflow Runs{hidden_suffix} ")
+        format!(" All Workflow Runs{hidden_suffix}{filter_suffix} ")
     } else {
         match &context {
-            Some(label) => format!(" Workflow Runs ({label}){hidden_suffix} "),
-            None => format!(" Workflow Runs{hidden_suffix} "),
+            Some(label) => format!(" Workflow Runs ({label}){hidden_suffix}{filter_suffix} "),
+            None => format!(" Workflow Runs{hidden_suffix}{filter_suffix} "),
         }
     };
 

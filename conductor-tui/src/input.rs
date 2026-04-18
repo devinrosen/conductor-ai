@@ -390,6 +390,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('D') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
                 return Action::DeleteWorkflowRun;
             }
+            // / key: open inline workflow name filter when Runs pane is focused.
+            KeyCode::Char('/')
+                if state.workflows_focus == crate::state::WorkflowsFocus::Runs
+                    && state.column_focus == crate::state::ColumnFocus::Workflow =>
+            {
+                return Action::OpenWorkflowFilter;
+            }
+            // Filter-bar input handling when filter is active.
+            KeyCode::Esc if state.workflows_focus == crate::state::WorkflowsFocus::Filter => {
+                return Action::ClearWorkflowFilter;
+            }
+            KeyCode::Enter if state.workflows_focus == crate::state::WorkflowsFocus::Filter => {
+                return Action::ConfirmWorkflowFilter;
+            }
+            KeyCode::Backspace if state.workflows_focus == crate::state::WorkflowsFocus::Filter => {
+                return Action::WorkflowFilterBackspace;
+            }
+            KeyCode::Char(c) if state.workflows_focus == crate::state::WorkflowsFocus::Filter => {
+                return Action::WorkflowFilterInput(c);
+            }
             // Right / l: enter or exit the step tree pane when viewing defs.
             KeyCode::Right | KeyCode::Char('l')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>
@@ -460,33 +480,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     Action::None
                 }
             }
-            _ => Action::None,
-        };
-    }
-
-    // View-specific keybindings (Features list view)
-    if state.view == View::Features {
-        return match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => Action::Back,
-            KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-            KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-            KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
-            KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
-            KeyCode::Enter => Action::Select,
-            KeyCode::Char('r') => Action::FeatureRunFanOut,
-            KeyCode::Char('v') => Action::FeatureTransitionReady,
-            KeyCode::Char('a') => Action::FeatureTransitionApprove,
-            KeyCode::Char('x') => Action::FeatureClose,
-            _ => Action::None,
-        };
-    }
-
-    // View-specific keybindings (Feature detail view)
-    if state.view == View::FeatureDetail {
-        return match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => Action::Back,
-            KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-            KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
             _ => Action::None,
         };
     }
@@ -696,9 +689,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         if let KeyCode::Char('I') = key.code {
             return Action::ToggleAgentIssues;
         }
-        if let KeyCode::Char('f') = key.code {
-            return Action::OpenFeatures;
-        }
     }
 
     // Normal keybindings
@@ -733,9 +723,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         // Open notification list
         KeyCode::Char('N') => Action::ShowNotifications,
-
-        // Open Features view (global shortcut)
-        KeyCode::Char('F') => Action::OpenFeatures,
 
         // CRUD actions
         KeyCode::Char('a') => Action::RegisterRepo,

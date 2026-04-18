@@ -1,7 +1,7 @@
 use super::super::helpers::advance_form_field;
 use super::super::App;
 use crate::action::Action;
-use crate::state::{FormField, Modal, View};
+use crate::state::{FormField, Modal, View, WorkflowsFocus};
 use crate::theme::Theme;
 use conductor_core::config::Config;
 
@@ -117,7 +117,6 @@ fn data_refreshed_updates_repos() {
             pending_feedback_requests: vec![],
             waiting_gate_steps: vec![],
             live_turns_by_worktree: std::collections::HashMap::new(),
-            features_by_repo: std::collections::HashMap::new(),
             unread_notification_count: 0,
             latest_repo_agent_runs: std::collections::HashMap::new(),
             worktree_agent_events: vec![],
@@ -1678,6 +1677,214 @@ fn sync_selection_arcs_repo_no_clear_on_first_select() {
 }
 
 // Confirming a standalone Worktree-targeted workflow with no inputs and no
+// ═══════════════════════════════════════════════════════════════════════
+// Workflow name filter action tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn open_workflow_filter_sets_focus_and_copies_current_filter() {
+    let mut app = make_app();
+    app.state.workflow_name_filter = Some("release".to_string());
+    app.update(Action::OpenWorkflowFilter);
+    assert_eq!(app.state.workflows_focus, WorkflowsFocus::Filter);
+    assert_eq!(app.state.workflow_filter_input, "release");
+}
+
+#[test]
+fn open_workflow_filter_empty_when_no_filter_set() {
+    let mut app = make_app();
+    app.update(Action::OpenWorkflowFilter);
+    assert_eq!(app.state.workflows_focus, WorkflowsFocus::Filter);
+    assert_eq!(app.state.workflow_filter_input, "");
+}
+
+#[test]
+fn workflow_filter_input_appends_char_when_in_filter_focus() {
+    let mut app = make_app();
+    app.update(Action::OpenWorkflowFilter);
+    app.update(Action::WorkflowFilterInput('f'));
+    app.update(Action::WorkflowFilterInput('o'));
+    app.update(Action::WorkflowFilterInput('o'));
+    assert_eq!(app.state.workflow_filter_input, "foo");
+}
+
+#[test]
+fn workflow_filter_input_ignored_outside_filter_focus() {
+    let mut app = make_app();
+    // Focus is on Runs by default
+    app.update(Action::WorkflowFilterInput('x'));
+    assert_eq!(app.state.workflow_filter_input, "");
+}
+
+#[test]
+fn workflow_filter_backspace_removes_char() {
+    let mut app = make_app();
+    app.update(Action::OpenWorkflowFilter);
+    app.update(Action::WorkflowFilterInput('a'));
+    app.update(Action::WorkflowFilterInput('b'));
+    app.update(Action::WorkflowFilterBackspace);
+    assert_eq!(app.state.workflow_filter_input, "a");
+}
+
+#[test]
+fn confirm_workflow_filter_sets_filter_and_returns_to_runs() {
+    let mut app = make_app();
+    app.update(Action::OpenWorkflowFilter);
+    app.update(Action::WorkflowFilterInput('r'));
+    app.update(Action::WorkflowFilterInput('e'));
+    app.update(Action::ConfirmWorkflowFilter);
+    assert_eq!(app.state.workflow_name_filter, Some("re".to_string()));
+    assert_eq!(app.state.workflow_filter_input, "");
+    assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
+}
+
+#[test]
+fn confirm_workflow_filter_with_whitespace_only_clears_filter() {
+    let mut app = make_app();
+    // No pre-existing filter; open filter (input = "") then confirm → filter stays None
+    app.update(Action::OpenWorkflowFilter);
+    app.update(Action::ConfirmWorkflowFilter);
+    assert!(app.state.workflow_name_filter.is_none());
+}
+
+#[test]
+fn clear_workflow_filter_resets_all_filter_state() {
+    let mut app = make_app();
+    app.state.workflow_name_filter = Some("release".to_string());
+    app.update(Action::OpenWorkflowFilter);
+    app.update(Action::ClearWorkflowFilter);
+    assert!(app.state.workflow_name_filter.is_none());
+    assert_eq!(app.state.workflow_filter_input, "");
+    assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// workflow_name_filter applied consistently in visible_workflow_run_rows
+// and visible_workflow_run_rows_len
+// ═══════════════════════════════════════════════════════════════════════
+
+fn make_wf_run_named(id: &str, name: &str) -> conductor_core::workflow::WorkflowRun {
+    let mut run = crate::state::tests::make_wf_run_full(
+        id,
+        conductor_core::workflow::WorkflowRunStatus::Running,
+        None,
+    );
+    run.workflow_name = name.to_string();
+    run
+}
+
+#[test]
+fn workflow_name_filter_hides_non_matching_runs() {
+    let mut app = make_app();
+    // Use repo-scoped mode to avoid global-mode RepoHeader/TargetHeader overhead.
+    app.state.selected_repo_id = Some("repo1".to_string());
+    app.state.data.workflow_runs = vec![
+        make_wf_run_named("r1", "process-release"),
+        make_wf_run_named("r2", "process-feature"),
+        make_wf_run_named("r3", "process-release"),
+    ];
+    app.state.workflow_name_filter = Some("release".to_string());
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+
+    // Only the two release runs should be visible
+    assert_eq!(rows.len(), len, "rows() and rows_len() must agree");
+    // Each matching run produces exactly one Parent row (no children, no steps in test data)
+    assert_eq!(len, 2);
+}
+
+#[test]
+fn workflow_name_filter_case_insensitive() {
+    let mut app = make_app();
+    app.state.selected_repo_id = Some("repo1".to_string());
+    app.state.data.workflow_runs = vec![
+        make_wf_run_named("r1", "Process-Release"),
+        make_wf_run_named("r2", "process-feature"),
+    ];
+    app.state.workflow_name_filter = Some("RELEASE".to_string());
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+    assert_eq!(rows.len(), len);
+    assert_eq!(len, 1);
+}
+
+#[test]
+fn no_workflow_name_filter_shows_all_runs() {
+    let mut app = make_app();
+    app.state.selected_repo_id = Some("repo1".to_string());
+    app.state.data.workflow_runs = vec![
+        make_wf_run_named("r1", "process-release"),
+        make_wf_run_named("r2", "process-feature"),
+    ];
+    app.state.workflow_name_filter = None;
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+    assert_eq!(rows.len(), len);
+    assert_eq!(len, 2);
+}
+
+#[test]
+fn workflow_name_filter_global_mode_hides_non_matching_runs() {
+    let mut app = make_app();
+    // Global mode: no repo or worktree selected.
+    app.state.selected_repo_id = None;
+    app.state.selected_worktree_id = None;
+    // Two runs under the same target label so they end up in one repo+target group.
+    let mut r1 = make_wf_run_named("r1", "process-release");
+    r1.target_label = Some("my-repo/wt1".to_string());
+    let mut r2 = make_wf_run_named("r2", "process-feature");
+    r2.target_label = Some("my-repo/wt1".to_string());
+    app.state.data.workflow_runs = vec![r1, r2];
+    app.state.workflow_name_filter = Some("release".to_string());
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+
+    // rows() and rows_len() must agree.
+    assert_eq!(
+        rows.len(),
+        len,
+        "rows() and rows_len() must agree in global mode"
+    );
+    // 1 RepoHeader + 1 TargetHeader + 1 Parent (only the release run).
+    assert_eq!(len, 3);
+    let parent_count = rows
+        .iter()
+        .filter(|r| matches!(r, crate::state::WorkflowRunRow::Parent { .. }))
+        .count();
+    assert_eq!(
+        parent_count, 1,
+        "only the matching run should be a Parent row"
+    );
+}
+
+#[test]
+fn workflow_name_filter_global_mode_no_filter_shows_all() {
+    let mut app = make_app();
+    app.state.selected_repo_id = None;
+    app.state.selected_worktree_id = None;
+    let mut r1 = make_wf_run_named("r1", "process-release");
+    r1.target_label = Some("my-repo/wt1".to_string());
+    let mut r2 = make_wf_run_named("r2", "process-feature");
+    r2.target_label = Some("my-repo/wt1".to_string());
+    app.state.data.workflow_runs = vec![r1, r2];
+    app.state.workflow_name_filter = None;
+
+    let rows = app.state.visible_workflow_run_rows();
+    let len = app.state.visible_workflow_run_rows_len();
+
+    assert_eq!(
+        rows.len(),
+        len,
+        "rows() and rows_len() must agree in global mode"
+    );
+    // 1 RepoHeader + 1 TargetHeader + 2 Parent rows.
+    assert_eq!(len, 4);
+}
+
 // active agent run should open the ModelPicker.
 #[test]
 fn workflow_picker_confirm_worktree_target() {
