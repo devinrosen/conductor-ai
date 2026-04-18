@@ -4,8 +4,7 @@ use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::CallNode;
 
 use crate::workflow::engine::{
-    record_step_failure, record_step_success, resolve_schema, restore_step, run_on_fail_agent,
-    should_skip, ExecutionState,
+    handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip, ExecutionState,
 };
 use crate::workflow::output::interpret_agent_output;
 use crate::workflow::prompt_builder::build_agent_prompt;
@@ -587,17 +586,14 @@ fn execute_call_with_schema(
         }
     }
 
-    // All retries exhausted — run on_fail agent if specified
-    if let Some(ref on_fail_agent) = node.on_fail {
-        run_on_fail_agent(
-            state,
-            agent_label,
-            on_fail_agent,
-            &last_error,
-            node.retries,
-            iteration,
-        );
-    }
-
-    record_step_failure(state, step_key, agent_label, last_error, max_attempts, true)
+    handle_on_fail(
+        state,
+        step_key,
+        agent_label,
+        &node.on_fail,
+        last_error,
+        node.retries,
+        iteration,
+        max_attempts,
+    )
 }

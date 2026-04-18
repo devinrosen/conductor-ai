@@ -8,9 +8,9 @@ use super::lexer::{Lexer, Token};
 use super::types::{
     AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, ForEachNode,
     ForeachOver, ForeachScope, GateNode, GateOptions, GateType, IfNode, InputDecl, InputType,
-    OnChildFail, OnCycle, OnFailAction, OnMaxIter, OnTimeout, ParallelNode, QualityGateConfig,
-    ScriptNode, TicketScope, UnlessNode, WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger,
-    WorktreeScope,
+    OnChildFail, OnCycle, OnFail, OnFailAction, OnMaxIter, OnTimeout, ParallelNode,
+    QualityGateConfig, ScriptNode, TicketScope, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
+    WorkflowTrigger, WorktreeScope,
 };
 
 // ---------------------------------------------------------------------------
@@ -425,14 +425,20 @@ impl Parser {
     fn extract_retries_on_fail_bot_name(
         kvs: &mut HashMap<String, KvValue>,
         err_prefix: &str,
-    ) -> std::result::Result<(u32, Option<AgentRef>, Option<String>), String> {
+    ) -> std::result::Result<(u32, Option<OnFail>, Option<String>), String> {
         let retries = kvs
             .get("retries")
             .map(|v| v.as_str().parse::<u32>())
             .transpose()
             .map_err(|e| format!("{err_prefix}invalid retries: {e}"))?
             .unwrap_or(0);
-        let on_fail = kvs.remove("on_fail").map(|v| v.into_agent_ref());
+        let on_fail = kvs.remove("on_fail").map(|v| {
+            if v.as_str() == "continue" {
+                OnFail::Continue
+            } else {
+                OnFail::Agent(v.into_agent_ref())
+            }
+        });
         let bot_name = kvs.remove("as").map(|v| v.into_string());
         Ok((retries, on_fail, bot_name))
     }

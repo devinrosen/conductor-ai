@@ -41,7 +41,7 @@ fn test_on_fail_quoted_bare_name_is_name() {
         WorkflowNode::Call(c) => {
             assert_eq!(
                 c.on_fail,
-                Some(AgentRef::Name("diagnose".to_string())),
+                Some(OnFail::Agent(AgentRef::Name("diagnose".to_string()))),
                 "quoted on_fail value without a slash should be AgentRef::Name"
             );
         }
@@ -57,7 +57,10 @@ fn test_on_fail_bare_name_is_name() {
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::Call(c) => {
-            assert_eq!(c.on_fail, Some(AgentRef::Name("diagnose".to_string())));
+            assert_eq!(
+                c.on_fail,
+                Some(OnFail::Agent(AgentRef::Name("diagnose".to_string())))
+            );
         }
         _ => panic!("Expected Call node"),
     }

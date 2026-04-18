@@ -10,7 +10,7 @@ use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::schema_config::{OutputSchema, SchemaIssue};
-use crate::workflow_dsl::{self, WorkflowDef, WorkflowNode};
+use crate::workflow_dsl::{self, OnFail, WorkflowDef, WorkflowNode};
 use crate::worktree::WorktreeManager;
 
 use super::manager::WorkflowManager;
@@ -1213,6 +1213,30 @@ pub(super) fn record_step_failure(
     Ok(())
 }
 
+/// Record a skipped step (on_fail = continue): insert StepResult with Skipped status.
+/// Does NOT set `state.all_succeeded = false` — the workflow continues normally.
+pub(super) fn record_step_skipped(
+    state: &mut ExecutionState<'_>,
+    step_key: String,
+    step_label: &str,
+) {
+    tracing::info!("Step '{}' skipped via on_fail = continue", step_label);
+    let step_result = StepResult {
+        step_name: step_label.to_string(),
+        status: WorkflowStepStatus::Skipped,
+        result_text: None,
+        cost_usd: None,
+        num_turns: None,
+        duration_ms: None,
+        markers: Vec::new(),
+        context: String::new(),
+        child_run_id: None,
+        structured_output: None,
+        output_file: None,
+    };
+    state.step_results.insert(step_key, step_result);
+}
+
 /// Record a successful step: accumulate stats, insert StepResult, push context.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_step_success(
@@ -1368,6 +1392,40 @@ pub(super) fn run_on_fail_agent(
     state.inputs.remove("failed_step");
     state.inputs.remove("failure_reason");
     state.inputs.remove("retry_count");
+}
+
+/// Dispatch `on_fail` after all retries are exhausted, then record the failure.
+///
+/// Returns `Ok(())` immediately when `on_fail = continue` (caller must propagate this return).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn handle_on_fail(
+    state: &mut ExecutionState<'_>,
+    step_key: String,
+    step_label: &str,
+    on_fail: &Option<OnFail>,
+    last_error: String,
+    retries: u32,
+    iteration: u32,
+    max_attempts: u32,
+) -> Result<()> {
+    match on_fail {
+        Some(OnFail::Continue) => {
+            record_step_skipped(state, step_key, step_label);
+            return Ok(());
+        }
+        Some(OnFail::Agent(ref on_fail_agent)) => {
+            run_on_fail_agent(
+                state,
+                step_label,
+                on_fail_agent,
+                &last_error,
+                retries,
+                iteration,
+            );
+        }
+        None => {}
+    }
+    record_step_failure(state, step_key, step_label, last_error, max_attempts, true)
 }
 
 /// Check whether a step should be skipped on resume.
