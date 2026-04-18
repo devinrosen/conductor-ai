@@ -162,42 +162,6 @@ impl App {
             Action::ShowHelp => {
                 self.state.modal = Modal::Help;
             }
-            Action::ShowNotifications => {
-                // Load recent notifications from DB off-thread to avoid blocking.
-                if let Some(ref bg_tx) = self.bg_tx {
-                    let tx = bg_tx.clone();
-                    std::thread::spawn(move || {
-                        use conductor_core::config::db_path;
-                        use conductor_core::db::open_database;
-                        use conductor_core::notification_manager::NotificationManager;
-                        match open_database(&db_path()) {
-                            Ok(conn) => {
-                                let mgr = NotificationManager::new(&conn);
-                                let notifications = mgr.list_recent(50, 0).unwrap_or_default();
-                                // Mark all as read when viewing
-                                let _ = mgr.mark_all_read();
-                                let _ = tx.send(Action::NotificationsLoaded { notifications });
-                            }
-                            Err(e) => {
-                                let _ = tx.send(Action::NotificationsLoaded {
-                                    notifications: vec![],
-                                });
-                                tracing::warn!("failed to open database for notifications: {e}");
-                            }
-                        }
-                    });
-                    self.state.modal = Modal::Progress {
-                        message: "Loading notifications\u{2026}".into(),
-                    };
-                }
-            }
-            Action::NotificationsLoaded { notifications } => {
-                self.state.unread_notification_count = 0;
-                self.state.modal = Modal::Notifications {
-                    notifications,
-                    selected: 0,
-                };
-            }
             Action::DismissModal => {
                 if matches!(self.state.modal, Modal::Progress { .. }) {
                     return true;
@@ -624,9 +588,6 @@ impl App {
                 }
                 | Modal::IssueSourceManager {
                     ref mut selected, ..
-                }
-                | Modal::Notifications {
-                    ref mut selected, ..
                 } => {
                     *selected = 0;
                 }
@@ -710,12 +671,6 @@ impl App {
                     ..
                 } => {
                     *selected = sources.len().saturating_sub(1);
-                }
-                Modal::Notifications {
-                    ref notifications,
-                    ref mut selected,
-                } => {
-                    *selected = notifications.len().saturating_sub(1);
                 }
                 _ => {
                     let (_, len) = self.state.focused_index_and_len();
@@ -1008,7 +963,6 @@ impl App {
                 self.state.data.workflow_run_estimates = payload.workflow_run_estimates;
                 self.state.data.completed_token_totals_by_worktree =
                     payload.completed_token_totals_by_worktree;
-                self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
                 self.refresh_pending_repo_feedback();
                 self.state.data.rebuild_maps();

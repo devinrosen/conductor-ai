@@ -5,7 +5,6 @@ pub mod health;
 pub mod hooks;
 pub mod issue_sources;
 pub mod model_config;
-pub mod notifications;
 pub mod push;
 pub mod repos;
 pub mod slack;
@@ -313,20 +312,6 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/repos/{id}/sources/{source_id}",
             delete(issue_sources::delete_issue_source),
-        )
-        // Notifications
-        .route("/api/notifications", get(notifications::list_notifications))
-        .route(
-            "/api/notifications/unread-count",
-            get(notifications::unread_count),
-        )
-        .route(
-            "/api/notifications/read",
-            post(notifications::mark_all_read),
-        )
-        .route(
-            "/api/notifications/{id}/read",
-            post(notifications::mark_read),
         )
         // Stats
         .route("/api/stats/theme-unlocks", get(stats::theme_unlock_stats))

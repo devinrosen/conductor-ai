@@ -711,12 +711,6 @@ pub fn poll_data(
     // Return an empty map here; the loop merges in the incremental state.
     let live_turns_by_worktree = std::collections::HashMap::new();
 
-    // Fetch unread notification count for the footer indicator.
-    let unread_notification_count = {
-        use conductor_core::notification_manager::NotificationManager;
-        NotificationManager::new(&conn).unread_count().unwrap_or(0)
-    };
-
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
@@ -731,7 +725,6 @@ pub fn poll_data(
         pending_feedback_requests,
         waiting_gate_steps,
         live_turns_by_worktree,
-        unread_notification_count,
         latest_repo_agent_runs,
         worktree_agent_events,
         worktree_agent_events_id,

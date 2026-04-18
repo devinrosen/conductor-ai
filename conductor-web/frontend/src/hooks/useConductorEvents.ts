@@ -16,7 +16,6 @@ export type ConductorEventType =
   | "feedback_requested"
   | "feedback_submitted"
   | "issue_sources_changed"
-  | "notification_created"
   | "lagged";
 
 export interface ConductorEventData {
@@ -40,7 +39,6 @@ const ALL_EVENT_TYPES: ConductorEventType[] = [
   "feedback_requested",
   "feedback_submitted",
   "issue_sources_changed",
-  "notification_created",
   "lagged",
 ];
 

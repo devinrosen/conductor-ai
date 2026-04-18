@@ -2,9 +2,6 @@ use std::sync::Arc;
 
 use conductor_core::agent::AgentManager;
 use conductor_core::config::Config;
-use conductor_core::notification_manager::{
-    CreateNotification, NotificationManager, NotificationSeverity,
-};
 use conductor_core::repo::RepoManager;
 use rusqlite::Connection;
 use tokio::sync::{Mutex, RwLock};
@@ -860,19 +857,6 @@ fn seed_repo_agent_run_with_subprocess_pid(conn: &Connection) {
     mgr.update_run_subprocess_pid(&run.id, 999_999_999).unwrap();
 }
 
-fn seed_notification(conn: &Connection) {
-    let mgr = NotificationManager::new(conn);
-    mgr.create_notification(&CreateNotification {
-        kind: "test",
-        title: "Test notification",
-        body: "This is a test",
-        severity: NotificationSeverity::Info,
-        entity_id: None,
-        entity_type: None,
-    })
-    .unwrap();
-}
-
 // ── Agent read/query route tests ──────────────────────────────────────
 
 #[tokio::test]
@@ -1286,149 +1270,6 @@ async fn test_orchestrate_agent_already_running_409() {
         "expected 4xx when agent already running, got {}",
         resp.status()
     );
-}
-
-// ── Notification route tests ─────────────────────────────────────────
-
-#[tokio::test]
-async fn test_list_notifications_empty() {
-    let base = spawn_test_server().await;
-    let resp = reqwest::get(format!("{base}/api/notifications"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert!(body.is_empty());
-}
-
-#[tokio::test]
-async fn test_list_notifications_with_data() {
-    let base = spawn_test_server_with_setup(seed_notification).await;
-    let resp = reqwest::get(format!("{base}/api/notifications"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert_eq!(body.len(), 1);
-    assert_eq!(body[0]["title"], "Test notification");
-}
-
-#[tokio::test]
-async fn test_list_notifications_unread_only() {
-    let base = spawn_test_server_with_setup(|conn| {
-        let mgr = NotificationManager::new(conn);
-        // Create two notifications
-        let id1 = mgr
-            .create_notification(&CreateNotification {
-                kind: "test",
-                title: "Read one",
-                body: "body",
-                severity: NotificationSeverity::Info,
-                entity_id: None,
-                entity_type: None,
-            })
-            .unwrap();
-        mgr.create_notification(&CreateNotification {
-            kind: "test",
-            title: "Unread one",
-            body: "body",
-            severity: NotificationSeverity::Warning,
-            entity_id: None,
-            entity_type: None,
-        })
-        .unwrap();
-        // Mark first as read
-        mgr.mark_read(&id1).unwrap();
-    })
-    .await;
-    let resp = reqwest::get(format!("{base}/api/notifications?unread_only=true"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert_eq!(body.len(), 1);
-    assert_eq!(body[0]["title"], "Unread one");
-}
-
-#[tokio::test]
-async fn test_unread_count_zero() {
-    let base = spawn_test_server().await;
-    let resp = reqwest::get(format!("{base}/api/notifications/unread-count"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["count"], 0);
-}
-
-#[tokio::test]
-async fn test_unread_count_with_data() {
-    let base = spawn_test_server_with_setup(|conn| {
-        seed_notification(conn);
-        seed_notification(conn);
-    })
-    .await;
-    let resp = reqwest::get(format!("{base}/api/notifications/unread-count"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["count"], 2);
-}
-
-#[tokio::test]
-async fn test_mark_read() {
-    let base = spawn_test_server_with_setup(seed_notification).await;
-    // Fetch the notification ID from the list endpoint
-    let notifs: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/notifications"))
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let notif_id = notifs[0]["id"].as_str().unwrap();
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{base}/api/notifications/{notif_id}/read"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 204);
-}
-
-#[tokio::test]
-async fn test_mark_read_nonexistent_404() {
-    let base = spawn_test_server().await;
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{base}/api/notifications/bad-id/read"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 404);
-}
-
-#[tokio::test]
-async fn test_mark_all_read() {
-    let base = spawn_test_server_with_setup(|conn| {
-        seed_notification(conn);
-        seed_notification(conn);
-    })
-    .await;
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{base}/api/notifications/read"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 204);
-
-    // Verify count is now 0
-    let resp = reqwest::get(format!("{base}/api/notifications/unread-count"))
-        .await
-        .unwrap();
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["count"], 0);
 }
 
 // ── Model config route tests ─────────────────────────────────────────

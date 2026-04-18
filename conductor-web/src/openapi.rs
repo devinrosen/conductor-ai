@@ -12,8 +12,6 @@ use conductor_core::github::{DiscoveredRepo, GithubPr};
 #[allow(unused_imports)]
 use conductor_core::issue_source::IssueSource;
 #[allow(unused_imports)]
-use conductor_core::notification_manager::{Notification, NotificationSeverity};
-#[allow(unused_imports)]
 use conductor_core::repo::Repo;
 #[allow(unused_imports)]
 use conductor_core::tickets::{Ticket, TicketLabel};
@@ -41,8 +39,6 @@ use crate::routes::model_config::{
     GlobalModelResponse, KnownModelResponse, SetGlobalModelRequest, SuggestModelRequest,
     SuggestModelResponse,
 };
-#[allow(unused_imports)]
-use crate::routes::notifications::{ListNotificationsQuery, UnreadCountResponse};
 #[allow(unused_imports)]
 use crate::routes::push::{PushSubscribeRequest, VapidPublicKeyResponse};
 #[allow(unused_imports)]
@@ -173,11 +169,6 @@ use crate::routes::worktrees::{
         crate::routes::issue_sources::list_issue_sources,
         crate::routes::issue_sources::create_issue_source,
         crate::routes::issue_sources::delete_issue_source,
-        // Notifications
-        crate::routes::notifications::list_notifications,
-        crate::routes::notifications::unread_count,
-        crate::routes::notifications::mark_all_read,
-        crate::routes::notifications::mark_read,
         // Stats
         crate::routes::stats::theme_unlock_stats,
         // Push Notifications
@@ -247,9 +238,6 @@ use crate::routes::worktrees::{
             Worktree,
             WorktreeStatus,
             WorktreeWithStatus,
-            // Notification types
-            Notification,
-            NotificationSeverity,
             // Issue source types
             IssueSource,
             // Web layer request/response types
@@ -276,8 +264,6 @@ use crate::routes::worktrees::{
             PostWorkflowRunRequest,
             InstantiateTemplateRequest,
             CreateIssueSourceRequest,
-            ListNotificationsQuery,
-            UnreadCountResponse,
             ThemeUnlockStats,
             VapidPublicKeyResponse,
             PushSubscribeRequest,

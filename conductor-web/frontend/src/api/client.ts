@@ -27,7 +27,6 @@ import type {
   FanOutItem,
   RunWorkflowRequest,
   FeedbackRequest,
-  Notification,
   ThemeUnlockStats,
   PushSubscribeRequest,
   VapidPublicKeyResponse,
@@ -324,18 +323,6 @@ export const api = {
     ),
   getPendingGates: () =>
     request<PendingGateAnalyticsRow[]>("/workflows/analytics/gates/pending"),
-
-  // Notifications
-  listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>
-    request<Notification[]>(
-      `/notifications?unread_only=${unreadOnly}&limit=${limit}&offset=${offset}`,
-    ),
-  unreadNotificationCount: () =>
-    request<{ count: number }>("/notifications/unread-count"),
-  markNotificationRead: (id: string) =>
-    request<void>(`/notifications/${id}/read`, { method: "POST" }),
-  markAllNotificationsRead: () =>
-    request<void>("/notifications/read", { method: "POST" }),
 
   // Stats
   getThemeUnlockStats: () =>

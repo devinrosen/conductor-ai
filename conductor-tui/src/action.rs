@@ -65,8 +65,6 @@ pub struct DataRefreshedPayload {
     /// Live turn count for currently running agents, keyed by worktree_id.
     /// Computed in the background poller to avoid blocking the main thread.
     pub live_turns_by_worktree: HashMap<String, i64>,
-    /// Number of unread in-app notifications.
-    pub unread_notification_count: usize,
     /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
     pub latest_repo_agent_runs: HashMap<String, AgentRun>,
     /// Agent events for the currently-selected worktree (populated by background poller).
@@ -212,7 +210,6 @@ pub enum Action {
 
     // Modal
     ShowHelp,
-    ShowNotifications,
     DismissModal,
     OpenTicketUrl,
     CopyErrorMessage,
@@ -431,11 +428,6 @@ pub enum Action {
     /// Toggle the focused checklist option in a multi-select gate modal.
     GateToggleOption,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
-
-    // Notification modal loaded
-    NotificationsLoaded {
-        notifications: Vec<conductor_core::notification_manager::Notification>,
-    },
 
     /// Background result: workflow defs loaded from disk for a picker.
     WorkflowPickerDefsLoaded {
