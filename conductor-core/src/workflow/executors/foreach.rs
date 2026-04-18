@@ -1872,9 +1872,9 @@ mod tests {
 
     #[test]
     fn test_collect_worktree_items_has_open_pr_filter() {
-        // setup_db() inserts repo r1 with remote_url = 'https://github.com/test/repo.git'.
-        // list_open_prs will fail in CI (no gh auth) and unwrap_or_default to [].
-        // So: has_open_pr=false → all pass (no open PRs found); has_open_pr=true → none pass.
+        // Covers the degraded/no-auth fallback path only: list_open_prs returns [] in CI
+        // (no gh auth), so this test does NOT exercise the actual branch-matching filter.
+        // See test_open_pr_filter_* tests below for coverage of the filtering logic itself.
         let conn = setup_db();
         let config: &'static crate::config::Config =
             Box::leak(Box::new(crate::config::Config::default()));
