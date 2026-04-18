@@ -794,7 +794,17 @@ impl App {
         wt_slug: String,
         items: Vec<BranchPickerItem>,
     ) {
-        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
+        let mut items_with_sentinel = vec![BranchPickerItem {
+            branch: None,
+            worktree_count: 0,
+            ticket_count: 0,
+            base_branch: None,
+            stale_days: None,
+            inferred_from: None,
+        }];
+        items_with_sentinel.extend(items);
+        let (ordered, tree_positions) =
+            crate::state::build_branch_picker_tree(&items_with_sentinel);
         self.state.modal = Modal::BaseBranchPicker {
             repo_slug,
             wt_slug,
