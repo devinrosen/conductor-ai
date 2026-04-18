@@ -1062,8 +1062,7 @@ impl App {
             Action::WorktreeCreateFailed { message } => {
                 self.state.modal = Modal::Error { message };
             }
-            Action::AgentLaunchComplete { result }
-            | Action::AgentRestartComplete { result } => {
+            Action::AgentLaunchComplete { result } | Action::AgentRestartComplete { result } => {
                 self.state.modal = Modal::None;
                 match result {
                     Ok(msg) => {
