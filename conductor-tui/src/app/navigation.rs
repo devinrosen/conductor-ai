@@ -431,8 +431,7 @@ impl App {
     }
 
     fn enter_workflow_run_detail(&mut self, run_id: String, worktree_id: Option<String>) {
-        self.state.previous_selected_worktree_id =
-            Some(self.state.selected_worktree_id.clone());
+        self.state.previous_selected_worktree_id = Some(self.state.selected_worktree_id.clone());
         if self.state.selected_worktree_id.is_none() {
             self.state.selected_worktree_id = worktree_id;
             self.sync_selection_arcs();
