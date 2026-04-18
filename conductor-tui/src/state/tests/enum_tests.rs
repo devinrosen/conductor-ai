@@ -246,6 +246,7 @@ fn focused_index_and_len_workflow_column_runs() {
     state.workflow_run_index = 1;
     state.selected_worktree_id = Some("w1".into());
     state.data.workflow_runs = vec![make_wf_run_full("r1", WorkflowRunStatus::Running, None)];
+    state.rebuild_workflow_run_rows();
     let (idx, len) = state.focused_index_and_len();
     assert_eq!(idx, 1);
     assert_eq!(len, 1);

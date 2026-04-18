@@ -1783,6 +1783,7 @@ fn workflow_name_filter_hides_non_matching_runs() {
         make_wf_run_named("r3", "process-release"),
     ];
     app.state.workflow_name_filter = Some("release".to_string());
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1802,6 +1803,7 @@ fn workflow_name_filter_case_insensitive() {
         make_wf_run_named("r2", "process-feature"),
     ];
     app.state.workflow_name_filter = Some("RELEASE".to_string());
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1818,6 +1820,7 @@ fn no_workflow_name_filter_shows_all_runs() {
         make_wf_run_named("r2", "process-feature"),
     ];
     app.state.workflow_name_filter = None;
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1838,6 +1841,7 @@ fn workflow_name_filter_global_mode_hides_non_matching_runs() {
     r2.target_label = Some("my-repo/wt1".to_string());
     app.state.data.workflow_runs = vec![r1, r2];
     app.state.workflow_name_filter = Some("release".to_string());
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();
@@ -1871,6 +1875,7 @@ fn workflow_name_filter_global_mode_no_filter_shows_all() {
     r2.target_label = Some("my-repo/wt1".to_string());
     app.state.data.workflow_runs = vec![r1, r2];
     app.state.workflow_name_filter = None;
+    app.state.rebuild_workflow_run_rows();
 
     let rows = app.state.visible_workflow_run_rows();
     let len = app.state.visible_workflow_run_rows_len();

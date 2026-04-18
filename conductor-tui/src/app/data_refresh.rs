@@ -38,6 +38,7 @@ impl App {
         }
 
         self.state.rebuild_filtered_tickets();
+        self.state.rebuild_workflow_run_rows();
         self.clamp_indices();
     }
 

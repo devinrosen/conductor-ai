@@ -408,6 +408,7 @@ pub(super) fn push_children(
 }
 
 /// Count the rows that `push_steps_for_run` would emit, without building them.
+#[allow(dead_code)]
 pub(super) fn count_steps_for_run(
     run_id: &str,
     expanded_step_run_ids: &std::collections::HashSet<String>,
@@ -448,6 +449,7 @@ pub(super) fn count_steps_for_run(
 }
 
 /// Count the rows that `push_children` would emit for `parent_id`, without building them.
+#[allow(dead_code)]
 pub(super) fn count_children_rows(
     parent_id: &str,
     children_map: &std::collections::HashMap<&str, Vec<&conductor_core::workflow::WorkflowRun>>,
