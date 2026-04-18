@@ -96,6 +96,9 @@ pub struct AppState {
     pub step_agent_event_index: usize,
     /// Currently selected workflow run ID (for detail view)
     pub selected_workflow_run_id: Option<String>,
+    /// Stack of parent workflow run IDs when drilling into child workflows.
+    /// Each push saves the current run; Esc pops back to it.
+    pub workflow_run_nav_stack: Vec<String>,
     /// Set of parent workflow run IDs that are currently collapsed in the runs pane.
     pub collapsed_workflow_run_ids: HashSet<String>,
     /// Set of repo slugs whose group header is collapsed in global mode.
@@ -237,6 +240,7 @@ impl AppState {
             error_pane_scroll: 0,
             step_agent_event_index: 0,
             selected_workflow_run_id: None,
+            workflow_run_nav_stack: Vec::new(),
             collapsed_workflow_run_ids: HashSet::new(),
             collapsed_repo_headers: HashSet::new(),
             collapsed_target_headers: HashSet::new(),
