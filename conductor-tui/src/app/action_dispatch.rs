@@ -358,6 +358,15 @@ impl App {
                 }
             },
             Action::SelectBranch(index) => self.handle_branch_pick(index),
+            Action::WorktreeBranchesLoaded {
+                repo_slug,
+                wt_name,
+                ticket_id,
+                items,
+            } => self.handle_worktree_branches_loaded(repo_slug, wt_name, ticket_id, items),
+            Action::WorktreeBranchesFailed { error } => {
+                self.state.modal = crate::state::Modal::Error { message: error };
+            }
             Action::SelectListItem(index) => {
                 if let Modal::WorkflowPicker {
                     ref items,

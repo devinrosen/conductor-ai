@@ -363,6 +363,17 @@ pub enum Action {
 
     // Branch picker (during worktree creation)
     SelectBranch(Option<usize>),
+    /// Background result: existing worktree branches loaded for the branch picker.
+    WorktreeBranchesLoaded {
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        items: Vec<crate::state::BranchPickerItem>,
+    },
+    /// Background result: failed to load worktree branches.
+    WorktreeBranchesFailed {
+        error: String,
+    },
 
     /// Select a list-picker item by number-key shortcut (0-indexed).
     /// Used by both WorkflowPicker and TemplatePicker modals.
