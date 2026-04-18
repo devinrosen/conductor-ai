@@ -860,11 +860,17 @@ impl App {
         ticket_id: Option<String>,
         items: Vec<crate::state::BranchPickerItem>,
     ) {
-        if items.is_empty() {
-            self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
-            return;
-        }
-        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
+        let mut items_with_sentinel = vec![crate::state::BranchPickerItem {
+            branch: None,
+            worktree_count: 0,
+            ticket_count: 0,
+            base_branch: None,
+            stale_days: None,
+            inferred_from: None,
+        }];
+        items_with_sentinel.extend(items);
+        let (ordered, tree_positions) =
+            crate::state::build_branch_picker_tree(&items_with_sentinel);
         self.state.modal = Modal::BranchPicker {
             repo_slug,
             wt_name,
@@ -1163,5 +1169,47 @@ mod tests {
         app.handle_branch_pick(Some(0));
         // Modal should stay None (no-op).
         assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    #[test]
+    fn worktree_branches_loaded_always_has_default_branch_sentinel() {
+        let mut app = make_app();
+        let worktree_items = vec![crate::state::BranchPickerItem {
+            branch: Some("feat/notifications".to_string()),
+            worktree_count: 0,
+            ticket_count: 0,
+            base_branch: None,
+            stale_days: None,
+            inferred_from: Some("feat-notifications".to_string()),
+        }];
+        app.handle_worktree_branches_loaded(
+            "repo".to_string(),
+            "my-wt".to_string(),
+            None,
+            worktree_items,
+        );
+        match &app.state.modal {
+            Modal::BranchPicker { items, .. } => {
+                assert!(
+                    items[0].branch.is_none(),
+                    "first item must be the default-branch sentinel (branch: None)"
+                );
+                assert_eq!(items.len(), 2, "sentinel + one worktree branch");
+            }
+            other => panic!("expected BranchPicker modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn worktree_branches_loaded_no_worktrees_shows_picker_with_only_sentinel() {
+        let mut app = make_app();
+        app.handle_worktree_branches_loaded("repo".to_string(), "my-wt".to_string(), None, vec![]);
+        match &app.state.modal {
+            Modal::BranchPicker { items, .. } => {
+                assert_eq!(items.len(), 1, "only the default-branch sentinel");
+                assert!(items[0].branch.is_none());
+            }
+            other => panic!("expected BranchPicker modal, got {:?}", other),
+        }
     }
 }
