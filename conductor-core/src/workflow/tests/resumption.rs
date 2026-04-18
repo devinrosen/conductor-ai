@@ -561,8 +561,8 @@ fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
 
     // Directly write invalid JSON into the inputs column to simulate corruption
     conn.execute(
-        "UPDATE workflow_runs SET inputs = ?1 WHERE id = ?2",
-        rusqlite::params!["not-valid-json", &run.id],
+        "UPDATE workflow_runs SET inputs = :inputs WHERE id = :id",
+        rusqlite::named_params! { ":inputs": "not-valid-json", ":id": &run.id },
     )
     .unwrap();
 

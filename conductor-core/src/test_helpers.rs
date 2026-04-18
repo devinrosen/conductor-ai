@@ -15,8 +15,8 @@ pub fn create_test_conn() -> Connection {
 pub fn insert_test_repo(conn: &Connection, id: &str, slug: &str, local_path: &str) {
     conn.execute(
         "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-         VALUES (?1, ?2, ?3, 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-        rusqlite::params![id, slug, local_path],
+         VALUES (:id, :slug, :local_path, 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+        rusqlite::named_params! { ":id": id, ":slug": slug, ":local_path": local_path },
     )
     .unwrap();
 }
@@ -26,8 +26,8 @@ pub fn insert_test_repo(conn: &Connection, id: &str, slug: &str, local_path: &st
 pub fn insert_test_worktree(conn: &Connection, id: &str, repo_id: &str, slug: &str, path: &str) {
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES (?1, ?2, ?3, 'feat/test', ?4, 'active', '2024-01-01T00:00:00Z')",
-        rusqlite::params![id, repo_id, slug, path],
+         VALUES (:id, :repo_id, :slug, 'feat/test', :path, 'active', '2024-01-01T00:00:00Z')",
+        rusqlite::named_params! { ":id": id, ":repo_id": repo_id, ":slug": slug, ":path": path },
     )
     .unwrap();
 }
@@ -36,8 +36,8 @@ pub fn insert_test_worktree(conn: &Connection, id: &str, repo_id: &str, slug: &s
 pub fn insert_test_agent_run(conn: &Connection, id: &str, worktree_id: &str) {
     conn.execute(
         "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
-         VALUES (?1, ?2, 'test', 'running', '2024-01-01T00:00:00Z')",
-        rusqlite::params![id, worktree_id],
+         VALUES (:id, :worktree_id, 'test', 'running', '2024-01-01T00:00:00Z')",
+        rusqlite::named_params! { ":id": id, ":worktree_id": worktree_id },
     )
     .unwrap();
 }

@@ -236,8 +236,8 @@ fn test_recover_stuck_steps_skips_step_with_purged_child_run() {
     // Point the step at a child_run_id that does not exist in agent_runs.
     conn.execute(
         "UPDATE workflow_run_steps SET status = 'running', child_run_id = 'nonexistent-run-id' \
-         WHERE id = ?1",
-        rusqlite::params![step_id],
+         WHERE id = :id",
+        rusqlite::named_params! { ":id": step_id },
     )
     .unwrap();
 

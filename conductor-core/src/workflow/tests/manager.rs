@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::agent::AgentManager;
-use rusqlite::{params, Connection};
+use rusqlite::{named_params, Connection};
 use std::collections::HashMap;
 
 #[test]
@@ -1285,9 +1285,9 @@ fn test_cancel_run_running_with_active_steps() {
 
     let agent_run: String = conn
         .query_row(
-            "SELECT status FROM agent_runs WHERE id = ?1",
-            params![child.id],
-            |r| r.get(0),
+            "SELECT status FROM agent_runs WHERE id = :id",
+            named_params! { ":id": child.id },
+            |r| r.get("status"),
         )
         .unwrap();
     assert_eq!(agent_run, "cancelled");
@@ -1456,18 +1456,18 @@ fn test_find_resumable_child_run_picks_most_recent() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at, \
           parent_workflow_run_id) \
-         VALUES ('older-child', 'child-wf', NULL, ?1, 'failed', 0, 'manual', \
+         VALUES ('older-child', 'child-wf', NULL, :parent_run_id, 'failed', 0, 'manual', \
                  '2025-01-01T00:00:00Z', 'parent1')",
-        params![p1.id],
+        named_params! { ":parent_run_id": p1.id },
     )
     .unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at, \
           parent_workflow_run_id) \
-         VALUES ('newer-child', 'child-wf', NULL, ?1, 'failed', 0, 'manual', \
+         VALUES ('newer-child', 'child-wf', NULL, :parent_run_id, 'failed', 0, 'manual', \
                  '2025-06-01T00:00:00Z', 'parent1')",
-        params![p2.id],
+        named_params! { ":parent_run_id": p2.id },
     )
     .unwrap();
 
@@ -1572,9 +1572,9 @@ fn test_reap_orphaned_workflow_runs_purged_parent() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES (?1, 'test-wf', NULL, ?2, 'waiting', 0, 'manual', \
+         VALUES (:run_id, 'test-wf', NULL, :ghost_parent_id, 'waiting', 0, 'manual', \
                  '2025-01-01T00:00:00Z', NULL)",
-        params![run_id, ghost_parent_id],
+        named_params! { ":run_id": run_id, ":ghost_parent_id": ghost_parent_id },
     )
     .unwrap();
 
@@ -1583,9 +1583,9 @@ fn test_reap_orphaned_workflow_runs_purged_parent() {
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           gate_type, gate_timeout, started_at) \
-         VALUES (?1, ?2, 'approval-gate', 'gate', 0, 'waiting', 1, \
+         VALUES (:step_id, :run_id, 'approval-gate', 'gate', 0, 'waiting', 1, \
                  'human_approval', '999999999s', '2099-01-01T00:00:00Z')",
-        params![step_id, run_id],
+        named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
 
@@ -1656,8 +1656,8 @@ fn insert_running_script_step_with_pid(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           subprocess_pid, started_at) \
-         VALUES (?1, ?2, ?3, 'script', 0, 'running', 0, ?4, ?5)",
-        params![step_id, run_id, step_name, pid, started],
+         VALUES (:step_id, :run_id, :step_name, 'script', 0, 'running', 0, :pid, :started)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name, ":pid": pid, ":started": started },
     )
     .unwrap();
     step_id
@@ -1706,9 +1706,9 @@ fn test_reap_orphaned_script_steps_dead_pid() {
 
     let result: String = conn
         .query_row(
-            "SELECT result_text FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
+            "SELECT result_text FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id },
+            |r| r.get("result_text"),
         )
         .unwrap();
     assert!(
@@ -1740,8 +1740,8 @@ fn test_reap_orphaned_script_steps_skips_completed() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'script-done', 'script', 0, 'completed', 0, 99999)",
-        params![step_id, run_id],
+         VALUES (:step_id, :run_id, 'script-done', 'script', 0, 'completed', 0, 99999)",
+        named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
 
@@ -1768,8 +1768,8 @@ fn test_reap_orphaned_script_steps_skips_agent_step() {
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           child_run_id, subprocess_pid) \
-         VALUES (?1, ?2, 'agent-step', 'actor', 0, 'running', 0, ?3, 99999)",
-        params![step_id, run_id, child_run.id],
+         VALUES (:step_id, :run_id, 'agent-step', 'actor', 0, 'running', 0, :child_run_id, 99999)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":child_run_id": child_run.id },
     )
     .unwrap();
 
@@ -2127,8 +2127,8 @@ fn test_resolve_run_context_worktree_path_exists() {
     // Insert a worktree pointing at the real temp dir.
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES ('wt-exists', 'r1', 'test-wt', 'feat/test', ?1, 'active', '2024-01-01T00:00:00Z')",
-        params![wt_path],
+         VALUES ('wt-exists', 'r1', 'test-wt', 'feat/test', :wt_path, 'active', '2024-01-01T00:00:00Z')",
+        named_params! { ":wt_path": wt_path },
     )
     .unwrap();
 
@@ -2257,8 +2257,8 @@ fn test_malformed_blocked_on_json_is_silently_dropped() {
 
     // Directly inject malformed JSON into the blocked_on column
     conn.execute(
-        "UPDATE workflow_runs SET blocked_on = ? WHERE id = ?",
-        params!["not-valid-json{{{", run.id],
+        "UPDATE workflow_runs SET blocked_on = :blocked_on WHERE id = :id",
+        named_params! { ":blocked_on": "not-valid-json{{{", ":id": run.id },
     )
     .unwrap();
 
@@ -2299,8 +2299,8 @@ fn test_backfill_migration_sets_repo_id_on_historical_runs() {
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
-         VALUES ('run-hist', 'test-wf', 'w1', ?1, 'completed', 0, 'manual', '2025-01-01T00:00:00Z')",
-        params![parent.id],
+         VALUES ('run-hist', 'test-wf', 'w1', :parent_run_id, 'completed', 0, 'manual', '2025-01-01T00:00:00Z')",
+        named_params! { ":parent_run_id": parent.id },
     )
     .unwrap();
 
@@ -2309,7 +2309,7 @@ fn test_backfill_migration_sets_repo_id_on_historical_runs() {
         .query_row(
             "SELECT repo_id FROM workflow_runs WHERE id = 'run-hist'",
             [],
-            |row| row.get(0),
+            |row| row.get("repo_id"),
         )
         .unwrap();
     assert!(
@@ -2328,7 +2328,7 @@ fn test_backfill_migration_sets_repo_id_on_historical_runs() {
         .query_row(
             "SELECT repo_id FROM workflow_runs WHERE id = 'run-hist'",
             [],
-            |row| row.get(0),
+            |row| row.get("repo_id"),
         )
         .unwrap();
     assert_eq!(repo_id_after.as_deref(), Some("r1"));
@@ -2358,9 +2358,9 @@ fn test_backfill_migration_skips_runs_with_existing_repo_id() {
 
     let repo_id: Option<String> = conn
         .query_row(
-            "SELECT repo_id FROM workflow_runs WHERE id = ?1",
-            params![run_id],
-            |row| row.get(0),
+            "SELECT repo_id FROM workflow_runs WHERE id = :id",
+            named_params! { ":id": run_id },
+            |row| row.get("repo_id"),
         )
         .unwrap();
     assert_eq!(
@@ -2386,8 +2386,8 @@ fn test_backfill_migration_leaves_null_when_worktree_deleted() {
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
-         VALUES ('run-orphan', 'test-wf', 'w1', ?1, 'completed', 0, 'manual', '2025-01-01T00:00:00Z')",
-        params![parent.id],
+         VALUES ('run-orphan', 'test-wf', 'w1', :parent_run_id, 'completed', 0, 'manual', '2025-01-01T00:00:00Z')",
+        named_params! { ":parent_run_id": parent.id },
     )
     .unwrap();
 
@@ -2411,7 +2411,7 @@ fn test_backfill_migration_leaves_null_when_worktree_deleted() {
         .query_row(
             "SELECT repo_id FROM workflow_runs WHERE id = 'run-orphan'",
             [],
-            |row| row.get(0),
+            |row| row.get("repo_id"),
         )
         .unwrap();
     assert!(
@@ -2594,9 +2594,9 @@ fn insert_running_root_run(conn: &Connection, run_id: &str) {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', \
+         VALUES (:run_id, 'test-wf', NULL, :parent_run_id, 'running', 0, 'manual', \
                  '2025-01-01T00:00:00Z', NULL)",
-        params![run_id, parent.id],
+        named_params! { ":run_id": run_id, ":parent_run_id": parent.id },
     )
     .unwrap();
 }
@@ -2606,8 +2606,8 @@ fn insert_non_terminal_step(conn: &Connection, step_id: &str, run_id: &str, stat
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration) \
-         VALUES (?1, ?2, 'step-a', 'actor', 0, ?3, 0)",
-        params![step_id, run_id, status],
+         VALUES (:step_id, :run_id, 'step-a', 'actor', 0, :status, 0)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":status": status },
     )
     .unwrap();
 }
@@ -2674,8 +2674,8 @@ fn test_detect_stuck_workflow_run_ids_detects_stale_heartbeat() {
     let stale_time = chrono::Utc::now() - chrono::Duration::seconds(200);
     let stale_str = stale_time.to_rfc3339();
     conn.execute(
-        "UPDATE workflow_runs SET last_heartbeat = ?1 WHERE id = 'stale-heartbeat-run'",
-        params![stale_str],
+        "UPDATE workflow_runs SET last_heartbeat = :ts WHERE id = 'stale-heartbeat-run'",
+        named_params! { ":ts": stale_str },
     )
     .unwrap();
 
@@ -2739,9 +2739,9 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES ('sub-run', 'child-wf', NULL, ?1, 'running', 0, 'manual', \
+         VALUES ('sub-run', 'child-wf', NULL, :parent_run_id, 'running', 0, 'manual', \
                  '2025-01-01T00:00:00Z', 'root-run')",
-        params![parent.id],
+        named_params! { ":parent_run_id": parent.id },
     )
     .unwrap();
     insert_terminal_step_with_id(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
@@ -2836,9 +2836,9 @@ fn insert_running_root_run_with_label(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id, target_label) \
-         VALUES (?1, ?2, NULL, ?3, 'running', 0, 'manual', \
-                 '2025-01-01T00:00:00Z', NULL, ?4)",
-        params![run_id, workflow_name, parent.id, target_label],
+         VALUES (:run_id, :workflow_name, NULL, :parent_run_id, 'running', 0, 'manual', \
+                 '2025-01-01T00:00:00Z', NULL, :target_label)",
+        named_params! { ":run_id": run_id, ":workflow_name": workflow_name, ":parent_run_id": parent.id, ":target_label": target_label },
     )
     .unwrap();
 }
@@ -2854,8 +2854,8 @@ fn insert_running_step_with_started_at(
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, started_at) \
-         VALUES (?1, ?2, ?3, 'actor', 0, 'running', 0, ?4)",
-        params![step_id, run_id, step_name, started_at],
+         VALUES (:step_id, :run_id, :step_name, 'actor', 0, 'running', 0, :started_at)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name, ":started_at": started_at },
     )
     .unwrap();
 }
@@ -2925,9 +2925,9 @@ fn test_detect_stale_workflow_runs_skips_sub_workflows() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES ('sub-run', 'child-wf', NULL, ?1, 'running', 0, 'manual', \
+         VALUES ('sub-run', 'child-wf', NULL, :parent_run_id, 'running', 0, 'manual', \
                  '2025-01-01T00:00:00Z', 'root-run')",
-        params![parent.id],
+        named_params! { ":parent_run_id": parent.id },
     )
     .unwrap();
     insert_running_step_with_started_at(&conn, "s1", "sub-run", "step-a", "2020-01-01T00:00:00Z");
@@ -2970,8 +2970,8 @@ fn test_reap_stale_reaps_dead_agent() {
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           started_at, child_run_id) \
          VALUES ('s1', 'stale-run', 'code-review', 'actor', 0, 'running', 0, \
-                 '2020-01-01T00:00:00Z', ?1)",
-        params![child.id],
+                 '2020-01-01T00:00:00Z', :child_run_id)",
+        named_params! { ":child_run_id": child.id },
     )
     .unwrap();
 
@@ -3006,8 +3006,8 @@ fn test_reap_stale_skips_live_agent() {
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           started_at, child_run_id, subprocess_pid) \
          VALUES ('s1', 'alive-run', 'code-review', 'actor', 0, 'running', 0, \
-                 '2020-01-01T00:00:00Z', ?1, ?2)",
-        params![child.id, live_pid],
+                 '2020-01-01T00:00:00Z', :child_run_id, :live_pid)",
+        named_params! { ":child_run_id": child.id, ":live_pid": live_pid },
     )
     .unwrap();
 
@@ -3034,8 +3034,8 @@ fn test_reap_stale_reaps_step_with_no_pid() {
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           started_at, child_run_id) \
          VALUES ('s1', 'no-pid-run', 'step-a', 'actor', 0, 'running', 0, \
-                 '2020-01-01T00:00:00Z', ?1)",
-        params![child.id],
+                 '2020-01-01T00:00:00Z', :child_run_id)",
+        named_params! { ":child_run_id": child.id },
     )
     .unwrap();
 
@@ -3063,9 +3063,9 @@ fn test_detect_stuck_finds_run_with_only_terminal_steps() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES ('stuck-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+         VALUES ('stuck-run', 'deploy', NULL, :parent_run_id, 'running', 0, 'manual', \
                  '2025-01-01T00:00:00Z', NULL)",
-        params![parent.id],
+        named_params! { ":parent_run_id": parent.id },
     )
     .unwrap();
     insert_terminal_step_with_id(
@@ -3091,9 +3091,9 @@ fn test_detect_stuck_skips_run_with_active_steps() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES ('active-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+         VALUES ('active-run', 'deploy', NULL, :parent_run_id, 'running', 0, 'manual', \
                  '2025-01-01T00:00:00Z', NULL)",
-        params![parent.id],
+        named_params! { ":parent_run_id": parent.id },
     )
     .unwrap();
     // Step is still running — run is not stuck.
@@ -3123,9 +3123,9 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES ('recover-run', 'deploy', NULL, ?1, 'running', 0, 'manual', \
+         VALUES ('recover-run', 'deploy', NULL, :parent_run_id, 'running', 0, 'manual', \
                  '2025-01-01T00:00:00Z', NULL)",
-        params![parent.id],
+        named_params! { ":parent_run_id": parent.id },
     )
     .unwrap();
 
@@ -3134,8 +3134,8 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
         .create_run(None, "step prompt", None, None)
         .unwrap();
     conn.execute(
-        "UPDATE agent_runs SET status = 'completed' WHERE id = ?1",
-        params![child.id],
+        "UPDATE agent_runs SET status = 'completed' WHERE id = :id",
+        named_params! { ":id": child.id },
     )
     .unwrap();
 
@@ -3145,8 +3145,8 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           started_at, child_run_id) \
          VALUES ('s1', 'recover-run', 'code-review', 'actor', 0, 'running', 0, \
-                 '2020-01-01T00:00:00Z', ?1)",
-        params![child.id],
+                 '2020-01-01T00:00:00Z', :child_run_id)",
+        named_params! { ":child_run_id": child.id },
     )
     .unwrap();
 
@@ -3171,8 +3171,8 @@ fn test_reset_failed_steps_clears_subprocess_pid() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'step-failed', 'script', 0, 'failed', 0, 12345)",
-        params![step_id, run_id],
+         VALUES (:step_id, :run_id, 'step-failed', 'script', 0, 'failed', 0, 12345)",
+        named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3181,9 +3181,9 @@ fn test_reset_failed_steps_clears_subprocess_pid() {
 
     let pid: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(
@@ -3202,8 +3202,8 @@ fn test_reset_completed_steps_clears_subprocess_pid() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'step-done', 'script', 0, 'completed', 0, 99999)",
-        params![step_id, run_id],
+         VALUES (:step_id, :run_id, 'step-done', 'script', 0, 'completed', 0, 99999)",
+        named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3212,9 +3212,9 @@ fn test_reset_completed_steps_clears_subprocess_pid() {
 
     let pid: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(
@@ -3233,8 +3233,8 @@ fn test_reset_steps_from_position_clears_subprocess_pid() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'step-pos', 'script', 2, 'failed', 0, 55555)",
-        params![step_id, run_id],
+         VALUES (:step_id, :run_id, 'step-pos', 'script', 2, 'failed', 0, 55555)",
+        named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3243,9 +3243,9 @@ fn test_reset_steps_from_position_clears_subprocess_pid() {
 
     let pid: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(
@@ -3268,15 +3268,15 @@ fn test_reset_failed_steps_kills_running_subprocesses() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'step-running-a', 'script', 0, 'running', 0, 4294967295)",
-        params![step_id_a, run_id],
+         VALUES (:step_id, :run_id, 'step-running-a', 'script', 0, 'running', 0, 4294967295)",
+        named_params! { ":step_id": step_id_a, ":run_id": run_id },
     )
     .unwrap();
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'step-running-b', 'script', 1, 'running', 0, 4294967294)",
-        params![step_id_b, run_id],
+         VALUES (:step_id, :run_id, 'step-running-b', 'script', 1, 'running', 0, 4294967294)",
+        named_params! { ":step_id": step_id_b, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3290,9 +3290,9 @@ fn test_reset_failed_steps_kills_running_subprocesses() {
     ] {
         let pid: Option<i64> = conn
             .query_row(
-                "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
+                "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+                named_params! { ":id": id },
+                |r| r.get("subprocess_pid"),
             )
             .unwrap();
         assert!(
@@ -3315,8 +3315,8 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'step-before', 'script', 1, 'running', 0, 4294967294)",
-        params![step_id_before, run_id],
+         VALUES (:step_id, :run_id, 'step-before', 'script', 1, 'running', 0, 4294967294)",
+        named_params! { ":step_id": step_id_before, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3325,8 +3325,8 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'step-at', 'script', 2, 'running', 0, 4294967295)",
-        params![step_id_at, run_id],
+         VALUES (:step_id, :run_id, 'step-at', 'script', 2, 'running', 0, 4294967295)",
+        named_params! { ":step_id": step_id_at, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3335,8 +3335,8 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (?1, ?2, 'step-after', 'script', 3, 'running', 0, 4294967293)",
-        params![step_id_after, run_id],
+         VALUES (:step_id, :run_id, 'step-after', 'script', 3, 'running', 0, 4294967293)",
+        named_params! { ":step_id": step_id_after, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3346,9 +3346,9 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     // Step at boundary must have subprocess_pid nulled.
     let pid_at: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            params![step_id_at],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id_at },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(
@@ -3359,9 +3359,9 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     // Step after boundary must also have subprocess_pid nulled and status reset.
     let pid_after: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            params![step_id_after],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id_after },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert!(
@@ -3370,9 +3370,9 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     );
     let status_after: String = conn
         .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![step_id_after],
-            |r| r.get(0),
+            "SELECT status FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id_after },
+            |r| r.get("status"),
         )
         .unwrap();
     assert_eq!(
@@ -3383,9 +3383,9 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     // Step before boundary must retain its status and subprocess_pid.
     let pid_before: Option<i64> = conn
         .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = ?1",
-            params![step_id_before],
-            |r| r.get(0),
+            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id_before },
+            |r| r.get("subprocess_pid"),
         )
         .unwrap();
     assert_eq!(
@@ -3395,9 +3395,9 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
     );
     let status_before: String = conn
         .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![step_id_before],
-            |r| r.get(0),
+            "SELECT status FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id_before },
+            |r| r.get("status"),
         )
         .unwrap();
     assert_eq!(
@@ -3419,16 +3419,16 @@ fn create_agent_step(
         .create_run(Some("w1"), step_name, None, None)
         .unwrap();
     conn.execute(
-        "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
-        params![subprocess_pid, agent.id],
+        "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
+        named_params! { ":pid": subprocess_pid, ":id": agent.id },
     )
     .unwrap();
     let step_id = crate::new_id();
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, child_run_id) \
-         VALUES (?1, ?2, ?3, 'actor', ?4, 'running', 0, ?5)",
-        params![step_id, run_id, step_name, position, agent.id],
+         VALUES (:step_id, :run_id, :step_name, 'actor', :position, 'running', 0, :agent_run_id)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name, ":position": position, ":agent_run_id": agent.id },
     )
     .unwrap();
     (agent.id, step_id)
@@ -3458,18 +3458,18 @@ fn test_reset_steps_from_position_kills_agent_subprocesses() {
     // Steps at and after the boundary must be reset to pending.
     let status_at: String = conn
         .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![step_at],
-            |r| r.get(0),
+            "SELECT status FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_at },
+            |r| r.get("status"),
         )
         .unwrap();
     assert_eq!(status_at, "pending", "agent step at boundary must be reset");
 
     let status_after: String = conn
         .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![step_after],
-            |r| r.get(0),
+            "SELECT status FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_after },
+            |r| r.get("status"),
         )
         .unwrap();
     assert_eq!(
@@ -3480,9 +3480,9 @@ fn test_reset_steps_from_position_kills_agent_subprocesses() {
     // Step before boundary must remain running.
     let status_before: String = conn
         .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![step_before],
-            |r| r.get(0),
+            "SELECT status FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_before },
+            |r| r.get("status"),
         )
         .unwrap();
     assert_eq!(
@@ -3508,9 +3508,9 @@ fn test_reset_failed_steps_kills_agent_subprocesses() {
     // Step must be reset to pending.
     let status: String = conn
         .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
+            "SELECT status FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id },
+            |r| r.get("status"),
         )
         .unwrap();
     assert_eq!(status, "pending", "agent step must be reset to pending");
@@ -3531,8 +3531,8 @@ fn test_reset_failed_steps_clears_step_error() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
-         VALUES (?1, ?2, 'step-failed', 'script', 0, 'failed', 0, 'some error')",
-        params![step_id, run_id],
+         VALUES (:step_id, :run_id, 'step-failed', 'script', 0, 'failed', 0, 'some error')",
+        named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3541,9 +3541,9 @@ fn test_reset_failed_steps_clears_step_error() {
 
     let err: Option<String> = conn
         .query_row(
-            "SELECT step_error FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
+            "SELECT step_error FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id },
+            |r| r.get("step_error"),
         )
         .unwrap();
     assert!(
@@ -3562,8 +3562,8 @@ fn test_reset_completed_steps_clears_step_error() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
-         VALUES (?1, ?2, 'step-done', 'script', 0, 'completed', 0, 'some error')",
-        params![step_id, run_id],
+         VALUES (:step_id, :run_id, 'step-done', 'script', 0, 'completed', 0, 'some error')",
+        named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3572,9 +3572,9 @@ fn test_reset_completed_steps_clears_step_error() {
 
     let err: Option<String> = conn
         .query_row(
-            "SELECT step_error FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
+            "SELECT step_error FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id },
+            |r| r.get("step_error"),
         )
         .unwrap();
     assert!(
@@ -3593,8 +3593,8 @@ fn test_reset_steps_from_position_clears_step_error() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
-         VALUES (?1, ?2, 'step-pos', 'script', 2, 'failed', 0, 'some error')",
-        params![step_id, run_id],
+         VALUES (:step_id, :run_id, 'step-pos', 'script', 2, 'failed', 0, 'some error')",
+        named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
 
@@ -3603,9 +3603,9 @@ fn test_reset_steps_from_position_clears_step_error() {
 
     let err: Option<String> = conn
         .query_row(
-            "SELECT step_error FROM workflow_run_steps WHERE id = ?1",
-            params![step_id],
-            |r| r.get(0),
+            "SELECT step_error FROM workflow_run_steps WHERE id = :id",
+            named_params! { ":id": step_id },
+            |r| r.get("step_error"),
         )
         .unwrap();
     assert!(
@@ -3632,8 +3632,8 @@ fn insert_orphaned_root_run(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id, last_heartbeat) \
-         VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', ?3, NULL, ?4)",
-        params![id, parent.id, started_at, last_heartbeat],
+         VALUES (:id, 'test-wf', NULL, :parent_run_id, 'running', 0, 'manual', :started_at, NULL, :last_heartbeat)",
+        named_params! { ":id": id, ":parent_run_id": parent.id, ":started_at": started_at, ":last_heartbeat": last_heartbeat },
     )
     .unwrap();
     id
@@ -3641,18 +3641,18 @@ fn insert_orphaned_root_run(
 
 fn get_run_status(conn: &Connection, run_id: &str) -> String {
     conn.query_row(
-        "SELECT status FROM workflow_runs WHERE id = ?1",
-        params![run_id],
-        |r| r.get(0),
+        "SELECT status FROM workflow_runs WHERE id = :id",
+        named_params! { ":id": run_id },
+        |r| r.get("status"),
     )
     .unwrap()
 }
 
 fn get_step_status(conn: &Connection, step_id: &str) -> String {
     conn.query_row(
-        "SELECT status FROM workflow_run_steps WHERE id = ?1",
-        params![step_id],
-        |r| r.get(0),
+        "SELECT status FROM workflow_run_steps WHERE id = :id",
+        named_params! { ":id": step_id },
+        |r| r.get("status"),
     )
     .unwrap()
 }
@@ -3741,8 +3741,8 @@ fn test_reap_heartbeat_stuck_active_child_step() {
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration) \
-         VALUES ('step-1', ?1, 'step-a', 'actor', 0, 'pending', 0)",
-        params![run_id],
+         VALUES ('step-1', :run_id, 'step-a', 'actor', 0, 'pending', 0)",
+        named_params! { ":run_id": run_id },
     )
     .unwrap();
 
@@ -3789,8 +3789,8 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id, last_heartbeat) \
-         VALUES (?1, 'parent-wf', NULL, ?2, 'running', 0, 'manual', ?3, NULL, NULL)",
-        params![parent_run_id, parent_agent.id, stale.to_rfc3339()],
+         VALUES (:parent_run_id, 'parent-wf', NULL, :parent_agent_id, 'running', 0, 'manual', :stale_ts, NULL, NULL)",
+        named_params! { ":parent_run_id": parent_run_id, ":parent_agent_id": parent_agent.id, ":stale_ts": stale.to_rfc3339() },
     )
     .unwrap();
 
@@ -3803,13 +3803,8 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id, last_heartbeat) \
-         VALUES (?1, 'child-wf', NULL, ?2, 'running', 0, 'manual', ?3, ?4, NULL)",
-        params![
-            child_run_id,
-            child_agent.id,
-            stale.to_rfc3339(),
-            parent_run_id
-        ],
+         VALUES (:child_run_id, 'child-wf', NULL, :child_agent_id, 'running', 0, 'manual', :stale_ts, :parent_run_id, NULL)",
+        named_params! { ":child_run_id": child_run_id, ":child_agent_id": child_agent.id, ":stale_ts": stale.to_rfc3339(), ":parent_run_id": parent_run_id },
     )
     .unwrap();
 
@@ -4063,8 +4058,8 @@ fn test_delete_orphaned_pending_steps_ignores_started_pending() {
     conn.execute(
         "UPDATE workflow_run_steps \
          SET status = 'pending', started_at = '2025-01-01T00:00:00Z' \
-         WHERE id = ?1",
-        params![step_id],
+         WHERE id = :id",
+        named_params! { ":id": step_id },
     )
     .unwrap();
 
@@ -4094,8 +4089,8 @@ fn test_delete_orphaned_pending_steps_only_targets_pending() {
         conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, position, status, iteration) \
-             VALUES (?, ?, ?, 'actor', 0, ?, 0)",
-            params![crate::new_id(), run.id, name, status],
+             VALUES (:id, :run_id, :name, 'actor', 0, :status, 0)",
+            named_params! { ":id": crate::new_id(), ":run_id": run.id, ":name": name, ":status": status },
         )
         .unwrap();
     }

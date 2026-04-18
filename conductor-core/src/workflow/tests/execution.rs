@@ -3071,12 +3071,11 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
     );
 
     // Child run must also have trigger='hook' (propagated via triggered_by_hook).
-    use rusqlite::params;
     let child_run_id: String = conn
         .query_row(
-            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = ?1",
-            params![result.workflow_run_id],
-            |row| row.get(0),
+            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = :id",
+            rusqlite::named_params! { ":id": result.workflow_run_id },
+            |row| row.get("id"),
         )
         .expect("child run should exist");
     let child_run = wf_mgr

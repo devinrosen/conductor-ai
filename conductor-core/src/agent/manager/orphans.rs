@@ -38,11 +38,11 @@ impl<'a> AgentManager<'a> {
         let now = chrono::Utc::now().to_rfc3339();
         let changed = self.conn.execute(
             "UPDATE workflow_runs \
-             SET status = 'failed', ended_at = ?1, blocked_on = NULL, \
+             SET status = 'failed', ended_at = :ended_at, blocked_on = NULL, \
                  error = 'parent agent run was orphaned and reaped' \
-             WHERE parent_run_id = ?2 \
+             WHERE parent_run_id = :agent_run_id \
                AND status IN ('running', 'waiting', 'pending')",
-            rusqlite::params![now, agent_run_id],
+            rusqlite::named_params! { ":ended_at": now, ":agent_run_id": agent_run_id },
         )?;
         Ok(changed)
     }
@@ -61,7 +61,7 @@ impl<'a> AgentManager<'a> {
         let now = chrono::Utc::now().to_rfc3339();
         let changed = self.conn.execute(
             "UPDATE workflow_runs \
-             SET status = 'failed', ended_at = ?1, blocked_on = NULL, \
+             SET status = 'failed', ended_at = :ended_at, blocked_on = NULL, \
                  error = 'parent agent run reached terminal state without completing the workflow' \
              WHERE status IN ('running', 'waiting', 'pending') \
                AND parent_run_id IS NOT NULL \
@@ -69,7 +69,7 @@ impl<'a> AgentManager<'a> {
                    SELECT id FROM agent_runs \
                    WHERE status IN ('failed', 'completed', 'cancelled') \
                )",
-            rusqlite::params![now],
+            rusqlite::named_params! { ":ended_at": now },
         )?;
         if changed > 0 {
             tracing::warn!(
@@ -211,7 +211,7 @@ mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
     use crate::agent::status::AgentRunStatus;
-    use rusqlite::params;
+    use rusqlite::named_params;
 
     #[test]
     fn test_reap_orphaned_runs_no_subprocess_pid() {
@@ -281,8 +281,8 @@ mod tests {
         conn.execute(
             "INSERT INTO workflow_runs \
              (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
-             VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
-            params![wf_run_id, parent_run.id],
+             VALUES (:id, 'test-wf', NULL, :parent_run_id, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
+            named_params! { ":id": wf_run_id, ":parent_run_id": parent_run.id },
         )
         .unwrap();
 
@@ -357,8 +357,8 @@ mod tests {
             .unwrap();
         // Set subprocess_pid to the dead PID.
         conn.execute(
-            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
-            params![dead_pid as i64, run.id],
+            "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
+            named_params! { ":pid": dead_pid as i64, ":id": run.id },
         )
         .unwrap();
 
@@ -396,8 +396,8 @@ mod tests {
 
         // Backdate started_at to 2020 — far outside the 60-second tolerance.
         conn.execute(
-            "UPDATE agent_runs SET subprocess_pid = ?1, started_at = ?2 WHERE id = ?3",
-            rusqlite::params![live_pid as i64, "2020-01-01T00:00:00Z", run.id],
+            "UPDATE agent_runs SET subprocess_pid = :pid, started_at = :started_at WHERE id = :id",
+            rusqlite::named_params! { ":pid": live_pid as i64, ":started_at": "2020-01-01T00:00:00Z", ":id": run.id },
         )
         .unwrap();
 
@@ -444,8 +444,8 @@ mod tests {
         conn.execute(
             "INSERT INTO workflow_runs \
              (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
-             VALUES (?1, 'test-wf', NULL, ?2, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
-            rusqlite::params![wf_run_id, parent_run.id],
+             VALUES (:id, 'test-wf', NULL, :parent_run_id, 'running', 0, 'manual', '2025-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":id": wf_run_id, ":parent_run_id": parent_run.id },
         )
         .unwrap();
 
@@ -486,16 +486,16 @@ mod tests {
             .create_run(Some("w1"), "test prompt", None, None)
             .unwrap();
         conn.execute(
-            "UPDATE agent_runs SET status = ?1, ended_at = '2025-01-01T00:01:00Z' WHERE id = ?2",
-            rusqlite::params![parent_status, run.id],
+            "UPDATE agent_runs SET status = :status, ended_at = '2025-01-01T00:01:00Z' WHERE id = :id",
+            rusqlite::named_params! { ":status": parent_status, ":id": run.id },
         )
         .unwrap();
         let wf_run_id = crate::new_id();
         conn.execute(
             "INSERT INTO workflow_runs \
              (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
-             VALUES (?1, 'test-wf', NULL, ?2, ?3, 0, 'manual', '2025-01-01T00:00:00Z')",
-            rusqlite::params![wf_run_id, run.id, wf_status],
+             VALUES (:id, 'test-wf', NULL, :parent_run_id, :wf_status, 0, 'manual', '2025-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":id": wf_run_id, ":parent_run_id": run.id, ":wf_status": wf_status },
         )
         .unwrap();
         wf_run_id
@@ -522,18 +522,18 @@ mod tests {
 
         let wf_status: String = conn
             .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                rusqlite::params![wf_run_id],
-                |r: &rusqlite::Row<'_>| r.get(0),
+                "SELECT status FROM workflow_runs WHERE id = :id",
+                rusqlite::named_params! { ":id": wf_run_id },
+                |r: &rusqlite::Row<'_>| r.get("status"),
             )
             .unwrap();
         assert_eq!(wf_status, "failed");
 
         let wf_error: Option<String> = conn
             .query_row(
-                "SELECT error FROM workflow_runs WHERE id = ?1",
-                rusqlite::params![wf_run_id],
-                |r: &rusqlite::Row<'_>| r.get(0),
+                "SELECT error FROM workflow_runs WHERE id = :id",
+                rusqlite::named_params! { ":id": wf_run_id },
+                |r: &rusqlite::Row<'_>| r.get("error"),
             )
             .unwrap();
         assert!(wf_error
@@ -552,8 +552,8 @@ mod tests {
         let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "waiting");
         // Simulate a stale blocked_on value left by the workflow executor.
         conn.execute(
-            "UPDATE workflow_runs SET blocked_on = '{\"type\":\"stale\"}' WHERE id = ?1",
-            rusqlite::params![wf_run_id],
+            "UPDATE workflow_runs SET blocked_on = '{\"type\":\"stale\"}' WHERE id = :id",
+            rusqlite::named_params! { ":id": wf_run_id },
         )
         .unwrap();
 
@@ -562,9 +562,9 @@ mod tests {
 
         let (wf_status, blocked_on): (String, Option<String>) = conn
             .query_row(
-                "SELECT status, blocked_on FROM workflow_runs WHERE id = ?1",
-                rusqlite::params![wf_run_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                "SELECT status, blocked_on FROM workflow_runs WHERE id = :id",
+                rusqlite::named_params! { ":id": wf_run_id },
+                |r| Ok((r.get("status")?, r.get("blocked_on")?)),
             )
             .unwrap();
         assert_eq!(wf_status, "failed");
@@ -585,9 +585,9 @@ mod tests {
 
         let wf_status: String = conn
             .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                rusqlite::params![wf_run_id],
-                |r: &rusqlite::Row<'_>| r.get(0),
+                "SELECT status FROM workflow_runs WHERE id = :id",
+                rusqlite::named_params! { ":id": wf_run_id },
+                |r: &rusqlite::Row<'_>| r.get("status"),
             )
             .unwrap();
         assert_eq!(wf_status, "failed");
@@ -610,9 +610,9 @@ mod tests {
 
         let wf_status: String = conn
             .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                rusqlite::params![wf_run_id],
-                |r: &rusqlite::Row<'_>| r.get(0),
+                "SELECT status FROM workflow_runs WHERE id = :id",
+                rusqlite::named_params! { ":id": wf_run_id },
+                |r: &rusqlite::Row<'_>| r.get("status"),
             )
             .unwrap();
         assert_eq!(wf_status, "failed");
@@ -634,9 +634,9 @@ mod tests {
 
         let wf_status: String = conn
             .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                rusqlite::params![wf_run_id],
-                |r: &rusqlite::Row<'_>| r.get(0),
+                "SELECT status FROM workflow_runs WHERE id = :id",
+                rusqlite::named_params! { ":id": wf_run_id },
+                |r: &rusqlite::Row<'_>| r.get("status"),
             )
             .unwrap();
         assert_eq!(wf_status, "failed");
@@ -652,8 +652,8 @@ mod tests {
         let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "completed");
         // Mark the workflow_run as ended (terminal state).
         conn.execute(
-            "UPDATE workflow_runs SET ended_at = '2025-01-01T01:00:00Z' WHERE id = ?1",
-            rusqlite::params![wf_run_id],
+            "UPDATE workflow_runs SET ended_at = '2025-01-01T01:00:00Z' WHERE id = :id",
+            rusqlite::named_params! { ":id": wf_run_id },
         )
         .unwrap();
 
@@ -662,9 +662,9 @@ mod tests {
 
         let wf_status: String = conn
             .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                rusqlite::params![wf_run_id],
-                |r: &rusqlite::Row<'_>| r.get(0),
+                "SELECT status FROM workflow_runs WHERE id = :id",
+                rusqlite::named_params! { ":id": wf_run_id },
+                |r: &rusqlite::Row<'_>| r.get("status"),
             )
             .unwrap();
         assert_eq!(wf_status, "completed");
@@ -683,8 +683,8 @@ mod tests {
             .create_run(Some("w1"), "headless task alive", None, None)
             .unwrap();
         conn.execute(
-            "UPDATE agent_runs SET subprocess_pid = ?1 WHERE id = ?2",
-            params![live_pid as i64, run.id],
+            "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
+            rusqlite::named_params! { ":pid": live_pid as i64, ":id": run.id },
         )
         .unwrap();
 
@@ -697,8 +697,8 @@ mod tests {
             if let Some(proc_start) = crate::process_utils::process_started_at(live_pid) {
                 let started_at_str = chrono::DateTime::<chrono::Utc>::from(proc_start).to_rfc3339();
                 conn.execute(
-                    "UPDATE agent_runs SET started_at = ?1 WHERE id = ?2",
-                    params![started_at_str, run.id],
+                    "UPDATE agent_runs SET started_at = :started_at WHERE id = :id",
+                    rusqlite::named_params! { ":started_at": started_at_str, ":id": run.id },
                 )
                 .unwrap();
             }

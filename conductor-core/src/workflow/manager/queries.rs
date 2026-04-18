@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{named_params, OptionalExtension};
 
 use crate::config::Config;
 use crate::db::{query_collect, sql_placeholders, sql_placeholders_from};
@@ -71,9 +71,9 @@ impl<'a> WorkflowManager<'a> {
         let active_strings = WorkflowRunStatus::active_strings();
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(active_strings.iter()), |row| {
-            let repo_id: String = row.get(0)?;
-            let status: String = row.get(1)?;
-            let cnt: u32 = row.get(2)?;
+            let repo_id: String = row.get("repo_id")?;
+            let status: String = row.get("status")?;
+            let cnt: u32 = row.get("cnt")?;
             Ok((repo_id, status, cnt))
         })?;
         let mut map: HashMap<String, ActiveWorkflowCounts> = HashMap::new();
@@ -94,8 +94,8 @@ impl<'a> WorkflowManager<'a> {
         Ok(self
             .conn
             .query_row(
-                &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = :id"),
+                named_params! { ":id": id },
                 row_to_workflow_run,
             )
             .optional()?)
@@ -105,10 +105,13 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_child_workflow_runs(&self, parent_run_id: &str) -> Result<Vec<WorkflowRun>> {
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT {RUN_COLUMNS} FROM workflow_runs \
-             WHERE parent_workflow_run_id = ?1 \
+             WHERE parent_workflow_run_id = :parent_workflow_run_id \
              ORDER BY started_at ASC"
         ))?;
-        let rows = stmt.query_map(params![parent_run_id], row_to_workflow_run)?;
+        let rows = stmt.query_map(
+            named_params! { ":parent_workflow_run_id": parent_run_id },
+            row_to_workflow_run,
+        )?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
@@ -158,11 +161,11 @@ impl<'a> WorkflowManager<'a> {
             self.conn,
             &format!(
                 "{} \
-                 WHERE s.workflow_run_id = ?1 \
+                 WHERE s.workflow_run_id = :workflow_run_id \
                  ORDER BY s.position",
                 Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
             ),
-            params![workflow_run_id],
+            named_params! { ":workflow_run_id": workflow_run_id },
             row_to_workflow_step,
         )
     }
@@ -241,10 +244,10 @@ impl<'a> WorkflowManager<'a> {
     pub fn get_step_by_id(&self, step_id: &str) -> Result<Option<WorkflowRunStep>> {
         let mut stmt = self.conn.prepare_cached(&format!(
             "{} \
-             WHERE s.id = ?1",
+             WHERE s.id = :id",
             Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
         ))?;
-        let mut rows = stmt.query_map(params![step_id], row_to_workflow_step)?;
+        let mut rows = stmt.query_map(named_params! { ":id": step_id }, row_to_workflow_step)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -277,8 +280,8 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_workflow_runs(&self, worktree_id: &str) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
-            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE worktree_id = ?1 ORDER BY started_at DESC"),
-            params![worktree_id],
+            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE worktree_id = :worktree_id ORDER BY started_at DESC"),
+            named_params! { ":worktree_id": worktree_id },
             row_to_workflow_run,
         )
     }
@@ -294,10 +297,10 @@ impl<'a> WorkflowManager<'a> {
                 self.conn,
                 &format!(
                     "SELECT {RUN_COLUMNS} FROM workflow_runs \
-                     WHERE worktree_id = ?1 AND status = ?2 \
+                     WHERE worktree_id = :worktree_id AND status = :status \
                      ORDER BY started_at DESC"
                 ),
-                params![worktree_id, status_str],
+                named_params! { ":worktree_id": worktree_id, ":status": status_str },
                 row_to_workflow_run,
             )
         } else {
@@ -320,12 +323,12 @@ impl<'a> WorkflowManager<'a> {
                     "SELECT workflow_runs.* \
                      FROM workflow_runs \
                      LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE workflow_runs.repo_id = ?1 \
+                     WHERE workflow_runs.repo_id = :repo_id \
                        AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-                       AND workflow_runs.status = ?2 \
+                       AND workflow_runs.status = :status \
                      ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
                 ),
-                params![repo_id, status_str],
+                named_params! { ":repo_id": repo_id, ":status": status_str },
                 row_to_workflow_run,
             )
         } else {
@@ -347,10 +350,10 @@ impl<'a> WorkflowManager<'a> {
                 self.conn,
                 &format!(
                     "SELECT {RUN_COLUMNS} FROM workflow_runs \
-                     WHERE worktree_id = ?1 AND status = ?2 \
-                     ORDER BY started_at DESC LIMIT ?3 OFFSET ?4"
+                     WHERE worktree_id = :worktree_id AND status = :status \
+                     ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
                 ),
-                params![worktree_id, status_str, limit as i64, offset as i64],
+                named_params! { ":worktree_id": worktree_id, ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
         } else {
@@ -368,8 +371,8 @@ impl<'a> WorkflowManager<'a> {
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
              WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
-             ORDER BY workflow_runs.started_at DESC LIMIT ?1",
-            params![limit as i64],
+             ORDER BY workflow_runs.started_at DESC LIMIT :limit",
+            named_params! { ":limit": limit as i64 },
             row_to_workflow_run,
         )
     }
@@ -430,9 +433,9 @@ impl<'a> WorkflowManager<'a> {
                  FROM workflow_runs \
                  LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
                  WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-                   AND workflow_runs.status = ?1 \
-                 ORDER BY workflow_runs.started_at DESC LIMIT ?2 OFFSET ?3",
-                params![status_str, limit as i64, offset as i64],
+                   AND workflow_runs.status = :status \
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+                named_params! { ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
         } else {
@@ -442,8 +445,8 @@ impl<'a> WorkflowManager<'a> {
                  FROM workflow_runs \
                  LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
                  WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
-                 ORDER BY workflow_runs.started_at DESC LIMIT ?1 OFFSET ?2",
-                params![limit as i64, offset as i64],
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+                named_params! { ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
         }
@@ -464,10 +467,10 @@ impl<'a> WorkflowManager<'a> {
             "SELECT workflow_runs.* \
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE workflow_runs.repo_id = ?1 \
+             WHERE workflow_runs.repo_id = :repo_id \
                AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-             ORDER BY workflow_runs.started_at DESC LIMIT ?2 OFFSET ?3",
-            params![repo_id, limit as i64, offset as i64],
+             ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+            named_params! { ":repo_id": repo_id, ":limit": limit as i64, ":offset": offset as i64 },
             row_to_workflow_run,
         )
     }
@@ -484,10 +487,10 @@ impl<'a> WorkflowManager<'a> {
             self.conn,
             &format!(
                 "SELECT {RUN_COLUMNS} FROM workflow_runs \
-                 WHERE worktree_id = ?1 \
-                 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3"
+                 WHERE worktree_id = :worktree_id \
+                 ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
             ),
-            params![worktree_id, limit as i64, offset as i64],
+            named_params! { ":worktree_id": worktree_id, ":limit": limit as i64, ":offset": offset as i64 },
             row_to_workflow_run,
         )
     }
@@ -501,9 +504,9 @@ impl<'a> WorkflowManager<'a> {
             &format!(
                 "SELECT {RUN_COLUMNS} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
-                 ORDER BY started_at DESC LIMIT ?1"
+                 ORDER BY started_at DESC LIMIT :limit"
             ),
-            params![limit as i64],
+            named_params! { ":limit": limit as i64 },
             row_to_workflow_run,
         )
     }
@@ -530,9 +533,9 @@ impl<'a> WorkflowManager<'a> {
                            AND ended_at >= datetime('now', '-60 seconds')\
                        )\
                    ) \
-                 ORDER BY started_at DESC LIMIT ?1"
+                 ORDER BY started_at DESC LIMIT :limit"
             ),
-            params![limit],
+            named_params! { ":limit": limit },
             row_to_workflow_run,
         )
     }
@@ -549,12 +552,15 @@ impl<'a> WorkflowManager<'a> {
         for _ in 0..MAX_DEPTH {
             let mut stmt = self.conn.prepare_cached(
                 "SELECT id, workflow_name FROM workflow_runs \
-                 WHERE parent_workflow_run_id = ?1 \
+                 WHERE parent_workflow_run_id = :parent_workflow_run_id \
                    AND status IN ('running', 'waiting') \
                  LIMIT 1",
             )?;
             let result: Option<(String, String)> = stmt
-                .query_row(params![current_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .query_row(
+                    named_params! { ":parent_workflow_run_id": current_id },
+                    |row| Ok((row.get("id")?, row.get("workflow_name")?)),
+                )
                 .optional()?;
             match result {
                 Some((child_id, child_name)) => {
@@ -596,10 +602,10 @@ impl<'a> WorkflowManager<'a> {
                 "SELECT DISTINCT workflow_runs.* \
                  FROM workflow_runs \
                  LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE workflow_runs.repo_id = ?1 OR worktrees.repo_id = ?1 \
+                 WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
                  ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
             ),
-            params![repo_id],
+            named_params! { ":repo_id": repo_id },
             row_to_workflow_run,
         )
     }
@@ -667,7 +673,10 @@ impl<'a> WorkflowManager<'a> {
         let mut map = std::collections::HashMap::new();
         let params_iter = rusqlite::params_from_iter(agent_run_ids.iter());
         let rows = stmt.query_map(params_iter, |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>("child_run_id")?,
+                row.get::<_, String>("workflow_run_id")?,
+            ))
         })?;
         for row in rows {
             let (child_run_id, workflow_run_id) = row?;
@@ -683,11 +692,11 @@ impl<'a> WorkflowManager<'a> {
             .query_row(
                 &format!(
                     "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
-                     WHERE workflow_run_id = ?1 AND gate_type IS NOT NULL AND gate_approved_at IS NULL \
+                     WHERE workflow_run_id = :workflow_run_id AND gate_type IS NOT NULL AND gate_approved_at IS NULL \
                        AND status IN ('running', 'waiting') \
                      ORDER BY position DESC LIMIT 1"
                 ),
-                params![workflow_run_id],
+                named_params! { ":workflow_run_id": workflow_run_id },
                 row_to_workflow_step,
             )
             .optional()?)
@@ -724,8 +733,8 @@ impl<'a> WorkflowManager<'a> {
     /// Returns enriched [`PendingGateRow`] values that include the worktree branch and linked
     /// ticket source_id so the TUI can display context without additional queries.
     pub fn list_waiting_gate_steps_for_repo(&self, repo_id: &str) -> Result<Vec<PendingGateRow>> {
-        let placeholders = sql_placeholders_from(WorkflowRunStatus::ACTIVE.len(), 2);
         let active_strings = WorkflowRunStatus::active_strings();
+        let status_placeholders = sql_placeholders(active_strings.len());
         let sql = format!(
             "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
              FROM workflow_run_steps s \
@@ -733,14 +742,18 @@ impl<'a> WorkflowManager<'a> {
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
              LEFT JOIN tickets t ON t.id = r.ticket_id \
              WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-             AND r.status IN ({placeholders}) \
-             AND (r.repo_id = ?1 OR wt.repo_id = ?1) \
+             AND r.status IN ({status_placeholders}) \
+             AND (r.repo_id = ? OR wt.repo_id = ?) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
         );
-        let mut all_params: Vec<rusqlite::types::Value> =
-            vec![rusqlite::types::Value::Text(repo_id.to_owned())];
-        all_params.extend(active_strings.into_iter().map(rusqlite::types::Value::Text));
+        let mut all_params: Vec<rusqlite::types::Value> = active_strings
+            .into_iter()
+            .map(rusqlite::types::Value::Text)
+            .collect();
+        // repo_id appears twice in the WHERE clause (once for r.repo_id, once for wt.repo_id)
+        all_params.push(rusqlite::types::Value::Text(repo_id.to_owned()));
+        all_params.push(rusqlite::types::Value::Text(repo_id.to_owned()));
         crate::db::query_collect(
             self.conn,
             &sql,
@@ -822,11 +835,11 @@ impl<'a> WorkflowManager<'a> {
         let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
         let mut map: HashMap<String, (String, i64)> = HashMap::new();
         while let Some(row) = rows.next()? {
-            let run_id: String = row.get(0)?;
+            let run_id: String = row.get("workflow_run_id")?;
             // Take only the first (lowest-position) row per run_id.
             map.entry(run_id).or_insert_with(|| {
-                let step_name: String = row.get(1).unwrap_or_default();
-                let iteration: i64 = row.get(2).unwrap_or(0);
+                let step_name: String = row.get("step_name").unwrap_or_default();
+                let iteration: i64 = row.get("iteration").unwrap_or(0);
                 (step_name, iteration)
             });
         }
@@ -862,8 +875,8 @@ impl<'a> WorkflowManager<'a> {
         let mut name_rows = name_stmt.query(name_params.as_slice())?;
         let mut root_names: HashMap<String, String> = HashMap::new();
         while let Some(row) = name_rows.next()? {
-            let id: String = row.get(0)?;
-            let name: String = row.get(1)?;
+            let id: String = row.get("id")?;
+            let name: String = row.get("workflow_name")?;
             root_names.insert(id, name);
         }
 
@@ -938,9 +951,9 @@ impl<'a> WorkflowManager<'a> {
         let status: Option<String> = self
             .conn
             .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                params![run_id],
-                |row| row.get(0),
+                "SELECT status FROM workflow_runs WHERE id = :id",
+                named_params! { ":id": run_id },
+                |row| row.get("status"),
             )
             .optional()?;
         Ok(status.as_deref() == Some("cancelled"))
@@ -954,13 +967,16 @@ impl<'a> WorkflowManager<'a> {
         limit: usize,
     ) -> Result<Vec<i64>> {
         let sql = "SELECT total_duration_ms FROM workflow_runs \
-                   WHERE workflow_name = ?1 \
+                   WHERE workflow_name = :workflow_name \
                      AND status = 'completed' \
                      AND total_duration_ms IS NOT NULL \
                    ORDER BY ended_at DESC \
-                   LIMIT ?2";
+                   LIMIT :limit";
         let mut stmt = self.conn.prepare_cached(sql)?;
-        let rows = stmt.query_map(params![workflow_name, limit as i64], |row| row.get(0))?;
+        let rows = stmt.query_map(
+            named_params! { ":workflow_name": workflow_name, ":limit": limit as i64 },
+            |row| row.get("total_duration_ms"),
+        )?;
         let mut durations = Vec::new();
         for row in rows {
             durations.push(row?);
@@ -1023,13 +1039,16 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<HashMap<String, Vec<i64>>> {
         // Phase 1: get IDs of recent completed runs
         let run_sql = "SELECT id FROM workflow_runs \
-                       WHERE workflow_name = ?1 \
+                       WHERE workflow_name = :workflow_name \
                          AND status = 'completed' \
                        ORDER BY ended_at DESC \
-                       LIMIT ?2";
+                       LIMIT :limit";
         let mut run_stmt = self.conn.prepare_cached(run_sql)?;
         let run_ids: Vec<String> = run_stmt
-            .query_map(params![workflow_name, limit_runs as i64], |row| row.get(0))?
+            .query_map(
+                named_params! { ":workflow_name": workflow_name, ":limit": limit_runs as i64 },
+                |row| row.get("id"),
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         if run_ids.is_empty() {
@@ -1049,8 +1068,8 @@ impl<'a> WorkflowManager<'a> {
         );
         let mut step_stmt = self.conn.prepare(&step_sql)?;
         let rows = step_stmt.query_map(rusqlite::params_from_iter(run_ids.iter()), |row| {
-            let name: String = row.get(0)?;
-            let dur: i64 = row.get(1)?;
+            let name: String = row.get("step_name")?;
+            let dur: i64 = row.get("duration_ms")?;
             Ok((name, dur))
         })?;
 
@@ -1082,21 +1101,21 @@ impl<'a> WorkflowManager<'a> {
                     MAX(definition_snapshot) AS definition_snapshot \
              FROM workflow_runs \
              WHERE status IN ('completed', 'failed') \
-               AND (?1 IS NULL OR repo_id = ?1) \
+               AND (:repo_id IS NULL OR repo_id = :repo_id) \
              GROUP BY workflow_name \
              ORDER BY avg_input + avg_output DESC, run_count DESC",
         )?;
-        let rows = stmt.query_map(params![repo_id], |row| {
-            let definition_snapshot: Option<String> = row.get(7)?;
+        let rows = stmt.query_map(named_params! { ":repo_id": repo_id }, |row| {
+            let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
             let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
             Ok(WorkflowTokenAggregate {
-                workflow_name: row.get(0)?,
-                avg_input: row.get(1)?,
-                avg_output: row.get(2)?,
-                avg_cache_read: row.get(3)?,
-                avg_cache_creation: row.get(4)?,
-                run_count: row.get(5)?,
-                success_rate: row.get(6)?,
+                workflow_name: row.get("workflow_name")?,
+                avg_input: row.get("avg_input")?,
+                avg_output: row.get("avg_output")?,
+                avg_cache_read: row.get("avg_cache_read")?,
+                avg_cache_creation: row.get("avg_cache_creation")?,
+                run_count: row.get("run_count")?,
+                success_rate: row.get("success_rate")?,
                 workflow_title,
             })
         })?;
@@ -1117,19 +1136,19 @@ impl<'a> WorkflowManager<'a> {
                     COALESCE(SUM(total_cache_read_input_tokens), 0) as total_cache_read, \
                     COALESCE(SUM(total_cache_creation_input_tokens), 0) as total_cache_creation \
              FROM workflow_runs \
-             WHERE workflow_name = ?1 AND status = 'completed' AND total_input_tokens IS NOT NULL \
+             WHERE workflow_name = :workflow_name AND status = 'completed' AND total_input_tokens IS NOT NULL \
              GROUP BY period \
              ORDER BY period DESC \
              LIMIT 30"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
-        let rows = stmt.query_map(params![workflow_name], |row| {
+        let rows = stmt.query_map(named_params! { ":workflow_name": workflow_name }, |row| {
             Ok(WorkflowTokenTrendRow {
-                period: row.get(0)?,
-                total_input: row.get(1)?,
-                total_output: row.get(2)?,
-                total_cache_read: row.get(3)?,
-                total_cache_creation: row.get(4)?,
+                period: row.get("period")?,
+                total_input: row.get("total_input")?,
+                total_output: row.get("total_output")?,
+                total_cache_read: row.get("total_cache_read")?,
+                total_cache_creation: row.get("total_cache_creation")?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1158,13 +1177,13 @@ impl<'a> WorkflowManager<'a> {
              ORDER BY (AVG(ar.input_tokens) + AVG(ar.output_tokens)) DESC",
             Self::N_RECENT_COMPLETED_RUNS_SUBQUERY
         ))?;
-        let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params![workflow_name, limit_runs as i64], |row| {
             Ok(StepTokenHeatmapRow {
-                step_name: row.get(0)?,
-                avg_input: row.get(1)?,
-                avg_output: row.get(2)?,
-                avg_cache_read: row.get(3)?,
-                run_count: row.get(4)?,
+                step_name: row.get("step_name")?,
+                avg_input: row.get("avg_input")?,
+                avg_output: row.get("avg_output")?,
+                avg_cache_read: row.get("avg_cache_read")?,
+                run_count: row.get("run_count")?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1184,18 +1203,18 @@ impl<'a> WorkflowManager<'a> {
                     SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed_runs, \
                     COALESCE(CAST(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS success_rate \
              FROM workflow_runs \
-             WHERE workflow_name = ?1 AND status IN ('completed', 'failed') \
+             WHERE workflow_name = :workflow_name AND status IN ('completed', 'failed') \
              GROUP BY period \
              ORDER BY period DESC \
              LIMIT 30"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
-        let rows = stmt.query_map(params![workflow_name], |row| {
+        let rows = stmt.query_map(named_params! { ":workflow_name": workflow_name }, |row| {
             Ok(WorkflowFailureRateTrendRow {
-                period: row.get(0)?,
-                total_runs: row.get(1)?,
-                failed_runs: row.get(2)?,
-                success_rate: row.get(3)?,
+                period: row.get("period")?,
+                total_runs: row.get("total_runs")?,
+                failed_runs: row.get("failed_runs")?,
+                success_rate: row.get("success_rate")?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1226,13 +1245,13 @@ impl<'a> WorkflowManager<'a> {
              ORDER BY failure_rate DESC, total_executions DESC",
             Self::N_RECENT_TERMINAL_RUNS_SUBQUERY
         ))?;
-        let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params![workflow_name, limit_runs as i64], |row| {
             Ok(StepFailureHeatmapRow {
-                step_name: row.get(0)?,
-                total_executions: row.get(1)?,
-                failed_executions: row.get(2)?,
-                failure_rate: row.get(3)?,
-                avg_retry_count: row.get(4)?,
+                step_name: row.get("step_name")?,
+                total_executions: row.get("total_executions")?,
+                failed_executions: row.get("failed_executions")?,
+                failure_rate: row.get("failure_rate")?,
+                avg_retry_count: row.get("avg_retry_count")?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1272,14 +1291,14 @@ impl<'a> WorkflowManager<'a> {
              ORDER BY retry_rate DESC, total_executions DESC",
             Self::N_RECENT_TERMINAL_RUNS_SUBQUERY
         ))?;
-        let rows = stmt.query_map(params![workflow_name, limit_runs as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params![workflow_name, limit_runs as i64], |row| {
             Ok(StepRetryAnalyticsRow {
-                step_name: row.get(0)?,
-                total_executions: row.get(1)?,
-                executions_with_retries: row.get(2)?,
-                retry_rate: row.get(3)?,
-                avg_retry_count: row.get(4)?,
-                retry_success_rate: row.get(5)?,
+                step_name: row.get("step_name")?,
+                total_executions: row.get("total_executions")?,
+                executions_with_retries: row.get("executions_with_retries")?,
+                retry_rate: row.get("retry_rate")?,
+                avg_retry_count: row.get("avg_retry_count")?,
+                retry_success_rate: row.get("retry_success_rate")?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1296,24 +1315,27 @@ impl<'a> WorkflowManager<'a> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT id, started_at, total_duration_ms, total_input_tokens, total_output_tokens, worktree_id, repo_id \
              FROM workflow_runs \
-             WHERE workflow_name = ?1 \
+             WHERE workflow_name = :workflow_name \
                AND status = 'completed' \
-               AND started_at >= datetime('now', '-' || ?2 || ' days') \
+               AND started_at >= datetime('now', '-' || :days || ' days') \
                AND (COALESCE(total_input_tokens, 0) > 0 OR COALESCE(total_output_tokens, 0) > 0 OR COALESCE(total_duration_ms, 0) > 0) \
              ORDER BY started_at DESC \
              LIMIT 10000",
         )?;
-        let rows = stmt.query_map(params![workflow_name, days], |row| {
-            Ok(WorkflowRunMetricsRow {
-                run_id: row.get(0)?,
-                started_at: row.get(1)?,
-                duration_ms: row.get(2)?,
-                input_tokens: row.get(3)?,
-                output_tokens: row.get(4)?,
-                worktree_id: row.get(5)?,
-                repo_id: row.get(6)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            named_params! { ":workflow_name": workflow_name, ":days": days },
+            |row| {
+                Ok(WorkflowRunMetricsRow {
+                    run_id: row.get("id")?,
+                    started_at: row.get("started_at")?,
+                    duration_ms: row.get("total_duration_ms")?,
+                    input_tokens: row.get("total_input_tokens")?,
+                    output_tokens: row.get("total_output_tokens")?,
+                    worktree_id: row.get("worktree_id")?,
+                    repo_id: row.get("repo_id")?,
+                })
+            },
+        )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -1336,9 +1358,9 @@ impl<'a> WorkflowManager<'a> {
                  ROW_NUMBER() OVER (ORDER BY (COALESCE(total_input_tokens,0) + COALESCE(total_output_tokens,0))) AS rn_tok, \
                  COUNT(*) OVER () AS cnt \
                FROM workflow_runs \
-               WHERE workflow_name = ?1 \
+               WHERE workflow_name = :workflow_name \
                  AND status = 'completed' \
-                 AND started_at >= datetime('now', '-' || ?2 || ' days') \
+                 AND started_at >= datetime('now', '-' || :days || ' days') \
                  AND total_duration_ms IS NOT NULL \
              ) \
              SELECT \
@@ -1357,24 +1379,27 @@ impl<'a> WorkflowManager<'a> {
                MAX(cnt) AS run_count \
              FROM ranked",
         )?;
-        let row = stmt.query_row(params![workflow_name, days], |row| {
-            let run_count: Option<i64> = row.get(12)?;
-            Ok((
-                row.get::<_, Option<f64>>(0)?,
-                row.get::<_, Option<f64>>(1)?,
-                row.get::<_, Option<f64>>(2)?,
-                row.get::<_, Option<f64>>(3)?,
-                row.get::<_, Option<f64>>(4)?,
-                row.get::<_, Option<f64>>(5)?,
-                row.get::<_, Option<f64>>(6)?,
-                row.get::<_, Option<f64>>(7)?,
-                row.get::<_, Option<f64>>(8)?,
-                row.get::<_, Option<f64>>(9)?,
-                row.get::<_, Option<f64>>(10)?,
-                row.get::<_, Option<f64>>(11)?,
-                run_count,
-            ))
-        })?;
+        let row = stmt.query_row(
+            named_params! { ":workflow_name": workflow_name, ":days": days },
+            |row| {
+                let run_count: Option<i64> = row.get("run_count")?;
+                Ok((
+                    row.get::<_, Option<f64>>("p50_duration_ms")?,
+                    row.get::<_, Option<f64>>("p75_duration_ms")?,
+                    row.get::<_, Option<f64>>("p95_duration_ms")?,
+                    row.get::<_, Option<f64>>("p99_duration_ms")?,
+                    row.get::<_, Option<f64>>("p50_cost_usd")?,
+                    row.get::<_, Option<f64>>("p75_cost_usd")?,
+                    row.get::<_, Option<f64>>("p95_cost_usd")?,
+                    row.get::<_, Option<f64>>("p99_cost_usd")?,
+                    row.get::<_, Option<f64>>("p50_total_tokens")?,
+                    row.get::<_, Option<f64>>("p75_total_tokens")?,
+                    row.get::<_, Option<f64>>("p95_total_tokens")?,
+                    row.get::<_, Option<f64>>("p99_total_tokens")?,
+                    run_count,
+                ))
+            },
+        )?;
         let run_count = row.12.unwrap_or(0);
         if run_count == 0 {
             return Ok(None);
@@ -1414,10 +1439,10 @@ impl<'a> WorkflowManager<'a> {
                  ROW_NUMBER() OVER (ORDER BY total_duration_ms) AS rn_dur, \
                  COUNT(*) OVER () AS cnt \
                FROM workflow_runs \
-               WHERE workflow_name = ?1 \
+               WHERE workflow_name = :workflow_name \
                  AND status = 'completed' \
                  AND parent_workflow_run_id IS NULL \
-                 AND started_at >= datetime('now', '-' || ?2 || ' days') \
+                 AND started_at >= datetime('now', '-' || :days || ' days') \
                  AND total_duration_ms IS NOT NULL \
              ) \
              SELECT \
@@ -1426,13 +1451,16 @@ impl<'a> WorkflowManager<'a> {
                MAX(cnt) AS run_count \
              FROM ranked",
         )?;
-        let row = stmt.query_row(params![workflow_name, days], |row| {
-            Ok((
-                row.get::<_, Option<f64>>(0)?,
-                row.get::<_, Option<f64>>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-            ))
-        })?;
+        let row = stmt.query_row(
+            named_params! { ":workflow_name": workflow_name, ":days": days },
+            |row| {
+                Ok((
+                    row.get::<_, Option<f64>>("avg_cost_usd")?,
+                    row.get::<_, Option<f64>>("p75_duration_ms")?,
+                    row.get::<_, Option<i64>>("run_count")?,
+                ))
+            },
+        )?;
         let run_count = row.2.unwrap_or(0);
         if run_count < min_runs as i64 {
             return Ok(None);
@@ -1481,7 +1509,7 @@ impl<'a> WorkflowManager<'a> {
                  COUNT(*) OVER (PARTITION BY workflow_name)                               AS cnt
                FROM workflow_runs
                WHERE status IN ('completed', 'failed')
-                 AND started_at >= datetime('now', '-' || ?1 || ' days')
+                 AND started_at >= datetime('now', '-' || :recent_days || ' days')
              ),
              recent AS (
                SELECT
@@ -1495,7 +1523,7 @@ impl<'a> WorkflowManager<'a> {
                  MAX(definition_snapshot)                                                  AS definition_snapshot
                FROM recent_ranked
                GROUP BY workflow_name
-               HAVING COUNT(*) >= ?2
+               HAVING COUNT(*) >= :min_recent_runs
              ),
              baseline_ranked AS (
                SELECT
@@ -1508,8 +1536,8 @@ impl<'a> WorkflowManager<'a> {
                  COUNT(*) OVER (PARTITION BY workflow_name)                               AS cnt
                FROM workflow_runs
                WHERE status IN ('completed', 'failed')
-                 AND started_at >= datetime('now', '-' || (?1 + ?3) || ' days')
-                 AND started_at <  datetime('now', '-' || ?1 || ' days')
+                 AND started_at >= datetime('now', '-' || (:recent_days + :baseline_days) || ' days')
+                 AND started_at <  datetime('now', '-' || :recent_days || ' days')
              ),
              baseline AS (
                SELECT
@@ -1539,17 +1567,17 @@ impl<'a> WorkflowManager<'a> {
         )?;
 
         let rows = stmt.query_map(
-            params![recent_days, min_recent_runs, baseline_days],
+            named_params! { ":recent_days": recent_days, ":min_recent_runs": min_recent_runs, ":baseline_days": baseline_days },
             |row| {
-                let recent_runs: i64 = row.get(1)?;
-                let baseline_runs: i64 = row.get(2)?;
-                let recent_p75_duration_ms: Option<f64> = row.get(3)?;
-                let baseline_p75_duration_ms: Option<f64> = row.get(4)?;
-                let recent_p75_cost_usd: Option<f64> = row.get(5)?;
-                let baseline_p75_cost_usd: Option<f64> = row.get(6)?;
-                let recent_failure_rate: f64 = row.get(7)?;
-                let baseline_failure_rate: f64 = row.get(8)?;
-                let definition_snapshot: Option<String> = row.get(9)?;
+                let recent_runs: i64 = row.get("recent_runs")?;
+                let baseline_runs: i64 = row.get("baseline_runs")?;
+                let recent_p75_duration_ms: Option<f64> = row.get("recent_p75_duration_ms")?;
+                let baseline_p75_duration_ms: Option<f64> = row.get("baseline_p75_duration_ms")?;
+                let recent_p75_cost_usd: Option<f64> = row.get("recent_p75_cost_usd")?;
+                let baseline_p75_cost_usd: Option<f64> = row.get("baseline_p75_cost_usd")?;
+                let recent_failure_rate: f64 = row.get("recent_failure_rate")?;
+                let baseline_failure_rate: f64 = row.get("baseline_failure_rate")?;
+                let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
                 let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
 
                 // Compute percentage change for duration and cost.
@@ -1559,7 +1587,7 @@ impl<'a> WorkflowManager<'a> {
                 let failure_rate_change_pp = recent_failure_rate - baseline_failure_rate;
 
                 Ok(WorkflowRegressionSignal {
-                    workflow_name: row.get(0)?,
+                    workflow_name: row.get("workflow_name")?,
                     workflow_title,
                     recent_runs,
                     baseline_runs,
@@ -1619,10 +1647,10 @@ impl<'a> WorkflowManager<'a> {
                  wrs.gate_feedback \
                FROM workflow_runs wr \
                JOIN workflow_run_steps wrs ON wrs.workflow_run_id = wr.id \
-               WHERE wr.workflow_name = ?1 \
+               WHERE wr.workflow_name = :workflow_name \
                  AND wrs.gate_type IS NOT NULL \
                  AND wrs.status IN ('completed', 'failed') \
-                 AND wr.started_at >= datetime('now', '-' || ?2 || ' days') \
+                 AND wr.started_at >= datetime('now', '-' || :days || ' days') \
              ), \
              ranked AS ( \
                SELECT \
@@ -1649,19 +1677,22 @@ impl<'a> WorkflowManager<'a> {
              GROUP BY step_name \
              ORDER BY total_gate_hits DESC, step_name",
         )?;
-        let rows = stmt.query_map(params![workflow_name, days], |row| {
-            Ok(GateAnalyticsRow {
-                step_name: row.get(0)?,
-                total_gate_hits: row.get(1)?,
-                approved_count: row.get(2)?,
-                rejected_count: row.get(3)?,
-                approval_rate: row.get(4)?,
-                avg_wait_ms: row.get(5)?,
-                p50_wait_ms: row.get(6)?,
-                p95_wait_ms: row.get(7)?,
-                avg_feedback_length: row.get(8)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            named_params! { ":workflow_name": workflow_name, ":days": days },
+            |row| {
+                Ok(GateAnalyticsRow {
+                    step_name: row.get("step_name")?,
+                    total_gate_hits: row.get("total_gate_hits")?,
+                    approved_count: row.get("approved_count")?,
+                    rejected_count: row.get("rejected_count")?,
+                    approval_rate: row.get("approval_rate")?,
+                    avg_wait_ms: row.get("avg_wait_ms")?,
+                    p50_wait_ms: row.get("p50_wait_ms")?,
+                    p95_wait_ms: row.get("p95_wait_ms")?,
+                    avg_feedback_length: row.get("avg_feedback_length")?,
+                })
+            },
+        )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -1686,14 +1717,14 @@ impl<'a> WorkflowManager<'a> {
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(PendingGateAnalyticsRow {
-                step_id: row.get(0)?,
-                step_name: row.get(1)?,
-                gate_type: row.get(2)?,
-                gate_prompt: row.get(3)?,
-                workflow_name: row.get(4)?,
-                workflow_run_id: row.get(5)?,
-                started_at: row.get(6)?,
-                wait_ms_so_far: row.get(7)?,
+                step_id: row.get("step_id")?,
+                step_name: row.get("step_name")?,
+                gate_type: row.get("gate_type")?,
+                gate_prompt: row.get("gate_prompt")?,
+                workflow_name: row.get("workflow_name")?,
+                workflow_run_id: row.get("workflow_run_id")?,
+                started_at: row.get("started_at")?,
+                wait_ms_so_far: row.get("wait_ms_so_far")?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1805,8 +1836,8 @@ mod tests {
             conn.execute(
                 "INSERT INTO workflow_runs \
                  (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
-                 VALUES (?1, 'test-wf', NULL, 'dummy-ar', 'completed', datetime('now'))",
-                rusqlite::params![id],
+                 VALUES (:id, 'test-wf', NULL, 'dummy-ar', 'completed', datetime('now'))",
+                rusqlite::named_params! { ":id": id },
             )
             .unwrap();
         }

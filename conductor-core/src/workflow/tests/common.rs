@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::schema_config;
 use crate::schema_config::OutputSchema;
 use crate::workflow_dsl::{ApprovalMode, GateNode, GateType, OnTimeout};
-use rusqlite::{params, Connection};
+use rusqlite::{named_params, Connection};
 use std::collections::HashMap;
 
 pub(super) fn setup_db() -> Connection {
@@ -337,9 +337,9 @@ pub(super) fn insert_test_ticket(conn: &Connection, id: &str, repo_id: &str) {
     conn.execute(
         "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, \
          labels, url, synced_at, raw_json) \
-         VALUES (?1, ?2, 'github', ?3, 'Test ticket title', '', 'open', '[]', \
+         VALUES (:id, :repo_id, 'github', :id, 'Test ticket title', '', 'open', '[]', \
          'https://github.com/test/repo/issues/1', '2024-01-01T00:00:00Z', '{}')",
-        rusqlite::params![id, repo_id, id],
+        named_params! { ":id": id, ":repo_id": repo_id },
     )
     .unwrap();
 }
@@ -360,8 +360,8 @@ pub(super) fn insert_workflow_run(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at, \
           parent_workflow_run_id) \
-         VALUES (?1, ?2, NULL, ?3, ?4, 0, 'manual', '2025-01-01T00:00:00Z', ?5)",
-        params![id, name, parent.id, status, parent_workflow_run_id],
+         VALUES (:id, :name, NULL, :parent_run_id, :status, 0, 'manual', '2025-01-01T00:00:00Z', :parent_workflow_run_id)",
+        named_params! { ":id": id, ":name": name, ":parent_run_id": parent.id, ":status": status, ":parent_workflow_run_id": parent_workflow_run_id },
     )
     .unwrap();
 }
@@ -371,8 +371,8 @@ pub(super) fn insert_running_step(conn: &Connection, step_id: &str, run_id: &str
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration) \
-         VALUES (?1, ?2, ?3, 'actor', 0, 'running', 1)",
-        params![step_id, run_id, step_name],
+         VALUES (:step_id, :run_id, :step_name, 'actor', 0, 'running', 1)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name },
     )
     .unwrap();
 }
@@ -418,8 +418,8 @@ pub(super) fn insert_waiting_run_with_gate(
 
     // Set the parent agent run to the requested status directly.
     conn.execute(
-        "UPDATE agent_runs SET status = ?1 WHERE id = ?2",
-        params![parent_status, parent.id],
+        "UPDATE agent_runs SET status = :status WHERE id = :id",
+        named_params! { ":status": parent_status, ":id": parent.id },
     )
     .unwrap();
 
@@ -428,9 +428,9 @@ pub(super) fn insert_waiting_run_with_gate(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
           started_at, parent_workflow_run_id) \
-         VALUES (?1, 'test-wf', NULL, ?2, 'waiting', 0, 'manual', \
+         VALUES (:run_id, 'test-wf', NULL, :parent_run_id, 'waiting', 0, 'manual', \
                  '2025-01-01T00:00:00Z', NULL)",
-        params![run_id, parent.id],
+        named_params! { ":run_id": run_id, ":parent_run_id": parent.id },
     )
     .unwrap();
 
@@ -441,9 +441,9 @@ pub(super) fn insert_waiting_run_with_gate(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, \
           gate_type, gate_timeout, started_at) \
-         VALUES (?1, ?2, 'approval-gate', 'gate', 0, 'waiting', 1, \
-                 'human_approval', ?3, ?4)",
-        params![step_id, run_id, gate_timeout, started],
+         VALUES (:step_id, :run_id, 'approval-gate', 'gate', 0, 'waiting', 1, \
+                 'human_approval', :gate_timeout, :started)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":gate_timeout": gate_timeout, ":started": started },
     )
     .unwrap();
 
@@ -518,8 +518,8 @@ pub(super) fn insert_terminal_step_with_id(
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, ended_at) \
-         VALUES (?1, ?2, 'step-a', 'actor', 0, ?3, 0, ?4)",
-        params![step_id, run_id, status, ended_at],
+         VALUES (:step_id, :run_id, 'step-a', 'actor', 0, :status, 0, :ended_at)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":status": status, ":ended_at": ended_at },
     )
     .unwrap();
 }

@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use rusqlite::params;
-
 use crate::error::Result;
 
 use super::super::context::PR_REVIEW_SWARM_PROMPT_PREFIX;
@@ -17,7 +15,7 @@ impl<'a> AgentManager<'a> {
         let (where_clause, param_values): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
             match repo_id {
                 Some(id) => (
-                    "WHERE w.ticket_id IS NOT NULL AND a.status = 'completed' AND w.repo_id = ?1",
+                    "WHERE w.ticket_id IS NOT NULL AND a.status = 'completed' AND w.repo_id = ?",
                     vec![Box::new(id.to_string())],
                 ),
                 None => (
@@ -47,15 +45,15 @@ impl<'a> AgentManager<'a> {
             param_values.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(param_refs.as_slice(), |row| {
             Ok(TicketAgentTotals {
-                ticket_id: row.get(0)?,
-                total_runs: row.get(1)?,
-                total_cost: row.get(2)?,
-                total_turns: row.get(3)?,
-                total_duration_ms: row.get(4)?,
-                total_input_tokens: row.get(5)?,
-                total_output_tokens: row.get(6)?,
-                total_cache_read_tokens: row.get(7)?,
-                total_cache_creation_tokens: row.get(8)?,
+                ticket_id: row.get("ticket_id")?,
+                total_runs: row.get("total_runs")?,
+                total_cost: row.get("total_cost")?,
+                total_turns: row.get("total_turns")?,
+                total_duration_ms: row.get("total_duration_ms")?,
+                total_input_tokens: row.get("total_input_tokens")?,
+                total_output_tokens: row.get("total_output_tokens")?,
+                total_cache_read_tokens: row.get("total_cache_read_tokens")?,
+                total_cache_creation_tokens: row.get("total_cache_creation_tokens")?,
             })
         })?;
 
@@ -94,7 +92,7 @@ impl<'a> AgentManager<'a> {
             "WITH RECURSIVE tree(root_id, node_id) AS ( \
                  SELECT id, id \
                  FROM agent_runs \
-                 WHERE worktree_id = ?1 AND parent_run_id IS NULL \
+                 WHERE worktree_id = :worktree_id AND parent_run_id IS NULL \
                  UNION ALL \
                  SELECT t.root_id, a.id \
                  FROM agent_runs a \
@@ -109,22 +107,25 @@ impl<'a> AgentManager<'a> {
                  GROUP BY t.root_id \
              ) \
              SELECT r.id, r.model, r.prompt, \
-                    COALESCE(agg.total_cost, 0.0), \
-                    COALESCE(agg.total_duration_ms, 0) \
+                    COALESCE(agg.total_cost, 0.0) AS total_cost, \
+                    COALESCE(agg.total_duration_ms, 0) AS total_duration_ms \
              FROM agent_runs r \
              LEFT JOIN agg ON agg.root_id = r.id \
-             WHERE r.worktree_id = ?1 AND r.parent_run_id IS NULL \
+             WHERE r.worktree_id = :worktree_id AND r.parent_run_id IS NULL \
              ORDER BY r.started_at ASC",
         )?;
 
-        let rows = stmt.query_map(params![worktree_id], |row| {
-            Ok((
-                row.get::<_, Option<String>>(1)?, // model
-                row.get::<_, String>(2)?,         // prompt
-                row.get::<_, f64>(3)?,            // total_cost
-                row.get::<_, i64>(4)?,            // total_duration_ms
-            ))
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::named_params! { ":worktree_id": worktree_id },
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>("model")?,  // model
+                    row.get::<_, String>("prompt")?,         // prompt
+                    row.get::<_, f64>("total_cost")?,        // total_cost
+                    row.get::<_, i64>("total_duration_ms")?, // total_duration_ms
+                ))
+            },
+        )?;
 
         let mut phases = Vec::new();
         let mut review_count = 0u32;
@@ -156,7 +157,7 @@ impl<'a> AgentManager<'a> {
     pub fn aggregate_run_tree(&self, root_run_id: &str) -> Result<RunTreeTotals> {
         let row = self.conn.query_row(
             "WITH RECURSIVE tree(id) AS ( \
-                 SELECT id FROM agent_runs WHERE id = ?1 \
+                 SELECT id FROM agent_runs WHERE id = :root_run_id \
                  UNION ALL \
                  SELECT a.id FROM agent_runs a JOIN tree t ON a.parent_run_id = t.id \
              ) \
@@ -169,15 +170,15 @@ impl<'a> AgentManager<'a> {
              FROM agent_runs a \
              JOIN tree t ON a.id = t.id \
              WHERE a.status = 'completed'",
-            params![root_run_id],
+            rusqlite::named_params! { ":root_run_id": root_run_id },
             |row| {
                 Ok(RunTreeTotals {
-                    total_runs: row.get(0)?,
-                    total_cost: row.get(1)?,
-                    total_turns: row.get(2)?,
-                    total_duration_ms: row.get(3)?,
-                    total_input_tokens: row.get(4)?,
-                    total_output_tokens: row.get(5)?,
+                    total_runs: row.get("total_runs")?,
+                    total_cost: row.get("total_cost")?,
+                    total_turns: row.get("total_turns")?,
+                    total_duration_ms: row.get("total_duration_ms")?,
+                    total_input_tokens: row.get("total_input_tokens")?,
+                    total_output_tokens: row.get("total_output_tokens")?,
                 })
             },
         )?;
@@ -193,8 +194,8 @@ impl<'a> AgentManager<'a> {
     pub fn totals_by_worktree(&self) -> Result<HashMap<String, (i64, i64)>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT a.worktree_id, \
-                    COALESCE(SUM(a.input_tokens), 0), \
-                    COALESCE(SUM(a.output_tokens), 0) \
+                    COALESCE(SUM(a.input_tokens), 0) AS total_input_tokens, \
+                    COALESCE(SUM(a.output_tokens), 0) AS total_output_tokens \
              FROM agent_runs a \
              WHERE a.status = 'completed' \
                AND a.worktree_id IS NOT NULL \
@@ -202,9 +203,9 @@ impl<'a> AgentManager<'a> {
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
+                row.get::<_, String>("worktree_id")?,
+                row.get::<_, i64>("total_input_tokens")?,
+                row.get::<_, i64>("total_output_tokens")?,
             ))
         })?;
         let mut map = HashMap::new();
@@ -226,9 +227,9 @@ impl<'a> AgentManager<'a> {
              GROUP BY w.repo_id, a.status",
         )?;
         let rows = stmt.query_map([], |row| {
-            let repo_id: String = row.get(0)?;
-            let status: String = row.get(1)?;
-            let cnt: u32 = row.get(2)?;
+            let repo_id: String = row.get("repo_id")?;
+            let status: String = row.get("status")?;
+            let cnt: u32 = row.get("cnt")?;
             Ok((repo_id, status, cnt))
         })?;
         let mut map: HashMap<String, ActiveAgentCounts> = HashMap::new();

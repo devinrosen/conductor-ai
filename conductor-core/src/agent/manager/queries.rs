@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rusqlite::params;
+use rusqlite::named_params;
 
 use crate::db::query_collect;
 use crate::error::Result;
@@ -34,8 +34,8 @@ impl<'a> AgentManager<'a> {
 
     pub fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
-            &format!("{AGENT_RUN_SELECT} WHERE id = ?1"),
-            params![run_id],
+            &format!("{AGENT_RUN_SELECT} WHERE id = :id"),
+            named_params! { ":id": run_id },
             row_to_agent_run,
         );
         self.load_optional_run(result)
@@ -64,8 +64,10 @@ impl<'a> AgentManager<'a> {
     pub fn list_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRun>> {
         let mut runs = query_collect(
             self.conn,
-            &format!("{AGENT_RUN_SELECT} WHERE worktree_id = ?1 ORDER BY started_at DESC"),
-            params![worktree_id],
+            &format!(
+                "{AGENT_RUN_SELECT} WHERE worktree_id = :worktree_id ORDER BY started_at DESC"
+            ),
+            named_params! { ":worktree_id": worktree_id },
             row_to_agent_run,
         )?;
         self.populate_plans(&mut runs)?;
@@ -76,8 +78,8 @@ impl<'a> AgentManager<'a> {
     pub fn list_for_conversation(&self, conversation_id: &str) -> Result<Vec<AgentRun>> {
         let mut runs = query_collect(
             self.conn,
-            &format!("{AGENT_RUN_SELECT} WHERE conversation_id = ?1 ORDER BY started_at ASC"),
-            params![conversation_id],
+            &format!("{AGENT_RUN_SELECT} WHERE conversation_id = :conversation_id ORDER BY started_at ASC"),
+            named_params! { ":conversation_id": conversation_id },
             row_to_agent_run,
         )?;
         self.populate_plans(&mut runs)?;
@@ -95,10 +97,10 @@ impl<'a> AgentManager<'a> {
                 "SELECT {AGENT_RUN_COLS_A_NULL_PLAN} \
                  FROM agent_runs a \
                  JOIN worktrees w ON a.worktree_id = w.id \
-                 WHERE w.repo_id = ?1 \
+                 WHERE w.repo_id = :repo_id \
                  ORDER BY a.started_at DESC"
             ),
-            params![repo_id],
+            named_params! { ":repo_id": repo_id },
             row_to_agent_run,
         )?;
         self.populate_plans(&mut runs)?;
@@ -110,10 +112,10 @@ impl<'a> AgentManager<'a> {
         let mut runs = query_collect(
             self.conn,
             &format!(
-                "{AGENT_RUN_SELECT} WHERE repo_id = ?1 AND worktree_id IS NULL \
+                "{AGENT_RUN_SELECT} WHERE repo_id = :repo_id AND worktree_id IS NULL \
                  ORDER BY started_at DESC"
             ),
-            params![repo_id],
+            named_params! { ":repo_id": repo_id },
             row_to_agent_run,
         )?;
         self.populate_plans(&mut runs)?;
@@ -124,10 +126,10 @@ impl<'a> AgentManager<'a> {
     pub fn latest_repo_scoped(&self, repo_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
             &format!(
-                "{AGENT_RUN_SELECT} WHERE repo_id = ?1 AND worktree_id IS NULL \
+                "{AGENT_RUN_SELECT} WHERE repo_id = :repo_id AND worktree_id IS NULL \
                  ORDER BY started_at DESC LIMIT 1"
             ),
-            params![repo_id],
+            named_params! { ":repo_id": repo_id },
             row_to_agent_run,
         );
         self.load_optional_run(result)
@@ -136,17 +138,17 @@ impl<'a> AgentManager<'a> {
     /// Returns true if the worktree has any prior agent runs.
     pub fn has_runs_for_worktree(&self, worktree_id: &str) -> Result<bool> {
         let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM agent_runs WHERE worktree_id = ?1",
-            params![worktree_id],
-            |row| row.get(0),
+            "SELECT COUNT(*) as cnt FROM agent_runs WHERE worktree_id = :worktree_id",
+            named_params! { ":worktree_id": worktree_id },
+            |row| row.get("cnt"),
         )?;
         Ok(count > 0)
     }
 
     pub fn latest_for_worktree(&self, worktree_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
-            &format!("{AGENT_RUN_SELECT} WHERE worktree_id = ?1 ORDER BY started_at DESC LIMIT 1"),
-            params![worktree_id],
+            &format!("{AGENT_RUN_SELECT} WHERE worktree_id = :worktree_id ORDER BY started_at DESC LIMIT 1"),
+            named_params! { ":worktree_id": worktree_id },
             row_to_agent_run,
         );
         self.load_optional_run(result)
@@ -197,11 +199,11 @@ impl<'a> AgentManager<'a> {
                      SELECT ar.worktree_id, MAX(ar.started_at) AS max_started \
                      FROM agent_runs ar \
                      JOIN worktrees w ON ar.worktree_id = w.id \
-                     WHERE w.repo_id = ?1 \
+                     WHERE w.repo_id = :repo_id \
                      GROUP BY ar.worktree_id \
                  ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started"
             ),
-            params![repo_id],
+            named_params! { ":repo_id": repo_id },
             row_to_agent_run,
         )?;
         self.runs_to_worktree_map(runs)
@@ -244,11 +246,11 @@ impl<'a> AgentManager<'a> {
             self.conn,
             &format!(
                 "{AGENT_RUN_SELECT} \
-                 WHERE worktree_id = ?1 AND parent_run_id IS NULL \
+                 WHERE worktree_id = :worktree_id AND parent_run_id IS NULL \
                  ORDER BY started_at DESC \
                  LIMIT 1"
             ),
-            params![worktree_id],
+            named_params! { ":worktree_id": worktree_id },
             row_to_agent_run,
         )?;
         self.populate_plans(&mut runs)?;
@@ -261,8 +263,10 @@ impl<'a> AgentManager<'a> {
     pub fn list_child_runs(&self, parent_run_id: &str) -> Result<Vec<AgentRun>> {
         let mut runs = query_collect(
             self.conn,
-            &format!("{AGENT_RUN_SELECT} WHERE parent_run_id = ?1 ORDER BY started_at DESC"),
-            params![parent_run_id],
+            &format!(
+                "{AGENT_RUN_SELECT} WHERE parent_run_id = :parent_run_id ORDER BY started_at DESC"
+            ),
+            named_params! { ":parent_run_id": parent_run_id },
             row_to_agent_run,
         )?;
         self.populate_plans(&mut runs)?;
@@ -279,7 +283,7 @@ impl<'a> AgentManager<'a> {
             self.conn,
             &format!(
                 "WITH RECURSIVE tree(id) AS ( \
-                     SELECT id FROM agent_runs WHERE id = ?1 \
+                     SELECT id FROM agent_runs WHERE id = :root_run_id \
                      UNION ALL \
                      SELECT a.id FROM agent_runs a JOIN tree t ON a.parent_run_id = t.id \
                  ) \
@@ -288,7 +292,7 @@ impl<'a> AgentManager<'a> {
                  JOIN tree t ON a.id = t.id \
                  ORDER BY a.started_at ASC"
             ),
-            params![root_run_id],
+            named_params! { ":root_run_id": root_run_id },
             row_to_agent_run,
         )?;
         self.populate_plans(&mut runs)?;
@@ -300,10 +304,10 @@ impl<'a> AgentManager<'a> {
         let mut runs = query_collect(
             self.conn,
             &format!(
-                "{AGENT_RUN_SELECT} WHERE worktree_id = ?1 AND parent_run_id IS NULL \
+                "{AGENT_RUN_SELECT} WHERE worktree_id = :worktree_id AND parent_run_id IS NULL \
                  ORDER BY started_at DESC"
             ),
-            params![worktree_id],
+            named_params! { ":worktree_id": worktree_id },
             row_to_agent_run,
         )?;
         self.populate_plans(&mut runs)?;
@@ -577,8 +581,8 @@ mod tests {
 
         // Delete the parent — ON DELETE SET NULL should clear child's parent_run_id
         conn.execute(
-            "DELETE FROM agent_runs WHERE id = ?1",
-            rusqlite::params![parent.id],
+            "DELETE FROM agent_runs WHERE id = :id",
+            rusqlite::named_params! { ":id": parent.id },
         )
         .unwrap();
 

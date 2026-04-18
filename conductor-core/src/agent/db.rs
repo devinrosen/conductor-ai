@@ -163,32 +163,32 @@ pub(super) const AGENT_CREATED_ISSUES_SELECT: &str =
      FROM agent_created_issues";
 
 pub(super) fn row_to_feedback_request(row: &rusqlite::Row) -> rusqlite::Result<FeedbackRequest> {
-    let options_json: Option<String> = row.get(8)?;
+    let options_json: Option<String> = row.get("options_json")?;
     let options: Option<Vec<FeedbackOption>> =
         options_json.and_then(|j| serde_json::from_str(&j).ok());
     Ok(FeedbackRequest {
-        id: row.get(0)?,
-        run_id: row.get(1)?,
-        prompt: row.get(2)?,
-        response: row.get(3)?,
-        status: row.get(4)?,
-        created_at: row.get(5)?,
-        responded_at: row.get(6)?,
-        feedback_type: row.get(7)?,
+        id: row.get("id")?,
+        run_id: row.get("run_id")?,
+        prompt: row.get("prompt")?,
+        response: row.get("response")?,
+        status: row.get("status")?,
+        created_at: row.get("created_at")?,
+        responded_at: row.get("responded_at")?,
+        feedback_type: row.get("feedback_type")?,
         options,
-        timeout_secs: row.get(9)?,
+        timeout_secs: row.get("timeout_secs")?,
     })
 }
 
 pub(super) fn row_to_agent_run_event(row: &rusqlite::Row) -> rusqlite::Result<AgentRunEvent> {
     Ok(AgentRunEvent {
-        id: row.get(0)?,
-        run_id: row.get(1)?,
-        kind: row.get(2)?,
-        summary: row.get(3)?,
-        started_at: row.get(4)?,
-        ended_at: row.get(5)?,
-        metadata: row.get(6)?,
+        id: row.get("id")?,
+        run_id: row.get("run_id")?,
+        kind: row.get("kind")?,
+        summary: row.get("summary")?,
+        started_at: row.get("started_at")?,
+        ended_at: row.get("ended_at")?,
+        metadata: row.get("metadata")?,
     })
 }
 
@@ -196,59 +196,59 @@ pub(super) fn row_to_agent_created_issue(
     row: &rusqlite::Row,
 ) -> rusqlite::Result<AgentCreatedIssue> {
     Ok(AgentCreatedIssue {
-        id: row.get(0)?,
-        agent_run_id: row.get(1)?,
-        repo_id: row.get(2)?,
-        source_type: row.get(3)?,
-        source_id: row.get(4)?,
-        title: row.get(5)?,
-        url: row.get(6)?,
-        created_at: row.get(7)?,
+        id: row.get("id")?,
+        agent_run_id: row.get("agent_run_id")?,
+        repo_id: row.get("repo_id")?,
+        source_type: row.get("source_type")?,
+        source_id: row.get("source_id")?,
+        title: row.get("title")?,
+        url: row.get("url")?,
+        created_at: row.get("created_at")?,
     })
 }
 
 pub(super) fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
     // Plan is populated separately from agent_run_steps table by the caller.
-    // Column 15 (plan JSON) is still selected for SQL compatibility but ignored.
+    // The "plan" column is still selected for SQL compatibility but ignored here.
     Ok(AgentRun {
-        id: row.get(0)?,
-        worktree_id: row.get(1)?,
-        repo_id: row.get(2)?,
-        claude_session_id: row.get(3)?,
-        prompt: row.get(4)?,
-        status: row.get(5)?,
-        result_text: row.get(6)?,
-        cost_usd: row.get(7)?,
-        num_turns: row.get(8)?,
-        duration_ms: row.get(9)?,
-        started_at: row.get(10)?,
-        ended_at: row.get(11)?,
-        tmux_window: row.get(12)?,
-        log_file: row.get(13)?,
-        model: row.get(14)?,
+        id: row.get("id")?,
+        worktree_id: row.get("worktree_id")?,
+        repo_id: row.get("repo_id")?,
+        claude_session_id: row.get("claude_session_id")?,
+        prompt: row.get("prompt")?,
+        status: row.get("status")?,
+        result_text: row.get("result_text")?,
+        cost_usd: row.get("cost_usd")?,
+        num_turns: row.get("num_turns")?,
+        duration_ms: row.get("duration_ms")?,
+        started_at: row.get("started_at")?,
+        ended_at: row.get("ended_at")?,
+        tmux_window: row.get("tmux_window")?,
+        log_file: row.get("log_file")?,
+        model: row.get("model")?,
         plan: None,
-        parent_run_id: row.get(16)?,
-        input_tokens: row.get(17)?,
-        output_tokens: row.get(18)?,
-        cache_read_input_tokens: row.get(19)?,
-        cache_creation_input_tokens: row.get(20)?,
-        bot_name: row.get(21)?,
-        conversation_id: row.get(22)?,
-        subprocess_pid: row.get(23)?,
+        parent_run_id: row.get("parent_run_id")?,
+        input_tokens: row.get("input_tokens")?,
+        output_tokens: row.get("output_tokens")?,
+        cache_read_input_tokens: row.get("cache_read_input_tokens")?,
+        cache_creation_input_tokens: row.get("cache_creation_input_tokens")?,
+        bot_name: row.get("bot_name")?,
+        conversation_id: row.get("conversation_id")?,
+        subprocess_pid: row.get("subprocess_pid")?,
     })
 }
 
 pub(super) fn row_to_plan_step(row: &rusqlite::Row) -> rusqlite::Result<PlanStep> {
-    let status: StepStatus = row.get(4)?;
+    let status: StepStatus = row.get("status")?;
     let done = status == StepStatus::Completed;
     Ok(PlanStep {
-        id: Some(row.get(0)?),
-        description: row.get(3)?,
+        id: Some(row.get("id")?),
+        description: row.get("description")?,
         done,
         status,
-        position: Some(row.get(2)?),
-        started_at: row.get(5)?,
-        completed_at: row.get(6)?,
+        position: Some(row.get("position")?),
+        started_at: row.get("started_at")?,
+        completed_at: row.get("completed_at")?,
     })
 }
 
@@ -373,39 +373,42 @@ mod tests {
              tmux_window, log_file, model, plan, parent_run_id, \
              input_tokens, output_tokens, cache_read_input_tokens, \
              cache_creation_input_tokens, bot_name) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
-                     ?17, ?18, ?19, ?20, ?21, ?22)",
-            rusqlite::params![
-                "run-001",
-                "do the thing",
-                "running",
-                "2025-01-01T00:00:00Z",
-                "wt-001",
-                "repo-001",
-                "sess-001",
-                "all done",
-                1.5,
-                10i64,
-                5000i64,
-                "2025-01-01T00:05:00Z",
-                "tmux-win",
-                "/tmp/log.txt",
-                "claude-sonnet-4-6",
-                "[]",
-                "parent-001",
-                1000i64,
-                2000i64,
-                500i64,
-                100i64,
-                "my-bot",
-            ],
+             VALUES (:id, :prompt, :status, :started_at, :worktree_id, :repo_id, \
+                     :claude_session_id, :result_text, :cost_usd, :num_turns, :duration_ms, :ended_at, \
+                     :tmux_window, :log_file, :model, :plan, :parent_run_id, \
+                     :input_tokens, :output_tokens, :cache_read_input_tokens, \
+                     :cache_creation_input_tokens, :bot_name)",
+            rusqlite::named_params! {
+                ":id": "run-001",
+                ":prompt": "do the thing",
+                ":status": "running",
+                ":started_at": "2025-01-01T00:00:00Z",
+                ":worktree_id": "wt-001",
+                ":repo_id": "repo-001",
+                ":claude_session_id": "sess-001",
+                ":result_text": "all done",
+                ":cost_usd": 1.5,
+                ":num_turns": 10i64,
+                ":duration_ms": 5000i64,
+                ":ended_at": "2025-01-01T00:05:00Z",
+                ":tmux_window": "tmux-win",
+                ":log_file": "/tmp/log.txt",
+                ":model": "claude-sonnet-4-6",
+                ":plan": "[]",
+                ":parent_run_id": "parent-001",
+                ":input_tokens": 1000i64,
+                ":output_tokens": 2000i64,
+                ":cache_read_input_tokens": 500i64,
+                ":cache_creation_input_tokens": 100i64,
+                ":bot_name": "my-bot",
+            },
         )
         .unwrap();
 
         let run: AgentRun = conn
             .query_row(
-                &format!("{AGENT_RUN_SELECT} WHERE id = ?1"),
-                ["run-001"],
+                &format!("{AGENT_RUN_SELECT} WHERE id = :id"),
+                rusqlite::named_params! { ":id": "run-001" },
                 row_to_agent_run,
             )
             .unwrap();

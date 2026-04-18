@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{named_params, Connection};
 
 use crate::agent::AgentManager;
 use crate::error::{ConductorError, Result};
@@ -31,15 +31,15 @@ impl<'a> ConversationManager<'a> {
 
         self.conn.execute(
             "INSERT INTO conversations (id, scope, scope_id, title, created_at, last_active_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                conv.id,
-                conv.scope.to_string(),
-                conv.scope_id,
-                conv.title,
-                conv.created_at,
-                conv.last_active_at,
-            ],
+             VALUES (:id, :scope, :scope_id, :title, :created_at, :last_active_at)",
+            named_params! {
+                ":id": conv.id,
+                ":scope": conv.scope.to_string(),
+                ":scope_id": conv.scope_id,
+                ":title": conv.title,
+                ":created_at": conv.created_at,
+                ":last_active_at": conv.last_active_at,
+            },
         )?;
 
         Ok(conv)
@@ -49,8 +49,8 @@ impl<'a> ConversationManager<'a> {
     pub fn get(&self, id: &str) -> Result<Option<Conversation>> {
         let result = self.conn.query_row(
             "SELECT id, scope, scope_id, title, created_at, last_active_at \
-             FROM conversations WHERE id = ?1",
-            params![id],
+             FROM conversations WHERE id = :id",
+            named_params! { ":id": id },
             row_to_conversation,
         );
         match result {
@@ -65,10 +65,13 @@ impl<'a> ConversationManager<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT id, scope, scope_id, title, created_at, last_active_at \
              FROM conversations \
-             WHERE scope = ?1 AND scope_id = ?2 \
+             WHERE scope = :scope AND scope_id = :scope_id \
              ORDER BY last_active_at DESC",
         )?;
-        let rows = stmt.query_map(params![scope.to_string(), scope_id], row_to_conversation)?;
+        let rows = stmt.query_map(
+            named_params! { ":scope": scope.to_string(), ":scope_id": scope_id },
+            row_to_conversation,
+        )?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -93,11 +96,11 @@ impl<'a> ConversationManager<'a> {
     /// waiting_for_feedback) agent run.
     pub fn has_active_run(&self, conversation_id: &str) -> Result<bool> {
         let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM agent_runs \
-             WHERE conversation_id = ?1 \
+            "SELECT COUNT(*) AS cnt FROM agent_runs \
+             WHERE conversation_id = :conversation_id \
                AND status IN ('running', 'waiting_for_feedback')",
-            params![conversation_id],
-            |row| row.get(0),
+            named_params! { ":conversation_id": conversation_id },
+            |row| row.get("cnt"),
         )?;
         Ok(count > 0)
     }
@@ -107,10 +110,10 @@ impl<'a> ConversationManager<'a> {
     pub fn last_completed_session_id(&self, conversation_id: &str) -> Result<Option<String>> {
         let result: rusqlite::Result<Option<String>> = self.conn.query_row(
             "SELECT claude_session_id FROM agent_runs \
-             WHERE conversation_id = ?1 AND status = 'completed' \
+             WHERE conversation_id = :conversation_id AND status = 'completed' \
              ORDER BY started_at DESC LIMIT 1",
-            params![conversation_id],
-            |row| row.get(0),
+            named_params! { ":conversation_id": conversation_id },
+            |row| row.get("claude_session_id"),
         );
         match result {
             Ok(v) => Ok(v),
@@ -123,8 +126,8 @@ impl<'a> ConversationManager<'a> {
     pub fn update_last_active(&self, conversation_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE conversations SET last_active_at = ?1 WHERE id = ?2",
-            params![now, conversation_id],
+            "UPDATE conversations SET last_active_at = :now WHERE id = :id",
+            named_params! { ":now": now, ":id": conversation_id },
         )?;
         Ok(())
     }
@@ -134,8 +137,8 @@ impl<'a> ConversationManager<'a> {
     pub fn set_title_if_unset(&self, conversation_id: &str, prompt: &str) -> Result<()> {
         let title: String = prompt.chars().take(60).collect();
         self.conn.execute(
-            "UPDATE conversations SET title = ?1 WHERE id = ?2 AND title IS NULL",
-            params![title, conversation_id],
+            "UPDATE conversations SET title = :title WHERE id = :id AND title IS NULL",
+            named_params! { ":title": title, ":id": conversation_id },
         )?;
         Ok(())
     }
@@ -178,8 +181,10 @@ impl<'a> ConversationManager<'a> {
 
         AgentManager::new(self.conn).delete_runs_for_conversation(id)?;
 
-        self.conn
-            .execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
+        self.conn.execute(
+            "DELETE FROM conversations WHERE id = :id",
+            named_params! { ":id": id },
+        )?;
 
         Ok(())
     }
@@ -237,7 +242,7 @@ impl<'a> ConversationManager<'a> {
 }
 
 fn row_to_conversation(row: &rusqlite::Row) -> rusqlite::Result<Conversation> {
-    let scope_str: String = row.get(1)?;
+    let scope_str: String = row.get("scope")?;
     let scope = scope_str.parse::<ConversationScope>().map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             1,
@@ -247,12 +252,12 @@ fn row_to_conversation(row: &rusqlite::Row) -> rusqlite::Result<Conversation> {
     })?;
 
     Ok(Conversation {
-        id: row.get(0)?,
+        id: row.get("id")?,
         scope,
-        scope_id: row.get(2)?,
-        title: row.get(3)?,
-        created_at: row.get(4)?,
-        last_active_at: row.get(5)?,
+        scope_id: row.get("scope_id")?,
+        title: row.get("title")?,
+        created_at: row.get("created_at")?,
+        last_active_at: row.get("last_active_at")?,
     })
 }
 
@@ -496,9 +501,9 @@ mod tests {
         assert!(mgr.get(&conv.id).unwrap().is_none());
         let remaining: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM agent_runs WHERE conversation_id = ?1",
-                params![conv.id],
-                |row| row.get(0),
+                "SELECT COUNT(*) AS cnt FROM agent_runs WHERE conversation_id = :conversation_id",
+                named_params! { ":conversation_id": conv.id },
+                |row| row.get("cnt"),
             )
             .unwrap();
         assert_eq!(remaining, 0);

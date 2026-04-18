@@ -1156,8 +1156,8 @@ mod tests {
         let config = serde_json::json!({"project_id": "PROJ-001", "sdlc_root": "/path/to/sdlc"});
         conn.execute(
             "INSERT INTO repo_issue_sources (id, repo_id, source_type, config_json) \
-             VALUES ('s1', 'r1', 'vantage', ?1)",
-            rusqlite::params![config.to_string()],
+             VALUES ('s1', 'r1', 'vantage', :config)",
+            rusqlite::named_params! { ":config": config.to_string() },
         )
         .unwrap();
         let result = VantageLifecycle::resolve(&conn, "t1", "r1").unwrap();

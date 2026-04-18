@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::named_params;
 
 use crate::db::query_collect;
 use crate::error::Result;
@@ -17,8 +17,8 @@ impl<'a> AgentManager<'a> {
     pub fn update_run_plan(&self, run_id: &str, steps: &[PlanStep]) -> Result<()> {
         // Delete any existing steps for this run.
         self.conn.execute(
-            "DELETE FROM agent_run_steps WHERE run_id = ?1",
-            params![run_id],
+            "DELETE FROM agent_run_steps WHERE run_id = :run_id",
+            named_params! { ":run_id": run_id },
         )?;
 
         for (i, step) in steps.iter().enumerate() {
@@ -30,8 +30,14 @@ impl<'a> AgentManager<'a> {
             };
             self.conn.execute(
                 "INSERT INTO agent_run_steps (id, run_id, position, description, status) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![step_id, run_id, i as i64, step.description, status],
+                 VALUES (:id, :run_id, :position, :description, :status)",
+                named_params! {
+                    ":id": step_id,
+                    ":run_id": run_id,
+                    ":position": i as i64,
+                    ":description": step.description,
+                    ":status": status,
+                },
             )?;
         }
 
@@ -42,9 +48,9 @@ impl<'a> AgentManager<'a> {
     pub fn mark_plan_done(&self, run_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_run_steps SET status = 'completed', completed_at = ?1 \
-             WHERE run_id = ?2 AND status != 'completed'",
-            params![now, run_id],
+            "UPDATE agent_run_steps SET status = 'completed', completed_at = :completed_at \
+             WHERE run_id = :run_id AND status != 'completed'",
+            named_params! { ":completed_at": now, ":run_id": run_id },
         )?;
         Ok(())
     }
@@ -55,20 +61,20 @@ impl<'a> AgentManager<'a> {
         match status {
             StepStatus::InProgress => {
                 self.conn.execute(
-                    "UPDATE agent_run_steps SET status = ?1, started_at = ?2 WHERE id = ?3",
-                    params![status, now, step_id],
+                    "UPDATE agent_run_steps SET status = :status, started_at = :started_at WHERE id = :id",
+                    named_params! { ":status": status, ":started_at": now, ":id": step_id },
                 )?;
             }
             StepStatus::Completed | StepStatus::Failed => {
                 self.conn.execute(
-                    "UPDATE agent_run_steps SET status = ?1, completed_at = ?2 WHERE id = ?3",
-                    params![status, now, step_id],
+                    "UPDATE agent_run_steps SET status = :status, completed_at = :completed_at WHERE id = :id",
+                    named_params! { ":status": status, ":completed_at": now, ":id": step_id },
                 )?;
             }
             _ => {
                 self.conn.execute(
-                    "UPDATE agent_run_steps SET status = ?1 WHERE id = ?2",
-                    params![status, step_id],
+                    "UPDATE agent_run_steps SET status = :status WHERE id = :id",
+                    named_params! { ":status": status, ":id": step_id },
                 )?;
             }
         }
@@ -79,8 +85,8 @@ impl<'a> AgentManager<'a> {
     pub fn get_run_steps(&self, run_id: &str) -> Result<Vec<PlanStep>> {
         query_collect(
             self.conn,
-            &format!("{AGENT_RUN_STEPS_SELECT} WHERE run_id = ?1 ORDER BY position ASC"),
-            params![run_id],
+            &format!("{AGENT_RUN_STEPS_SELECT} WHERE run_id = :run_id ORDER BY position ASC"),
+            named_params! { ":run_id": run_id },
             row_to_plan_step,
         )
     }
@@ -99,7 +105,7 @@ impl<'a> AgentManager<'a> {
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(&ids), |row| {
-            let run_id: String = row.get(1)?;
+            let run_id: String = row.get("run_id")?;
             let step = row_to_plan_step(row)?;
             Ok((run_id, step))
         })?;
