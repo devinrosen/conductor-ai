@@ -938,7 +938,14 @@ fn test_resume_workflow_repo_target() {
 
     let input = WorkflowExecInput {
         repo_id: Some("r1"),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -979,7 +986,14 @@ fn test_resume_workflow_ticket_target() {
 
     let input = WorkflowExecInput {
         ticket_id: Some("tkt-1"),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input).unwrap();
 

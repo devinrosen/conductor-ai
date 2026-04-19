@@ -26,7 +26,14 @@ fn test_cannot_start_workflow_run_when_active() {
     let workflow = make_empty_workflow();
     let input = WorkflowExecInput {
         worktree_id: Some("w1"),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/ws/feat-test", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -55,7 +62,14 @@ fn test_can_start_workflow_run_after_completion() {
     let workflow = make_empty_workflow();
     let input = WorkflowExecInput {
         worktree_id: Some("w1"),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/ws/feat-test", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -87,7 +101,14 @@ fn test_child_workflow_not_blocked_by_parent() {
     let input = WorkflowExecInput {
         worktree_id: Some("w1"),
         depth: 1,
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/ws/feat-test", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input);
     assert!(
@@ -112,7 +133,14 @@ fn test_run_id_notify_slot_is_populated() {
 
     let input = WorkflowExecInput {
         run_id_notify: Some(std::sync::Arc::clone(&slot)),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -145,7 +173,14 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
 
     let input = WorkflowExecInput {
         worktree_id: Some("w1"), // path /tmp/ws/feat-test — does not exist on disk
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input).expect(
@@ -167,7 +202,14 @@ fn test_execute_workflow_injects_repo_variables() {
     // repo `r1` with local_path `/tmp/repo` is inserted by setup_db()
     let input = WorkflowExecInput {
         repo_id: Some("r1"),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -202,7 +244,14 @@ fn test_execute_workflow_injects_ticket_variables() {
 
     let input = WorkflowExecInput {
         ticket_id: Some("tkt-1"),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -242,7 +291,14 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
     let input = WorkflowExecInput {
         repo_id: Some("r1"),
         inputs: explicit_inputs,
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -457,7 +513,14 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         plugin_dirs: vec![],
     }));
 
-    let input = make_exec_input(&conn, &config, &workflow, working_dir, working_dir, &exec_config);
+    let input = make_exec_input(
+        &conn,
+        &config,
+        &workflow,
+        working_dir,
+        working_dir,
+        &exec_config,
+    );
 
     let err = execute_workflow(&input).unwrap_err();
     let msg = err.to_string();
@@ -516,7 +579,14 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         plugin_dirs: vec![],
     }));
 
-    let input = make_exec_input(&conn, &config, &workflow, working_dir, working_dir, &exec_config);
+    let input = make_exec_input(
+        &conn,
+        &config,
+        &workflow,
+        working_dir,
+        working_dir,
+        &exec_config,
+    );
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
     // It will fail later when trying to actually run the agent (no tmux, etc.),
@@ -555,7 +625,14 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
 
     let input = WorkflowExecInput {
         worktree_id: Some("wt-custom-base"),
-        ..make_exec_input(&conn, config, &workflow, "/tmp/ws/feat-custom", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            config,
+            &workflow,
+            "/tmp/ws/feat-custom",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -584,7 +661,14 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
 
     let input = WorkflowExecInput {
         worktree_id: Some("w1"),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/ws/feat-test", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -628,7 +712,14 @@ fn test_foreach_worktrees_uses_derived_repo_id_from_worktree() {
 
     let input = WorkflowExecInput {
         worktree_id: Some("w1"),
-        ..make_exec_input(&conn, &config, &workflow, "/tmp/ws/feat-test", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input);
@@ -747,7 +838,14 @@ fn test_parent_step_id_writes_child_run_id_to_step() {
         depth: 1,
         parent_workflow_run_id: Some(&parent_run.id),
         parent_step_id: Some(parent_step_id.clone()),
-        ..make_exec_input(&conn, &config, &child_workflow, "/tmp/ws/feat-test", "/tmp/repo", &exec_config)
+        ..make_exec_input(
+            &conn,
+            &config,
+            &child_workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input).unwrap();

@@ -15,6 +15,7 @@ mod output;
 mod resumption;
 mod types;
 
+pub(super) use self::helpers::make_exec_input;
 pub(super) use super::engine::{
     bubble_up_child_step_results, completed_keys_from_steps, execute_nodes,
     fetch_child_final_output, record_step_failure, record_step_skipped, resolve_child_inputs,
@@ -37,5 +38,4 @@ pub(super) use super::*;
 pub(super) use crate::config::Config;
 pub(super) use crate::workflow_dsl::OnTimeout;
 pub(super) use common::*;
-pub(super) use self::helpers::make_exec_input;
 pub(super) use std::collections::HashMap;
