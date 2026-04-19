@@ -13,7 +13,7 @@ use super::helpers::{
 use super::WorkflowManager;
 use crate::workflow::constants::{
     REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
-    REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
+    REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
 };
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
@@ -729,10 +729,11 @@ impl<'a> WorkflowManager<'a> {
             .conn
             .query_row(
                 &format!(
-                    "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
-                     WHERE workflow_run_id = :workflow_run_id AND gate_type IS NOT NULL AND gate_approved_at IS NULL \
-                       AND status IN ('running', 'waiting') \
-                     ORDER BY position DESC LIMIT 1"
+                    "{} \
+                     WHERE s.workflow_run_id = :workflow_run_id AND s.gate_type IS NOT NULL AND s.gate_approved_at IS NULL \
+                       AND s.status IN ('running', 'waiting') \
+                     ORDER BY s.position DESC LIMIT 1",
+                    Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
                 ),
                 named_params! { ":workflow_run_id": workflow_run_id },
                 row_to_workflow_step,
@@ -750,8 +751,9 @@ impl<'a> WorkflowManager<'a> {
         let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
         let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
-            "SELECT {cols}, r.workflow_name, r.target_label \
+            "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
+             LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
              AND r.status IN ({placeholders}) \
@@ -774,8 +776,9 @@ impl<'a> WorkflowManager<'a> {
         let active_strings = WorkflowRunStatus::active_strings();
         let status_placeholders = sql_placeholders(active_strings.len());
         let sql = format!(
-            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
+            "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
              FROM workflow_run_steps s \
+             LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
              LEFT JOIN tickets t ON t.id = r.ticket_id \
