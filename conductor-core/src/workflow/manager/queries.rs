@@ -254,6 +254,42 @@ impl<'a> WorkflowManager<'a> {
         }
     }
 
+    /// Find the most recent non-completed step for a given `(workflow_run_id, step_name, iteration)`.
+    ///
+    /// Returns `None` when no such row exists (fresh execution) or when the most recent
+    /// matching row is completed. Used by `execute_foreach` on resume to detect and reuse
+    /// a prior interrupted step rather than creating a duplicate row, which would make the
+    /// old step's fan_out_items invisible and violate `max_parallel`.
+    pub fn find_step_by_name_and_iteration(
+        &self,
+        workflow_run_id: &str,
+        step_name: &str,
+        iteration: i64,
+    ) -> Result<Option<WorkflowRunStep>> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "{} \
+             WHERE s.workflow_run_id = :workflow_run_id \
+               AND s.step_name = :step_name \
+               AND s.iteration = :iteration \
+               AND s.status != 'completed' \
+             ORDER BY s.id DESC \
+             LIMIT 1",
+            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+        ))?;
+        let mut rows = stmt.query_map(
+            named_params! {
+                ":workflow_run_id": workflow_run_id,
+                ":step_name": step_name,
+                ":iteration": iteration,
+            },
+            row_to_workflow_step,
+        )?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     /// Return the first active (pending/running/waiting) top-level workflow run for a worktree,
     /// or `None` if none exist.
     pub fn get_active_run_for_worktree(&self, worktree_id: &str) -> Result<Option<WorkflowRun>> {

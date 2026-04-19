@@ -62,25 +62,54 @@ pub fn execute_foreach(
         return Ok(());
     }
 
-    // Insert the step record.
-    let step_id = state.wf_mgr.insert_step(
-        &state.workflow_run_id,
-        &step_key,
-        "foreach",
-        false,
-        pos,
-        iteration as i64,
-    )?;
+    // Find or create the step record.
+    // On resume, reuse the existing non-completed step row so that fan_out_items
+    // inserted under the old step_id remain visible and max_parallel is respected.
+    let existing_step = if state.resume_ctx.is_some() {
+        state.wf_mgr.find_step_by_name_and_iteration(
+            &state.workflow_run_id,
+            &step_key,
+            iteration as i64,
+        )?
+    } else {
+        None
+    };
 
-    state.wf_mgr.update_step_status(
-        &step_id,
-        WorkflowStepStatus::Running,
-        None,
-        None,
-        None,
-        None,
-        Some(0),
-    )?;
+    let step_id = if let Some(existing) = existing_step {
+        state.wf_mgr.update_step_status(
+            &existing.id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )?;
+        // Reset orphaned running items (no child_run_id) so they are re-dispatched.
+        state
+            .wf_mgr
+            .reset_running_items_without_child_run(&existing.id)?;
+        existing.id
+    } else {
+        let id = state.wf_mgr.insert_step(
+            &state.workflow_run_id,
+            &step_key,
+            "foreach",
+            false,
+            pos,
+            iteration as i64,
+        )?;
+        state.wf_mgr.update_step_status(
+            &id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )?;
+        id
+    };
 
     // Load the child workflow definition (needed for input resolution).
     let child_def = crate::workflow_dsl::load_workflow_by_name(

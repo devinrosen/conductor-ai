@@ -1897,6 +1897,171 @@ fn test_build_item_vars_tickets_missing_ticket_falls_back() {
     assert!(!vars.contains_key("item.labels"));
 }
 
+// -----------------------------------------------------------------------
+// Resume / find-or-reuse step tests (#2306)
+// -----------------------------------------------------------------------
+
+/// Regression test for #2306: on resume with an existing non-completed foreach step,
+/// `find_step_by_name_and_iteration` must find the old step, and
+/// `reset_running_items_without_child_run` must reset orphaned items back to pending.
+/// No second step row must be created.
+#[test]
+fn test_foreach_resume_reuses_existing_step_and_resets_orphaned_items() {
+    let conn = setup_db();
+    let _config: &'static crate::config::Config =
+        Box::leak(Box::new(crate::config::Config::default()));
+
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    let step_key = "foreach:my-foreach";
+    let iteration: i64 = 0;
+
+    // Simulate a prior interrupted run: insert a step in 'running' state.
+    let old_step_id = wf_mgr
+        .insert_step(&run.id, step_key, "foreach", false, 0, iteration)
+        .unwrap();
+    wf_mgr
+        .update_step_status(
+            &old_step_id,
+            crate::workflow::status::WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+    // Insert an orphaned item: running, no child_run_id.
+    let orphan_item_id = wf_mgr
+        .insert_fan_out_item(&old_step_id, "ticket", "ticket-orphan", "orphan")
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_step_fan_out_items SET status = 'running' WHERE id = ?1",
+        rusqlite::params![orphan_item_id],
+    )
+    .unwrap();
+
+    // Verify find_step_by_name_and_iteration returns the old step.
+    let found = wf_mgr
+        .find_step_by_name_and_iteration(&run.id, step_key, iteration)
+        .unwrap();
+    assert!(
+        found.is_some(),
+        "must find the existing non-completed step on resume"
+    );
+    let found_step = found.unwrap();
+    assert_eq!(
+        found_step.id, old_step_id,
+        "must reuse old step_id, not create a new one"
+    );
+
+    // Verify reset_running_items_without_child_run resets the orphaned item.
+    let reset_count = wf_mgr
+        .reset_running_items_without_child_run(&old_step_id)
+        .unwrap();
+    assert_eq!(reset_count, 1, "exactly one orphaned item should be reset");
+
+    let items = wf_mgr.get_fan_out_items(&old_step_id, None).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].status, "pending",
+        "orphaned item must be reset to pending so it is re-dispatched"
+    );
+
+    // Verify no second step row was created for this (run_id, step_name, iteration).
+    let all_steps: Vec<_> = conn
+        .prepare(
+            "SELECT id FROM workflow_run_steps \
+             WHERE workflow_run_id = ?1 AND step_name = ?2 AND iteration = ?3",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![&run.id, step_key, iteration], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        all_steps.len(),
+        1,
+        "only one step row must exist — no duplicate created on resume"
+    );
+    assert_eq!(all_steps[0], old_step_id);
+}
+
+/// Regression test for #2306: a running item that HAS a child_run_id must NOT be reset.
+/// Only orphaned items (running, no child_run_id) should be affected.
+#[test]
+fn test_foreach_resume_preserves_running_items_with_child_run_id() {
+    let conn = setup_db();
+
+    let agent_mgr = crate::agent::AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+
+    let step_id = wf_mgr
+        .insert_step(&run.id, "foreach:check", "foreach", false, 0, 0)
+        .unwrap();
+
+    // Item with child_run_id: must remain running after the call.
+    let item_with_child = wf_mgr
+        .insert_fan_out_item(&step_id, "ticket", "ticket-live", "live")
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_step_fan_out_items \
+         SET status = 'running', child_run_id = 'real-child-run' WHERE id = ?1",
+        rusqlite::params![item_with_child],
+    )
+    .unwrap();
+
+    // Orphaned item: no child_run_id — should be reset.
+    let orphan = wf_mgr
+        .insert_fan_out_item(&step_id, "ticket", "ticket-orphan", "orphan")
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_step_fan_out_items SET status = 'running' WHERE id = ?1",
+        rusqlite::params![orphan],
+    )
+    .unwrap();
+
+    let reset_count = wf_mgr
+        .reset_running_items_without_child_run(&step_id)
+        .unwrap();
+    assert_eq!(reset_count, 1, "only the orphan should be reset");
+
+    let items = wf_mgr.get_fan_out_items(&step_id, None).unwrap();
+    let status_of = |id: &str| {
+        items
+            .iter()
+            .find(|i| i.id == id)
+            .map(|i| i.status.as_str())
+            .unwrap_or("NOT FOUND")
+    };
+    assert_eq!(
+        status_of(&item_with_child),
+        "running",
+        "item with child_run_id must remain running"
+    );
+    assert_eq!(
+        status_of(&orphan),
+        "pending",
+        "orphan must be reset to pending"
+    );
+}
+
 /// build_item_vars for Repos with a non-existent repo ID falls back to
 /// minimal vars (item.id, item.slug) without hard-failing.
 #[test]
