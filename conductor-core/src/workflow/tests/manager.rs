@@ -2951,6 +2951,163 @@ fn test_detect_stale_workflow_runs_disabled_when_zero() {
     assert!(stale.is_empty(), "threshold 0 should disable detection");
 }
 
+/// Insert a child workflow_run row with a given status and parent_workflow_run_id.
+fn insert_child_workflow_run(
+    conn: &Connection,
+    child_run_id: &str,
+    parent_workflow_run_id: &str,
+    status: &str,
+) {
+    let agent_mgr = AgentManager::new(conn);
+    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id) \
+         VALUES (:child_run_id, 'child-wf', NULL, :parent_run_id, :status, 0, 'manual', \
+                 '2025-01-01T00:00:00Z', :parent_workflow_run_id)",
+        named_params! {
+            ":child_run_id": child_run_id,
+            ":parent_run_id": parent.id,
+            ":status": status,
+            ":parent_workflow_run_id": parent_workflow_run_id,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_detect_stale_skips_parent_with_running_child() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "parent-run", "for-each-wf", None);
+    insert_running_step_with_started_at(
+        &conn,
+        "s1",
+        "parent-run",
+        "foreach-step",
+        "2020-01-01T00:00:00Z",
+    );
+    insert_child_workflow_run(&conn, "child-run-1", "parent-run", "running");
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert!(
+        stale.is_empty(),
+        "parent with a running child should not be detected as stale"
+    );
+}
+
+#[test]
+fn test_detect_stale_skips_parent_with_pending_child() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "parent-run", "for-each-wf", None);
+    insert_running_step_with_started_at(
+        &conn,
+        "s1",
+        "parent-run",
+        "foreach-step",
+        "2020-01-01T00:00:00Z",
+    );
+    insert_child_workflow_run(&conn, "child-run-1", "parent-run", "pending");
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert!(
+        stale.is_empty(),
+        "parent with a pending child should not be detected as stale"
+    );
+}
+
+#[test]
+fn test_detect_stale_skips_parent_with_waiting_child() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "parent-run", "for-each-wf", None);
+    insert_running_step_with_started_at(
+        &conn,
+        "s1",
+        "parent-run",
+        "foreach-step",
+        "2020-01-01T00:00:00Z",
+    );
+    insert_child_workflow_run(&conn, "child-run-1", "parent-run", "waiting");
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert!(
+        stale.is_empty(),
+        "parent with a waiting child should not be detected as stale"
+    );
+}
+
+#[test]
+fn test_detect_stale_skips_parent_with_mixed_children() {
+    // One child completed, one child still running — parent must not be detected as stale.
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "parent-run", "for-each-wf", None);
+    insert_running_step_with_started_at(
+        &conn,
+        "s1",
+        "parent-run",
+        "foreach-step",
+        "2020-01-01T00:00:00Z",
+    );
+    insert_child_workflow_run(&conn, "child-run-done", "parent-run", "completed");
+    insert_child_workflow_run(&conn, "child-run-active", "parent-run", "running");
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert!(
+        stale.is_empty(),
+        "parent with one completed and one running child should not be detected as stale"
+    );
+}
+
+#[test]
+fn test_detect_stale_includes_parent_when_children_completed() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "parent-run", "for-each-wf", None);
+    insert_running_step_with_started_at(
+        &conn,
+        "s1",
+        "parent-run",
+        "foreach-step",
+        "2020-01-01T00:00:00Z",
+    );
+    insert_child_workflow_run(&conn, "child-run-1", "parent-run", "completed");
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert_eq!(
+        stale.len(),
+        1,
+        "parent with only completed children should be detected as stale"
+    );
+    assert_eq!(stale[0].run_id, "parent-run");
+}
+
+#[test]
+fn test_detect_stale_includes_parent_when_children_failed() {
+    let conn = setup_db();
+    insert_running_root_run_with_label(&conn, "parent-run", "for-each-wf", None);
+    insert_running_step_with_started_at(
+        &conn,
+        "s1",
+        "parent-run",
+        "foreach-step",
+        "2020-01-01T00:00:00Z",
+    );
+    insert_child_workflow_run(&conn, "child-run-1", "parent-run", "failed");
+
+    let mgr = WorkflowManager::new(&conn);
+    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    assert_eq!(
+        stale.len(),
+        1,
+        "parent with only failed children should be detected as stale"
+    );
+    assert_eq!(stale[0].run_id, "parent-run");
+}
+
 // ---------------------------------------------------------------------------
 // reap_stale_workflow_runs — PID liveness check + mark-as-failed tests
 // ---------------------------------------------------------------------------
