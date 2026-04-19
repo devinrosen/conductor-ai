@@ -34,6 +34,7 @@ use crate::workflow::engine::{
     record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
 };
 use crate::workflow::prompt_builder::build_variable_map;
+use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::WorkflowExecStandalone;
 use crate::workflow_dsl::{ForEachNode, ForeachOver, ForeachScope, OnChildFail};
@@ -111,10 +112,18 @@ pub fn execute_foreach(
         id
     };
 
+    let (working_dir, repo_path) = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        (
+            ctx.working_dir().to_path_buf(),
+            ctx.repo_path().to_path_buf(),
+        )
+    };
+
     // Load the child workflow definition (needed for input resolution).
     let child_def = crate::workflow_dsl::load_workflow_by_name(
-        &state.working_dir,
-        &state.repo_path,
+        working_dir.to_str().unwrap_or(""),
+        repo_path.to_str().unwrap_or(""),
         &node.workflow,
     )
     .map_err(|e| {
@@ -326,7 +335,11 @@ fn collect_ticket_items(
     let syncer = TicketSyncer::new(state.conn);
 
     // Determine repo scope: require a repo_id for ticket fan-outs.
-    let repo_id = state.repo_id.as_deref().ok_or_else(|| {
+    let repo_id_owned = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        ctx.repo_id().map(String::from)
+    };
+    let repo_id = repo_id_owned.as_deref().ok_or_else(|| {
         ConductorError::Workflow(
             "foreach over tickets requires a repo_id in the execution context".to_string(),
         )
@@ -500,7 +513,11 @@ fn collect_worktree_items(
     existing_set: &HashSet<String>,
 ) -> Result<Vec<(String, String, String)>> {
     // Require a repo_id for worktree fan-outs.
-    let repo_id = state.repo_id.as_deref().ok_or_else(|| {
+    let repo_id_owned = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        ctx.repo_id().map(String::from)
+    };
+    let repo_id = repo_id_owned.as_deref().ok_or_else(|| {
         ConductorError::Workflow(
             "foreach over worktrees requires a repo_id in the execution context".to_string(),
         )
@@ -515,7 +532,11 @@ fn collect_worktree_items(
     let base_branch: &str = match wt_scope_opt.and_then(|s| s.base_branch.as_deref()) {
         Some(b) => b,
         None => {
-            let wt_id = state.worktree_id.as_deref().ok_or_else(|| {
+            let worktree_id_owned = {
+                let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+                ctx.worktree_id().map(String::from)
+            };
+            let wt_id = worktree_id_owned.as_deref().ok_or_else(|| {
                 ConductorError::Workflow(format!(
                     "foreach '{}': over = worktrees requires either \
                      scope = {{ base_branch = \"...\" }} or a worktree_id in the execution context",
@@ -792,6 +813,27 @@ fn build_child_dispatch_params(
     item: &crate::workflow::manager::FanOutItemRow,
     child_def: &crate::workflow_dsl::WorkflowDef,
 ) -> Result<WorkflowExecStandalone> {
+    let (
+        working_dir,
+        repo_path,
+        ticket_id,
+        repo_id,
+        worktree_id,
+        conductor_bin_dir,
+        extra_plugin_dirs,
+    ) = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        (
+            ctx.working_dir().to_path_buf(),
+            ctx.repo_path().to_path_buf(),
+            ctx.ticket_id().map(String::from),
+            ctx.repo_id().map(String::from),
+            ctx.worktree_id().map(String::from),
+            ctx.conductor_bin_dir().map(|p| p.to_path_buf()),
+            ctx.extra_plugin_dirs().to_vec(),
+        )
+    };
+
     // Build item-specific variable map for {{item.*}} substitution.
     let item_vars = build_item_vars(state, node, item)?;
 
@@ -840,9 +882,9 @@ fn build_child_dispatch_params(
     let (item_ticket_id, item_repo_id, item_worktree_id) = resolve_child_context_ids(
         node.over.clone(),
         &item.item_id,
-        &state.ticket_id,
-        &state.repo_id,
-        &state.worktree_id,
+        &ticket_id,
+        &repo_id,
+        &worktree_id,
     );
 
     // For worktree fan-outs, run the child in the child worktree's directory,
@@ -855,11 +897,11 @@ fn build_child_dispatch_params(
                     "foreach: failed to look up worktree '{}', falling back to parent working dir: {e}",
                     item.item_id
                 );
-                state.working_dir.clone()
+                working_dir.to_str().unwrap_or("").to_string()
             }
         }
     } else {
-        state.working_dir.clone()
+        working_dir.to_str().unwrap_or("").to_string()
     };
 
     Ok(WorkflowExecStandalone {
@@ -867,7 +909,7 @@ fn build_child_dispatch_params(
         workflow: child_def.clone(),
         worktree_id: item_worktree_id,
         working_dir: child_working_dir,
-        repo_path: state.repo_path.clone(),
+        repo_path: repo_path.to_str().unwrap_or("").to_string(),
         ticket_id: item_ticket_id,
         repo_id: item_repo_id,
         model: state.model.clone(),
@@ -882,9 +924,9 @@ fn build_child_dispatch_params(
         target_label,
         run_id_notify: None,
         triggered_by_hook: state.triggered_by_hook,
-        conductor_bin_dir: state.conductor_bin_dir.clone(),
+        conductor_bin_dir: conductor_bin_dir.clone(),
         force: false,
-        extra_plugin_dirs: state.extra_plugin_dirs.clone(),
+        extra_plugin_dirs: extra_plugin_dirs.clone(),
         db_path: None,
         parent_workflow_run_id: Some(state.workflow_run_id.clone()),
     })

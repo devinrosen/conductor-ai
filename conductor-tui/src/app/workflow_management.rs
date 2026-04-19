@@ -820,8 +820,6 @@ impl App {
         def: conductor_core::workflow::WorkflowDef,
         prefill: std::collections::HashMap<String, String>,
     ) {
-        use conductor_core::workflow::ENGINE_INJECTED_KEYS;
-
         if !def.inputs.is_empty() {
             let mut fields = build_form_fields(&def.inputs);
             for field in &mut fields {
@@ -832,7 +830,10 @@ impl App {
             }
             // Mark engine-injected fields as readonly when they have been pre-populated
             for field in &mut fields {
-                if ENGINE_INJECTED_KEYS.contains(&field.label.as_str()) && !field.value.is_empty() {
+                if conductor_core::workflow::injected_variable_keys()
+                    .contains(&field.label.as_str())
+                    && !field.value.is_empty()
+                {
                     field.readonly = true;
                     field.manually_edited = false;
                 }

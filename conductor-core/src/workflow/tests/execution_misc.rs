@@ -259,12 +259,16 @@ fn make_call_wf_state<'a>(
         config,
         workflow_run_id,
         workflow_name: "parent-wf".into(),
-        worktree_id: None,
-        working_dir: working_dir.to_string(),
-        worktree_slug: String::new(),
-        repo_path: working_dir.to_string(),
-        ticket_id: None,
-        repo_id: None,
+        worktree_ctx: crate::workflow::engine::WorktreeContext {
+            worktree_id: None,
+            working_dir: working_dir.to_string(),
+            worktree_slug: String::new(),
+            repo_path: working_dir.to_string(),
+            ticket_id: None,
+            repo_id: None,
+            conductor_bin_dir: None,
+            extra_plugin_dirs: vec![],
+        },
         model: None,
         exec_config: WorkflowExecConfig {
             fail_fast: false,
@@ -293,8 +297,6 @@ fn make_call_wf_state<'a>(
         resume_ctx: None,
         default_bot_name: None,
         triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
         last_heartbeat_at: ExecutionState::new_heartbeat(),
     }
 }

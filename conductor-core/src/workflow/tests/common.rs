@@ -45,12 +45,16 @@ pub(in crate::workflow) fn base_execution_state<'a>(
         config,
         workflow_run_id: run_id,
         workflow_name: "test".to_string(),
-        worktree_id: None,
-        working_dir: String::new(),
-        worktree_slug: String::new(),
-        repo_path: String::new(),
-        ticket_id: None,
-        repo_id: None,
+        worktree_ctx: crate::workflow::engine::WorktreeContext {
+            worktree_id: None,
+            working_dir: String::new(),
+            worktree_slug: String::new(),
+            repo_path: String::new(),
+            ticket_id: None,
+            repo_id: None,
+            conductor_bin_dir: None,
+            extra_plugin_dirs: vec![],
+        },
         model: None,
         exec_config: WorkflowExecConfig::default(),
         inputs: HashMap::new(),
@@ -76,8 +80,6 @@ pub(in crate::workflow) fn base_execution_state<'a>(
         resume_ctx: None,
         default_bot_name: None,
         triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
         last_heartbeat_at: ExecutionState::new_heartbeat(),
     }
 }
@@ -106,7 +108,16 @@ pub(super) fn make_state_with_run<'a>(
         .unwrap();
     let run_id = run.id.clone();
     let state = ExecutionState {
-        worktree_id: Some("w1".to_string()),
+        worktree_ctx: crate::workflow::engine::WorktreeContext {
+            worktree_id: Some("w1".to_string()),
+            working_dir: String::new(),
+            worktree_slug: String::new(),
+            repo_path: String::new(),
+            ticket_id: None,
+            repo_id: None,
+            conductor_bin_dir: None,
+            extra_plugin_dirs: vec![],
+        },
         ..base_execution_state(conn, config, run_id.clone(), parent.id)
     };
     (state, run_id)
@@ -159,10 +170,16 @@ pub(in crate::workflow) fn make_loop_test_state<'a>(
         .unwrap();
 
     ExecutionState {
-        worktree_id: Some("w1".into()),
-        working_dir: "/tmp/test".into(),
-        worktree_slug: "test".into(),
-        repo_path: "/tmp/repo".into(),
+        worktree_ctx: crate::workflow::engine::WorktreeContext {
+            worktree_id: Some("w1".into()),
+            working_dir: "/tmp/test".into(),
+            worktree_slug: "test".into(),
+            repo_path: "/tmp/repo".into(),
+            ticket_id: None,
+            repo_id: None,
+            conductor_bin_dir: None,
+            extra_plugin_dirs: vec![],
+        },
         ..base_execution_state(conn, config, run.id, parent.id)
     }
 }

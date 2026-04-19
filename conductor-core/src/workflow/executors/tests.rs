@@ -3,7 +3,6 @@ use super::{
     execute_parallel, execute_quality_gate, execute_script, execute_unless, poll_script_child,
     read_stdout_bounded, ScriptPollResult,
 };
-use crate::workflow::engine::ExecutionState;
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::tests::common::make_loop_test_state;
 use crate::workflow::types::StepResult;
@@ -72,11 +71,9 @@ fn test_execute_script_success() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        ..make_loop_test_state(&conn, config)
-    };
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
 
     let node = crate::workflow_dsl::ScriptNode {
         name: "hello".into(),
@@ -128,14 +125,12 @@ fn test_execute_script_failure_captures_stdout() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            fail_fast: false,
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, config)
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        fail_fast: false,
+        ..Default::default()
     };
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -203,11 +198,9 @@ echo "<<<END_CONDUCTOR_OUTPUT>>>"
     // Simulate prior_output holding text that itself contains {{…}} tokens.
     // Use a value without JSON special characters so printf embeds it safely.
     let literal_braces_value = "score:{{deterministic-score}}".to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        ..make_loop_test_state(&conn, config)
-    };
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
     state
         .inputs
         .insert("prior_output".to_string(), literal_braces_value.clone());
@@ -260,11 +253,9 @@ echo "<<<END_CONDUCTOR_OUTPUT>>>"
     let dir_str = dir.path().to_str().unwrap().to_string();
 
     // No inputs — so {{unknown_ref}} is unresolvable.
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        ..make_loop_test_state(&conn, config)
-    };
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
 
     let mut env = std::collections::HashMap::new();
     env.insert(
@@ -352,11 +343,9 @@ fn test_execute_script_with_bot_name_not_configured() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        ..make_loop_test_state(&conn, config)
-    };
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
 
     let node = crate::workflow_dsl::ScriptNode {
         name: "bot-step".into(),
@@ -392,11 +381,9 @@ fn test_execute_script_bot_name_falls_back_to_default() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        ..make_loop_test_state(&conn, config)
-    };
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
     state.default_bot_name = Some("default-bot".into());
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -431,14 +418,12 @@ fn test_execute_script_timeout() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            fail_fast: false,
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, config)
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        fail_fast: false,
+        ..Default::default()
     };
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -498,14 +483,12 @@ fn test_execute_script_cancelled() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            shutdown: Some(Arc::clone(&shutdown)),
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, config)
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        shutdown: Some(Arc::clone(&shutdown)),
+        ..Default::default()
     };
 
     let node = crate::workflow_dsl::ScriptNode {
@@ -560,14 +543,12 @@ fn test_execute_script_retries_exhausted() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            fail_fast: false, // don't short-circuit on first failure
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, config)
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        fail_fast: false, // don't short-circuit on first failure
+        ..Default::default()
     };
     let run_id = state.workflow_run_id.clone();
 
@@ -731,17 +712,15 @@ fn test_execute_script_injects_conductor_on_path() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        ..make_loop_test_state(&conn, config)
-    };
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
 
     // Simulate what binary crates do: resolve conductor binary dir from current_exe.
     let bin_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    state.conductor_bin_dir = bin_dir;
+    state.worktree_ctx.conductor_bin_dir = bin_dir;
 
     let node = crate::workflow_dsl::ScriptNode {
         name: "check_path".into(),
@@ -761,6 +740,7 @@ fn test_execute_script_injects_conductor_on_path() {
     let log_path = ctx.output_file.as_ref().unwrap();
     let output = std::fs::read_to_string(log_path).unwrap();
     let exe_dir = state
+        .worktree_ctx
         .conductor_bin_dir
         .as_ref()
         .unwrap()
@@ -1194,13 +1174,11 @@ fn test_stepref_gate_happy_path() {
     .unwrap();
 
     let config = crate::config::Config::default();
-    let mut state = ExecutionState {
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            // Short poll interval so the test doesn't drag out.
-            poll_interval: Duration::from_millis(50),
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, &config)
+    let mut state = make_loop_test_state(&conn, &config);
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        // Short poll interval so the test doesn't drag out.
+        poll_interval: Duration::from_millis(50),
+        ..Default::default()
     };
     state.step_results.insert(
         "prior".to_string(),
@@ -1263,11 +1241,9 @@ fn test_execute_call_workflow_sets_child_run_id() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        ..make_loop_test_state(&conn, config)
-    };
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
 
     let node = crate::workflow_dsl::CallWorkflowNode {
         workflow: "empty-child".to_string(),
@@ -1333,14 +1309,12 @@ fn test_parallel_three_agents_headless_spawn_fail() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            fail_fast: false,
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, config)
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        fail_fast: false,
+        ..Default::default()
     };
 
     let node = ParallelNode {
@@ -1417,18 +1391,16 @@ fn test_parallel_channel_polling_timeout_path() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            // 1 ns timeout — fires immediately in the polling loop so the
-            // timeout-cancellation branch is hit on the very first iteration.
-            step_timeout: Duration::from_nanos(1),
-            poll_interval: Duration::from_millis(1),
-            fail_fast: false,
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, config)
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        // 1 ns timeout — fires immediately in the polling loop so the
+        // timeout-cancellation branch is hit on the very first iteration.
+        step_timeout: Duration::from_nanos(1),
+        poll_interval: Duration::from_millis(1),
+        fail_fast: false,
+        ..Default::default()
     };
 
     let node = ParallelNode {
@@ -1487,14 +1459,12 @@ fn test_call_headless_spawn_fail() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            fail_fast: false,
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, config)
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        fail_fast: false,
+        ..Default::default()
     };
 
     let node = CallNode {
@@ -1548,17 +1518,15 @@ fn test_call_shutdown_during_drain() {
     let conn = crate::test_helpers::setup_db();
     let config = Box::leak(Box::new(crate::config::Config::default()));
     let dir_str = dir.path().to_str().unwrap().to_string();
-    let mut state = ExecutionState {
-        working_dir: dir_str.clone(),
-        repo_path: dir_str,
-        exec_config: crate::workflow::types::WorkflowExecConfig {
-            shutdown: Some(Arc::clone(&shutdown)),
-            // fail_fast=true ensures we get Err both when spawn fails (retries exhausted)
-            // and when the shutdown flag is detected mid-drain.
-            fail_fast: true,
-            ..Default::default()
-        },
-        ..make_loop_test_state(&conn, config)
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        shutdown: Some(Arc::clone(&shutdown)),
+        // fail_fast=true ensures we get Err both when spawn fails (retries exhausted)
+        // and when the shutdown flag is detected mid-drain.
+        fail_fast: true,
+        ..Default::default()
     };
 
     // Set the shutdown flag immediately so it fires on the first poll tick
