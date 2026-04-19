@@ -112,6 +112,7 @@ pub(crate) fn make_wf_run_full(
         total_cost_usd: None,
         total_duration_ms: None,
         model: None,
+        dismissed: false,
     }
 }
 

@@ -486,6 +486,47 @@ impl App {
                 self.clamp_workflow_indices();
             }
 
+            // Workflow dismissed visibility toggle
+            Action::ToggleDismissedRuns => {
+                self.state.show_dismissed_workflow_runs = !self.state.show_dismissed_workflow_runs;
+                self.state.rebuild_workflow_run_rows();
+                self.clamp_workflow_indices();
+            }
+
+            Action::ToggleWorkflowRunDismissed => self.handle_toggle_workflow_run_dismissed(),
+
+            Action::DismissComplete {
+                run_id,
+                dismissed,
+                result,
+            } => {
+                match result {
+                    Ok(()) => {
+                        // Update the in-memory run so the UI reflects the new state immediately.
+                        if let Some(run) = self
+                            .state
+                            .data
+                            .workflow_runs
+                            .iter_mut()
+                            .find(|r| r.id == run_id)
+                        {
+                            run.dismissed = dismissed;
+                        }
+                        self.state.rebuild_workflow_run_rows();
+                        self.clamp_workflow_indices();
+                        let verb = if dismissed {
+                            "dismissed"
+                        } else {
+                            "un-dismissed"
+                        };
+                        self.state.status_message = Some(format!("Run {verb}"));
+                    }
+                    Err(e) => {
+                        self.state.status_message = Some(format!("Dismiss failed: {e}"));
+                    }
+                }
+            }
+
             // WorktreeDetail panel actions
             Action::WorktreeDetailCopy => self.handle_worktree_detail_copy(),
             Action::WorktreeDetailOpen => self.handle_worktree_detail_open(),

@@ -2011,6 +2011,57 @@ impl App {
         Some((repo.slug.clone(), repo.local_path.clone()))
     }
 
+    /// Handle the `ToggleWorkflowRunDismissed` action.
+    pub(super) fn handle_toggle_workflow_run_dismissed(&mut self) {
+        use conductor_core::workflow::WorkflowManager;
+
+        let Some(run_id) = self.state.selected_workflow_run_id.clone() else {
+            self.state.status_message = Some("No workflow run selected".to_string());
+            return;
+        };
+
+        let run = match self
+            .state
+            .data
+            .workflow_runs
+            .iter()
+            .find(|r| r.id == run_id)
+        {
+            Some(r) => r.clone(),
+            None => {
+                self.state.status_message = Some("Workflow run not found".to_string());
+                return;
+            }
+        };
+
+        if !run.status.is_terminal() {
+            self.state.status_message =
+                Some("Cannot dismiss an active run — cancel it first (x)".to_string());
+            return;
+        }
+
+        let new_dismissed = !run.dismissed;
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+        let run_id_clone = run_id.clone();
+
+        std::thread::spawn(move || {
+            let result = (|| {
+                let db_path = conductor_core::config::db_path();
+                let conn =
+                    conductor_core::db::open_database(&db_path).map_err(|e| e.to_string())?;
+                WorkflowManager::new(&conn)
+                    .set_dismissed(&run_id_clone, new_dismissed)
+                    .map_err(|e| e.to_string())
+            })();
+            let _ = tx.send(Action::DismissComplete {
+                run_id: run_id_clone,
+                dismissed: new_dismissed,
+                result,
+            });
+        });
+    }
+
     /// Handle the `D` (DeleteWorkflowRun) action.
     ///
     /// Resolves the target run from either the detail view or the list view,

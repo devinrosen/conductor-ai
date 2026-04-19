@@ -4255,3 +4255,45 @@ fn test_find_step_by_name_and_iteration_ignores_completed_steps() {
         "completed step must not be returned — it would be skipped via should_skip"
     );
 }
+
+#[test]
+fn test_set_dismissed_marks_run_dismissed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+    assert!(!run.dismissed, "new runs start with dismissed = false");
+
+    mgr.set_dismissed(&run.id, true).unwrap();
+
+    let updated = mgr.list_workflow_runs_for_repo("r1", 50).unwrap();
+    let found = updated.iter().find(|r| r.id == run.id).unwrap();
+    assert!(
+        found.dismissed,
+        "run should be dismissed after set_dismissed(true)"
+    );
+}
+
+#[test]
+fn test_set_dismissed_can_undismiss() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+
+    mgr.set_dismissed(&run.id, true).unwrap();
+    mgr.set_dismissed(&run.id, false).unwrap();
+
+    let updated = mgr.list_workflow_runs_for_repo("r1", 50).unwrap();
+    let found = updated.iter().find(|r| r.id == run.id).unwrap();
+    assert!(
+        !found.dismissed,
+        "run should not be dismissed after set_dismissed(false)"
+    );
+}
+
+#[test]
+fn test_set_dismissed_unknown_id_is_noop() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    // Should not error for an unknown run ID.
+    assert!(mgr.set_dismissed("nonexistent-id", true).is_ok());
+}

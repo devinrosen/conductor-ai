@@ -270,8 +270,9 @@ pub mod workflow_run_info_row {
     pub const TICKET: usize = 5;
     pub const STARTED: usize = 6;
     pub const SUMMARY: usize = 7;
+    pub const DISMISSED: usize = 8;
     /// Total number of navigable rows (used for bounds clamping).
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 9;
 }
 
 /// One selectable item in the workflow picker modal.

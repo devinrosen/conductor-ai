@@ -1310,12 +1310,24 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
         .collect();
 
     let hidden = state.hidden_workflow_run_count();
-    let hidden_suffix = if hidden > 0 {
-        format!(" +{hidden} hidden (H to show)")
-    } else if !state.show_completed_workflow_runs {
-        " (H: show history)".to_string()
-    } else {
-        String::new()
+    let dismissed = state.dismissed_workflow_run_count();
+    let hidden_suffix = {
+        let mut parts = Vec::new();
+        if hidden > 0 {
+            parts.push(format!("+{hidden} hidden (H to show)"));
+        } else if !state.show_completed_workflow_runs {
+            parts.push("H: show history".to_string());
+        }
+        if dismissed > 0 {
+            parts.push(format!("+{dismissed} dismissed (V to show)"));
+        } else if !state.show_dismissed_workflow_runs {
+            parts.push("V: show dismissed".to_string());
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", parts.join(", "))
+        }
     };
     let filter_suffix = if let Some(ref f) = state.workflow_name_filter {
         format!("  [/{}]", f)
@@ -1390,9 +1402,9 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .unwrap_or_default();
 
-    // Info panel: 8 fixed rows + 2 border lines = 10
+    // Info panel: 9 fixed rows + 2 border lines = 11
     // Plus optional declared inputs rendered below the info panel
-    let info_height: u16 = 10;
+    let info_height: u16 = 11;
     let inputs_extra = matched_inputs.len() as u16;
     let inputs_height = if inputs_extra > 0 {
         inputs_extra + 2 // rows + top/bottom border
@@ -1439,7 +1451,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         ])
         .split(area);
 
-    // Info panel (8 fixed rows)
+    // Info panel (9 fixed rows)
     let info_focused = state.workflow_run_detail_focus == WorkflowRunDetailFocus::Info;
 
     if let Some(run) = run_info {
@@ -1544,6 +1556,32 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
                 Line::from(vec![
                     Span::styled(" Summary:  ", label_style),
                     Span::raw(summary_display),
+                ])
+            },
+            // Row 8: Dismissed toggle ([ ] No / [x] Yes)
+            {
+                let is_active = !run.status.is_terminal();
+                let (checkbox, checkbox_style) = if run.dismissed {
+                    ("[x] Yes", Style::default().fg(state.theme.label_warning))
+                } else {
+                    ("[ ] No", Style::default().fg(state.theme.label_secondary))
+                };
+                let label_s = if is_active {
+                    Style::default().fg(state.theme.label_secondary)
+                } else {
+                    label_style
+                };
+                Line::from(vec![
+                    Span::styled(" Dismiss:  ", label_s),
+                    Span::styled(checkbox, checkbox_style),
+                    if is_active {
+                        Span::styled(
+                            " (only for terminal runs)",
+                            Style::default().fg(state.theme.label_secondary),
+                        )
+                    } else {
+                        Span::raw("")
+                    },
                 ])
             },
         ];

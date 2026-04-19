@@ -113,6 +113,8 @@ pub struct WorkflowRun {
     pub total_cost_usd: Option<f64>,
     pub total_duration_ms: Option<i64>,
     pub model: Option<String>,
+    /// When true, the run is hidden from the default list view (soft-dismiss).
+    pub dismissed: bool,
 }
 
 /// Extract the human-readable title from a workflow definition snapshot JSON string.
@@ -761,6 +763,7 @@ mod tests {
             total_cost_usd: None,
             total_duration_ms: None,
             model: None,
+            dismissed: false,
         }
     }
 

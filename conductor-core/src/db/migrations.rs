@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 74;
+pub const LATEST_SCHEMA_VERSION: u32 = 75;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1077,6 +1077,17 @@ pub fn run(conn: &Connection) -> Result<()> {
     if version < 74 {
         conn.execute_batch(include_str!("migrations/074_drop_notifications.sql"))?;
         bump_version(conn, 74)?;
+    }
+
+    // Migration 075: add dismissed column to workflow_runs for soft-dismiss feature.
+    if version < 75 {
+        let has_col: bool = conn
+            .prepare("SELECT dismissed FROM workflow_runs LIMIT 0")
+            .is_ok();
+        if !has_col {
+            conn.execute_batch(include_str!("migrations/075_workflow_run_dismissed.sql"))?;
+        }
+        bump_version(conn, 75)?;
     }
 
     Ok(())

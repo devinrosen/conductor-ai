@@ -170,6 +170,19 @@ pub enum Action {
     // Toggle visibility of completed/cancelled workflow runs in the workflow column
     ToggleCompletedRuns,
 
+    // Toggle visibility of dismissed workflow runs in the workflow column
+    ToggleDismissedRuns,
+
+    /// Toggle the dismissed flag on the currently-selected workflow run.
+    ToggleWorkflowRunDismissed,
+
+    /// Background result: set_dismissed() completed.
+    DismissComplete {
+        run_id: String,
+        dismissed: bool,
+        result: Result<(), String>,
+    },
+
     // Agent triggers
     LaunchAgent,
     PromptRepoAgent,
