@@ -64,52 +64,32 @@ pub(super) fn query_dep_pairs(
         .query_map(rusqlite::named_params! { ":dep_type": dep_type }, |row| {
             let from_id: String = row.get("from_ticket_id")?;
             let to_id: String = row.get("to_ticket_id")?;
-            let from_exists: Option<String> = row.get("tf_id")?;
-            let to_exists: Option<String> = row.get("tt_id")?;
-            Ok((from_id, to_id, from_exists, to_exists))
+            let tf_id: Option<String> = row.get("tf_id")?;
+            let tt_id: Option<String> = row.get("tt_id")?;
+            let from_ticket = if tf_id.is_some() {
+                Some(map_ticket_row_aliased(row, "tf_")?)
+            } else {
+                None
+            };
+            let to_ticket = if tt_id.is_some() {
+                Some(map_ticket_row_aliased(row, "tt_")?)
+            } else {
+                None
+            };
+            Ok((from_id, to_id, from_ticket, to_ticket))
         })
         .map_err(ConductorError::Database)?;
 
-    // First pass: check for orphaned references.
-    let mut checked = Vec::new();
+    let mut result = Vec::new();
     for row in rows {
-        let (from_id, to_id, from_exists, to_exists) = row.map_err(ConductorError::Database)?;
-        if from_exists.is_none() {
-            return Err(ConductorError::TicketNotFound { id: from_id });
+        let (from_id, to_id, from_ticket, to_ticket) = row.map_err(ConductorError::Database)?;
+        match (from_ticket, to_ticket) {
+            (Some(from), Some(to)) => result.push((from_id, to_id, from, to)),
+            (None, _) => return Err(ConductorError::TicketNotFound { id: from_id }),
+            (_, None) => return Err(ConductorError::TicketNotFound { id: to_id }),
         }
-        if to_exists.is_none() {
-            return Err(ConductorError::TicketNotFound { id: to_id });
-        }
-        checked.push((from_id, to_id));
     }
-
-    // All tickets exist — re-query with INNER JOIN to map full Ticket objects.
-    query_collect(
-        conn,
-        "SELECT d.from_ticket_id, d.to_ticket_id,
-         tf.id AS tf_id, tf.repo_id AS tf_repo_id, tf.source_type AS tf_source_type, tf.source_id AS tf_source_id,
-         tf.title AS tf_title, tf.body AS tf_body, tf.state AS tf_state,
-         tf.labels AS tf_labels, tf.assignee AS tf_assignee, tf.priority AS tf_priority,
-         tf.url AS tf_url, tf.synced_at AS tf_synced_at, tf.raw_json AS tf_raw_json,
-         tf.workflow AS tf_workflow, tf.agent_map AS tf_agent_map,
-         tt.id AS tt_id, tt.repo_id AS tt_repo_id, tt.source_type AS tt_source_type, tt.source_id AS tt_source_id,
-         tt.title AS tt_title, tt.body AS tt_body, tt.state AS tt_state,
-         tt.labels AS tt_labels, tt.assignee AS tt_assignee, tt.priority AS tt_priority,
-         tt.url AS tt_url, tt.synced_at AS tt_synced_at, tt.raw_json AS tt_raw_json,
-         tt.workflow AS tt_workflow, tt.agent_map AS tt_agent_map
-         FROM ticket_dependencies d
-         JOIN tickets tf ON tf.id = d.from_ticket_id
-         JOIN tickets tt ON tt.id = d.to_ticket_id
-         WHERE d.dep_type = :dep_type",
-        rusqlite::named_params! { ":dep_type": dep_type },
-        |row| {
-            let from_id: String = row.get("from_ticket_id")?;
-            let to_id: String = row.get("to_ticket_id")?;
-            let from_ticket = map_ticket_row_aliased(row, "tf_")?;
-            let to_ticket = map_ticket_row_aliased(row, "tt_")?;
-            Ok((from_id, to_id, from_ticket, to_ticket))
-        },
-    )
+    Ok(result)
 }
 
 /// Like `query_dep_pairs` but scoped to a single repo (edges where at least one
