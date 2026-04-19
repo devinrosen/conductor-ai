@@ -4268,3 +4268,43 @@ fn test_delete_orphaned_pending_steps_noop_when_none() {
     let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
     assert_eq!(deleted, 0);
 }
+
+// ---------------------------------------------------------------------------
+// update_step_child_run_id
+// ---------------------------------------------------------------------------
+
+/// `update_step_child_run_id` writes the child run ID to the step row so the
+/// TUI can drill into a running child workflow.
+#[test]
+fn test_update_step_child_run_id() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    let step_id = mgr
+        .insert_step(&run.id, "call-child", "actor", false, 0, 0)
+        .unwrap();
+
+    let child_run_id = crate::new_id();
+    mgr.update_step_child_run_id(&step_id, &child_run_id)
+        .unwrap();
+
+    let step = mgr
+        .get_step_by_id(&step_id)
+        .unwrap()
+        .expect("step must exist");
+    assert_eq!(
+        step.child_run_id.as_deref(),
+        Some(child_run_id.as_str()),
+        "child_run_id must be written to the step row"
+    );
+}
+
+/// Calling `update_step_child_run_id` on a non-existent step is a no-op (no error).
+#[test]
+fn test_update_step_child_run_id_nonexistent_step() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    // SQLite UPDATE on a missing row succeeds with 0 rows affected — no error expected.
+    mgr.update_step_child_run_id("nonexistent-step-id", "any-child-run-id")
+        .unwrap();
+}

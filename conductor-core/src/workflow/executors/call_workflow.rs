@@ -280,6 +280,7 @@ pub fn execute_call_workflow(
             conductor_bin_dir: state.conductor_bin_dir.clone(),
             force: false,
             extra_plugin_dirs: state.extra_plugin_dirs.clone(),
+            parent_step_id: Some(step_id.clone()),
         };
 
         match crate::workflow::engine::execute_workflow(&child_input) {

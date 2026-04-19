@@ -162,6 +162,15 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Write the child run ID back to a parent step immediately after the child run is created.
+    pub fn update_step_child_run_id(&self, step_id: &str, child_run_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_run_steps SET child_run_id = :child_run_id WHERE id = :id",
+            named_params![":child_run_id": child_run_id, ":id": step_id],
+        )?;
+        Ok(())
+    }
+
     /// Persist or clear the subprocess PID for a script step.
     ///
     /// Pass `Some(pid)` after a successful `cmd.spawn()` to record the child PID.

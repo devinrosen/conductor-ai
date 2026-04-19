@@ -823,6 +823,7 @@ pub async fn post_workflow_run(
             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
             extra_plugin_dirs: vec![],
             force: false,
+            parent_step_id: None,
         };
 
         let result = execute_workflow(&input);

@@ -469,6 +469,11 @@ pub struct WorkflowExecInput<'a> {
     /// Additional plugin directories passed via `--plugin-dir` CLI flag.
     /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
     pub extra_plugin_dirs: Vec<String>,
+    /// The parent step ID that triggered this child workflow invocation.
+    /// When set, `execute_workflow` writes the child run ID back to the parent
+    /// step record immediately after the child run is created, enabling TUI
+    /// drill-in while the child is still running.
+    pub parent_step_id: Option<String>,
 }
 
 /// Owned inputs for [`execute_workflow_standalone`], avoiding lifetime issues
