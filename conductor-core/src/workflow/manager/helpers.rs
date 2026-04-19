@@ -163,27 +163,14 @@ pub(in crate::workflow) fn row_to_workflow_step(
         output_file: row.get("output_file")?,
         gate_options: row.get("gate_options")?,
         gate_selections: row.get("gate_selections")?,
-        input_tokens: row.get::<_, Option<i64>>("input_tokens").unwrap_or(None),
-        output_tokens: row.get::<_, Option<i64>>("output_tokens").unwrap_or(None),
-        cache_read_input_tokens: row
-            .get::<_, Option<i64>>("cache_read_input_tokens")
-            .unwrap_or(None),
-        cache_creation_input_tokens: row
-            .get::<_, Option<i64>>("cache_creation_input_tokens")
-            .unwrap_or(None),
-        fan_out_total: row.get::<_, Option<i64>>("fan_out_total").unwrap_or(None),
-        fan_out_completed: row
-            .get::<_, Option<i64>>("fan_out_completed")
-            .unwrap_or(None)
-            .unwrap_or(0),
-        fan_out_failed: row
-            .get::<_, Option<i64>>("fan_out_failed")
-            .unwrap_or(None)
-            .unwrap_or(0),
-        fan_out_skipped: row
-            .get::<_, Option<i64>>("fan_out_skipped")
-            .unwrap_or(None)
-            .unwrap_or(0),
-        step_error: row.get::<_, Option<String>>("step_error").unwrap_or(None),
+        input_tokens: row.get::<_, Option<i64>>("input_tokens")?,
+        output_tokens: row.get::<_, Option<i64>>("output_tokens")?,
+        cache_read_input_tokens: row.get::<_, Option<i64>>("cache_read_input_tokens")?,
+        cache_creation_input_tokens: row.get::<_, Option<i64>>("cache_creation_input_tokens")?,
+        fan_out_total: row.get::<_, Option<i64>>("fan_out_total")?,
+        fan_out_completed: row.get::<_, Option<i64>>("fan_out_completed")?.unwrap_or(0),
+        fan_out_failed: row.get::<_, Option<i64>>("fan_out_failed")?.unwrap_or(0),
+        fan_out_skipped: row.get::<_, Option<i64>>("fan_out_skipped")?.unwrap_or(0),
+        step_error: row.get::<_, Option<String>>("step_error")?,
     })
 }
