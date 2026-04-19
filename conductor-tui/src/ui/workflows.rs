@@ -1619,7 +1619,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     // Determine if the selected step has agent activity to show
     let selected_step = state.data.workflow_steps.get(state.workflow_step_index);
     let has_agent_activity = selected_step
-        .map(|s| s.child_run_id.is_some() && s.role != "workflow")
+        .map(|s| s.child_run_id.is_some() && s.role != conductor_core::workflow::STEP_ROLE_WORKFLOW)
         .unwrap_or(false);
 
     if has_agent_activity {
@@ -1865,7 +1865,7 @@ fn render_step_list(
         .data
         .workflow_steps
         .get(state.workflow_step_index)
-        .map(|s| s.role == "workflow" && s.child_run_id.is_some())
+        .map(|s| s.role == conductor_core::workflow::STEP_ROLE_WORKFLOW && s.child_run_id.is_some())
         .unwrap_or(false);
     let title = match (
         focused,

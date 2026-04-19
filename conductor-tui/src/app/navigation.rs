@@ -953,7 +953,7 @@ impl App {
                     .get(self.state.workflow_step_index)
                 {
                     // [workflow] steps: drill into the child workflow run instead of a modal.
-                    if step.role == "workflow" {
+                    if step.role == conductor_core::workflow::STEP_ROLE_WORKFLOW {
                         if let Some(ref child_id) = step.child_run_id.clone() {
                             self.drill_into_child_workflow(child_id.clone());
                         }
@@ -1797,5 +1797,29 @@ mod tests {
             "Arc must be synced to None when run has no worktree_id"
         );
         assert_eq!(app.state.view, View::WorkflowRunDetail);
+    }
+
+    #[test]
+    fn enter_on_workflow_step_drills_into_child_run() {
+        use conductor_core::workflow::STEP_ROLE_WORKFLOW;
+        let mut app = make_test_app();
+        app.state.view = View::WorkflowRunDetail;
+        app.state.selected_workflow_run_id = Some("parent-run".into());
+        let mut step = crate::state::tests::make_wf_step("s1", "parent-run", "child-wf", 0);
+        step.role = STEP_ROLE_WORKFLOW.into();
+        step.child_run_id = Some("child-run".into());
+        app.state.data.workflow_steps = vec![step];
+        app.state.workflow_step_index = 0;
+        app.select();
+        assert_eq!(
+            app.state.workflow_run_nav_stack,
+            vec!["parent-run".to_string()],
+            "parent run id must be pushed onto the nav stack"
+        );
+        assert_eq!(
+            app.state.selected_workflow_run_id,
+            Some("child-run".into()),
+            "selected run must switch to the child run"
+        );
     }
 }
