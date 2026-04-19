@@ -1,5 +1,7 @@
 /// Step role value for `foreach` steps, as stored in `workflow_run_steps.role`.
 pub const STEP_ROLE_FOREACH: &str = "foreach";
+/// Step role value for `workflow` steps (child workflow invocations), as stored in `workflow_run_steps.role`.
+pub const STEP_ROLE_WORKFLOW: &str = "workflow";
 
 /// Step role value for steps that call a child workflow, as stored in `workflow_run_steps.role`.
 pub const STEP_ROLE_WORKFLOW: &str = "workflow";

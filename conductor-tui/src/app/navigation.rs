@@ -172,23 +172,23 @@ impl App {
                 self.sync_selection_arcs();
             }
             View::WorkflowRunDetail => {
-                // If we've drilled into a child workflow, pop back to the parent.
+                // Pop back to parent child workflow if we drilled in; otherwise leave the view.
                 if let Some(parent_id) = self.state.workflow_run_nav_stack.pop() {
                     self.switch_to_workflow_run(parent_id);
-                    return;
+                } else {
+                    self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+                    if let Some(prev_wt_id) = self.state.previous_selected_worktree_id.take() {
+                        self.state.selected_worktree_id = prev_wt_id;
+                        self.sync_selection_arcs();
+                    }
+                    self.state.selected_workflow_run_id = None;
+                    self.state.column_focus = crate::state::ColumnFocus::Workflow;
+                    self.state.workflows_focus = WorkflowsFocus::Runs;
+                    // Re-poll immediately so the workflow column reflects the restored view's
+                    // context (repo- or worktree-scoped) instead of showing stale global data
+                    // that was loaded while in WorkflowRunDetail.
+                    self.poll_workflow_data_async();
                 }
-                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
-                if let Some(prev_wt_id) = self.state.previous_selected_worktree_id.take() {
-                    self.state.selected_worktree_id = prev_wt_id;
-                    self.sync_selection_arcs();
-                }
-                self.state.selected_workflow_run_id = None;
-                self.state.column_focus = crate::state::ColumnFocus::Workflow;
-                self.state.workflows_focus = WorkflowsFocus::Runs;
-                // Re-poll immediately so the workflow column reflects the restored view's
-                // context (repo- or worktree-scoped) instead of showing stale global data
-                // that was loaded while in WorkflowRunDetail.
-                self.poll_workflow_data_async();
             }
             View::WorkflowDefDetail => {
                 self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
@@ -955,19 +955,7 @@ impl App {
                     // [workflow] steps: drill into the child workflow run instead of a modal.
                     if step.role == conductor_core::workflow::STEP_ROLE_WORKFLOW {
                         if let Some(ref child_id) = step.child_run_id.clone() {
-                            let exists = self
-                                .state
-                                .data
-                                .workflow_runs
-                                .iter()
-                                .any(|r| &r.id == child_id);
-                            if exists {
-                                self.drill_into_child_workflow(child_id.clone());
-                            } else {
-                                self.state.status_message =
-                                    Some("Child workflow not loaded yet — try again".to_string());
-                                self.state.status_message_at = Some(std::time::Instant::now());
-                            }
+                            self.drill_into_child_workflow(child_id.clone());
                         }
                         return;
                     }
@@ -1873,5 +1861,29 @@ mod tests {
             "Arc must be synced to None when run has no worktree_id"
         );
         assert_eq!(app.state.view, View::WorkflowRunDetail);
+    }
+
+    #[test]
+    fn enter_on_workflow_step_drills_into_child_run() {
+        use conductor_core::workflow::STEP_ROLE_WORKFLOW;
+        let mut app = make_test_app();
+        app.state.view = View::WorkflowRunDetail;
+        app.state.selected_workflow_run_id = Some("parent-run".into());
+        let mut step = crate::state::tests::make_wf_step("s1", "parent-run", "child-wf", 0);
+        step.role = STEP_ROLE_WORKFLOW.into();
+        step.child_run_id = Some("child-run".into());
+        app.state.data.workflow_steps = vec![step];
+        app.state.workflow_step_index = 0;
+        app.select();
+        assert_eq!(
+            app.state.workflow_run_nav_stack,
+            vec!["parent-run".to_string()],
+            "parent run id must be pushed onto the nav stack"
+        );
+        assert_eq!(
+            app.state.selected_workflow_run_id,
+            Some("child-run".into()),
+            "selected run must switch to the child run"
+        );
     }
 }
