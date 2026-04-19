@@ -407,7 +407,12 @@ impl<'a> WorkflowManager<'a> {
                AND wrs.status = 'running' \
                AND wrs.started_at IS NOT NULL \
                AND (CAST(strftime('%s', 'now') AS INTEGER) \
-                    - CAST(strftime('%s', wrs.started_at) AS INTEGER)) > :threshold_minutes * 60",
+                    - CAST(strftime('%s', wrs.started_at) AS INTEGER)) > :threshold_minutes * 60 \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM workflow_runs child \
+                 WHERE child.parent_workflow_run_id = wr.id \
+                   AND child.status IN ('running', 'pending', 'waiting') \
+               )",
             named_params![":threshold_minutes": threshold_minutes],
             |row| {
                 Ok(StaleWorkflowRun {
