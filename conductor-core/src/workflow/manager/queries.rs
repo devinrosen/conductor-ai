@@ -42,6 +42,10 @@ fn granularity_to_strftime_format(granularity: TimeGranularity) -> &'static str 
 }
 
 impl<'a> WorkflowManager<'a> {
+    /// Token columns from the agent_runs join, used in gate step queries.
+    const AGENT_RUN_TOKEN_COLS: &'static str =
+        "ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens";
+
     /// Common SELECT clause for step queries with agent run token data.
     const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
                  FROM workflow_run_steps s \
@@ -751,7 +755,7 @@ impl<'a> WorkflowManager<'a> {
         let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
         let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
-            "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens, r.workflow_name, r.target_label \
+            "SELECT {cols}, {token_cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
              LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
@@ -759,6 +763,7 @@ impl<'a> WorkflowManager<'a> {
              AND r.status IN ({placeholders}) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
+            token_cols = Self::AGENT_RUN_TOKEN_COLS,
         );
         crate::db::query_collect(
             self.conn,
@@ -776,7 +781,7 @@ impl<'a> WorkflowManager<'a> {
         let active_strings = WorkflowRunStatus::active_strings();
         let status_placeholders = sql_placeholders(active_strings.len());
         let sql = format!(
-            "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
+            "SELECT {cols}, {token_cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
              FROM workflow_run_steps s \
              LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
@@ -787,6 +792,7 @@ impl<'a> WorkflowManager<'a> {
              AND (r.repo_id = ? OR wt.repo_id = ?) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
+            token_cols = Self::AGENT_RUN_TOKEN_COLS,
         );
         let mut all_params: Vec<rusqlite::types::Value> = active_strings
             .into_iter()
