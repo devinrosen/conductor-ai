@@ -67,6 +67,54 @@ impl<'a> TicketSyncer<'a> {
         Self { conn }
     }
 
+    /// For a Jira-sourced ticket, fetches fresh data including comments and persists it.
+    /// Returns `(effective_raw_json, formatted_comments_section)`.
+    /// Falls back to the stored ticket data on any failure (non-fatal).
+    pub fn enrich_jira_ticket_with_comments(&self, ticket: &Ticket) -> (String, String) {
+        if ticket.source_type != "jira" {
+            return (ticket.raw_json.clone(), String::new());
+        }
+
+        let jira_url = crate::issue_source::IssueSourceManager::new(self.conn)
+            .list(&ticket.repo_id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|s| s.source_type == "jira")
+            .and_then(|s| {
+                serde_json::from_str::<crate::issue_source::JiraConfig>(&s.config_json)
+                    .ok()
+                    .map(|c| c.url)
+            });
+
+        let Some(url) = jira_url else {
+            return (ticket.raw_json.clone(), String::new());
+        };
+
+        match crate::jira_acli::fetch_jira_issue(&ticket.source_id, &url) {
+            Ok(fresh) => {
+                let comments_str = super::format_comments_section(&fresh.comments);
+                let fresh_raw = fresh.raw_json.clone();
+                if let Err(e) = self.upsert_tickets(&ticket.repo_id, &[fresh]) {
+                    tracing::warn!(
+                        "failed to persist enriched Jira ticket {}: {e}",
+                        ticket.source_id
+                    );
+                }
+                (
+                    fresh_raw.unwrap_or_else(|| ticket.raw_json.clone()),
+                    comments_str,
+                )
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "failed to re-fetch Jira issue {} for enrichment: {e}",
+                    ticket.source_id
+                );
+                (ticket.raw_json.clone(), String::new())
+            }
+        }
+    }
+
     /// Upsert a batch of tickets for a repo. Returns the number of tickets upserted.
     pub fn upsert_tickets(&self, repo_id: &str, tickets: &[TicketInput]) -> Result<usize> {
         for ticket in tickets {

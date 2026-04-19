@@ -1012,8 +1012,10 @@ fn test_build_agent_prompt_with_comments() {
 
     let prompt = build_agent_prompt(&ticket, &comments);
     assert!(prompt.contains("## Comments"));
-    assert!(prompt.contains("**Kate**: Let's max it out at 30 characters"));
-    assert!(prompt.contains("**Bob**: Agreed, 30 is good"));
+    assert!(prompt.contains("**Kate**:"));
+    assert!(prompt.contains("Let's max it out at 30 characters"));
+    assert!(prompt.contains("**Bob**:"));
+    assert!(prompt.contains("Agreed, 30 is good"));
 }
 
 #[test]
@@ -1030,7 +1032,8 @@ fn test_format_comments_section_nonempty() {
     }];
     let section = format_comments_section(&comments);
     assert!(section.contains("## Comments"));
-    assert!(section.contains("**Alice**: Good point"));
+    assert!(section.contains("**Alice**:"));
+    assert!(section.contains("Good point"));
 }
 
 /// Verify that `TicketSyncer::list` returns all tickets regardless of state,
@@ -2902,4 +2905,83 @@ fn test_resolve_tickets_in_repo_preserves_order() {
     assert_eq!(result[0].source_id, "300");
     assert_eq!(result[1].id, "ord-id-1");
     assert_eq!(result[2].source_id, "200");
+}
+
+#[test]
+fn test_format_comments_section_code_fence_wrapping() {
+    let comments = vec![TicketComment {
+        id: "1".to_string(),
+        author: "Kate".to_string(),
+        body: "Let's max it out at 30 characters".to_string(),
+    }];
+    let section = format_comments_section(&comments);
+    // Body must be inside a code block, not inline after author
+    assert!(section.contains("**Kate**:\n```\nLet's max it out at 30 characters\n```"));
+}
+
+#[test]
+fn test_format_comments_section_escapes_embedded_fences() {
+    let comments = vec![TicketComment {
+        id: "1".to_string(),
+        author: "Alice".to_string(),
+        body: "Use ``` for code blocks".to_string(),
+    }];
+    let section = format_comments_section(&comments);
+    // Embedded ``` must be escaped so they cannot break out of the wrapping fence
+    assert!(!section.contains("\n```\nUse ``` for code"));
+    assert!(section.contains("` ` `"));
+}
+
+#[test]
+fn test_enrich_jira_ticket_with_comments_non_jira_passthrough() {
+    let conn = setup_db();
+    let syncer = TicketSyncer::new(&conn);
+    let ticket = Ticket {
+        id: "t1".to_string(),
+        repo_id: "r1".to_string(),
+        source_type: "github".to_string(),
+        source_id: "123".to_string(),
+        title: "GitHub issue".to_string(),
+        body: String::new(),
+        state: "open".to_string(),
+        labels: "[]".to_string(),
+        assignee: None,
+        priority: None,
+        url: String::new(),
+        synced_at: "2026-01-01T00:00:00Z".to_string(),
+        raw_json: r#"{"number":123}"#.to_string(),
+        workflow: None,
+        agent_map: None,
+    };
+    let (raw, comments) = syncer.enrich_jira_ticket_with_comments(&ticket);
+    assert_eq!(raw, r#"{"number":123}"#);
+    assert_eq!(comments, "");
+}
+
+#[test]
+fn test_enrich_jira_ticket_with_comments_no_jira_source_configured() {
+    // Jira ticket with no IssueSource configured → returns original raw_json, empty comments
+    let conn = setup_db();
+    let syncer = TicketSyncer::new(&conn);
+    let ticket = Ticket {
+        id: "t2".to_string(),
+        repo_id: "r1".to_string(),
+        source_type: "jira".to_string(),
+        source_id: "RND-1".to_string(),
+        title: "Jira issue".to_string(),
+        body: String::new(),
+        state: "open".to_string(),
+        labels: "[]".to_string(),
+        assignee: None,
+        priority: None,
+        url: String::new(),
+        synced_at: "2026-01-01T00:00:00Z".to_string(),
+        raw_json: r#"{"key":"RND-1"}"#.to_string(),
+        workflow: None,
+        agent_map: None,
+    };
+    let (raw, comments) = syncer.enrich_jira_ticket_with_comments(&ticket);
+    // No Jira IssueSource in DB → falls back immediately
+    assert_eq!(raw, r#"{"key":"RND-1"}"#);
+    assert_eq!(comments, "");
 }

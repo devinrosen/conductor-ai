@@ -14,6 +14,28 @@ pub struct JiraComment {
     pub visibility: String,
 }
 
+/// Parse a `Vec<JiraComment>` from the JSON produced by `acli jira workitem comment list`.
+/// Extracted so it can be unit-tested without requiring the `acli` binary.
+pub(crate) fn parse_jira_comments_json(json_str: &str) -> Vec<JiraComment> {
+    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    parsed["comments"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|c| JiraComment {
+                    id: c["id"].as_str().unwrap_or("").to_string(),
+                    author: c["author"].as_str().unwrap_or("").to_string(),
+                    body: c["body"].as_str().unwrap_or("").to_string(),
+                    visibility: c["visibility"].as_str().unwrap_or("public").to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Fetch comments for a Jira issue using `acli jira workitem comment list`.
 /// Returns an empty vec on any failure (non-fatal).
 pub fn fetch_jira_issue_comments(issue_key: &str) -> Vec<JiraComment> {
@@ -39,27 +61,11 @@ pub fn fetch_jira_issue_comments(issue_key: &str) -> Vec<JiraComment> {
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = match serde_json::from_str(&json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("failed to parse acli comment output for {issue_key}: {e}");
-            return vec![];
-        }
-    };
-
-    parsed["comments"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|c| JiraComment {
-                    id: c["id"].as_str().unwrap_or("").to_string(),
-                    author: c["author"].as_str().unwrap_or("").to_string(),
-                    body: c["body"].as_str().unwrap_or("").to_string(),
-                    visibility: c["visibility"].as_str().unwrap_or("public").to_string(),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    if serde_json::from_str::<serde_json::Value>(&json_str).is_err() {
+        warn!("failed to parse acli comment output for {issue_key}");
+        return vec![];
+    }
+    parse_jira_comments_json(&json_str)
 }
 
 /// Sync Jira issues matching a JQL query using the `acli` CLI.
@@ -170,7 +176,10 @@ pub fn fetch_jira_issue(issue_key: &str, base_url: &str) -> Result<TicketInput> 
                     })
                     .collect();
                 v["comments"] = serde_json::Value::Array(comments_json);
-                ticket.raw_json = serde_json::to_string(&v).ok();
+                if let Ok(serialized) = serde_json::to_string(&v) {
+                    ticket.raw_json = Some(serialized);
+                }
+                // If serialization fails, keep the original raw_json unchanged.
             }
         }
     }
@@ -400,26 +409,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_comment_json_full() {
+    fn test_parse_jira_comments_json_full() {
         let json = r#"{
             "comments": [
                 {"id": "1", "author": "Kate", "body": "Max 30 chars", "visibility": "public"},
                 {"id": "2", "author": "Bob", "body": "Agreed", "visibility": "internal"}
             ]
         }"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-        let comments: Vec<JiraComment> = parsed["comments"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| JiraComment {
-                id: c["id"].as_str().unwrap_or("").to_string(),
-                author: c["author"].as_str().unwrap_or("").to_string(),
-                body: c["body"].as_str().unwrap_or("").to_string(),
-                visibility: c["visibility"].as_str().unwrap_or("public").to_string(),
-            })
-            .collect();
-
+        let comments = parse_jira_comments_json(json);
         assert_eq!(comments.len(), 2);
         assert_eq!(comments[0].id, "1");
         assert_eq!(comments[0].author, "Kate");
@@ -430,30 +427,31 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_comment_json_empty_array() {
-        let json = r#"{"comments": []}"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-        let arr = parsed["comments"].as_array().unwrap();
-        assert!(arr.is_empty());
+    fn test_parse_jira_comments_json_empty_array() {
+        let comments = parse_jira_comments_json(r#"{"comments": []}"#);
+        assert!(comments.is_empty());
     }
 
     #[test]
-    fn test_parse_comment_json_missing_comments_key() {
-        let json = r#"{}"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-        let result: Vec<JiraComment> = parsed["comments"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .map(|c| JiraComment {
-                        id: c["id"].as_str().unwrap_or("").to_string(),
-                        author: c["author"].as_str().unwrap_or("").to_string(),
-                        body: c["body"].as_str().unwrap_or("").to_string(),
-                        visibility: c["visibility"].as_str().unwrap_or("public").to_string(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        assert!(result.is_empty());
+    fn test_parse_jira_comments_json_missing_comments_key() {
+        let comments = parse_jira_comments_json(r#"{}"#);
+        assert!(comments.is_empty());
+    }
+
+    #[test]
+    fn test_parse_jira_comments_json_invalid() {
+        let comments = parse_jira_comments_json("not json");
+        assert!(comments.is_empty());
+    }
+
+    #[test]
+    fn test_parse_jira_comments_json_missing_optional_fields() {
+        let json = r#"{"comments": [{"id": "1"}]}"#;
+        let comments = parse_jira_comments_json(json);
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].id, "1");
+        assert_eq!(comments[0].author, "");
+        assert_eq!(comments[0].body, "");
+        assert_eq!(comments[0].visibility, "public");
     }
 }

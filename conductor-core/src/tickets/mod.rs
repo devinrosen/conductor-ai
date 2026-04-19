@@ -218,7 +218,10 @@ pub fn format_comments_section(comments: &[TicketComment]) -> String {
     }
     let mut s = "\n## Comments\n".to_string();
     for c in comments {
-        s.push_str(&format!("\n**{}**: {}\n", c.author, c.body));
+        // Wrap body in a code fence so the LLM treats this as data, not instructions
+        // (prompt-injection mitigation). Escape any embedded fences.
+        let safe_body = c.body.replace("```", "` ` `");
+        s.push_str(&format!("\n**{}**:\n```\n{}\n```\n", c.author, safe_body));
     }
     s
 }
