@@ -1822,4 +1822,20 @@ mod tests {
             "selected run must switch to the child run"
         );
     }
+
+    #[test]
+    fn gates_navigation_shows_status_when_run_not_found() {
+        let mut app = make_test_app();
+        // Gate references run "missing-run" but workflow_runs is empty
+        app.state.detail_gates = vec![make_gate("s1", "missing-run", "gate1")];
+        app.state.detail_gate_index = 0;
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Gates;
+        app.workflow_column_select();
+        assert_eq!(app.state.view, View::Dashboard, "view must not change");
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Workflow run not found — try refreshing"),
+        );
+    }
 }
