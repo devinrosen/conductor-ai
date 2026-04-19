@@ -34,7 +34,7 @@ pub(super) fn make_gate_node(gate_type: GateType, on_timeout: OnTimeout) -> Gate
 
 /// Build an `ExecutionState` with all common defaults filled in.
 /// Callers override only the fields they care about via struct update syntax.
-fn base_execution_state<'a>(
+pub(in crate::workflow) fn base_execution_state<'a>(
     conn: &'a Connection,
     config: &'a Config,
     run_id: String,

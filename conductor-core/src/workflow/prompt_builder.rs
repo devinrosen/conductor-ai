@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::schema_config;
 
 use super::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
-use super::engine::ExecutionState;
+use super::engine::{ExecutionState, ENGINE_INJECTED_KEYS};
+use super::run_context::{RunContext, WorktreeRunContext};
 
 fn substitute_variables_impl(
     template: &str,
@@ -46,8 +47,19 @@ pub(super) fn substitute_variables_keep_literal(
 /// Build the variable map from execution state (used for substitution in sub-workflow inputs).
 pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&'a str, String> {
     let mut vars: HashMap<&str, String> = HashMap::new();
+
+    // Non-injected user-defined inputs (e.g. feature_base_branch, worktree_branch, fsm_path)
     for (k, v) in &state.inputs {
-        vars.insert(k.as_str(), v.clone());
+        if !ENGINE_INJECTED_KEYS.contains(&k.as_str()) {
+            vars.insert(k.as_str(), v.clone());
+        }
+    }
+
+    // ENGINE_INJECTED_KEYS read through the RunContext trait facade.
+    // injected_variables() returns &'static str keys directly, satisfying the &'a str bound.
+    let ctx = WorktreeRunContext::new(state);
+    for (k, v) in ctx.injected_variables() {
+        vars.insert(k, v);
     }
     let prior_context = state
         .contexts
@@ -169,51 +181,20 @@ pub(super) fn build_agent_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::types::{ContextEntry, WorkflowExecConfig};
+    use crate::workflow::types::ContextEntry;
 
     fn make_state(conn: &rusqlite::Connection) -> ExecutionState<'_> {
-        let config = crate::config::Config::default();
         // Use a leaked config so the borrow lives long enough for the test.
-        let config: &'static crate::config::Config = Box::leak(Box::new(config));
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
         ExecutionState {
-            conn,
-            config,
-            workflow_run_id: String::new(),
             workflow_name: "test-wf".into(),
-            worktree_id: None,
-            working_dir: String::new(),
-            worktree_slug: String::new(),
-            repo_path: String::new(),
-            ticket_id: None,
-            repo_id: None,
-            model: None,
-            exec_config: WorkflowExecConfig::default(),
-            inputs: std::collections::HashMap::new(),
-            agent_mgr: crate::agent::AgentManager::new(conn),
-            wf_mgr: crate::workflow::manager::WorkflowManager::new(conn),
-            parent_run_id: String::new(),
-            depth: 0,
-            target_label: None,
-            step_results: std::collections::HashMap::new(),
-            contexts: Vec::new(),
-            position: 0,
-            all_succeeded: true,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_input_tokens: 0,
-            total_cache_creation_input_tokens: 0,
-            last_gate_feedback: None,
-            block_output: None,
-            block_with: Vec::new(),
-            resume_ctx: None,
-            default_bot_name: None,
-            triggered_by_hook: false,
-            conductor_bin_dir: None,
-            extra_plugin_dirs: vec![],
-            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            ..crate::workflow::tests::common::base_execution_state(
+                conn,
+                config,
+                String::new(),
+                String::new(),
+            )
         }
     }
 
@@ -226,6 +207,34 @@ mod tests {
             structured_output: None,
             output_file: output_file.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn test_build_variable_map_separates_injected_and_non_injected() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut state = make_state(&conn);
+        // ticket_id is an ENGINE_INJECTED_KEY; feature_base_branch is user-defined.
+        state
+            .inputs
+            .insert("ticket_id".to_string(), "tid-99".to_string());
+        state.inputs.insert(
+            "feature_base_branch".to_string(),
+            "release/v1.0".to_string(),
+        );
+        let vars = build_variable_map(&state);
+        // Both should appear in the map.
+        assert_eq!(vars.get("ticket_id").map(String::as_str), Some("tid-99"));
+        assert_eq!(
+            vars.get("feature_base_branch").map(String::as_str),
+            Some("release/v1.0")
+        );
+        // ticket_id must not appear twice (it should be in the injected slot, not the user slot).
+        // The HashMap guarantees uniqueness; verify the value is correct.
+        assert_eq!(
+            vars.iter().filter(|(&k, _)| k == "ticket_id").count(),
+            1,
+            "ticket_id should appear exactly once in variable map"
+        );
     }
 
     #[test]

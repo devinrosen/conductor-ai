@@ -13,6 +13,7 @@ pub(crate) mod helpers;
 pub(crate) mod manager;
 pub(crate) mod output;
 pub(crate) mod prompt_builder;
+pub(crate) mod run_context;
 pub(crate) mod status;
 pub(crate) mod types;
 
