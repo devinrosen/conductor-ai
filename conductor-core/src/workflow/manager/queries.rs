@@ -2009,8 +2009,14 @@ mod tests {
             .unwrap()
             .expect("should find a waiting gate step");
 
-        assert_eq!(step.input_tokens, None, "no agent_run → input_tokens should be None");
-        assert_eq!(step.output_tokens, None, "no agent_run → output_tokens should be None");
+        assert_eq!(
+            step.input_tokens, None,
+            "no agent_run → input_tokens should be None"
+        );
+        assert_eq!(
+            step.output_tokens, None,
+            "no agent_run → output_tokens should be None"
+        );
         assert_eq!(step.cache_read_input_tokens, None);
         assert_eq!(step.cache_creation_input_tokens, None);
     }
