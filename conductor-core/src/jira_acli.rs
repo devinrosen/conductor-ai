@@ -40,11 +40,45 @@ pub fn sync_jira_issues_acli(jql: &str, base_url: &str) -> Result<Vec<TicketInpu
     parse_jira_issues(&json_str, base_url)
 }
 
+/// Validate that `key` matches the canonical Jira key format: one or more
+/// uppercase ASCII letters, a hyphen, then one or more ASCII digits (e.g. PROJ-123).
+fn validate_issue_key(key: &str) -> Result<()> {
+    let bytes = key.as_bytes();
+    let hyphen = bytes.iter().position(|&b| b == b'-').ok_or_else(|| {
+        ConductorError::TicketSync("invalid issue key format; expected PROJECT-123".to_string())
+    })?;
+
+    if hyphen == 0 || hyphen == bytes.len() - 1 {
+        return Err(ConductorError::TicketSync(
+            "invalid issue key format; expected PROJECT-123".to_string(),
+        ));
+    }
+
+    let prefix = &bytes[..hyphen];
+    let suffix = &bytes[hyphen + 1..];
+
+    let prefix_valid = !prefix.is_empty()
+        && prefix[0].is_ascii_alphabetic()
+        && prefix
+            .iter()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+    let suffix_valid = !suffix.is_empty() && suffix.iter().all(|b| b.is_ascii_digit());
+
+    if prefix_valid && suffix_valid {
+        Ok(())
+    } else {
+        Err(ConductorError::TicketSync(
+            "invalid issue key format; expected PROJECT-123".to_string(),
+        ))
+    }
+}
+
 /// Fetch a single Jira issue by key and return its current state.
 ///
 /// Uses JQL `key = <issue_key>` with a limit of 1 to retrieve only the
 /// requested issue, reusing the existing `parse_jira_issues` parser.
 pub fn fetch_jira_issue(issue_key: &str, base_url: &str) -> Result<TicketInput> {
+    validate_issue_key(issue_key)?;
     let jql = format!("key = {issue_key}");
     let output = Command::new("acli")
         .args([
@@ -286,6 +320,32 @@ mod tests {
     fn test_map_jira_status_unknown_defaults_to_open() {
         assert_eq!(map_jira_status("Custom Status"), "open");
         assert_eq!(map_jira_status("Waiting for QA"), "open");
+    }
+
+    #[test]
+    fn test_validate_issue_key_valid() {
+        assert!(validate_issue_key("PROJ-1").is_ok());
+        assert!(validate_issue_key("RND-123").is_ok());
+        assert!(validate_issue_key("AB-9999").is_ok());
+        assert!(validate_issue_key("A1-42").is_ok());
+    }
+
+    #[test]
+    fn test_validate_issue_key_rejects_injection() {
+        assert!(validate_issue_key("RND-1 OR key != RND-1").is_err());
+        assert!(validate_issue_key("PROJ-1; DROP TABLE tickets").is_err());
+        assert!(validate_issue_key("KEY-1 AND 1=1").is_err());
+    }
+
+    #[test]
+    fn test_validate_issue_key_rejects_malformed() {
+        assert!(validate_issue_key("").is_err());
+        assert!(validate_issue_key("NOHYPHEN").is_err());
+        assert!(validate_issue_key("-123").is_err());
+        assert!(validate_issue_key("PROJ-").is_err());
+        assert!(validate_issue_key("proj-1").is_err());
+        assert!(validate_issue_key("123-456").is_err());
+        assert!(validate_issue_key("PROJ-abc").is_err());
     }
 
     #[test]
