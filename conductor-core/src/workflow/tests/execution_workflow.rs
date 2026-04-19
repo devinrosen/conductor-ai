@@ -25,28 +25,15 @@ fn test_cannot_start_workflow_run_when_active() {
 
     let workflow = make_empty_workflow();
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
         worktree_id: Some("w1"),
-        working_dir: "/tmp/ws/feat-test",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -74,28 +61,15 @@ fn test_can_start_workflow_run_after_completion() {
 
     let workflow = make_empty_workflow();
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
         worktree_id: Some("w1"),
-        working_dir: "/tmp/ws/feat-test",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -125,28 +99,16 @@ fn test_child_workflow_not_blocked_by_parent() {
     let workflow = make_empty_workflow();
     // depth = 1 means this is a child workflow — guard must be skipped.
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
         worktree_id: Some("w1"),
-        working_dir: "/tmp/ws/feat-test",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
         depth: 1,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input);
     assert!(
@@ -170,28 +132,15 @@ fn test_run_id_notify_slot_is_populated() {
         std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
         run_id_notify: Some(std::sync::Arc::clone(&slot)),
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -223,28 +172,15 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
     let workflow = make_empty_workflow();
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
         worktree_id: Some("w1"), // path /tmp/ws/feat-test — does not exist on disk
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input).expect(
@@ -265,28 +201,15 @@ fn test_execute_workflow_injects_repo_variables() {
 
     // repo `r1` with local_path `/tmp/repo` is inserted by setup_db()
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
         repo_id: Some("r1"),
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -320,28 +243,15 @@ fn test_execute_workflow_injects_ticket_variables() {
     insert_test_ticket(&conn, "tkt-1", "r1");
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
         ticket_id: Some("tkt-1"),
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -379,28 +289,16 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
     explicit_inputs.insert("repo_name".to_string(), "my-override".to_string());
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
         repo_id: Some("r1"),
-        model: None,
-        exec_config: &exec_config,
         inputs: explicit_inputs,
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/repo",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -425,28 +323,8 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
     let workflow = make_empty_workflow();
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "",
-        repo_path: "",
         ticket_id: Some("nonexistent-ticket"),
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(&conn, &config, &workflow, "", "", &exec_config)
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -462,28 +340,8 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
     let workflow = make_empty_workflow();
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "",
-        repo_path: "",
-        ticket_id: None,
         repo_id: Some("nonexistent-repo"),
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(&conn, &config, &workflow, "", "", &exec_config)
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -503,30 +361,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
     let workflow = make_empty_workflow();
 
     // First ephemeral call — must succeed (empty workflow, no agents to spawn).
-    let input1 = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "",
-        repo_path: "",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
-    };
+    let input1 = make_exec_input(&conn, &config, &workflow, "", "", &exec_config);
     let result1 = execute_workflow(&input1);
     assert!(
         !matches!(
@@ -539,30 +374,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
     // Second ephemeral call — must also not be blocked by the guard, even though
     // the first run's record now exists in the DB (it has no worktree_id, so the
     // guard is skipped entirely for ephemeral runs).
-    let input2 = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "",
-        repo_path: "",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
-    };
+    let input2 = make_exec_input(&conn, &config, &workflow, "", "", &exec_config);
     let result2 = execute_workflow(&input2);
     assert!(
         !matches!(
@@ -587,28 +399,10 @@ fn test_execute_workflow_iteration_persisted() {
         std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "",
-        repo_path: "",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
         depth: 1,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
         iteration: 3,
         run_id_notify: Some(slot.clone()),
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(&conn, &config, &workflow, "", "", &exec_config)
     };
 
     let result = execute_workflow(&input);
@@ -664,30 +458,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         plugin_dirs: vec![],
     }));
 
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir,
-        repo_path: "",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
-    };
+    let input = make_exec_input(&conn, &config, &workflow, working_dir, "", &exec_config);
 
     let err = execute_workflow(&input).unwrap_err();
     let msg = err.to_string();
@@ -742,30 +513,14 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         plugin_dirs: vec![],
     }));
 
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
+    let input = make_exec_input(
+        &conn,
+        &config,
+        &workflow,
         working_dir,
-        repo_path: working_dir,
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
-    };
+        working_dir,
+        &exec_config,
+    );
 
     let err = execute_workflow(&input).unwrap_err();
     let msg = err.to_string();
@@ -824,30 +579,14 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         plugin_dirs: vec![],
     }));
 
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
+    let input = make_exec_input(
+        &conn,
+        &config,
+        &workflow,
         working_dir,
-        repo_path: working_dir,
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
-    };
+        working_dir,
+        &exec_config,
+    );
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
     // It will fail later when trying to actually run the agent (no tmux, etc.),
@@ -884,32 +623,19 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
     let workflow = make_empty_workflow();
     let exec_config = WorkflowExecConfig::default();
 
-    let input = crate::workflow::types::WorkflowExecInput {
-        conn: &conn,
-        config,
-        workflow: &workflow,
+    let input = WorkflowExecInput {
         worktree_id: Some("wt-custom-base"),
-        working_dir: "/tmp/ws/feat-custom",
-        repo_path: "/tmp/repo",
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        ticket_id: None,
-        repo_id: None,
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            config,
+            &workflow,
+            "/tmp/ws/feat-custom",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
-    let result = crate::workflow::engine::execute_workflow(&input).unwrap();
+    let result = execute_workflow(&input).unwrap();
 
     // Fetch the persisted workflow run and verify the injected base branch.
     let wf_mgr = WorkflowManager::new(&conn);
@@ -934,28 +660,15 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
     let workflow = make_empty_workflow();
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
         worktree_id: Some("w1"),
-        working_dir: "/tmp/ws/feat-test",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -998,28 +711,15 @@ fn test_foreach_worktrees_uses_derived_repo_id_from_worktree() {
     workflow.body = vec![WorkflowNode::ForEach(foreach_node)];
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
         worktree_id: Some("w1"),
-        working_dir: "/tmp/ws/feat-test",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(
+            &conn,
+            &config,
+            &workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input);
@@ -1134,28 +834,18 @@ fn test_parent_step_id_writes_child_run_id_to_step() {
     // Execute an empty child workflow with parent_step_id set.
     let child_workflow = make_empty_workflow();
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &child_workflow,
         worktree_id: Some("w1"),
-        working_dir: "/tmp/ws/feat-test",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
         depth: 1,
         parent_workflow_run_id: Some(&parent_run.id),
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
         parent_step_id: Some(parent_step_id.clone()),
+        ..make_exec_input(
+            &conn,
+            &config,
+            &child_workflow,
+            "/tmp/ws/feat-test",
+            "/tmp/repo",
+            &exec_config,
+        )
     };
 
     let result = execute_workflow(&input).unwrap();

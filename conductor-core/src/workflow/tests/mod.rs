@@ -8,13 +8,14 @@ mod execution_steps;
 mod execution_variables;
 mod execution_workflow;
 mod gates;
-mod helpers;
+pub(super) mod helpers;
 mod manager;
 mod on_fail_continue;
 mod output;
 mod resumption;
 mod types;
 
+pub(super) use self::helpers::make_exec_input;
 pub(super) use super::engine::{
     bubble_up_child_step_results, completed_keys_from_steps, execute_nodes,
     fetch_child_final_output, record_step_failure, record_step_skipped, resolve_child_inputs,
