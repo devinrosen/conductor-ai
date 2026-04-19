@@ -266,6 +266,7 @@ pub fn handle_workflow(
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
+                    parent_step_id: None,
                 })?;
             } else if let Some(run_id) = workflow_run {
                 // Workflow-run targeted run (e.g. postmortem workflows)
@@ -310,6 +311,7 @@ pub fn handle_workflow(
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
+                    parent_step_id: None,
                 })?;
             } else if let Some(ticket_id) = ticket {
                 let syncer = TicketSyncer::new(conn);
@@ -351,6 +353,7 @@ pub fn handle_workflow(
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
+                    parent_step_id: None,
                 })?;
             } else {
                 // Normal registered repo/worktree run
@@ -428,6 +431,7 @@ pub fn handle_workflow(
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     force: false,
                     extra_plugin_dirs: plugin_dirs,
+                    parent_step_id: None,
                 })?;
             }
         }

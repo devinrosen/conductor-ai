@@ -113,6 +113,8 @@ pub struct WorkflowRun {
     pub total_cost_usd: Option<f64>,
     pub total_duration_ms: Option<i64>,
     pub model: Option<String>,
+    /// When true, the run is hidden from the default list view (soft-dismiss).
+    pub dismissed: bool,
 }
 
 /// Extract the human-readable title from a workflow definition snapshot JSON string.
@@ -467,6 +469,11 @@ pub struct WorkflowExecInput<'a> {
     /// Additional plugin directories passed via `--plugin-dir` CLI flag.
     /// Appended to repo-level `plugin_dirs` when spawning agent sessions.
     pub extra_plugin_dirs: Vec<String>,
+    /// The parent step ID that triggered this child workflow invocation.
+    /// When set, `execute_workflow` writes the child run ID back to the parent
+    /// step record immediately after the child run is created, enabling TUI
+    /// drill-in while the child is still running.
+    pub parent_step_id: Option<String>,
 }
 
 /// Owned inputs for [`execute_workflow_standalone`], avoiding lifetime issues
@@ -761,6 +768,7 @@ mod tests {
             total_cost_usd: None,
             total_duration_ms: None,
             model: None,
+            dismissed: false,
         }
     }
 

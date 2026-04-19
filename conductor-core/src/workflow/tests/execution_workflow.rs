@@ -46,6 +46,7 @@ fn test_cannot_start_workflow_run_when_active() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -94,6 +95,7 @@ fn test_can_start_workflow_run_after_completion() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -144,6 +146,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input);
     assert!(
@@ -188,6 +191,7 @@ fn test_run_id_notify_slot_is_populated() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -240,6 +244,7 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input).expect(
@@ -281,6 +286,7 @@ fn test_execute_workflow_injects_repo_variables() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -335,6 +341,7 @@ fn test_execute_workflow_injects_ticket_variables() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -393,6 +400,7 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -438,6 +446,7 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -474,6 +483,7 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -515,6 +525,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result1 = execute_workflow(&input1);
     assert!(
@@ -550,6 +561,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result2 = execute_workflow(&input2);
     assert!(
@@ -596,6 +608,7 @@ fn test_execute_workflow_iteration_persisted() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input);
@@ -673,6 +686,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -750,6 +764,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -831,6 +846,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
@@ -890,6 +906,7 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = crate::workflow::engine::execute_workflow(&input).unwrap();
@@ -938,6 +955,7 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -1001,6 +1019,7 @@ fn test_foreach_worktrees_uses_derived_repo_id_from_worktree() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input);
@@ -1066,5 +1085,90 @@ fn test_body_skips_on_fail_fast_failure() {
     assert_eq!(
         state.position, initial_position,
         "body gate must be skipped when fail_fast=true and body already failed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// parent_step_id — child run ID written back immediately (#2320)
+// ---------------------------------------------------------------------------
+
+/// When `parent_step_id` is set, `execute_workflow` must write the new child
+/// run ID back to the parent step row immediately after the child run is
+/// created, so the TUI can drill into a running child workflow.
+#[test]
+fn test_parent_step_id_writes_child_run_id_to_step() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+
+    // Set up a parent workflow run with a placeholder "call-child" step.
+    let agent_mgr = AgentManager::new(&conn);
+    let parent_agent_run = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let parent_run = wf_mgr
+        .create_workflow_run(
+            "parent-wf",
+            Some("w1"),
+            &parent_agent_run.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+    let parent_step_id = wf_mgr
+        .insert_step(&parent_run.id, "call-child", "actor", false, 0, 0)
+        .unwrap();
+
+    // child_run_id should be None before execute_workflow is called.
+    let step_before = wf_mgr
+        .get_step_by_id(&parent_step_id)
+        .unwrap()
+        .expect("step must exist");
+    assert!(
+        step_before.child_run_id.is_none(),
+        "child_run_id must be None before the child run is created"
+    );
+
+    // Execute an empty child workflow with parent_step_id set.
+    let child_workflow = make_empty_workflow();
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &child_workflow,
+        worktree_id: Some("w1"),
+        working_dir: "/tmp/ws/feat-test",
+        repo_path: "/tmp/repo",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 1,
+        parent_workflow_run_id: Some(&parent_run.id),
+        target_label: None,
+        default_bot_name: None,
+        iteration: 0,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
+        force: false,
+        parent_step_id: Some(parent_step_id.clone()),
+    };
+
+    let result = execute_workflow(&input).unwrap();
+    let child_run_id = result.workflow_run_id;
+
+    // The parent step must now have child_run_id set to the new child run's ID.
+    let step_after = wf_mgr
+        .get_step_by_id(&parent_step_id)
+        .unwrap()
+        .expect("step must still exist");
+    assert_eq!(
+        step_after.child_run_id.as_deref(),
+        Some(child_run_id.as_str()),
+        "child_run_id must be written back to the parent step immediately on child run creation"
     );
 }

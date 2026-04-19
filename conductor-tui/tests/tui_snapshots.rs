@@ -331,6 +331,7 @@ fn snap_workflow_run_detail_with_steps() {
         total_cost_usd: None,
         total_duration_ms: None,
         model: None,
+        dismissed: false,
     };
 
     let steps = vec![

@@ -120,6 +120,9 @@ pub struct AppState {
     /// When false (default), completed and cancelled workflow runs are hidden in the workflow column.
     pub show_completed_workflow_runs: bool,
 
+    /// When false (default), dismissed workflow runs are hidden in the workflow column.
+    pub show_dismissed_workflow_runs: bool,
+
     /// Cached result of `rebuild_workflow_run_rows()`. Invalidated at every mutation site.
     cached_workflow_run_rows: Vec<WorkflowRunRow>,
 
@@ -253,6 +256,7 @@ impl AppState {
             should_quit: false,
             show_closed_tickets: false,
             show_completed_workflow_runs: false,
+            show_dismissed_workflow_runs: false,
             cached_workflow_run_rows: Vec::new(),
             ticket_sync_in_progress: false,
             loading_workflow_picker_defs: false,
@@ -623,6 +627,9 @@ impl AppState {
                 {
                     continue;
                 }
+                if !self.show_dismissed_workflow_runs && run.dismissed {
+                    continue;
+                }
                 if !Self::run_matches_name_filter(&name_filter_lower, run) {
                     continue;
                 }
@@ -710,6 +717,9 @@ impl AppState {
                     WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
                 )
             {
+                continue;
+            }
+            if !self.show_dismissed_workflow_runs && run.dismissed {
                 continue;
             }
             if !Self::run_matches_name_filter(&name_filter_lower, run) {
@@ -870,25 +880,43 @@ impl AppState {
         self.cached_workflow_run_rows.len()
     }
 
-    /// Auto-initialize collapse state for newly-seen terminal-status parent runs.
-    /// Count root-level workflow runs that are hidden because `show_completed_workflow_runs` is false.
-    pub fn hidden_workflow_run_count(&self) -> usize {
-        if self.show_completed_workflow_runs {
-            return 0;
-        }
+    /// Returns the set of run IDs that are children of a known run (i.e. sub-workflow runs).
+    /// Used to restrict counts to root-level runs only.
+    fn child_run_ids(&self) -> HashSet<&str> {
         let known_ids: HashSet<&str> = self
             .data
             .workflow_runs
             .iter()
             .map(|r| r.id.as_str())
             .collect();
-        let child_ids: HashSet<&str> = self
-            .data
+        self.data
             .workflow_runs
             .iter()
             .filter_map(|r| r.parent_workflow_run_id.as_deref())
             .filter(|pid| known_ids.contains(pid))
-            .collect();
+            .collect()
+    }
+
+    /// Count root-level workflow runs that are hidden because they are dismissed.
+    pub fn dismissed_workflow_run_count(&self) -> usize {
+        if self.show_dismissed_workflow_runs {
+            return 0;
+        }
+        let child_ids = self.child_run_ids();
+        self.data
+            .workflow_runs
+            .iter()
+            .filter(|r| !child_ids.contains(r.id.as_str()))
+            .filter(|r| r.dismissed)
+            .count()
+    }
+
+    /// Count root-level workflow runs that are hidden because `show_completed_workflow_runs` is false.
+    pub fn hidden_workflow_run_count(&self) -> usize {
+        if self.show_completed_workflow_runs {
+            return 0;
+        }
+        let child_ids = self.child_run_ids();
         self.data
             .workflow_runs
             .iter()
@@ -1064,5 +1092,84 @@ impl AppState {
             (_, false) => self.status_message_at = None,
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conductor_core::workflow::{WorkflowRun, WorkflowRunStatus};
+
+    fn make_run(id: &str, parent_workflow_run_id: Option<&str>, dismissed: bool) -> WorkflowRun {
+        WorkflowRun {
+            id: id.to_string(),
+            workflow_name: "test".to_string(),
+            worktree_id: None,
+            parent_run_id: "agent-1".to_string(),
+            status: WorkflowRunStatus::Failed,
+            dry_run: false,
+            trigger: "manual".to_string(),
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: None,
+            inputs: Default::default(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: parent_workflow_run_id.map(String::from),
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed,
+        }
+    }
+
+    #[test]
+    fn dismissed_count_zero_when_show_dismissed_is_true() {
+        let mut state = AppState::new();
+        state.show_dismissed_workflow_runs = true;
+        state.data.workflow_runs = vec![make_run("r1", None, true)];
+        assert_eq!(state.dismissed_workflow_run_count(), 0);
+    }
+
+    #[test]
+    fn dismissed_count_counts_root_dismissed_runs() {
+        let mut state = AppState::new();
+        state.show_dismissed_workflow_runs = false;
+        state.data.workflow_runs = vec![
+            make_run("r1", None, true),
+            make_run("r2", None, false),
+            make_run("r3", None, true),
+        ];
+        assert_eq!(state.dismissed_workflow_run_count(), 2);
+    }
+
+    #[test]
+    fn dismissed_count_excludes_child_runs() {
+        let mut state = AppState::new();
+        state.show_dismissed_workflow_runs = false;
+        // r2 is a child of r1 — should not count even if dismissed
+        state.data.workflow_runs =
+            vec![make_run("r1", None, true), make_run("r2", Some("r1"), true)];
+        assert_eq!(state.dismissed_workflow_run_count(), 1);
+    }
+
+    #[test]
+    fn dismissed_count_zero_when_no_dismissed_runs() {
+        let mut state = AppState::new();
+        state.show_dismissed_workflow_runs = false;
+        state.data.workflow_runs = vec![make_run("r1", None, false)];
+        assert_eq!(state.dismissed_workflow_run_count(), 0);
     }
 }
