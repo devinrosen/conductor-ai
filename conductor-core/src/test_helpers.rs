@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 
 use crate::db;
+use crate::tickets::TicketInput;
 
 /// Opens an in-memory SQLite database with migrations applied. No seed data is inserted.
 pub fn create_test_conn() -> Connection {
@@ -52,6 +53,25 @@ pub fn setup_db() -> Connection {
     insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
     insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp/ws/feat-test");
     conn
+}
+
+pub fn make_ticket(source_id: &str, title: &str) -> TicketInput {
+    TicketInput {
+        source_type: "github".to_string(),
+        source_id: source_id.to_string(),
+        title: title.to_string(),
+        body: String::new(),
+        state: "open".to_string(),
+        labels: vec![],
+        assignee: None,
+        priority: None,
+        url: String::new(),
+        raw_json: None,
+        label_details: vec![],
+        blocked_by: vec![],
+        children: vec![],
+        parent: None,
+    }
 }
 
 /// `setup_db()` + an agent_run `ar1` attached to worktree `w1`.

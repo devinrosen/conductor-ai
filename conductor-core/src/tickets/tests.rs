@@ -9,22 +9,7 @@ fn setup_db() -> Connection {
 }
 
 fn make_ticket(source_id: &str, title: &str) -> TicketInput {
-    TicketInput {
-        source_type: "github".to_string(),
-        source_id: source_id.to_string(),
-        title: title.to_string(),
-        body: String::new(),
-        state: "open".to_string(),
-        labels: vec![],
-        assignee: None,
-        priority: None,
-        url: String::new(),
-        raw_json: None,
-        label_details: vec![],
-        blocked_by: vec![],
-        children: vec![],
-        parent: None,
-    }
+    crate::test_helpers::make_ticket(source_id, title)
 }
 
 fn get_ticket_state(conn: &Connection, source_id: &str) -> String {
