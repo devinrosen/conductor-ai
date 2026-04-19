@@ -427,8 +427,18 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         let ticket = crate::tickets::TicketSyncer::new(conn).get_by_id(tid)?;
 
         // Enrich Jira tickets with fresh comments lazily; non-fatal on failure.
-        let (effective_raw_json, ticket_comments_str) =
+        let (effective_raw_json, ticket_comments_str, fresh_ticket) =
             crate::tickets::TicketSyncer::new(conn).enrich_jira_ticket_with_comments(&ticket);
+        if let Some(fresh) = fresh_ticket {
+            if let Err(e) =
+                crate::tickets::TicketSyncer::new(conn).upsert_tickets(&ticket.repo_id, &[fresh])
+            {
+                tracing::warn!(
+                    "failed to persist enriched Jira ticket {}: {e}",
+                    ticket.source_id
+                );
+            }
+        }
 
         merged_inputs
             .entry("ticket_id".to_string())

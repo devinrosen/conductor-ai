@@ -2953,9 +2953,10 @@ fn test_enrich_jira_ticket_with_comments_non_jira_passthrough() {
         workflow: None,
         agent_map: None,
     };
-    let (raw, comments) = syncer.enrich_jira_ticket_with_comments(&ticket);
+    let (raw, comments, fresh) = syncer.enrich_jira_ticket_with_comments(&ticket);
     assert_eq!(raw, r#"{"number":123}"#);
     assert_eq!(comments, "");
+    assert!(fresh.is_none());
 }
 
 #[test]
@@ -2980,8 +2981,90 @@ fn test_enrich_jira_ticket_with_comments_no_jira_source_configured() {
         workflow: None,
         agent_map: None,
     };
-    let (raw, comments) = syncer.enrich_jira_ticket_with_comments(&ticket);
+    let (raw, comments, fresh) = syncer.enrich_jira_ticket_with_comments(&ticket);
     // No Jira IssueSource in DB → falls back immediately
     assert_eq!(raw, r#"{"key":"RND-1"}"#);
     assert_eq!(comments, "");
+    assert!(fresh.is_none());
+}
+
+#[test]
+fn test_enrich_jira_ticket_with_comments_jira_configured() {
+    // Jira IssueSource configured: exercises fetch path. With acli available, fresh ticket is
+    // returned; without acli, falls back to original data. Either way, no panic.
+    let conn = setup_db();
+    crate::issue_source::IssueSourceManager::new(&conn)
+        .add(
+            "r1",
+            "jira",
+            r#"{"jql":"project=RND","url":"https://jira.example.com"}"#,
+            "test-repo",
+        )
+        .unwrap();
+
+    let syncer = TicketSyncer::new(&conn);
+    let original_raw = r#"{"key":"RND-FAKE-TEST-99999"}"#.to_string();
+    let ticket = Ticket {
+        id: "t3".to_string(),
+        repo_id: "r1".to_string(),
+        source_type: "jira".to_string(),
+        source_id: "RND-FAKE-TEST-99999".to_string(),
+        title: "Jira issue".to_string(),
+        body: String::new(),
+        state: "open".to_string(),
+        labels: "[]".to_string(),
+        assignee: None,
+        priority: None,
+        url: String::new(),
+        synced_at: "2026-01-01T00:00:00Z".to_string(),
+        raw_json: original_raw.clone(),
+        workflow: None,
+        agent_map: None,
+    };
+
+    let (raw, _comments, fresh) = syncer.enrich_jira_ticket_with_comments(&ticket);
+    if fresh.is_some() {
+        // acli available and ticket found: enriched data returned
+        assert_ne!(raw, original_raw);
+    } else {
+        // acli unavailable or ticket not found: falls back to original
+        assert_eq!(raw, original_raw);
+    }
+}
+
+#[test]
+fn test_enrich_jira_ticket_with_comments_invalid_config_json() {
+    // Jira IssueSource configured but config_json is invalid → warn and fall back
+    let conn = setup_db();
+    conn.execute(
+        "INSERT INTO repo_issue_sources (id, repo_id, source_type, config_json) \
+         VALUES ('src1', 'r1', 'jira', 'not-valid-json')",
+        [],
+    )
+    .unwrap();
+
+    let syncer = TicketSyncer::new(&conn);
+    let ticket = Ticket {
+        id: "t4".to_string(),
+        repo_id: "r1".to_string(),
+        source_type: "jira".to_string(),
+        source_id: "RND-1".to_string(),
+        title: "Jira issue".to_string(),
+        body: String::new(),
+        state: "open".to_string(),
+        labels: "[]".to_string(),
+        assignee: None,
+        priority: None,
+        url: String::new(),
+        synced_at: "2026-01-01T00:00:00Z".to_string(),
+        raw_json: r#"{"key":"RND-1"}"#.to_string(),
+        workflow: None,
+        agent_map: None,
+    };
+
+    let (raw, comments, fresh) = syncer.enrich_jira_ticket_with_comments(&ticket);
+    // config_json parse fails → falls back to original data
+    assert_eq!(raw, r#"{"key":"RND-1"}"#);
+    assert_eq!(comments, "");
+    assert!(fresh.is_none());
 }

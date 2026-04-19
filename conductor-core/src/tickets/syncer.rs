@@ -67,50 +67,65 @@ impl<'a> TicketSyncer<'a> {
         Self { conn }
     }
 
-    /// For a Jira-sourced ticket, fetches fresh data including comments and persists it.
-    /// Returns `(effective_raw_json, formatted_comments_section)`.
+    /// For a Jira-sourced ticket, fetches fresh data including comments.
+    /// Returns `(effective_raw_json, formatted_comments_section, Option<fresh_ticket>)`.
+    /// The caller is responsible for persisting `fresh_ticket` if desired.
     /// Falls back to the stored ticket data on any failure (non-fatal).
-    pub fn enrich_jira_ticket_with_comments(&self, ticket: &Ticket) -> (String, String) {
+    pub fn enrich_jira_ticket_with_comments(
+        &self,
+        ticket: &Ticket,
+    ) -> (String, String, Option<TicketInput>) {
         if ticket.source_type != "jira" {
-            return (ticket.raw_json.clone(), String::new());
+            return (ticket.raw_json.clone(), String::new(), None);
         }
 
-        let jira_url = crate::issue_source::IssueSourceManager::new(self.conn)
-            .list(&ticket.repo_id)
-            .unwrap_or_default()
+        let sources =
+            match crate::issue_source::IssueSourceManager::new(self.conn).list(&ticket.repo_id) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(
+                        "failed to list issue sources for repo {}: {e}",
+                        ticket.repo_id
+                    );
+                    return (ticket.raw_json.clone(), String::new(), None);
+                }
+            };
+
+        let jira_url = sources
             .into_iter()
             .find(|s| s.source_type == "jira")
             .and_then(|s| {
-                serde_json::from_str::<crate::issue_source::JiraConfig>(&s.config_json)
-                    .ok()
-                    .map(|c| c.url)
+                match serde_json::from_str::<crate::issue_source::JiraConfig>(&s.config_json) {
+                    Ok(cfg) => Some(cfg.url),
+                    Err(e) => {
+                        tracing::warn!(
+                            "failed to parse Jira config for repo {}: {e}",
+                            ticket.repo_id
+                        );
+                        None
+                    }
+                }
             });
 
         let Some(url) = jira_url else {
-            return (ticket.raw_json.clone(), String::new());
+            return (ticket.raw_json.clone(), String::new(), None);
         };
 
         match crate::jira_acli::fetch_jira_issue(&ticket.source_id, &url) {
             Ok(fresh) => {
                 let comments_str = super::format_comments_section(&fresh.comments);
-                let fresh_raw = fresh.raw_json.clone();
-                if let Err(e) = self.upsert_tickets(&ticket.repo_id, &[fresh]) {
-                    tracing::warn!(
-                        "failed to persist enriched Jira ticket {}: {e}",
-                        ticket.source_id
-                    );
-                }
-                (
-                    fresh_raw.unwrap_or_else(|| ticket.raw_json.clone()),
-                    comments_str,
-                )
+                let fresh_raw = fresh
+                    .raw_json
+                    .clone()
+                    .unwrap_or_else(|| ticket.raw_json.clone());
+                (fresh_raw, comments_str, Some(fresh))
             }
             Err(e) => {
                 tracing::warn!(
                     "failed to re-fetch Jira issue {} for enrichment: {e}",
                     ticket.source_id
                 );
-                (ticket.raw_json.clone(), String::new())
+                (ticket.raw_json.clone(), String::new(), None)
             }
         }
     }

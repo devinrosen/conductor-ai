@@ -14,14 +14,8 @@ pub struct JiraComment {
     pub visibility: String,
 }
 
-/// Parse a `Vec<JiraComment>` from the JSON produced by `acli jira workitem comment list`.
-/// Extracted so it can be unit-tested without requiring the `acli` binary.
-pub(crate) fn parse_jira_comments_json(json_str: &str) -> Vec<JiraComment> {
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return vec![],
-    };
-    parsed["comments"]
+fn parse_jira_comments_value(value: &serde_json::Value) -> Vec<JiraComment> {
+    value["comments"]
         .as_array()
         .map(|arr| {
             arr.iter()
@@ -34,6 +28,16 @@ pub(crate) fn parse_jira_comments_json(json_str: &str) -> Vec<JiraComment> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Parse a `Vec<JiraComment>` from the JSON produced by `acli jira workitem comment list`.
+/// Extracted so it can be unit-tested without requiring the `acli` binary.
+#[cfg(test)]
+pub(crate) fn parse_jira_comments_json(json_str: &str) -> Vec<JiraComment> {
+    match serde_json::from_str::<serde_json::Value>(json_str) {
+        Ok(parsed) => parse_jira_comments_value(&parsed),
+        Err(_) => vec![],
+    }
 }
 
 /// Fetch comments for a Jira issue using `acli jira workitem comment list`.
@@ -61,11 +65,13 @@ pub fn fetch_jira_issue_comments(issue_key: &str) -> Vec<JiraComment> {
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    if serde_json::from_str::<serde_json::Value>(&json_str).is_err() {
-        warn!("failed to parse acli comment output for {issue_key}");
-        return vec![];
+    match serde_json::from_str::<serde_json::Value>(&json_str) {
+        Ok(parsed) => parse_jira_comments_value(&parsed),
+        Err(e) => {
+            warn!("failed to parse acli comment output for {issue_key}: {e}");
+            vec![]
+        }
     }
-    parse_jira_comments_json(&json_str)
 }
 
 /// Sync Jira issues matching a JQL query using the `acli` CLI.
