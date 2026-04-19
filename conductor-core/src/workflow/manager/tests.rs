@@ -4102,3 +4102,163 @@ fn test_list_defs_with_validation_propagates_io_error() {
         "Expected Err when workflows directory is unreadable, got Ok"
     );
 }
+
+// -----------------------------------------------------------------------
+// reset_running_items_without_child_run tests (#2306)
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_reset_running_items_without_child_run() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let parent_id = make_parent_id(&conn, "w1");
+    let run = mgr
+        .create_workflow_run("test", Some("w1"), &parent_id, false, "manual", None)
+        .unwrap();
+    let step_id = mgr
+        .insert_step(&run.id, "foreach:test", "foreach", false, 0, 0)
+        .unwrap();
+
+    // Item A: running, no child_run_id — should be reset to pending.
+    let item_a = mgr
+        .insert_fan_out_item(&step_id, "ticket", "ticket-a", "a")
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_step_fan_out_items SET status = 'running' WHERE id = ?1",
+        rusqlite::params![item_a],
+    )
+    .unwrap();
+
+    // Item B: running, WITH child_run_id — must NOT be reset.
+    let item_b = mgr
+        .insert_fan_out_item(&step_id, "ticket", "ticket-b", "b")
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_step_fan_out_items \
+         SET status = 'running', child_run_id = 'some-child-run' WHERE id = ?1",
+        rusqlite::params![item_b],
+    )
+    .unwrap();
+
+    // Item C: pending — must NOT be changed.
+    let item_c = mgr
+        .insert_fan_out_item(&step_id, "ticket", "ticket-c", "c")
+        .unwrap();
+
+    // Item D: completed — must NOT be changed.
+    let item_d = mgr
+        .insert_fan_out_item(&step_id, "ticket", "ticket-d", "d")
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_step_fan_out_items SET status = 'completed' WHERE id = ?1",
+        rusqlite::params![item_d],
+    )
+    .unwrap();
+
+    let reset_count = mgr.reset_running_items_without_child_run(&step_id).unwrap();
+    assert_eq!(
+        reset_count, 1,
+        "only item A (running, no child_run_id) should be reset"
+    );
+
+    let items = mgr.get_fan_out_items(&step_id, None).unwrap();
+    let status_of = |id: &str| {
+        items
+            .iter()
+            .find(|i| i.id == id)
+            .map(|i| i.status.as_str())
+            .unwrap_or("NOT FOUND")
+    };
+
+    assert_eq!(
+        status_of(&item_a),
+        "pending",
+        "item A must be reset to pending"
+    );
+    assert_eq!(
+        status_of(&item_b),
+        "running",
+        "item B (has child_run_id) must remain running"
+    );
+    assert_eq!(status_of(&item_c), "pending", "item C must remain pending");
+    assert_eq!(
+        status_of(&item_d),
+        "completed",
+        "item D must remain completed"
+    );
+}
+
+#[test]
+fn test_find_step_by_name_and_iteration_returns_non_completed_step() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let parent_id = make_parent_id(&conn, "w1");
+    let run = mgr
+        .create_workflow_run("test", Some("w1"), &parent_id, false, "manual", None)
+        .unwrap();
+
+    let step_name = "foreach:my-step";
+
+    // Insert a running step.
+    let step_id = mgr
+        .insert_step(&run.id, step_name, "foreach", false, 0, 1)
+        .unwrap();
+    set_step_status(
+        &mgr,
+        &step_id,
+        crate::workflow::status::WorkflowStepStatus::Running,
+    );
+
+    // Should find the running step.
+    let found = mgr
+        .find_step_by_name_and_iteration(&run.id, step_name, 1)
+        .unwrap();
+    assert!(found.is_some(), "should find the non-completed step");
+    assert_eq!(found.unwrap().id, step_id);
+
+    // Non-matching iteration → None.
+    let not_found = mgr
+        .find_step_by_name_and_iteration(&run.id, step_name, 2)
+        .unwrap();
+    assert!(not_found.is_none(), "different iteration should not match");
+
+    // Non-matching step_name → None.
+    let not_found2 = mgr
+        .find_step_by_name_and_iteration(&run.id, "foreach:other", 1)
+        .unwrap();
+    assert!(not_found2.is_none(), "different step_name should not match");
+}
+
+#[test]
+fn test_find_step_by_name_and_iteration_ignores_completed_steps() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let parent_id = make_parent_id(&conn, "w1");
+    let run = mgr
+        .create_workflow_run("test", Some("w1"), &parent_id, false, "manual", None)
+        .unwrap();
+
+    let step_name = "foreach:done-step";
+
+    // Insert a completed step.
+    let step_id = mgr
+        .insert_step(&run.id, step_name, "foreach", false, 0, 0)
+        .unwrap();
+    set_step_status(
+        &mgr,
+        &step_id,
+        crate::workflow::status::WorkflowStepStatus::Completed,
+    );
+
+    // Should NOT return a completed step.
+    let found = mgr
+        .find_step_by_name_and_iteration(&run.id, step_name, 0)
+        .unwrap();
+    assert!(
+        found.is_none(),
+        "completed step must not be returned — it would be skipped via should_skip"
+    );
+}

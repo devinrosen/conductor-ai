@@ -176,6 +176,24 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Reset `running` fan-out items that have no `child_run_id` back to `pending`.
+    ///
+    /// These are orphaned items whose background threads died when the parent workflow
+    /// was killed between setting `status='running'` and writing `child_run_id`. Called
+    /// on resume, before entering the dispatch loop, so they are re-dispatched correctly.
+    /// Returns the count of items reset.
+    pub fn reset_running_items_without_child_run(&self, step_run_id: &str) -> Result<u64> {
+        let count = self.conn.execute(
+            "UPDATE workflow_run_step_fan_out_items \
+             SET status = 'pending', dispatched_at = NULL \
+             WHERE step_run_id = :step_run_id \
+               AND status = 'running' \
+               AND child_run_id IS NULL",
+            named_params![":step_run_id": step_run_id],
+        )?;
+        Ok(count as u64)
+    }
+
     /// Mark all pending/running fan-out items for a step as skipped.
     /// Used when on_child_fail = Halt to cancel remaining work.
     pub fn cancel_fan_out_items(&self, step_run_id: &str) -> Result<()> {
