@@ -248,9 +248,10 @@ mod tests {
         state
             .inputs
             .insert("ticket_id".to_string(), "tid-99".to_string());
-        state
-            .inputs
-            .insert("feature_base_branch".to_string(), "release/v1.0".to_string());
+        state.inputs.insert(
+            "feature_base_branch".to_string(),
+            "release/v1.0".to_string(),
+        );
         let vars = build_variable_map(&state);
         // Both should appear in the map.
         assert_eq!(vars.get("ticket_id").map(String::as_str), Some("tid-99"));
