@@ -85,11 +85,21 @@ pub trait ActionExecutor: Send + Sync {
     /// Returns structured output that feeds the marker/context system.
     fn execute(
         &self,
-        ctx: &dyn RunContext,
+        ectx: &ExecutionContext,
         params: &ActionParams,
     ) -> Result<ActionOutput, EngineError>;
 
-    /// Optional: cancel an in-flight execution (used by parallel fail_fast).
+    /// Advisory cancel of an in-flight execution. Called when the run is
+    /// cancelled (user request, parallel fail_fast, timeout, parent cancel,
+    /// engine shutdown). The engine fires this and moves on — it does not
+    /// wait for `cancel()` to return. Executors use this to preempt external
+    /// work: conductor's `ClaudeAgentExecutor` kills the tmux window; an
+    /// HTTP-based executor aborts the in-flight request.
+    ///
+    /// Well-behaved executors also check `ectx.cancellation.is_cancelled()`
+    /// from inside `execute()` — cooperative cancel is the primary path.
+    /// `cancel()` is the escalation for external work that can't observe
+    /// the cooperative token.
     fn cancel(&self, execution_id: &str) -> Result<(), EngineError> {
         let _ = execution_id;
         Ok(())
@@ -151,9 +161,11 @@ pub trait ItemProvider: Send + Sync {
     fn name(&self) -> &str;
 
     /// Collect items to fan out over. Called once at foreach step start.
+    /// Providers that do slow I/O (remote fetch, IMAP scan) should check
+    /// `ectx.cancellation.is_cancelled()` during collection.
     fn items(
         &self,
-        ctx: &dyn RunContext,
+        ectx: &ExecutionContext,
         scope: &HashMap<String, String>,
         filter: &HashMap<String, String>,
     ) -> Result<Vec<FanOutItem>, EngineError>;
@@ -198,7 +210,7 @@ pub trait GateResolver: Send + Sync {
         &self,
         run_id: &str,
         params: &GateParams,
-        ctx: &dyn RunContext,
+        ectx: &ExecutionContext,
     ) -> Result<GatePoll, EngineError>;
 }
 
@@ -639,6 +651,146 @@ let engine = FlowEngine::builder()
 
 ---
 
+## Cancellation
+
+Five distinct triggers need to halt running work: user-initiated cancellation,
+parallel `fail_fast`, step-level `timeout`, engine/host shutdown, and
+parent-workflow cancellation propagating to sub-workflows. All five need to
+reach whatever executor code is currently running.
+
+### Model — cooperative + advisory preempt
+
+- **Cooperative token** is the primary mechanism. Executors check
+  `ectx.cancellation.is_cancelled()` at natural interruption points and exit
+  early.
+- **Advisory `ActionExecutor::cancel(execution_id)`** is the escalation for
+  external work that can't observe the token (Claude subprocess already in
+  flight, HTTP call mid-request). The engine fires `cancel()` and moves on —
+  it does not wait for the executor to finish. Executors use this to kill
+  subprocesses, abort connections, etc.
+
+### `ExecutionContext` bundling struct
+
+Runtime concerns the engine passes through to executors live on a single
+struct rather than being scattered across params types:
+
+```rust
+pub struct ExecutionContext<'a> {
+    pub run: &'a dyn RunContext,
+    pub cancellation: &'a CancellationToken,
+    // Future: tracing span, feature flags, request-scoped telemetry, etc.
+}
+```
+
+Every executor trait method takes `&ExecutionContext` instead of `&dyn
+RunContext` directly. Note: `RunContext` (the trait) and `ExecutionContext`
+(the struct) are distinct types — the struct holds a reference to a trait
+object. The earlier naming question (Open Q #7) resolved the *trait* name;
+`ExecutionContext` claims the struct name because `ExecutionState` is being
+removed in Step 1.1b.
+
+### `CancellationToken`
+
+```rust
+pub struct CancellationToken {
+    inner: Arc<CancellationInner>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self;
+
+    /// Create a child token. Parent cancel propagates to child; child cancel
+    /// does NOT propagate back to parent.
+    pub fn child(&self) -> Self;
+
+    pub fn cancel(&self, reason: CancellationReason);
+
+    /// True if this token OR any ancestor has been cancelled.
+    pub fn is_cancelled(&self) -> bool;
+
+    pub fn reason(&self) -> Option<CancellationReason>;
+
+    pub fn error_if_cancelled(&self) -> Result<(), EngineError>;
+}
+
+pub enum CancellationReason {
+    UserRequested(Option<String>),   // from cancel_run() API
+    Timeout,                         // step-level timeout fired
+    FailFast,                        // sibling parallel branch failed
+    ParentCancelled,                 // inherited from parent scope
+    EngineShutdown,                  // host process shutting down
+}
+```
+
+### Inheritance / scope tree
+
+- **Run root token** — owned by the engine for each active run; cancelled by
+  external `cancel_run()` or by engine shutdown.
+- **Parallel scope token** — child of run root; one per parallel block.
+  Cancelling the scope stops all branches (fail_fast).
+- **Parallel branch token** — child of the parallel scope; one per branch.
+- **Step token** — child of the enclosing scope; used for step-level
+  timeouts (`timeout = "5m"` fires a timer that cancels this token).
+- **Sub-workflow root token** — child of the parent step's token; parent
+  cancel propagates downward into `call workflow` invocations.
+
+### External cancel API
+
+```rust
+impl FlowEngine {
+    pub fn cancel_run(
+        &self,
+        run_id: &str,
+        reason: CancellationReason,
+    ) -> Result<(), EngineError>;
+}
+```
+
+Same-process flow:
+
+1. Mark run as `Cancelling` via `WorkflowPersistence::update_run_status`.
+2. Look up the in-memory root token for this run.
+3. `token.cancel(reason)` — propagates to all descendants.
+4. Spawn a thread to call `executor.cancel(execution_id)` for the running
+   executor. Fire-and-forget; engine doesn't wait.
+5. Return immediately. Engine's worker thread observes cancelled at next
+   check, cleans up, marks run `Cancelled`, emits `RunCancelled` event.
+
+Cross-process flow (CLI cancels a run owned by another process):
+
+- Caller writes `Cancelling` status to DB.
+- Owning process polls DB at step boundaries (already part of the resumability
+  model), observes `Cancelling`, flips its in-memory token.
+- Proceeds as same-process from step (3).
+
+### Step boundaries are guaranteed interruption points
+
+Even if an executor ignores the cooperative token, the engine checks
+`is_cancelled()` before starting each step. A non-cooperating executor can
+delay cancellation by the duration of its current step, but cannot prevent
+it once the step completes.
+
+### Resumability
+
+**Cancelled runs are terminal — not resumable.** Resume is for crashes and
+transient failures; cancellation is intentional (user, timeout, fail_fast).
+Reversing a cancellation would require state rollback semantics, which are
+out of scope.
+
+### Shipping layers
+
+- **Layer A (Phase 1):** Types — `ExecutionContext`, `CancellationToken`,
+  `CancellationReason`. Trait signatures updated to take `&ExecutionContext`.
+  Cooperative checks added in conductor executors where cheap. This shapes
+  Steps 1.2, 1.3, 1.4.
+- **Layer B (Phase 2):** `FlowEngine::cancel_run()`, in-memory token
+  registry, parallel fail_fast wiring, step-level timeout → `token.cancel()`,
+  `ActionExecutor::cancel()` escalation, cross-process DB-backed propagation,
+  `RunCancelled` event emission, `ConductorClaudeAgentExecutor::cancel()`
+  killing tmux windows.
+
+---
+
 ## What Stays in Each Layer
 
 ### `runkon-flow` (the published library)
@@ -654,6 +806,8 @@ let engine = FlowEngine::builder()
   `TriggerSource`, `RunContext`, `WorkflowPersistence`)
 - `EventSink` trait + `EngineEvent` / `EngineEventData` types (ships no default
   sink — hosts register their own)
+- `ExecutionContext` struct, `CancellationToken`, `CancellationReason` enum
+- `FlowEngine::cancel_run(run_id, reason)` external cancellation API
 - `FlowEngine` builder
 
 ### `conductor-core` (conductor's harness layer)
