@@ -181,51 +181,20 @@ pub(super) fn build_agent_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::types::{ContextEntry, WorkflowExecConfig};
+    use crate::workflow::types::ContextEntry;
 
     fn make_state(conn: &rusqlite::Connection) -> ExecutionState<'_> {
-        let config = crate::config::Config::default();
         // Use a leaked config so the borrow lives long enough for the test.
-        let config: &'static crate::config::Config = Box::leak(Box::new(config));
+        let config: &'static crate::config::Config =
+            Box::leak(Box::new(crate::config::Config::default()));
         ExecutionState {
-            conn,
-            config,
-            workflow_run_id: String::new(),
             workflow_name: "test-wf".into(),
-            worktree_id: None,
-            working_dir: String::new(),
-            worktree_slug: String::new(),
-            repo_path: String::new(),
-            ticket_id: None,
-            repo_id: None,
-            model: None,
-            exec_config: WorkflowExecConfig::default(),
-            inputs: std::collections::HashMap::new(),
-            agent_mgr: crate::agent::AgentManager::new(conn),
-            wf_mgr: crate::workflow::manager::WorkflowManager::new(conn),
-            parent_run_id: String::new(),
-            depth: 0,
-            target_label: None,
-            step_results: std::collections::HashMap::new(),
-            contexts: Vec::new(),
-            position: 0,
-            all_succeeded: true,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_input_tokens: 0,
-            total_cache_creation_input_tokens: 0,
-            last_gate_feedback: None,
-            block_output: None,
-            block_with: Vec::new(),
-            resume_ctx: None,
-            default_bot_name: None,
-            triggered_by_hook: false,
-            conductor_bin_dir: None,
-            extra_plugin_dirs: vec![],
-            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            ..crate::workflow::tests::common::base_execution_state(
+                conn,
+                config,
+                String::new(),
+                String::new(),
+            )
         }
     }
 
