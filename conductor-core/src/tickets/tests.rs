@@ -1,4 +1,4 @@
-use super::query::query_dep_pairs;
+use super::query::{query_dep_pairs, query_dep_pairs_for_repo};
 use super::syncer::CLOSED_TICKET_ARTIFACTS_SQL;
 use super::*;
 use rusqlite::Connection;
@@ -2845,4 +2845,88 @@ fn test_resolve_tickets_in_repo_preserves_order() {
     assert_eq!(result[0].source_id, "300");
     assert_eq!(result[1].id, "ord-id-1");
     assert_eq!(result[2].source_id, "200");
+}
+
+/// Happy-path: query_dep_pairs returns both tickets when the dependency edge is intact.
+#[test]
+fn test_query_dep_pairs_returns_ticket_pair() {
+    let conn = setup_db();
+    let syncer = TicketSyncer::new(&conn);
+
+    syncer
+        .upsert_tickets("r1", &[make_ticket("t1", "Blocker"), make_ticket("t2", "Blocked")])
+        .unwrap();
+    let from_id = get_ticket_id(&conn, "t1");
+    let to_id = get_ticket_id(&conn, "t2");
+
+    conn.execute(
+        "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) \
+         VALUES (:from_id, :to_id, 'blocks')",
+        rusqlite::named_params! { ":from_id": from_id, ":to_id": to_id },
+    )
+    .unwrap();
+
+    let pairs = query_dep_pairs(&conn, "blocks").unwrap();
+    assert_eq!(pairs.len(), 1);
+    let (got_from_id, got_to_id, from_ticket, to_ticket) = &pairs[0];
+    assert_eq!(got_from_id, &from_id);
+    assert_eq!(got_to_id, &to_id);
+    assert_eq!(from_ticket.source_id, "t1");
+    assert_eq!(to_ticket.source_id, "t2");
+}
+
+/// query_dep_pairs_for_repo includes cross-repo edges where at least one endpoint
+/// belongs to the requested repo, and excludes edges between two other repos.
+#[test]
+fn test_query_dep_pairs_for_repo_cross_repo() {
+    let conn = setup_db();
+    // setup_db() creates repo "r1"; add "r2" and "r3" for the cross-repo scenario.
+    crate::test_helpers::insert_test_repo(&conn, "r2", "repo-two", "/tmp/r2");
+    crate::test_helpers::insert_test_repo(&conn, "r3", "repo-three", "/tmp/r3");
+    let syncer = TicketSyncer::new(&conn);
+
+    // r1 ticket blocks an r2 ticket — cross-repo edge
+    syncer
+        .upsert_tickets("r1", &[make_ticket("a1", "R1 Blocker")])
+        .unwrap();
+    syncer
+        .upsert_tickets("r2", &[make_ticket("b1", "R2 Blocked")])
+        .unwrap();
+    // r3-only edge — should NOT appear when querying for r1
+    syncer
+        .upsert_tickets(
+            "r3",
+            &[make_ticket("c1", "R3 From"), make_ticket("c2", "R3 To")],
+        )
+        .unwrap();
+
+    let a1 = get_ticket_id(&conn, "a1");
+    let b1 = get_ticket_id(&conn, "b1");
+    let c1 = get_ticket_id(&conn, "c1");
+    let c2 = get_ticket_id(&conn, "c2");
+
+    conn.execute(
+        "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (:f, :t, 'blocks')",
+        rusqlite::named_params! { ":f": a1, ":t": b1 },
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) VALUES (:f, :t, 'blocks')",
+        rusqlite::named_params! { ":f": c1, ":t": c2 },
+    )
+    .unwrap();
+
+    // Querying for r1 must return the cross-repo r1→r2 edge and nothing else.
+    let pairs = query_dep_pairs_for_repo(&conn, "blocks", "r1").unwrap();
+    assert_eq!(pairs.len(), 1, "only the r1-involving edge should be returned");
+    let (got_from, got_to, from_ticket, to_ticket) = &pairs[0];
+    assert_eq!(got_from, &a1);
+    assert_eq!(got_to, &b1);
+    assert_eq!(from_ticket.source_id, "a1");
+    assert_eq!(to_ticket.source_id, "b1");
+
+    // Querying for r3 must return the r3-only edge and nothing else.
+    let r3_pairs = query_dep_pairs_for_repo(&conn, "blocks", "r3").unwrap();
+    assert_eq!(r3_pairs.len(), 1);
+    assert_eq!(r3_pairs[0].2.source_id, "c1");
 }
