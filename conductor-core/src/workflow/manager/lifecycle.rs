@@ -108,6 +108,7 @@ impl<'a> WorkflowManager<'a> {
             total_cost_usd: None,
             total_duration_ms: None,
             model: None,
+            dismissed: false,
         })
     }
 
@@ -349,6 +350,16 @@ impl<'a> WorkflowManager<'a> {
             "UPDATE workflow_runs SET last_heartbeat = :now \
              WHERE id = :id AND status = 'running'",
             named_params![":now": now, ":id": run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Toggle the dismissed flag on a workflow run (soft-dismiss / un-dismiss).
+    pub fn set_dismissed(&self, run_id: &str, dismissed: bool) -> Result<()> {
+        let val: i64 = if dismissed { 1 } else { 0 };
+        self.conn.execute(
+            "UPDATE workflow_runs SET dismissed = ?1 WHERE id = ?2",
+            rusqlite::params![val, run_id],
         )?;
         Ok(())
     }

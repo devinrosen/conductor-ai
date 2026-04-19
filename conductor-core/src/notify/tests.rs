@@ -1318,6 +1318,7 @@ fn make_workflow_run(id: &str, name: &str, status: WorkflowRunStatus) -> Workflo
         total_cost_usd: None,
         total_duration_ms: None,
         model: None,
+        dismissed: false,
     }
 }
 

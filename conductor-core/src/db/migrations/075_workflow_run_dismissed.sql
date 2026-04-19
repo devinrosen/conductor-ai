@@ -1,0 +1,1 @@
+ALTER TABLE workflow_runs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0;

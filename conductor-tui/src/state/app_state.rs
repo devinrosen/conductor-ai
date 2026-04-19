@@ -120,6 +120,9 @@ pub struct AppState {
     /// When false (default), completed and cancelled workflow runs are hidden in the workflow column.
     pub show_completed_workflow_runs: bool,
 
+    /// When false (default), dismissed workflow runs are hidden in the workflow column.
+    pub show_dismissed_workflow_runs: bool,
+
     /// Cached result of `rebuild_workflow_run_rows()`. Invalidated at every mutation site.
     cached_workflow_run_rows: Vec<WorkflowRunRow>,
 
@@ -253,6 +256,7 @@ impl AppState {
             should_quit: false,
             show_closed_tickets: false,
             show_completed_workflow_runs: false,
+            show_dismissed_workflow_runs: false,
             cached_workflow_run_rows: Vec::new(),
             ticket_sync_in_progress: false,
             loading_workflow_picker_defs: false,
@@ -623,6 +627,9 @@ impl AppState {
                 {
                     continue;
                 }
+                if !self.show_dismissed_workflow_runs && run.dismissed {
+                    continue;
+                }
                 if !Self::run_matches_name_filter(&name_filter_lower, run) {
                     continue;
                 }
@@ -710,6 +717,9 @@ impl AppState {
                     WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
                 )
             {
+                continue;
+            }
+            if !self.show_dismissed_workflow_runs && run.dismissed {
                 continue;
             }
             if !Self::run_matches_name_filter(&name_filter_lower, run) {
@@ -868,6 +878,32 @@ impl AppState {
     /// Returns the number of cached visible workflow run rows.
     pub fn visible_workflow_run_rows_len(&self) -> usize {
         self.cached_workflow_run_rows.len()
+    }
+
+    /// Count root-level workflow runs that are hidden because they are dismissed.
+    pub fn dismissed_workflow_run_count(&self) -> usize {
+        if self.show_dismissed_workflow_runs {
+            return 0;
+        }
+        let known_ids: std::collections::HashSet<&str> = self
+            .data
+            .workflow_runs
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+        let child_ids: std::collections::HashSet<&str> = self
+            .data
+            .workflow_runs
+            .iter()
+            .filter_map(|r| r.parent_workflow_run_id.as_deref())
+            .filter(|pid| known_ids.contains(pid))
+            .collect();
+        self.data
+            .workflow_runs
+            .iter()
+            .filter(|r| !child_ids.contains(r.id.as_str()))
+            .filter(|r| r.dismissed)
+            .count()
     }
 
     /// Auto-initialize collapse state for newly-seen terminal-status parent runs.

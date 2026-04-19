@@ -349,6 +349,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     if state.column_focus == ColumnFocus::Workflow {
         match key.code {
             KeyCode::Char('H') => return Action::ToggleCompletedRuns,
+            KeyCode::Char('V') => return Action::ToggleDismissedRuns,
             KeyCode::Char('r') => return Action::RunWorkflow,
             KeyCode::Char('v')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs
@@ -575,6 +576,12 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Char('j') | KeyCode::Down => return Action::MoveDown,
                 KeyCode::Char('k') | KeyCode::Up => return Action::MoveUp,
                 KeyCode::Char('y') => return Action::WorkflowRunDetailCopy,
+                KeyCode::Enter
+                    if state.workflow_run_info_row
+                        == crate::state::workflow_run_info_row::DISMISSED =>
+                {
+                    return Action::ToggleWorkflowRunDismissed
+                }
                 _ => {}
             }
         }
