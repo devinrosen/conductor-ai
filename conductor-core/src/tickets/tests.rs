@@ -2854,7 +2854,10 @@ fn test_query_dep_pairs_returns_ticket_pair() {
     let syncer = TicketSyncer::new(&conn);
 
     syncer
-        .upsert_tickets("r1", &[make_ticket("t1", "Blocker"), make_ticket("t2", "Blocked")])
+        .upsert_tickets(
+            "r1",
+            &[make_ticket("t1", "Blocker"), make_ticket("t2", "Blocked")],
+        )
         .unwrap();
     let from_id = get_ticket_id(&conn, "t1");
     let to_id = get_ticket_id(&conn, "t2");
@@ -2918,7 +2921,11 @@ fn test_query_dep_pairs_for_repo_cross_repo() {
 
     // Querying for r1 must return the cross-repo r1→r2 edge and nothing else.
     let pairs = query_dep_pairs_for_repo(&conn, "blocks", "r1").unwrap();
-    assert_eq!(pairs.len(), 1, "only the r1-involving edge should be returned");
+    assert_eq!(
+        pairs.len(),
+        1,
+        "only the r1-involving edge should be returned"
+    );
     let (got_from, got_to, from_ticket, to_ticket) = &pairs[0];
     assert_eq!(got_from, &a1);
     assert_eq!(got_to, &b1);
