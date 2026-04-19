@@ -172,18 +172,23 @@ impl App {
                 self.sync_selection_arcs();
             }
             View::WorkflowRunDetail => {
-                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
-                if let Some(prev_wt_id) = self.state.previous_selected_worktree_id.take() {
-                    self.state.selected_worktree_id = prev_wt_id;
-                    self.sync_selection_arcs();
+                // Pop back to parent child workflow if we drilled in; otherwise leave the view.
+                if let Some(parent_id) = self.state.workflow_run_nav_stack.pop() {
+                    self.switch_to_workflow_run(parent_id);
+                } else {
+                    self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+                    if let Some(prev_wt_id) = self.state.previous_selected_worktree_id.take() {
+                        self.state.selected_worktree_id = prev_wt_id;
+                        self.sync_selection_arcs();
+                    }
+                    self.state.selected_workflow_run_id = None;
+                    self.state.column_focus = crate::state::ColumnFocus::Workflow;
+                    self.state.workflows_focus = WorkflowsFocus::Runs;
+                    // Re-poll immediately so the workflow column reflects the restored view's
+                    // context (repo- or worktree-scoped) instead of showing stale global data
+                    // that was loaded while in WorkflowRunDetail.
+                    self.poll_workflow_data_async();
                 }
-                self.state.selected_workflow_run_id = None;
-                self.state.column_focus = crate::state::ColumnFocus::Workflow;
-                self.state.workflows_focus = WorkflowsFocus::Runs;
-                // Re-poll immediately so the workflow column reflects the restored view's
-                // context (repo- or worktree-scoped) instead of showing stale global data
-                // that was loaded while in WorkflowRunDetail.
-                self.poll_workflow_data_async();
             }
             View::WorkflowDefDetail => {
                 self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
@@ -437,6 +442,7 @@ impl App {
             self.sync_selection_arcs();
         }
         self.state.selected_workflow_run_id = Some(run_id);
+        self.state.workflow_run_nav_stack.clear();
         self.state.previous_view = Some(self.state.view);
         self.state.view = View::WorkflowRunDetail;
         self.state.workflow_step_index = 0;
@@ -445,6 +451,21 @@ impl App {
         self.state.error_pane_scroll = 0;
         self.state.column_focus = crate::state::ColumnFocus::Content;
         self.reload_workflow_steps();
+    }
+
+    fn switch_to_workflow_run(&mut self, run_id: String) {
+        self.state.selected_workflow_run_id = Some(run_id);
+        self.state.workflow_step_index = 0;
+        self.state.step_agent_event_index = 0;
+        self.state.error_pane_scroll = 0;
+        self.reload_workflow_steps();
+    }
+
+    fn drill_into_child_workflow(&mut self, child_run_id: String) {
+        if let Some(current_id) = self.state.selected_workflow_run_id.take() {
+            self.state.workflow_run_nav_stack.push(current_id);
+        }
+        self.switch_to_workflow_run(child_run_id);
     }
 
     pub(super) fn move_up(&mut self) {
@@ -931,6 +952,13 @@ impl App {
                     .workflow_steps
                     .get(self.state.workflow_step_index)
                 {
+                    // [workflow] steps: drill into the child workflow run instead of a modal.
+                    if step.role == "workflow" {
+                        if let Some(ref child_id) = step.child_run_id.clone() {
+                            self.drill_into_child_workflow(child_id.clone());
+                        }
+                        return;
+                    }
                     if step.child_run_id.is_some() {
                         // Step has an agent run — show agent activity from cached data
                         let events = &self.state.data.step_agent_events;
