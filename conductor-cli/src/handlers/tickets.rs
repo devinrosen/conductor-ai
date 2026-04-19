@@ -206,6 +206,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                 priority,
                 url,
                 raw_json: None,
+                comments: vec![],
                 blocked_by: vec![],
                 children: vec![],
                 parent,

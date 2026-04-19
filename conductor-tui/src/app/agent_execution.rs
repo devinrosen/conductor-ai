@@ -134,7 +134,7 @@ impl App {
                 .ticket_id
                 .as_ref()
                 .and_then(|tid| self.state.data.ticket_map.get(tid))
-                .map(build_agent_prompt)
+                .map(|t| build_agent_prompt(t, &[]))
                 .unwrap_or_default();
             ("Claude Agent".to_string(), prefill)
         };
@@ -426,7 +426,7 @@ impl App {
                 .data
                 .ticket_map
                 .get(&ticket_id)
-                .map(build_agent_prompt)
+                .map(|t| build_agent_prompt(t, &[]))
                 .unwrap_or_default()
         };
 

@@ -92,7 +92,7 @@ pub fn handle_worktree(
                     let syncer = TicketSyncer::new(conn);
                     match syncer.get_by_id(tid) {
                         Ok(t) => {
-                            let prompt = build_agent_prompt(&t);
+                            let prompt = build_agent_prompt(&t, &[]);
                             println!("Starting agent...");
                             // Resolve model: per-worktree → per-repo config → global config
                             let repo_mgr = RepoManager::new(conn, config);

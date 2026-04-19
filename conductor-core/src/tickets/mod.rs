@@ -27,6 +27,14 @@ pub struct Ticket {
     pub agent_map: Option<String>,
 }
 
+/// A source-agnostic comment attached to a ticket, populated during lazy fetch.
+#[derive(Debug, Clone)]
+pub struct TicketComment {
+    pub id: String,
+    pub author: String,
+    pub body: String,
+}
+
 /// A normalized ticket from any source, ready to be upserted into the database.
 pub struct TicketInput {
     pub source_type: String,
@@ -39,6 +47,8 @@ pub struct TicketInput {
     pub priority: Option<String>,
     pub url: String,
     pub raw_json: Option<String>,
+    /// Comments fetched lazily (not a DB column; passed through in-memory only).
+    pub comments: Vec<TicketComment>,
     /// Label details (name + color) for populating the ticket_labels join table.
     /// Pass `vec![]` for sources that do not supply color data.
     pub label_details: Vec<TicketLabelInput>,
@@ -163,7 +173,9 @@ pub(super) fn ticket_not_found(
 }
 
 /// Build a rich agent prompt from a ticket's context.
-pub fn build_agent_prompt(ticket: &Ticket) -> String {
+/// Pass `comments` from a fresh `TicketInput` fetch to include a `## Comments` section;
+/// pass `&[]` when comments are unavailable (e.g. loaded from DB without re-fetch).
+pub fn build_agent_prompt(ticket: &Ticket, comments: &[TicketComment]) -> String {
     let labels_display = if ticket.labels.is_empty() || ticket.labels == "[]" {
         "None".to_string()
     } else {
@@ -176,6 +188,8 @@ pub fn build_agent_prompt(ticket: &Ticket) -> String {
         ticket.body.clone()
     };
 
+    let comments_section = format_comments_section(comments);
+
     format!(
         "Work on the following GitHub issue in this repository.\n\
          \n\
@@ -185,14 +199,28 @@ pub fn build_agent_prompt(ticket: &Ticket) -> String {
          \n\
          Description:\n\
          {body}\n\
-         \n\
+         {comments_section}\n\
          Implement the changes described in the issue. Follow existing code conventions and patterns. Write tests if appropriate.",
         source_id = ticket.source_id,
         title = ticket.title,
         state = ticket.state,
         labels = labels_display,
         body = body_display,
+        comments_section = comments_section,
     )
+}
+
+/// Format a slice of comments into a `## Comments` section string.
+/// Returns an empty string when the slice is empty.
+pub fn format_comments_section(comments: &[TicketComment]) -> String {
+    if comments.is_empty() {
+        return String::new();
+    }
+    let mut s = "\n## Comments\n".to_string();
+    for c in comments {
+        s.push_str(&format!("\n**{}**: {}\n", c.author, c.body));
+    }
+    s
 }
 
 #[cfg(test)]

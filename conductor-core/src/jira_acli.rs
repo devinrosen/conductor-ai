@@ -1,7 +1,66 @@
 use std::process::Command;
 
+use tracing::warn;
+
 use crate::error::{ConductorError, Result};
-use crate::tickets::TicketInput;
+use crate::tickets::{TicketComment, TicketInput};
+
+/// A comment returned by `acli jira workitem comment list`.
+#[derive(Debug, Clone)]
+pub struct JiraComment {
+    pub id: String,
+    pub author: String,
+    pub body: String,
+    pub visibility: String,
+}
+
+/// Fetch comments for a Jira issue using `acli jira workitem comment list`.
+/// Returns an empty vec on any failure (non-fatal).
+pub fn fetch_jira_issue_comments(issue_key: &str) -> Vec<JiraComment> {
+    let output = match Command::new("acli")
+        .args([
+            "jira", "workitem", "comment", "list", "--key", issue_key, "--json",
+        ])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            warn!("failed to run acli for comments on {issue_key}: {e}");
+            return vec![];
+        }
+    };
+
+    if !output.status.success() {
+        warn!(
+            "acli comment list failed for {issue_key}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return vec![];
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("failed to parse acli comment output for {issue_key}: {e}");
+            return vec![];
+        }
+    };
+
+    parsed["comments"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|c| JiraComment {
+                    id: c["id"].as_str().unwrap_or("").to_string(),
+                    author: c["author"].as_str().unwrap_or("").to_string(),
+                    body: c["body"].as_str().unwrap_or("").to_string(),
+                    visibility: c["visibility"].as_str().unwrap_or("public").to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Sync Jira issues matching a JQL query using the `acli` CLI.
 /// Returns a list of normalized TicketInputs ready for upsert.
@@ -78,9 +137,45 @@ pub fn fetch_jira_issue(issue_key: &str, base_url: &str) -> Result<TicketInput> 
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let mut tickets = parse_jira_issues(&json_str, base_url)?;
-    tickets.pop().ok_or_else(|| ConductorError::TicketNotFound {
-        id: issue_key.to_string(),
-    })
+    let mut ticket = tickets
+        .pop()
+        .ok_or_else(|| ConductorError::TicketNotFound {
+            id: issue_key.to_string(),
+        })?;
+
+    // Fetch comments lazily and merge into ticket.
+    let jira_comments = fetch_jira_issue_comments(issue_key);
+    ticket.comments = jira_comments
+        .iter()
+        .map(|c| TicketComment {
+            id: c.id.clone(),
+            author: c.author.clone(),
+            body: c.body.clone(),
+        })
+        .collect();
+
+    // Merge comments array into raw_json so ticket_raw_json is self-contained.
+    if !jira_comments.is_empty() {
+        if let Some(ref raw) = ticket.raw_json {
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(raw) {
+                let comments_json: Vec<serde_json::Value> = jira_comments
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "id": c.id,
+                            "author": c.author,
+                            "body": c.body,
+                            "visibility": c.visibility,
+                        })
+                    })
+                    .collect();
+                v["comments"] = serde_json::Value::Array(comments_json);
+                ticket.raw_json = serde_json::to_string(&v).ok();
+            }
+        }
+    }
+
+    Ok(ticket)
 }
 
 /// Parse acli JSON output into TicketInputs.
@@ -131,6 +226,7 @@ fn parse_jira_issues(json_str: &str, base_url: &str) -> Result<Vec<TicketInput>>
                 priority,
                 url,
                 raw_json: serde_json::to_string(&issue).ok(),
+                comments: vec![],
                 label_details: vec![],
                 blocked_by: vec![],
                 children: vec![],
@@ -301,5 +397,63 @@ mod tests {
 
         let tickets = parse_jira_issues(json, "https://jira.example.com").unwrap();
         assert_eq!(tickets[0].assignee, Some("bob".to_string()));
+    }
+
+    #[test]
+    fn test_parse_comment_json_full() {
+        let json = r#"{
+            "comments": [
+                {"id": "1", "author": "Kate", "body": "Max 30 chars", "visibility": "public"},
+                {"id": "2", "author": "Bob", "body": "Agreed", "visibility": "internal"}
+            ]
+        }"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let comments: Vec<JiraComment> = parsed["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| JiraComment {
+                id: c["id"].as_str().unwrap_or("").to_string(),
+                author: c["author"].as_str().unwrap_or("").to_string(),
+                body: c["body"].as_str().unwrap_or("").to_string(),
+                visibility: c["visibility"].as_str().unwrap_or("public").to_string(),
+            })
+            .collect();
+
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].id, "1");
+        assert_eq!(comments[0].author, "Kate");
+        assert_eq!(comments[0].body, "Max 30 chars");
+        assert_eq!(comments[0].visibility, "public");
+        assert_eq!(comments[1].author, "Bob");
+        assert_eq!(comments[1].visibility, "internal");
+    }
+
+    #[test]
+    fn test_parse_comment_json_empty_array() {
+        let json = r#"{"comments": []}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let arr = parsed["comments"].as_array().unwrap();
+        assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn test_parse_comment_json_missing_comments_key() {
+        let json = r#"{}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let result: Vec<JiraComment> = parsed["comments"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|c| JiraComment {
+                        id: c["id"].as_str().unwrap_or("").to_string(),
+                        author: c["author"].as_str().unwrap_or("").to_string(),
+                        body: c["body"].as_str().unwrap_or("").to_string(),
+                        visibility: c["visibility"].as_str().unwrap_or("public").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(result.is_empty());
     }
 }

@@ -765,7 +765,7 @@ pub async fn get_prompt(
     } else if let Some(ref ticket_id) = wt.ticket_id {
         let syncer = TicketSyncer::new(&db);
         match syncer.get_by_id(ticket_id) {
-            Ok(ticket) => build_agent_prompt(&ticket),
+            Ok(ticket) => build_agent_prompt(&ticket, &[]),
             Err(_) => String::new(),
         }
     } else {

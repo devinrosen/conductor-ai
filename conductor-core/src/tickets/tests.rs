@@ -1,4 +1,3 @@
-
 use super::query::query_dep_pairs;
 use super::syncer::CLOSED_TICKET_ARTIFACTS_SQL;
 use super::*;
@@ -21,6 +20,7 @@ fn make_ticket(source_id: &str, title: &str) -> TicketInput {
         priority: None,
         url: String::new(),
         raw_json: None,
+        comments: vec![],
         label_details: vec![],
         blocked_by: vec![],
         children: vec![],
@@ -944,7 +944,7 @@ fn test_build_agent_prompt_full_ticket() {
         agent_map: None,
     };
 
-    let prompt = build_agent_prompt(&ticket);
+    let prompt = build_agent_prompt(&ticket, &[]);
     assert!(prompt.contains("Issue: #42 — Add dark mode support"));
     assert!(prompt.contains("State: open"));
     assert!(prompt.contains("Labels: enhancement, ui"));
@@ -972,10 +972,65 @@ fn test_build_agent_prompt_empty_body_and_labels() {
         agent_map: None,
     };
 
-    let prompt = build_agent_prompt(&ticket);
+    let prompt = build_agent_prompt(&ticket, &[]);
     assert!(prompt.contains("Issue: #7 — Fix typo"));
     assert!(prompt.contains("Labels: None"));
     assert!(prompt.contains("(No description provided)"));
+}
+
+#[test]
+fn test_build_agent_prompt_with_comments() {
+    let ticket = Ticket {
+        id: "01ABCDEF".to_string(),
+        repo_id: "r1".to_string(),
+        source_type: "jira".to_string(),
+        source_id: "RND-1".to_string(),
+        title: "Profile name limit".to_string(),
+        body: "Set a limit for profile names.".to_string(),
+        state: "open".to_string(),
+        labels: "[]".to_string(),
+        assignee: None,
+        priority: None,
+        url: String::new(),
+        synced_at: "2026-01-01T00:00:00Z".to_string(),
+        raw_json: "{}".to_string(),
+        workflow: None,
+        agent_map: None,
+    };
+    let comments = vec![
+        TicketComment {
+            id: "1".to_string(),
+            author: "Kate".to_string(),
+            body: "Let's max it out at 30 characters".to_string(),
+        },
+        TicketComment {
+            id: "2".to_string(),
+            author: "Bob".to_string(),
+            body: "Agreed, 30 is good".to_string(),
+        },
+    ];
+
+    let prompt = build_agent_prompt(&ticket, &comments);
+    assert!(prompt.contains("## Comments"));
+    assert!(prompt.contains("**Kate**: Let's max it out at 30 characters"));
+    assert!(prompt.contains("**Bob**: Agreed, 30 is good"));
+}
+
+#[test]
+fn test_format_comments_section_empty() {
+    assert_eq!(format_comments_section(&[]), String::new());
+}
+
+#[test]
+fn test_format_comments_section_nonempty() {
+    let comments = vec![TicketComment {
+        id: "1".to_string(),
+        author: "Alice".to_string(),
+        body: "Good point".to_string(),
+    }];
+    let section = format_comments_section(&comments);
+    assert!(section.contains("## Comments"));
+    assert!(section.contains("**Alice**: Good point"));
 }
 
 /// Verify that `TicketSyncer::list` returns all tickets regardless of state,
@@ -1106,6 +1161,7 @@ fn make_ticket_with_body(source_id: &str, title: &str, body: &str) -> TicketInpu
         priority: None,
         url: String::new(),
         raw_json: None,
+        comments: vec![],
         label_details: vec![],
         blocked_by: vec![],
         children: vec![],

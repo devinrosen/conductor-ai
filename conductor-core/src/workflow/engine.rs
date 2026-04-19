@@ -32,6 +32,7 @@ pub const ENGINE_INJECTED_KEYS: &[&str] = &[
     "ticket_body",
     "ticket_url",
     "ticket_raw_json",
+    "ticket_comments",
     "repo_id",
     "repo_path",
     "repo_name",
@@ -424,6 +425,49 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     let mut merged_inputs = input.inputs.clone();
     if let Some(tid) = input.ticket_id {
         let ticket = crate::tickets::TicketSyncer::new(conn).get_by_id(tid)?;
+
+        // For Jira tickets, do a fresh fetch to pull in comments lazily.
+        // Failure is non-fatal: fall back to the DB ticket without comments.
+        let (effective_raw_json, ticket_comments_str) = if ticket.source_type == "jira" {
+            let jira_url = crate::issue_source::IssueSourceManager::new(conn)
+                .list(&ticket.repo_id)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|s| s.source_type == "jira")
+                .and_then(|s| {
+                    serde_json::from_str::<crate::issue_source::JiraConfig>(&s.config_json)
+                        .ok()
+                        .map(|c| c.url)
+                });
+
+            if let Some(url) = jira_url {
+                match crate::jira_acli::fetch_jira_issue(&ticket.source_id, &url) {
+                    Ok(fresh) => {
+                        let comments_str = crate::tickets::format_comments_section(&fresh.comments);
+                        let fresh_raw = fresh.raw_json.clone();
+                        // Upsert enriched ticket so raw_json is persisted.
+                        let _ = crate::tickets::TicketSyncer::new(conn)
+                            .upsert_tickets(&ticket.repo_id, &[fresh]);
+                        (
+                            fresh_raw.unwrap_or_else(|| ticket.raw_json.clone()),
+                            comments_str,
+                        )
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "failed to re-fetch Jira issue {} for workflow enrichment: {e}",
+                            ticket.source_id
+                        );
+                        (ticket.raw_json.clone(), String::new())
+                    }
+                }
+            } else {
+                (ticket.raw_json.clone(), String::new())
+            }
+        } else {
+            (ticket.raw_json.clone(), String::new())
+        };
+
         merged_inputs
             .entry("ticket_id".to_string())
             .or_insert_with(|| ticket.id.clone());
@@ -444,7 +488,10 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             .or_insert_with(|| ticket.url.clone());
         merged_inputs
             .entry("ticket_raw_json".to_string())
-            .or_insert_with(|| ticket.raw_json.clone());
+            .or_insert_with(|| effective_raw_json);
+        merged_inputs
+            .entry("ticket_comments".to_string())
+            .or_insert_with(|| ticket_comments_str);
     }
     if let Some(rid) = effective_repo_id {
         let repo = crate::repo::RepoManager::new(conn, config).get_by_id(rid)?;

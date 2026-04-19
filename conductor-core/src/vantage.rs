@@ -485,6 +485,7 @@ fn parse_vantage_deliverable(d: &serde_json::Value) -> TicketInput {
         priority,
         url,
         raw_json: serde_json::to_string(d).ok(),
+        comments: vec![],
         label_details: vec![],
         blocked_by,
         children,

@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::tickets::{TicketInput, TicketLabelInput, TicketSyncer};
 use crate::workflow_dsl::{ForeachOver, ForeachScope, OnChildFail, OnCycle, TicketScope};
@@ -19,6 +18,7 @@ fn make_ticket(source_id: &str, title: &str) -> TicketInput {
         priority: None,
         url: String::new(),
         raw_json: None,
+        comments: vec![],
         label_details: vec![],
         blocked_by: vec![],
         children: vec![],
