@@ -348,6 +348,7 @@ let engine = FlowEngine::builder()
     .gate_resolver(Box::new(PrChecksGateResolver::new()))
     .gate_resolver(Box::new(HumanApprovalGateResolver::new(&db)))
     .trigger_source(Box::new(ManualTriggerSource))
+    .event_sink(Box::new(tui_event_sink))        // optional; host picks delivery
     .build()?;
 
 engine.run(&workflow_def, inputs)?;
@@ -535,6 +536,109 @@ different backends can never share state — that's a feature, not a bug.
 
 ---
 
+## Events / Observability
+
+Host applications (TUI, web UI, metrics systems, audit logs) need to learn about
+workflow state changes in real time. Polling the database works but has
+unacceptable latency for user-facing UIs. `runkon-flow` exposes an optional
+event stream that fires on every state transition.
+
+### `EventSink` trait
+
+```rust
+pub trait EventSink: Send + Sync {
+    /// Emit a single event. Called synchronously from the engine thread;
+    /// expected to be cheap. Sinks that need async dispatch (HTTP POST,
+    /// database writes, etc.) must offload internally (e.g., via an mpsc
+    /// channel).
+    ///
+    /// Sink panics are caught and logged — they must not tank the run.
+    fn emit(&self, event: &EngineEventData);
+}
+
+pub struct EngineEventData {
+    pub timestamp: DateTime<Utc>,
+    pub event: EngineEvent,
+}
+
+#[non_exhaustive]
+pub enum EngineEvent {
+    // Run lifecycle
+    RunStarted   { run_id: String, workflow_name: String, inputs: HashMap<String, String> },
+    RunCompleted { run_id: String, status: RunStatus, error: Option<String> },
+    RunResumed   { run_id: String, from_step_id: String },
+    RunCancelled { run_id: String, reason: String },
+
+    // Step lifecycle
+    StepStarted   { run_id: String, step_id: String, step_kind: StepKind, position: Vec<usize> },
+    StepCompleted { run_id: String, step_id: String, status: StepStatus, duration_ms: u64 },
+    StepRetrying  { run_id: String, step_id: String, attempt: u32 },
+
+    // Gate-specific
+    GateWaiting  { run_id: String, step_id: String, gate_type: String, prompt: Option<String> },
+    GateResolved { run_id: String, step_id: String, resolution: GateResolution },
+
+    // Fan-out
+    FanOutItemsCollected { run_id: String, step_id: String, item_count: usize },
+    FanOutItemStarted    { run_id: String, step_id: String, item_id: String, item_label: String },
+    FanOutItemCompleted  { run_id: String, step_id: String, item_id: String, status: ItemStatus },
+
+    // Metrics (opt-in — emitted after cost/token accounting updates)
+    MetricsUpdated { run_id: String, total_cost_usd: Option<f64>, total_tokens: i64, total_duration_ms: u64 },
+}
+```
+
+Both `EngineEvent` and `EngineEventData` are `#[non_exhaustive]` — new variants
+and fields can be added without a semver-major break.
+
+### Registration
+
+Multiple sinks can be registered; they receive every event in registration order.
+
+```rust
+let engine = FlowEngine::builder()
+    .persistence(Box::new(SqliteWorkflowPersistence::new(&db)))
+    .event_sink(Box::new(ChannelEventSink::new(tx)))      // TUI live updates
+    .event_sink(Box::new(PrometheusEventSink::new()))     // metrics
+    .event_sink(Box::new(AuditLogEventSink::new(&path)))  // audit trail
+    // ...
+    .build()?;
+```
+
+### Semantics
+
+- **Events are best-effort, not canonical.** The database is the source of
+  truth. Events describe transitions as they happen; a crashed sink doesn't lose
+  data (the DB already has it).
+- **DB writes happen before event emission.** Subscribers never observe an event
+  for state that isn't yet persisted.
+- **Ordering within a run is preserved.** Emission is synchronous on the engine
+  thread, so events for a single run arrive in transition order. Events from
+  different runs may interleave.
+- **Sinks that block, block the engine.** Default behavior: emission is
+  synchronous. Slow sinks (HTTP calls, disk writes) must offload internally —
+  typically by wrapping an `mpsc::Sender` and dispatching on a worker thread.
+- **Sink panics are swallowed.** The engine catches, logs, and continues. A
+  misbehaving sink must not tank a workflow.
+- **No default sink.** `runkon-flow` has no opinion on how a host surfaces
+  events. Each harness registers what it needs.
+- **In-process only.** `EventSink` is not a cross-process mechanism. Hosts that
+  need cross-process event delivery keep polling the DB — that's always safe
+  because the DB update precedes the event emission.
+
+### Non-goals
+
+- **Event replay from history.** Events are live. If a sink misses them (not
+  registered yet, crashed), they're gone. Reconstructing state requires reading
+  from `WorkflowPersistence`.
+- **Backpressure management.** Default is "slow sink blocks engine." Hosts that
+  need drop-on-full or bounded-buffer semantics implement them in their own
+  sinks.
+- **Automatic retry.** If emission fails, the engine doesn't retry. Sinks that
+  want at-least-once delivery implement retry internally.
+
+---
+
 ## What Stays in Each Layer
 
 ### `runkon-flow` (the published library)
@@ -546,7 +650,10 @@ different backends can never share state — that's a feature, not a bug.
 - Resumability and snapshot semantics
 - Context threading (`prior_context`, `prior_contexts`, `{{variable}}` substitution)
 - `WorkflowPersistence` trait + `InMemoryWorkflowPersistence` (for tests)
-- All six traits defined above
+- All six traits defined above (`ActionExecutor`, `ItemProvider`, `GateResolver`,
+  `TriggerSource`, `RunContext`, `WorkflowPersistence`)
+- `EventSink` trait + `EngineEvent` / `EngineEventData` types (ships no default
+  sink — hosts register their own)
 - `FlowEngine` builder
 
 ### `conductor-core` (conductor's harness layer)
