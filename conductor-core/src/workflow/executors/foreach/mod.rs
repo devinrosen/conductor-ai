@@ -813,26 +813,13 @@ fn build_child_dispatch_params(
     item: &crate::workflow::manager::FanOutItemRow,
     child_def: &crate::workflow_dsl::WorkflowDef,
 ) -> Result<WorkflowExecStandalone> {
-    let (
-        working_dir,
-        repo_path,
-        ticket_id,
-        repo_id,
-        worktree_id,
-        conductor_bin_dir,
-        extra_plugin_dirs,
-    ) = {
-        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        (
-            ctx.working_dir().to_path_buf(),
-            ctx.repo_path().to_path_buf(),
-            ctx.ticket_id().map(String::from),
-            ctx.repo_id().map(String::from),
-            ctx.worktree_id().map(String::from),
-            ctx.conductor_bin_dir().map(|p| p.to_path_buf()),
-            ctx.extra_plugin_dirs().to_vec(),
-        )
-    };
+    let working_dir = state.worktree_ctx.working_dir.clone();
+    let repo_path = state.worktree_ctx.repo_path.clone();
+    let ticket_id = state.worktree_ctx.ticket_id.clone();
+    let repo_id = state.worktree_ctx.repo_id.clone();
+    let worktree_id = state.worktree_ctx.worktree_id.clone();
+    let conductor_bin_dir = state.worktree_ctx.conductor_bin_dir.clone();
+    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
 
     // Build item-specific variable map for {{item.*}} substitution.
     let item_vars = build_item_vars(state, node, item)?;
@@ -897,11 +884,11 @@ fn build_child_dispatch_params(
                     "foreach: failed to look up worktree '{}', falling back to parent working dir: {e}",
                     item.item_id
                 );
-                working_dir.to_str().unwrap_or("").to_string()
+                working_dir.clone()
             }
         }
     } else {
-        working_dir.to_str().unwrap_or("").to_string()
+        working_dir
     };
 
     Ok(WorkflowExecStandalone {
@@ -909,7 +896,7 @@ fn build_child_dispatch_params(
         workflow: child_def.clone(),
         worktree_id: item_worktree_id,
         working_dir: child_working_dir,
-        repo_path: repo_path.to_str().unwrap_or("").to_string(),
+        repo_path,
         ticket_id: item_ticket_id,
         repo_id: item_repo_id,
         model: state.model.clone(),

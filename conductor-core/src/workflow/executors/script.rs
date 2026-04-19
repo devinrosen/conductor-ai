@@ -128,12 +128,12 @@ pub fn execute_script(
     let pos = state.position;
     state.position += 1;
 
-    let (working_dir, repo_path, conductor_bin_dir) = {
+    let (working_dir, repo_path, script_env) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
         (
             ctx.working_dir().to_path_buf(),
             ctx.repo_path().to_path_buf(),
-            ctx.conductor_bin_dir().map(|p| p.to_path_buf()),
+            ctx.script_env(),
         )
     };
 
@@ -226,15 +226,11 @@ pub fn execute_script(
             .or(state.default_bot_name.as_deref());
         let mut cmd = Command::new(&resolved_path);
         cmd.envs(&resolved_env)
+            .envs(&script_env)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdout(output_file)
             .stderr(stderr_file)
             .current_dir(&working_dir);
-        // Inject conductor's binary directory into PATH so scripts can call `conductor`
-        if let Some(ref bin_dir) = conductor_bin_dir {
-            let path = std::env::var("PATH").unwrap_or_default();
-            cmd.env("PATH", format!("{}:{}", bin_dir.display(), path));
-        }
         match crate::github_app::resolve_named_app_token(state.config, effective_bot, "script") {
             crate::github_app::TokenResolution::AppToken(token) => {
                 cmd.env("GH_TOKEN", token);

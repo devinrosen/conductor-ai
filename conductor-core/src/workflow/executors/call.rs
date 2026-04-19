@@ -8,7 +8,6 @@ use crate::workflow::engine::{
 };
 use crate::workflow::output::interpret_agent_output;
 use crate::workflow::prompt_builder::build_agent_prompt;
-use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 
 pub fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32) -> Result<()> {
@@ -60,15 +59,10 @@ fn execute_call_with_schema(
     let pos = state.position;
     state.position += 1;
 
-    let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
-        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        (
-            ctx.working_dir().to_path_buf(),
-            ctx.repo_path().to_path_buf(),
-            ctx.extra_plugin_dirs().to_vec(),
-            ctx.worktree_id().map(String::from),
-        )
-    };
+    let working_dir = state.worktree_ctx.working_dir.clone();
+    let repo_path = state.worktree_ctx.repo_path.clone();
+    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
+    let worktree_id = state.worktree_ctx.worktree_id.clone();
 
     let step_key_check = node.agent.step_key();
     if should_skip(state, &step_key_check, iteration) {
@@ -91,8 +85,8 @@ fn execute_call_with_schema(
 
     // Load agent definition
     let agent_def = crate::agent_config::load_agent(
-        working_dir.to_str().unwrap_or(""),
-        repo_path.to_str().unwrap_or(""),
+        &working_dir,
+        &repo_path,
         &AgentSpec::from(&node.agent),
         Some(&state.workflow_name),
         &merged_plugin_dirs,
@@ -107,8 +101,8 @@ fn execute_call_with_schema(
 
     // Load and concatenate prompt snippets
     let snippet_text = crate::prompt_config::load_and_concat_snippets(
-        working_dir.to_str().unwrap_or(""),
-        repo_path.to_str().unwrap_or(""),
+        &working_dir,
+        &repo_path,
         with_refs,
         Some(&state.workflow_name),
     )?;
@@ -309,7 +303,7 @@ fn execute_call_with_schema(
         // Build args and spawn headless subprocess
         let params = crate::agent_runtime::SpawnHeadlessParams {
             run_id: &child_run.id,
-            working_dir: working_dir.to_str().unwrap_or(""),
+            working_dir: &working_dir,
             prompt: &prompt,
             resume_session_id: None,
             model: step_model,
