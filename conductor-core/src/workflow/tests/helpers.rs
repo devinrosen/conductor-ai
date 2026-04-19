@@ -12,6 +12,40 @@ use crate::workflow_dsl::{
 };
 use std::collections::HashMap;
 
+pub fn make_exec_input<'a>(
+    conn: &'a rusqlite::Connection,
+    config: &'a crate::config::Config,
+    workflow: &'a crate::workflow_dsl::WorkflowDef,
+    working_dir: &'a str,
+    repo_path: &'a str,
+    exec_config: &'a WorkflowExecConfig,
+) -> WorkflowExecInput<'a> {
+    WorkflowExecInput {
+        conn,
+        config,
+        workflow,
+        working_dir,
+        repo_path,
+        exec_config,
+        worktree_id: None,
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        inputs: HashMap::new(),
+        depth: 0,
+        iteration: 0,
+        parent_workflow_run_id: None,
+        parent_step_id: None,
+        target_label: None,
+        default_bot_name: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
+        force: false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // sanitize_tmux_name
 // ---------------------------------------------------------------------------

@@ -203,28 +203,8 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
         }));
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &parent,
-        worktree_id: None,
-        working_dir,
-        repo_path: "",
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
         triggered_by_hook: true,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(&conn, &config, &parent, working_dir, "", &exec_config)
     };
     let result = execute_workflow(&input).unwrap();
     assert!(result.all_succeeded);
@@ -608,28 +588,8 @@ on_complete = "should-not-fire"
 
     let workflow = make_empty_workflow();
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: dir_path,
-        repo_path: dir_path,
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
         triggered_by_hook: true,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
+        ..make_exec_input(&conn, &config, &workflow, dir_path, dir_path, &exec_config)
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -676,30 +636,7 @@ on_complete = "nonexistent-hook-wf"
     let dir_path = dir.path().to_str().unwrap();
 
     let workflow = make_empty_workflow();
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: dir_path,
-        repo_path: dir_path,
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
-    };
+    let input = make_exec_input(&conn, &config, &workflow, dir_path, dir_path, &exec_config);
 
     let result = execute_workflow(&input).unwrap();
     assert!(
@@ -735,30 +672,7 @@ on_complete = "post-complete"
     let dir_path = dir.path().to_str().unwrap();
 
     let workflow = make_empty_workflow();
-    let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: dir_path,
-        repo_path: dir_path,
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        extra_plugin_dirs: vec![],
-        force: false,
-        parent_step_id: None,
-    };
+    let input = make_exec_input(&conn, &config, &workflow, dir_path, dir_path, &exec_config);
 
     let result = execute_workflow(&input).unwrap();
     assert!(result.all_succeeded);

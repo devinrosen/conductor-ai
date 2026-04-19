@@ -937,28 +937,8 @@ fn test_resume_workflow_repo_target() {
     let workflow = make_empty_workflow();
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
-        ticket_id: None,
         repo_id: Some("r1"),
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-        extra_plugin_dirs: vec![],
-        parent_step_id: None,
+        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -998,28 +978,8 @@ fn test_resume_workflow_ticket_target() {
     insert_test_ticket(&conn, "tkt-1", "r1");
 
     let input = WorkflowExecInput {
-        conn: &conn,
-        config: &config,
-        workflow: &workflow,
-        worktree_id: None,
-        working_dir: "/tmp/repo",
-        repo_path: "/tmp/repo",
         ticket_id: Some("tkt-1"),
-        repo_id: None,
-        model: None,
-        exec_config: &exec_config,
-        inputs: HashMap::new(),
-        depth: 0,
-        parent_workflow_run_id: None,
-        target_label: None,
-        default_bot_name: None,
-        iteration: 0,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-        extra_plugin_dirs: vec![],
-        parent_step_id: None,
+        ..make_exec_input(&conn, &config, &workflow, "/tmp/repo", "/tmp/repo", &exec_config)
     };
     let result = execute_workflow(&input).unwrap();
 
