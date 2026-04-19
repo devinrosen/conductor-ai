@@ -2327,6 +2327,42 @@ fn test_query_dep_pairs_orphaned_ticket_returns_error() {
     }
 }
 
+/// Symmetric case: edge where the from_ticket is missing must also return TicketNotFound
+/// with the from_ticket_id (the (None, _) arm of the match in query_dep_pairs).
+#[test]
+fn test_query_dep_pairs_orphaned_from_ticket_returns_error() {
+    let conn = setup_db();
+    let syncer = TicketSyncer::new(&conn);
+
+    // Insert one real ticket to act as the "to" side.
+    syncer
+        .upsert_tickets("r1", &[make_ticket("orphan-to", "To Ticket")])
+        .unwrap();
+    let to_id = get_ticket_id(&conn, "orphan-to");
+
+    // Bypass FK constraints to insert an edge with a non-existent from_ticket_id.
+    conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+    conn.execute(
+        "INSERT INTO ticket_dependencies (from_ticket_id, to_ticket_id, dep_type) \
+             VALUES ('nonexistent-from-id', :to_id, 'blocks')",
+        rusqlite::named_params! { ":to_id": to_id },
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+    let result = query_dep_pairs(&conn, "blocks");
+    assert!(
+        result.is_err(),
+        "query_dep_pairs must return Err when from_ticket is missing"
+    );
+    match result.unwrap_err() {
+        ConductorError::TicketNotFound { id } => {
+            assert_eq!(id, "nonexistent-from-id");
+        }
+        e => panic!("expected TicketNotFound, got {e:?}"),
+    }
+}
+
 #[test]
 fn test_upsert_preserves_raw_json_on_cli_re_upsert() {
     let conn = setup_db();
