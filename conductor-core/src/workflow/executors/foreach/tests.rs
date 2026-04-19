@@ -1908,7 +1908,7 @@ fn test_build_item_vars_tickets_missing_ticket_falls_back() {
 #[test]
 fn test_foreach_resume_reuses_existing_step_and_resets_orphaned_items() {
     let conn = setup_db();
-    let config: &'static crate::config::Config =
+    let _config: &'static crate::config::Config =
         Box::leak(Box::new(crate::config::Config::default()));
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
@@ -1978,10 +1978,10 @@ fn test_foreach_resume_reuses_existing_step_and_resets_orphaned_items() {
 
     // Verify no second step row was created for this (run_id, step_name, iteration).
     let all_steps: Vec<_> = conn
-        .prepare(&format!(
+        .prepare(
             "SELECT id FROM workflow_run_steps \
-             WHERE workflow_run_id = ?1 AND step_name = ?2 AND iteration = ?3"
-        ))
+             WHERE workflow_run_id = ?1 AND step_name = ?2 AND iteration = ?3",
+        )
         .unwrap()
         .query_map(rusqlite::params![&run.id, step_key, iteration], |row| {
             row.get::<_, String>(0)
