@@ -1,4 +1,3 @@
-
 use super::query::query_dep_pairs;
 use super::syncer::CLOSED_TICKET_ARTIFACTS_SQL;
 use super::*;
