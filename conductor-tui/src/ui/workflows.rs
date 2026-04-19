@@ -1619,7 +1619,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     // Determine if the selected step has agent activity to show
     let selected_step = state.data.workflow_steps.get(state.workflow_step_index);
     let has_agent_activity = selected_step
-        .map(|s| s.child_run_id.is_some())
+        .map(|s| s.child_run_id.is_some() && s.role != conductor_core::workflow::STEP_ROLE_WORKFLOW)
         .unwrap_or(false);
 
     if has_agent_activity {
@@ -1860,13 +1860,28 @@ fn render_step_list(
         .map(|s| s.role == conductor_core::workflow::STEP_ROLE_FOREACH)
         .unwrap_or(false);
 
-    let title = match (focused, has_waiting_gate, selected_is_foreach) {
-        (true, true, true) => " Steps (Enter=approve gate, Space=expand, Tab=switch) ",
-        (true, true, false) => " Steps (Enter=approve gate, Tab=switch) ",
-        (true, false, true) => " Steps (Enter=detail, Space=expand, Tab=switch) ",
-        (true, false, false) => " Steps (Enter=detail, Tab=switch) ",
-        (false, true, _) => " Steps (Enter=approve gate) ",
-        (false, false, _) => " Steps ",
+    let in_child_workflow = !state.workflow_run_nav_stack.is_empty();
+    let selected_is_workflow = state
+        .data
+        .workflow_steps
+        .get(state.workflow_step_index)
+        .map(|s| s.role == conductor_core::workflow::STEP_ROLE_WORKFLOW && s.child_run_id.is_some())
+        .unwrap_or(false);
+    let title = match (
+        focused,
+        has_waiting_gate,
+        selected_is_foreach,
+        selected_is_workflow,
+        in_child_workflow,
+    ) {
+        (true, true, true, _, _) => " Steps (Enter=approve gate, Space=expand, Tab=switch) ",
+        (true, true, false, _, _) => " Steps (Enter=approve gate, Tab=switch) ",
+        (true, false, true, _, _) => " Steps (Enter=detail, Space=expand, Tab=switch) ",
+        (true, false, false, true, _) => " Steps (Enter=drill in, Tab=switch) ",
+        (true, false, false, false, true) => " Steps (Enter=detail, Esc=back, Tab=switch) ",
+        (true, false, false, false, false) => " Steps (Enter=detail, Tab=switch) ",
+        (false, true, _, _, _) => " Steps (Enter=approve gate) ",
+        (false, false, _, _, _) => " Steps ",
     };
 
     let list = List::new(items)
