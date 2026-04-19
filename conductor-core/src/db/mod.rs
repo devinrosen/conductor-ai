@@ -68,6 +68,7 @@ pub(crate) fn sql_placeholders_from(n: usize, _start: usize) -> String {
     s
 }
 
+
 /// Build a parameterised IN-clause query and execute a closure with the
 /// prepared params slice.
 ///
