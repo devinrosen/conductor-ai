@@ -65,7 +65,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let total_duration_ms: Option<i64> = row.get("total_duration_ms")?;
     let model: Option<String> = row.get("model")?;
     let error: Option<String> = row.get("error")?;
-    let dismissed_int: i64 = row.get::<_, Option<i64>>("dismissed")?.unwrap_or(0);
+    let dismissed_int: i64 = row.get("dismissed")?;
     let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
     let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
     Ok(WorkflowRun {
