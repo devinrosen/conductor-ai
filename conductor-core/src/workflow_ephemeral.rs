@@ -259,6 +259,7 @@ pub fn run_workflow_on_pr(
         conductor_bin_dir,
         force: false,
         extra_plugin_dirs: vec![],
+        parent_step_id: None,
     };
 
     // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.

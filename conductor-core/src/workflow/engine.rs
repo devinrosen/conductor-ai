@@ -403,6 +403,11 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         input.target_label,
     )?;
 
+    // Write child run ID back to parent step immediately so TUI can drill in while running.
+    if let Some(ref step_id) = input.parent_step_id {
+        wf_mgr.update_step_child_run_id(step_id, &wf_run.id)?;
+    }
+
     // Notify any waiting caller of the freshly-created run ID.
     if let Some(pair) = &input.run_id_notify {
         let (lock, cvar) = pair.as_ref();
@@ -746,6 +751,7 @@ fn evaluate_hooks(
             conductor_bin_dir: state.conductor_bin_dir.clone(),
             force: false,
             extra_plugin_dirs: state.extra_plugin_dirs.clone(),
+            parent_step_id: None,
         };
 
         match execute_workflow(&hook_input) {
@@ -795,6 +801,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         conductor_bin_dir: params.conductor_bin_dir.clone(),
         force: params.force,
         extra_plugin_dirs: params.extra_plugin_dirs.clone(),
+        parent_step_id: None,
     };
 
     execute_workflow(&input)

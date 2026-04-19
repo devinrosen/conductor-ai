@@ -224,6 +224,7 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
     assert!(result.all_succeeded);
@@ -628,6 +629,7 @@ on_complete = "should-not-fire"
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -696,6 +698,7 @@ on_complete = "nonexistent-hook-wf"
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -754,6 +757,7 @@ on_complete = "post-complete"
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input).unwrap();

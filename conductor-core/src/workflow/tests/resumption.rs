@@ -958,6 +958,7 @@ fn test_resume_workflow_repo_target() {
         conductor_bin_dir: None,
         force: false,
         extra_plugin_dirs: vec![],
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -1018,6 +1019,7 @@ fn test_resume_workflow_ticket_target() {
         conductor_bin_dir: None,
         force: false,
         extra_plugin_dirs: vec![],
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
 

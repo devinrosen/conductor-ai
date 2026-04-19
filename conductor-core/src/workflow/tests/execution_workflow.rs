@@ -46,6 +46,7 @@ fn test_cannot_start_workflow_run_when_active() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -94,6 +95,7 @@ fn test_can_start_workflow_run_after_completion() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -144,6 +146,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input);
     assert!(
@@ -188,6 +191,7 @@ fn test_run_id_notify_slot_is_populated() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -240,6 +244,7 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input).expect(
@@ -281,6 +286,7 @@ fn test_execute_workflow_injects_repo_variables() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -335,6 +341,7 @@ fn test_execute_workflow_injects_ticket_variables() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -393,6 +400,7 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -438,6 +446,7 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -474,6 +483,7 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -515,6 +525,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result1 = execute_workflow(&input1);
     assert!(
@@ -550,6 +561,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
     let result2 = execute_workflow(&input2);
     assert!(
@@ -596,6 +608,7 @@ fn test_execute_workflow_iteration_persisted() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input);
@@ -673,6 +686,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -750,6 +764,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -831,6 +846,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
@@ -890,6 +906,7 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = crate::workflow::engine::execute_workflow(&input).unwrap();
@@ -938,6 +955,7 @@ fn test_execute_workflow_derives_repo_id_from_worktree() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -1001,6 +1019,7 @@ fn test_foreach_worktrees_uses_derived_repo_id_from_worktree() {
         conductor_bin_dir: None,
         extra_plugin_dirs: vec![],
         force: false,
+        parent_step_id: None,
     };
 
     let result = execute_workflow(&input);
