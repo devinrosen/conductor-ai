@@ -13,7 +13,7 @@ use super::helpers::{
 use super::WorkflowManager;
 use crate::workflow::constants::{
     REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
-    REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
+    REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
 };
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
@@ -42,6 +42,10 @@ fn granularity_to_strftime_format(granularity: TimeGranularity) -> &'static str 
 }
 
 impl<'a> WorkflowManager<'a> {
+    /// Token columns from the agent_runs join, used in gate step queries.
+    const AGENT_RUN_TOKEN_COLS: &'static str =
+        "ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens";
+
     /// Common SELECT clause for step queries with agent run token data.
     const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
                  FROM workflow_run_steps s \
@@ -729,10 +733,11 @@ impl<'a> WorkflowManager<'a> {
             .conn
             .query_row(
                 &format!(
-                    "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
-                     WHERE workflow_run_id = :workflow_run_id AND gate_type IS NOT NULL AND gate_approved_at IS NULL \
-                       AND status IN ('running', 'waiting') \
-                     ORDER BY position DESC LIMIT 1"
+                    "{} \
+                     WHERE s.workflow_run_id = :workflow_run_id AND s.gate_type IS NOT NULL AND s.gate_approved_at IS NULL \
+                       AND s.status IN ('running', 'waiting') \
+                     ORDER BY s.position DESC LIMIT 1",
+                    Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
                 ),
                 named_params! { ":workflow_run_id": workflow_run_id },
                 row_to_workflow_step,
@@ -750,13 +755,15 @@ impl<'a> WorkflowManager<'a> {
         let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
         let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
-            "SELECT {cols}, r.workflow_name, r.target_label \
+            "SELECT {cols}, {token_cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
+             LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
              AND r.status IN ({placeholders}) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
+            token_cols = Self::AGENT_RUN_TOKEN_COLS,
         );
         crate::db::query_collect(
             self.conn,
@@ -774,8 +781,9 @@ impl<'a> WorkflowManager<'a> {
         let active_strings = WorkflowRunStatus::active_strings();
         let status_placeholders = sql_placeholders(active_strings.len());
         let sql = format!(
-            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
+            "SELECT {cols}, {token_cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
              FROM workflow_run_steps s \
+             LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
              LEFT JOIN tickets t ON t.id = r.ticket_id \
@@ -784,6 +792,7 @@ impl<'a> WorkflowManager<'a> {
              AND (r.repo_id = ? OR wt.repo_id = ?) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
+            token_cols = Self::AGENT_RUN_TOKEN_COLS,
         );
         let mut all_params: Vec<rusqlite::types::Value> = active_strings
             .into_iter()
@@ -1929,5 +1938,92 @@ mod tests {
         // Empty input should return an empty map without querying the DB.
         let empty = mgr.get_plan_estimates_for_runs(&[]).unwrap();
         assert!(empty.is_empty(), "empty input → empty result");
+    }
+
+    /// Verify that token values stored in `agent_runs` are correctly propagated into
+    /// `WorkflowRunStep` when fetched via `find_waiting_gate` (which uses
+    /// `STEP_SELECT_WITH_TOKENS` + `row_to_workflow_step`).
+    #[test]
+    fn find_waiting_gate_propagates_agent_run_tokens() {
+        let conn = setup_db();
+
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+             VALUES ('run-gate-1', 'test-wf', NULL, 'dummy-ar', 'running', datetime('now'))",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO agent_runs \
+             (id, prompt, status, started_at, input_tokens, output_tokens, \
+              cache_read_input_tokens, cache_creation_input_tokens) \
+             VALUES ('ar-gate-1', 'do something', 'completed', datetime('now'), \
+                     1000, 200, 50, 75)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, \
+              gate_type, child_run_id) \
+             VALUES ('step-gate-1', 'run-gate-1', 'review', 'gate', 'waiting', 0, \
+                     'human_approval', 'ar-gate-1')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let step = mgr
+            .find_waiting_gate("run-gate-1")
+            .unwrap()
+            .expect("should find a waiting gate step");
+
+        assert_eq!(step.input_tokens, Some(1000));
+        assert_eq!(step.output_tokens, Some(200));
+        assert_eq!(step.cache_read_input_tokens, Some(50));
+        assert_eq!(step.cache_creation_input_tokens, Some(75));
+    }
+
+    /// Verify that `find_waiting_gate` returns `None` for a token-only step that has no
+    /// linked `agent_run` — token fields should be `None` rather than causing an error.
+    #[test]
+    fn find_waiting_gate_no_agent_run_tokens_are_none() {
+        let conn = setup_db();
+
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+             VALUES ('run-gate-2', 'test-wf', NULL, 'dummy-ar', 'running', datetime('now'))",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('step-gate-2', 'run-gate-2', 'review', 'gate', 'waiting', 0, 'human_approval')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let step = mgr
+            .find_waiting_gate("run-gate-2")
+            .unwrap()
+            .expect("should find a waiting gate step");
+
+        assert_eq!(
+            step.input_tokens, None,
+            "no agent_run → input_tokens should be None"
+        );
+        assert_eq!(
+            step.output_tokens, None,
+            "no agent_run → output_tokens should be None"
+        );
+        assert_eq!(step.cache_read_input_tokens, None);
+        assert_eq!(step.cache_creation_input_tokens, None);
     }
 }
