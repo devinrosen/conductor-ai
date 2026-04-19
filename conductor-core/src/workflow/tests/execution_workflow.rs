@@ -1087,3 +1087,88 @@ fn test_body_skips_on_fail_fast_failure() {
         "body gate must be skipped when fail_fast=true and body already failed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// parent_step_id — child run ID written back immediately (#2320)
+// ---------------------------------------------------------------------------
+
+/// When `parent_step_id` is set, `execute_workflow` must write the new child
+/// run ID back to the parent step row immediately after the child run is
+/// created, so the TUI can drill into a running child workflow.
+#[test]
+fn test_parent_step_id_writes_child_run_id_to_step() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+
+    // Set up a parent workflow run with a placeholder "call-child" step.
+    let agent_mgr = AgentManager::new(&conn);
+    let parent_agent_run = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let parent_run = wf_mgr
+        .create_workflow_run(
+            "parent-wf",
+            Some("w1"),
+            &parent_agent_run.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+    let parent_step_id = wf_mgr
+        .insert_step(&parent_run.id, "call-child", "actor", false, 0, 0)
+        .unwrap();
+
+    // child_run_id should be None before execute_workflow is called.
+    let step_before = wf_mgr
+        .get_step_by_id(&parent_step_id)
+        .unwrap()
+        .expect("step must exist");
+    assert!(
+        step_before.child_run_id.is_none(),
+        "child_run_id must be None before the child run is created"
+    );
+
+    // Execute an empty child workflow with parent_step_id set.
+    let child_workflow = make_empty_workflow();
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &child_workflow,
+        worktree_id: Some("w1"),
+        working_dir: "/tmp/ws/feat-test",
+        repo_path: "/tmp/repo",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 1,
+        parent_workflow_run_id: Some(&parent_run.id),
+        target_label: None,
+        default_bot_name: None,
+        iteration: 0,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        extra_plugin_dirs: vec![],
+        force: false,
+        parent_step_id: Some(parent_step_id.clone()),
+    };
+
+    let result = execute_workflow(&input).unwrap();
+    let child_run_id = result.workflow_run_id;
+
+    // The parent step must now have child_run_id set to the new child run's ID.
+    let step_after = wf_mgr
+        .get_step_by_id(&parent_step_id)
+        .unwrap()
+        .expect("step must still exist");
+    assert_eq!(
+        step_after.child_run_id.as_deref(),
+        Some(child_run_id.as_str()),
+        "child_run_id must be written back to the parent step immediately on child run creation"
+    );
+}
