@@ -955,7 +955,18 @@ impl App {
                     // [workflow] steps: drill into the child workflow run instead of a modal.
                     if step.role == conductor_core::workflow::STEP_ROLE_WORKFLOW {
                         if let Some(ref child_id) = step.child_run_id.clone() {
-                            self.drill_into_child_workflow(child_id.clone());
+                            let exists = self
+                                .state
+                                .data
+                                .workflow_runs
+                                .iter()
+                                .any(|r| r.id == *child_id);
+                            if exists {
+                                self.drill_into_child_workflow(child_id.clone());
+                            } else {
+                                self.state.status_message =
+                                    Some("Child workflow run not yet loaded.".into());
+                            }
                         }
                         return;
                     }
@@ -1874,6 +1885,8 @@ mod tests {
         step.child_run_id = Some("child-run".into());
         app.state.data.workflow_steps = vec![step];
         app.state.workflow_step_index = 0;
+        // Child run must be present in workflow_runs for drill to succeed.
+        app.state.data.workflow_runs = vec![make_test_run_without_worktree("child-run")];
         app.select();
         assert_eq!(
             app.state.workflow_run_nav_stack,
