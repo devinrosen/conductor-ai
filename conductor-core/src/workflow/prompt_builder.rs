@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::schema_config;
 
 use super::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
-use super::engine::ExecutionState;
+use super::engine::{ExecutionState, ENGINE_INJECTED_KEYS};
+use super::run_context::{RunContext, WorktreeRunContext};
 
 fn substitute_variables_impl(
     template: &str,
@@ -46,8 +47,21 @@ pub(super) fn substitute_variables_keep_literal(
 /// Build the variable map from execution state (used for substitution in sub-workflow inputs).
 pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&'a str, String> {
     let mut vars: HashMap<&str, String> = HashMap::new();
+
+    // Non-injected user-defined inputs (e.g. feature_base_branch, worktree_branch, fsm_path)
     for (k, v) in &state.inputs {
-        vars.insert(k.as_str(), v.clone());
+        if !ENGINE_INJECTED_KEYS.contains(&k.as_str()) {
+            vars.insert(k.as_str(), v.clone());
+        }
+    }
+
+    // ENGINE_INJECTED_KEYS read through the RunContext trait facade.
+    // Keys in ENGINE_INJECTED_KEYS are &'static str so they satisfy the &'a str bound.
+    let ctx = WorktreeRunContext::new(state);
+    for (k, v) in ctx.injected_variables() {
+        if let Some(&static_key) = ENGINE_INJECTED_KEYS.iter().find(|&&sk| sk == k.as_str()) {
+            vars.insert(static_key, v);
+        }
     }
     let prior_context = state
         .contexts
