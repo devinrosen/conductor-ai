@@ -1160,10 +1160,8 @@ mod tests {
         let mut state = AppState::new();
         state.show_dismissed_workflow_runs = false;
         // r2 is a child of r1 — should not count even if dismissed
-        state.data.workflow_runs = vec![
-            make_run("r1", None, true),
-            make_run("r2", Some("r1"), true),
-        ];
+        state.data.workflow_runs =
+            vec![make_run("r1", None, true), make_run("r2", Some("r1"), true)];
         assert_eq!(state.dismissed_workflow_run_count(), 1);
     }
 

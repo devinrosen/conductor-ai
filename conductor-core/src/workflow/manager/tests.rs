@@ -4267,7 +4267,10 @@ fn test_set_dismissed_marks_run_dismissed() {
 
     let updated = mgr.list_workflow_runs_for_repo("r1", 50).unwrap();
     let found = updated.iter().find(|r| r.id == run.id).unwrap();
-    assert!(found.dismissed, "run should be dismissed after set_dismissed(true)");
+    assert!(
+        found.dismissed,
+        "run should be dismissed after set_dismissed(true)"
+    );
 }
 
 #[test]
@@ -4281,7 +4284,10 @@ fn test_set_dismissed_can_undismiss() {
 
     let updated = mgr.list_workflow_runs_for_repo("r1", 50).unwrap();
     let found = updated.iter().find(|r| r.id == run.id).unwrap();
-    assert!(!found.dismissed, "run should not be dismissed after set_dismissed(false)");
+    assert!(
+        !found.dismissed,
+        "run should not be dismissed after set_dismissed(false)"
+    );
 }
 
 #[test]
