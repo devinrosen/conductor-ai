@@ -56,12 +56,10 @@ pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&
     }
 
     // ENGINE_INJECTED_KEYS read through the RunContext trait facade.
-    // Keys in ENGINE_INJECTED_KEYS are &'static str so they satisfy the &'a str bound.
+    // injected_variables() returns &'static str keys directly, satisfying the &'a str bound.
     let ctx = WorktreeRunContext::new(state);
     for (k, v) in ctx.injected_variables() {
-        if let Some(&static_key) = ENGINE_INJECTED_KEYS.iter().find(|&&sk| sk == k.as_str()) {
-            vars.insert(static_key, v);
-        }
+        vars.insert(k, v);
     }
     let prior_context = state
         .contexts
@@ -240,6 +238,33 @@ mod tests {
             structured_output: None,
             output_file: output_file.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn test_build_variable_map_separates_injected_and_non_injected() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut state = make_state(&conn);
+        // ticket_id is an ENGINE_INJECTED_KEY; feature_base_branch is user-defined.
+        state
+            .inputs
+            .insert("ticket_id".to_string(), "tid-99".to_string());
+        state
+            .inputs
+            .insert("feature_base_branch".to_string(), "release/v1.0".to_string());
+        let vars = build_variable_map(&state);
+        // Both should appear in the map.
+        assert_eq!(vars.get("ticket_id").map(String::as_str), Some("tid-99"));
+        assert_eq!(
+            vars.get("feature_base_branch").map(String::as_str),
+            Some("release/v1.0")
+        );
+        // ticket_id must not appear twice (it should be in the injected slot, not the user slot).
+        // The HashMap guarantees uniqueness; verify the value is correct.
+        assert_eq!(
+            vars.iter().filter(|(&k, _)| k == "ticket_id").count(),
+            1,
+            "ticket_id should appear exactly once in variable map"
+        );
     }
 
     #[test]

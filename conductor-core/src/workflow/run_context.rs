@@ -10,9 +10,10 @@ use super::engine::{ExecutionState, ENGINE_INJECTED_KEYS};
 /// can provide their own context without carrying the full `ExecutionState` shape.
 pub(crate) trait RunContext {
     /// Returns the subset of variables that the engine injects from run metadata
-    /// (ticket and repo fields, plus `workflow_run_id`). Callers merge these into
-    /// the full variable map before prompt substitution.
-    fn injected_variables(&self) -> HashMap<String, String>;
+    /// (ticket and repo fields, plus `workflow_run_id`). Keys are `&'static str`
+    /// (from `ENGINE_INJECTED_KEYS`) so callers can insert directly into a
+    /// `HashMap<&'static str, String>` without an extra key-recovery scan.
+    fn injected_variables(&self) -> HashMap<&'static str, String>;
 
     /// Absolute path to the working directory for this run.
     // Step 1.1b will wire callers; defined here as part of the trait interface.
@@ -43,13 +44,13 @@ impl<'s, 'conn> WorktreeRunContext<'s, 'conn> {
 }
 
 impl RunContext for WorktreeRunContext<'_, '_> {
-    fn injected_variables(&self) -> HashMap<String, String> {
+    fn injected_variables(&self) -> HashMap<&'static str, String> {
         let mut map = HashMap::new();
         for &key in ENGINE_INJECTED_KEYS {
             if key == "workflow_run_id" {
-                map.insert(key.to_string(), self.state.workflow_run_id.clone());
+                map.insert(key, self.state.workflow_run_id.clone());
             } else if let Some(v) = self.state.inputs.get(key) {
-                map.insert(key.to_string(), v.clone());
+                map.insert(key, v.clone());
             }
         }
         map
@@ -224,48 +225,10 @@ mod tests {
     #[test]
     fn test_injected_variables_absent_keys_not_inserted() {
         let conn = crate::test_helpers::create_test_conn();
-        let config = crate::config::Config::default();
-        let config: &'static crate::config::Config = Box::leak(Box::new(config));
-        let state = ExecutionState {
-            conn: &conn,
-            config,
-            workflow_run_id: "wf-empty".to_string(),
-            workflow_name: "test".to_string(),
-            worktree_id: None,
-            working_dir: "/tmp".to_string(),
-            worktree_slug: String::new(),
-            repo_path: String::new(),
-            ticket_id: None,
-            repo_id: None,
-            model: None,
-            exec_config: WorkflowExecConfig::default(),
-            inputs: HashMap::new(),
-            agent_mgr: crate::agent::AgentManager::new(&conn),
-            wf_mgr: crate::workflow::manager::WorkflowManager::new(&conn),
-            parent_run_id: String::new(),
-            depth: 0,
-            target_label: None,
-            step_results: HashMap::new(),
-            contexts: Vec::new(),
-            position: 0,
-            all_succeeded: true,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_input_tokens: 0,
-            total_cache_creation_input_tokens: 0,
-            last_gate_feedback: None,
-            block_output: None,
-            block_with: Vec::new(),
-            resume_ctx: None,
-            default_bot_name: None,
-            triggered_by_hook: false,
-            conductor_bin_dir: None,
-            extra_plugin_dirs: vec![],
-            last_heartbeat_at: ExecutionState::new_heartbeat(),
-        };
+        // Reuse the full-state helper then clear inputs so only workflow_run_id remains.
+        let mut state = make_state_with_all_injected(&conn);
+        state.workflow_run_id = "wf-empty".to_string();
+        state.inputs.clear();
         let ctx = WorktreeRunContext::new(&state);
         let vars = ctx.injected_variables();
 
