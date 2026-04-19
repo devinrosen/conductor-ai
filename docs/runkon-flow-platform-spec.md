@@ -460,6 +460,81 @@ The DSL is identical to a conductor workflow. Only the harness registration chan
 
 ---
 
+## Persistence Boundaries
+
+`runkon-flow` defines the *workflow* schema — `workflow_runs`, `workflow_run_steps`,
+`workflow_run_step_fan_out_items` — via `SqliteWorkflowPersistence` (or any other
+backend implementing `WorkflowPersistence`). It does **not** dictate where the
+database lives. Each harness picks its own storage location by passing the
+appropriate `Connection` / `PathBuf` / connection pool into the persistence impl at
+`FlowEngineBuilder::persistence(...)` time.
+
+### Distinct databases by default
+
+Each harness owns its own database, combining:
+
+- **Workflow tables** — defined and migrated by `runkon-flow` via
+  `SqliteWorkflowPersistence`. Schema is identical across harnesses on the same
+  `runkon-flow` version.
+- **Domain tables** — entirely harness-specific. conductor-developer owns `repos`,
+  `tickets`, `worktrees`, `agent_runs`, `repo_issue_sources`; comm-harness would
+  own `inbox_messages`, `threads`, `slack_channels`, etc. No overlap.
+
+Example layout:
+
+```
+~/.runkon/
+├── developer.db         # workflow_* tables + conductor domain tables
+└── inbox.db             # workflow_* tables + inbox domain tables
+```
+
+Why distinct by default:
+
+- **Harness isolation.** Domain data from one harness has no business in another's
+  table space. Operator mental model stays clean.
+- **Independent schema evolution.** Harnesses ship on different cadences. Sharing
+  a DB would force migration coordination across harnesses.
+- **Operational simplicity.** Different backup, retention, and access patterns.
+- **Multi-tenant safety.** A user running both harnesses for unrelated projects
+  doesn't cross data.
+
+### Shared-database deployments
+
+Technically supported but not the default. Both engines can be configured to point
+at the same `Connection` / file:
+
+```rust
+let shared = rusqlite::Connection::open("~/.runkon/shared.db")?;
+let developer_engine = FlowEngine::builder()
+    .persistence(Box::new(SqliteWorkflowPersistence::new(&shared)))
+    // ...
+    .build()?;
+let inbox_engine = FlowEngine::builder()
+    .persistence(Box::new(SqliteWorkflowPersistence::new(&shared)))
+    // ...
+    .build()?;
+```
+
+Workflow tables are shared (unified cross-harness run visibility). Domain tables
+coexist without conflict — table names don't collide.
+
+**Caveat:** Harnesses sharing a database must run compatible `runkon-flow`
+versions. A schema migration introduced by one library version affects every
+harness pointed at that DB. Shared deployments are only safe when both harnesses
+are bundled and versioned together (e.g., a single multi-harness binary), or
+when operators explicitly coordinate upgrades.
+
+### Backend-agnostic by design
+
+`WorkflowPersistence` is a trait — the SQLite default is the reference
+implementation, not the contract. A harness with different durability needs can
+implement a Postgres-backed `PostgresWorkflowPersistence`, a Redis-backed
+`RedisWorkflowPersistence`, or an in-memory impl for tests (`runkon-flow` ships
+`InMemoryWorkflowPersistence` for exactly this). Harnesses running against
+different backends can never share state — that's a feature, not a bug.
+
+---
+
 ## What Stays in Each Layer
 
 ### `runkon-flow` (the published library)
