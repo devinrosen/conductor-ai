@@ -396,9 +396,10 @@ mod tests {
         // fetch_jira_issue's not-found path is exercised by calling it indirectly
         // through the parser so we don't need acli installed.
         let mut tickets = parse_jira_issues("[]", "https://jira.example.com").unwrap();
-        let result: Result<TicketInput> = tickets
-            .pop()
-            .ok_or_else(|| ConductorError::TicketNotFound { id: "PROJ-1".to_string() });
+        let result: Result<TicketInput> =
+            tickets.pop().ok_or_else(|| ConductorError::TicketNotFound {
+                id: "PROJ-1".to_string(),
+            });
         assert!(matches!(result, Err(ConductorError::TicketNotFound { .. })));
     }
 }
