@@ -115,6 +115,8 @@ pub fn build_agent_args_with_mode(
     permission_mode: Option<&crate::config::AgentPermissionMode>,
     extra_plugin_dirs: &[String],
 ) -> std::result::Result<Vec<Cow<'static, str>>, String> {
+    crate::runtime::validate_run_id(run_id).map_err(|e| e.to_string())?;
+
     let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
 
     #[cfg(unix)]

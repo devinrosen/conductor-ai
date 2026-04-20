@@ -84,7 +84,7 @@ impl std::fmt::Display for PollError {
 ///
 /// Rejects empty strings, path separators, and any character outside
 /// [A-Za-z0-9\-_] to prevent path-traversal attacks.
-pub(super) fn validate_run_id(run_id: &str) -> Result<()> {
+pub fn validate_run_id(run_id: &str) -> Result<()> {
     if !run_id.is_empty()
         && run_id
             .chars()

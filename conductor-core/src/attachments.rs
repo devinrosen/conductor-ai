@@ -24,6 +24,8 @@ pub fn write_attachments_and_augment_prompt(
     prompt: &str,
     attachments: &[AttachmentFile<'_>],
 ) -> Result<String> {
+    crate::runtime::validate_run_id(run_id)?;
+
     if attachments.is_empty() {
         return Ok(prompt.to_string());
     }
