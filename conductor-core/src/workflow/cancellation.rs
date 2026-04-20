@@ -1,7 +1,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::engine_error::{CancellationReason, EngineError};
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CancellationReason {
+    UserRequested(Option<String>),
+    Timeout,
+    FailFast,
+    ParentCancelled,
+    EngineShutdown,
+}
 
 #[allow(dead_code)]
 struct CancellationInner {
@@ -77,10 +85,11 @@ impl CancellationToken {
         }
     }
 
-    pub(crate) fn error_if_cancelled(&self) -> Result<(), EngineError> {
+    /// Returns `Err(reason)` if this token or any ancestor is cancelled.
+    /// Callers that need `EngineError` can map: `.map_err(EngineError::Cancelled)`.
+    pub(crate) fn error_if_cancelled(&self) -> Result<(), CancellationReason> {
         if self.is_cancelled() {
-            let reason = self.reason().unwrap_or(CancellationReason::ParentCancelled);
-            Err(EngineError::Cancelled(reason))
+            Err(self.reason().unwrap_or(CancellationReason::ParentCancelled))
         } else {
             Ok(())
         }
@@ -149,10 +158,7 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel(CancellationReason::Timeout);
         let err = token.error_if_cancelled().unwrap_err();
-        assert!(matches!(
-            err,
-            EngineError::Cancelled(CancellationReason::Timeout)
-        ));
+        assert!(matches!(err, CancellationReason::Timeout));
     }
 
     #[test]
@@ -187,9 +193,6 @@ mod tests {
         let child = parent.child();
         parent.cancel(CancellationReason::UserRequested(Some("stop".into())));
         let err = child.error_if_cancelled().unwrap_err();
-        assert!(matches!(
-            err,
-            EngineError::Cancelled(CancellationReason::UserRequested(_))
-        ));
+        assert!(matches!(err, CancellationReason::UserRequested(_)));
     }
 }
