@@ -97,19 +97,19 @@ impl AgentRuntime for CliRuntime {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let output_path_str = output_path.to_string_lossy();
-        let exit_code_path_str = exit_code_path.to_string_lossy();
-        // Quote the binary path to prevent injection via config values.
+        // Quote all paths: binary for injection, output/exit paths for spaces in conductor_dir.
         let binary_quoted = Self::shell_single_quote(binary);
+        let output_path_quoted = Self::shell_single_quote(&output_path.to_string_lossy());
+        let exit_code_path_quoted = Self::shell_single_quote(&exit_code_path.to_string_lossy());
 
         let shell_cmd = if prompt_via == "stdin" {
             let prompt_quoted = Self::shell_single_quote(&request.prompt);
             format!(
-                "echo {prompt_quoted} | {binary_quoted} {args_str} > {output_path_str}; echo $? > {exit_code_path_str}"
+                "echo {prompt_quoted} | {binary_quoted} {args_str} > {output_path_quoted}; echo $? > {exit_code_path_quoted}"
             )
         } else {
             format!(
-                "{binary_quoted} {args_str} > {output_path_str}; echo $? > {exit_code_path_str}"
+                "{binary_quoted} {args_str} > {output_path_quoted}; echo $? > {exit_code_path_quoted}"
             )
         };
 
@@ -308,6 +308,36 @@ mod tests {
         })
     }
 
+    fn make_test_run(tmux_window: Option<String>) -> AgentRun {
+        AgentRun {
+            id: "test".to_string(),
+            tmux_window,
+            worktree_id: None,
+            repo_id: None,
+            claude_session_id: None,
+            prompt: "p".to_string(),
+            status: crate::agent::status::AgentRunStatus::Running,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid: None,
+            runtime: "cli".to_string(),
+        }
+    }
+
     #[test]
     fn shell_single_quote_basic() {
         assert_eq!(CliRuntime::shell_single_quote("hello"), "'hello'");
@@ -357,68 +387,14 @@ mod tests {
     #[test]
     fn is_alive_returns_false_for_none_window() {
         let runtime = make_runtime("echo");
-        let run = AgentRun {
-            id: "test".to_string(),
-            tmux_window: None,
-            worktree_id: None,
-            repo_id: None,
-            claude_session_id: None,
-            prompt: "p".to_string(),
-            status: crate::agent::status::AgentRunStatus::Running,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-            ended_at: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-            conversation_id: None,
-            subprocess_pid: None,
-            runtime: "cli".to_string(),
-        };
-        assert!(!runtime.is_alive(&run));
+        assert!(!runtime.is_alive(&make_test_run(None)));
     }
 
     #[test]
     fn is_alive_returns_false_for_nonexistent_window() {
         let runtime = make_runtime("echo");
-        let run = AgentRun {
-            id: "test".to_string(),
-            tmux_window: Some("no-such-window-xyz-99999".to_string()),
-            worktree_id: None,
-            repo_id: None,
-            claude_session_id: None,
-            prompt: "p".to_string(),
-            status: crate::agent::status::AgentRunStatus::Running,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-            ended_at: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-            conversation_id: None,
-            subprocess_pid: None,
-            runtime: "cli".to_string(),
-        };
         // Either tmux isn't running (returns false) or window doesn't exist (returns false).
-        assert!(!runtime.is_alive(&run));
+        assert!(!runtime.is_alive(&make_test_run(Some("no-such-window-xyz-99999".to_string()))));
     }
 
     #[test]

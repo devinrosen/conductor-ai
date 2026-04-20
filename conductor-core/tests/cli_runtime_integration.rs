@@ -5,6 +5,7 @@
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
 use conductor_core::agent_config::{AgentDef, AgentRole};
@@ -128,6 +129,10 @@ fn test_cli_runtime_success() {
         result.status,
         conductor_core::agent::AgentRunStatus::Completed
     );
+    assert!(
+        result.tmux_window.is_some(),
+        "tmux_window must be persisted so is_alive() and orphan reaper can track the run"
+    );
 }
 
 #[test]
@@ -228,4 +233,101 @@ exit 0"#
         conductor_core::agent::AgentRunStatus::Completed
     );
     let _ = f; // keep tempfile alive
+}
+
+#[test]
+fn test_cli_runtime_timeout_returns_no_result() {
+    if !tmux_available() {
+        eprintln!("skipping cli_runtime timeout test: tmux not available");
+        return;
+    }
+
+    // Script sleeps longer than the poll timeout.
+    let mut f = tempfile::Builder::new()
+        .suffix(".sh")
+        .tempfile()
+        .expect("temp script");
+    writeln!(f, "#!/bin/sh\nsleep 30\necho '{{}}'\nexit 0").unwrap();
+    let path = f.path().to_string_lossy().to_string();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let runtime = CliRuntime::new(RuntimeConfig {
+        runtime_type: Some("cli".to_string()),
+        binary: Some("sh".to_string()),
+        args: Some(vec![path.clone()]),
+        ..RuntimeConfig::default()
+    });
+
+    let run_id = format!("test-timeout-{}", ulid::Ulid::new());
+    let _db_guard = setup_test_db(&run_id);
+
+    let req = RuntimeRequest {
+        run_id: run_id.clone(),
+        agent_def: make_agent_def(),
+        prompt: "prompt".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        permission_mode: conductor_core::config::AgentPermissionMode::SkipPermissions,
+        config_dir: None,
+        bot_name: None,
+        plugin_dirs: vec![],
+    };
+
+    runtime.spawn(&req).expect("spawn must succeed");
+
+    let result = runtime.poll(&run_id, None, Duration::from_millis(200));
+    assert!(
+        matches!(result, Err(conductor_core::runtime::PollError::NoResult)),
+        "poll must return NoResult on timeout, got: {result:?}"
+    );
+    let _ = f;
+}
+
+#[test]
+fn test_cli_runtime_shutdown_flag_cancels_poll() {
+    if !tmux_available() {
+        eprintln!("skipping cli_runtime shutdown test: tmux not available");
+        return;
+    }
+
+    let mut f = tempfile::Builder::new()
+        .suffix(".sh")
+        .tempfile()
+        .expect("temp script");
+    writeln!(f, "#!/bin/sh\nsleep 30\necho '{{}}'\nexit 0").unwrap();
+    let path = f.path().to_string_lossy().to_string();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let runtime = CliRuntime::new(RuntimeConfig {
+        runtime_type: Some("cli".to_string()),
+        binary: Some("sh".to_string()),
+        args: Some(vec![path.clone()]),
+        ..RuntimeConfig::default()
+    });
+
+    let run_id = format!("test-shutdown-{}", ulid::Ulid::new());
+    let _db_guard = setup_test_db(&run_id);
+
+    let req = RuntimeRequest {
+        run_id: run_id.clone(),
+        agent_def: make_agent_def(),
+        prompt: "prompt".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        permission_mode: conductor_core::config::AgentPermissionMode::SkipPermissions,
+        config_dir: None,
+        bot_name: None,
+        plugin_dirs: vec![],
+    };
+
+    runtime.spawn(&req).expect("spawn must succeed");
+
+    // Pre-set the shutdown flag so poll() exits on the first iteration.
+    let shutdown = Arc::new(AtomicBool::new(true));
+    let result = runtime.poll(&run_id, Some(&shutdown), Duration::from_secs(10));
+    assert!(
+        matches!(result, Err(conductor_core::runtime::PollError::Cancelled)),
+        "poll with shutdown flag set must return Cancelled, got: {result:?}"
+    );
+    let _ = f;
 }
