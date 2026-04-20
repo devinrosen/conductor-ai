@@ -312,3 +312,26 @@ fn test_cli_runtime_shutdown_flag_cancels_poll() {
         "poll with shutdown flag set must return Cancelled, got: {result:?}"
     );
 }
+
+#[test]
+fn test_cli_runtime_rejects_invalid_run_id() {
+    let runtime = make_runtime("/bin/echo", "response", None);
+    let req = RuntimeRequest {
+        run_id: "../../etc/cron.d/payload".to_string(),
+        agent_def: make_agent_def(),
+        prompt: "test".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        permission_mode: AgentPermissionMode::SkipPermissions,
+        config_dir: None,
+        bot_name: None,
+        plugin_dirs: vec![],
+    };
+    let err = runtime
+        .spawn(&req)
+        .expect_err("spawn must reject path-traversal run_id");
+    assert!(
+        err.to_string().contains("invalid run_id"),
+        "error must mention invalid run_id, got: {err}"
+    );
+}

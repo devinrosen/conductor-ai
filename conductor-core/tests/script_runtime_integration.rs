@@ -206,3 +206,17 @@ fn test_script_runtime_resolve_via_config() {
         "resolve_runtime must return Ok for type=script"
     );
 }
+
+#[test]
+fn test_script_runtime_rejects_invalid_run_id() {
+    let _lock = DB_PATH_LOCK.lock().unwrap();
+    let runtime = make_runtime(Some("echo hello"));
+    let req = make_request("../../etc/cron.d/payload", "test");
+    let err = runtime
+        .spawn(&req)
+        .expect_err("spawn must reject path-traversal run_id");
+    assert!(
+        err.to_string().contains("invalid run_id"),
+        "error must mention invalid run_id, got: {err}"
+    );
+}

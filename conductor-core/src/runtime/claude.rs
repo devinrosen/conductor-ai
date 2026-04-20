@@ -32,6 +32,7 @@ impl Default for ClaudeRuntime {
 
 impl AgentRuntime for ClaudeRuntime {
     fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
+        crate::text_util::validate_run_id(&request.run_id)?;
         #[cfg(unix)]
         {
             let params = crate::agent_runtime::SpawnHeadlessParams {
@@ -214,5 +215,53 @@ fn poll_unix(
                 tracking_mgr.update_run_failed_if_running(run_id, "agent exited without result");
             Err(PollError::NoResult)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_config::{AgentDef, AgentRole};
+    use crate::config::AgentPermissionMode;
+
+    fn make_request(run_id: &str) -> RuntimeRequest {
+        RuntimeRequest {
+            run_id: run_id.to_string(),
+            agent_def: AgentDef {
+                name: "test".to_string(),
+                role: AgentRole::Reviewer,
+                can_commit: false,
+                model: None,
+                runtime: "claude".to_string(),
+                prompt: String::new(),
+            },
+            prompt: "p".to_string(),
+            working_dir: std::path::PathBuf::from("/tmp"),
+            permission_mode: AgentPermissionMode::SkipPermissions,
+            model: None,
+            config_dir: None,
+            bot_name: None,
+            plugin_dirs: vec![],
+        }
+    }
+
+    #[test]
+    fn spawn_rejects_path_traversal_run_id() {
+        let runtime = ClaudeRuntime::new();
+        let request = make_request("../../etc/cron.d/payload");
+        let err = runtime
+            .spawn(&request)
+            .expect_err("expected Err for path-traversal run_id");
+        assert!(
+            matches!(err, crate::error::ConductorError::InvalidInput(_)),
+            "expected InvalidInput, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn spawn_rejects_slash_in_run_id() {
+        let runtime = ClaudeRuntime::new();
+        let request = make_request("run/id");
+        assert!(runtime.spawn(&request).is_err());
     }
 }
