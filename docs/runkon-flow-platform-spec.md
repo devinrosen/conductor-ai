@@ -85,11 +85,21 @@ pub trait ActionExecutor: Send + Sync {
     /// Returns structured output that feeds the marker/context system.
     fn execute(
         &self,
-        ctx: &dyn RunContext,
+        ectx: &ExecutionContext,
         params: &ActionParams,
     ) -> Result<ActionOutput, EngineError>;
 
-    /// Optional: cancel an in-flight execution (used by parallel fail_fast).
+    /// Advisory cancel of an in-flight execution. Called when the run is
+    /// cancelled (user request, parallel fail_fast, timeout, parent cancel,
+    /// engine shutdown). The engine fires this and moves on — it does not
+    /// wait for `cancel()` to return. Executors use this to preempt external
+    /// work: conductor's `ClaudeAgentExecutor` kills the tmux window; an
+    /// HTTP-based executor aborts the in-flight request.
+    ///
+    /// Well-behaved executors also check `ectx.cancellation.is_cancelled()`
+    /// from inside `execute()` — cooperative cancel is the primary path.
+    /// `cancel()` is the escalation for external work that can't observe
+    /// the cooperative token.
     fn cancel(&self, execution_id: &str) -> Result<(), EngineError> {
         let _ = execution_id;
         Ok(())
@@ -151,9 +161,11 @@ pub trait ItemProvider: Send + Sync {
     fn name(&self) -> &str;
 
     /// Collect items to fan out over. Called once at foreach step start.
+    /// Providers that do slow I/O (remote fetch, IMAP scan) should check
+    /// `ectx.cancellation.is_cancelled()` during collection.
     fn items(
         &self,
-        ctx: &dyn RunContext,
+        ectx: &ExecutionContext,
         scope: &HashMap<String, String>,
         filter: &HashMap<String, String>,
     ) -> Result<Vec<FanOutItem>, EngineError>;
@@ -198,7 +210,7 @@ pub trait GateResolver: Send + Sync {
         &self,
         run_id: &str,
         params: &GateParams,
-        ctx: &dyn RunContext,
+        ectx: &ExecutionContext,
     ) -> Result<GatePoll, EngineError>;
 }
 
@@ -348,6 +360,7 @@ let engine = FlowEngine::builder()
     .gate_resolver(Box::new(PrChecksGateResolver::new()))
     .gate_resolver(Box::new(HumanApprovalGateResolver::new(&db)))
     .trigger_source(Box::new(ManualTriggerSource))
+    .event_sink(Box::new(tui_event_sink))        // optional; host picks delivery
     .build()?;
 
 engine.run(&workflow_def, inputs)?;
@@ -460,6 +473,324 @@ The DSL is identical to a conductor workflow. Only the harness registration chan
 
 ---
 
+## Persistence Boundaries
+
+`runkon-flow` defines the *workflow* schema — `workflow_runs`, `workflow_run_steps`,
+`workflow_run_step_fan_out_items` — via `SqliteWorkflowPersistence` (or any other
+backend implementing `WorkflowPersistence`). It does **not** dictate where the
+database lives. Each harness picks its own storage location by passing the
+appropriate `Connection` / `PathBuf` / connection pool into the persistence impl at
+`FlowEngineBuilder::persistence(...)` time.
+
+### Distinct databases by default
+
+Each harness owns its own database, combining:
+
+- **Workflow tables** — defined and migrated by `runkon-flow` via
+  `SqliteWorkflowPersistence`. Schema is identical across harnesses on the same
+  `runkon-flow` version.
+- **Domain tables** — entirely harness-specific. conductor-developer owns `repos`,
+  `tickets`, `worktrees`, `agent_runs`, `repo_issue_sources`; comm-harness would
+  own `inbox_messages`, `threads`, `slack_channels`, etc. No overlap.
+
+Example layout:
+
+```
+~/.runkon/
+├── developer.db         # workflow_* tables + conductor domain tables
+└── inbox.db             # workflow_* tables + inbox domain tables
+```
+
+Why distinct by default:
+
+- **Harness isolation.** Domain data from one harness has no business in another's
+  table space. Operator mental model stays clean.
+- **Independent schema evolution.** Harnesses ship on different cadences. Sharing
+  a DB would force migration coordination across harnesses.
+- **Operational simplicity.** Different backup, retention, and access patterns.
+- **Multi-tenant safety.** A user running both harnesses for unrelated projects
+  doesn't cross data.
+
+### Shared-database deployments
+
+Technically supported but not the default. Both engines can be configured to point
+at the same `Connection` / file:
+
+```rust
+let shared = rusqlite::Connection::open("~/.runkon/shared.db")?;
+let developer_engine = FlowEngine::builder()
+    .persistence(Box::new(SqliteWorkflowPersistence::new(&shared)))
+    // ...
+    .build()?;
+let inbox_engine = FlowEngine::builder()
+    .persistence(Box::new(SqliteWorkflowPersistence::new(&shared)))
+    // ...
+    .build()?;
+```
+
+Workflow tables are shared (unified cross-harness run visibility). Domain tables
+coexist without conflict — table names don't collide.
+
+**Caveat:** Harnesses sharing a database must run compatible `runkon-flow`
+versions. A schema migration introduced by one library version affects every
+harness pointed at that DB. Shared deployments are only safe when both harnesses
+are bundled and versioned together (e.g., a single multi-harness binary), or
+when operators explicitly coordinate upgrades.
+
+### Backend-agnostic by design
+
+`WorkflowPersistence` is a trait — the SQLite default is the reference
+implementation, not the contract. A harness with different durability needs can
+implement a Postgres-backed `PostgresWorkflowPersistence`, a Redis-backed
+`RedisWorkflowPersistence`, or an in-memory impl for tests (`runkon-flow` ships
+`InMemoryWorkflowPersistence` for exactly this). Harnesses running against
+different backends can never share state — that's a feature, not a bug.
+
+---
+
+## Events / Observability
+
+Host applications (TUI, web UI, metrics systems, audit logs) need to learn about
+workflow state changes in real time. Polling the database works but has
+unacceptable latency for user-facing UIs. `runkon-flow` exposes an optional
+event stream that fires on every state transition.
+
+### `EventSink` trait
+
+```rust
+pub trait EventSink: Send + Sync {
+    /// Emit a single event. Called synchronously from the engine thread;
+    /// expected to be cheap. Sinks that need async dispatch (HTTP POST,
+    /// database writes, etc.) must offload internally (e.g., via an mpsc
+    /// channel).
+    ///
+    /// Sink panics are caught and logged — they must not tank the run.
+    fn emit(&self, event: &EngineEventData);
+}
+
+pub struct EngineEventData {
+    pub timestamp: DateTime<Utc>,
+    pub event: EngineEvent,
+}
+
+#[non_exhaustive]
+pub enum EngineEvent {
+    // Run lifecycle
+    RunStarted   { run_id: String, workflow_name: String, inputs: HashMap<String, String> },
+    RunCompleted { run_id: String, status: RunStatus, error: Option<String> },
+    RunResumed   { run_id: String, from_step_id: String },
+    RunCancelled { run_id: String, reason: String },
+
+    // Step lifecycle
+    StepStarted   { run_id: String, step_id: String, step_kind: StepKind, position: Vec<usize> },
+    StepCompleted { run_id: String, step_id: String, status: StepStatus, duration_ms: u64 },
+    StepRetrying  { run_id: String, step_id: String, attempt: u32 },
+
+    // Gate-specific
+    GateWaiting  { run_id: String, step_id: String, gate_type: String, prompt: Option<String> },
+    GateResolved { run_id: String, step_id: String, resolution: GateResolution },
+
+    // Fan-out
+    FanOutItemsCollected { run_id: String, step_id: String, item_count: usize },
+    FanOutItemStarted    { run_id: String, step_id: String, item_id: String, item_label: String },
+    FanOutItemCompleted  { run_id: String, step_id: String, item_id: String, status: ItemStatus },
+
+    // Metrics (opt-in — emitted after cost/token accounting updates)
+    MetricsUpdated { run_id: String, total_cost_usd: Option<f64>, total_tokens: i64, total_duration_ms: u64 },
+}
+```
+
+Both `EngineEvent` and `EngineEventData` are `#[non_exhaustive]` — new variants
+and fields can be added without a semver-major break.
+
+### Registration
+
+Multiple sinks can be registered; they receive every event in registration order.
+
+```rust
+let engine = FlowEngine::builder()
+    .persistence(Box::new(SqliteWorkflowPersistence::new(&db)))
+    .event_sink(Box::new(ChannelEventSink::new(tx)))      // TUI live updates
+    .event_sink(Box::new(PrometheusEventSink::new()))     // metrics
+    .event_sink(Box::new(AuditLogEventSink::new(&path)))  // audit trail
+    // ...
+    .build()?;
+```
+
+### Semantics
+
+- **Events are best-effort, not canonical.** The database is the source of
+  truth. Events describe transitions as they happen; a crashed sink doesn't lose
+  data (the DB already has it).
+- **DB writes happen before event emission.** Subscribers never observe an event
+  for state that isn't yet persisted.
+- **Ordering within a run is preserved.** Emission is synchronous on the engine
+  thread, so events for a single run arrive in transition order. Events from
+  different runs may interleave.
+- **Sinks that block, block the engine.** Default behavior: emission is
+  synchronous. Slow sinks (HTTP calls, disk writes) must offload internally —
+  typically by wrapping an `mpsc::Sender` and dispatching on a worker thread.
+- **Sink panics are swallowed.** The engine catches, logs, and continues. A
+  misbehaving sink must not tank a workflow.
+- **No default sink.** `runkon-flow` has no opinion on how a host surfaces
+  events. Each harness registers what it needs.
+- **In-process only.** `EventSink` is not a cross-process mechanism. Hosts that
+  need cross-process event delivery keep polling the DB — that's always safe
+  because the DB update precedes the event emission.
+
+### Non-goals
+
+- **Event replay from history.** Events are live. If a sink misses them (not
+  registered yet, crashed), they're gone. Reconstructing state requires reading
+  from `WorkflowPersistence`.
+- **Backpressure management.** Default is "slow sink blocks engine." Hosts that
+  need drop-on-full or bounded-buffer semantics implement them in their own
+  sinks.
+- **Automatic retry.** If emission fails, the engine doesn't retry. Sinks that
+  want at-least-once delivery implement retry internally.
+
+---
+
+## Cancellation
+
+Five distinct triggers need to halt running work: user-initiated cancellation,
+parallel `fail_fast`, step-level `timeout`, engine/host shutdown, and
+parent-workflow cancellation propagating to sub-workflows. All five need to
+reach whatever executor code is currently running.
+
+### Model — cooperative + advisory preempt
+
+- **Cooperative token** is the primary mechanism. Executors check
+  `ectx.cancellation.is_cancelled()` at natural interruption points and exit
+  early.
+- **Advisory `ActionExecutor::cancel(execution_id)`** is the escalation for
+  external work that can't observe the token (Claude subprocess already in
+  flight, HTTP call mid-request). The engine fires `cancel()` and moves on —
+  it does not wait for the executor to finish. Executors use this to kill
+  subprocesses, abort connections, etc.
+
+### `ExecutionContext` bundling struct
+
+Runtime concerns the engine passes through to executors live on a single
+struct rather than being scattered across params types:
+
+```rust
+pub struct ExecutionContext<'a> {
+    pub run: &'a dyn RunContext,
+    pub cancellation: &'a CancellationToken,
+    // Future: tracing span, feature flags, request-scoped telemetry, etc.
+}
+```
+
+Every executor trait method takes `&ExecutionContext` instead of `&dyn
+RunContext` directly. Note: `RunContext` (the trait) and `ExecutionContext`
+(the struct) are distinct types — the struct holds a reference to a trait
+object. The earlier naming question (Open Q #7) resolved the *trait* name;
+`ExecutionContext` claims the struct name because `ExecutionState` is being
+removed in Step 1.1b.
+
+### `CancellationToken`
+
+```rust
+pub struct CancellationToken {
+    inner: Arc<CancellationInner>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self;
+
+    /// Create a child token. Parent cancel propagates to child; child cancel
+    /// does NOT propagate back to parent.
+    pub fn child(&self) -> Self;
+
+    pub fn cancel(&self, reason: CancellationReason);
+
+    /// True if this token OR any ancestor has been cancelled.
+    pub fn is_cancelled(&self) -> bool;
+
+    pub fn reason(&self) -> Option<CancellationReason>;
+
+    pub fn error_if_cancelled(&self) -> Result<(), EngineError>;
+}
+
+pub enum CancellationReason {
+    UserRequested(Option<String>),   // from cancel_run() API
+    Timeout,                         // step-level timeout fired
+    FailFast,                        // sibling parallel branch failed
+    ParentCancelled,                 // inherited from parent scope
+    EngineShutdown,                  // host process shutting down
+}
+```
+
+### Inheritance / scope tree
+
+- **Run root token** — owned by the engine for each active run; cancelled by
+  external `cancel_run()` or by engine shutdown.
+- **Parallel scope token** — child of run root; one per parallel block.
+  Cancelling the scope stops all branches (fail_fast).
+- **Parallel branch token** — child of the parallel scope; one per branch.
+- **Step token** — child of the enclosing scope; used for step-level
+  timeouts (`timeout = "5m"` fires a timer that cancels this token).
+- **Sub-workflow root token** — child of the parent step's token; parent
+  cancel propagates downward into `call workflow` invocations.
+
+### External cancel API
+
+```rust
+impl FlowEngine {
+    pub fn cancel_run(
+        &self,
+        run_id: &str,
+        reason: CancellationReason,
+    ) -> Result<(), EngineError>;
+}
+```
+
+Same-process flow:
+
+1. Mark run as `Cancelling` via `WorkflowPersistence::update_run_status`.
+2. Look up the in-memory root token for this run.
+3. `token.cancel(reason)` — propagates to all descendants.
+4. Spawn a thread to call `executor.cancel(execution_id)` for the running
+   executor. Fire-and-forget; engine doesn't wait.
+5. Return immediately. Engine's worker thread observes cancelled at next
+   check, cleans up, marks run `Cancelled`, emits `RunCancelled` event.
+
+Cross-process flow (CLI cancels a run owned by another process):
+
+- Caller writes `Cancelling` status to DB.
+- Owning process polls DB at step boundaries (already part of the resumability
+  model), observes `Cancelling`, flips its in-memory token.
+- Proceeds as same-process from step (3).
+
+### Step boundaries are guaranteed interruption points
+
+Even if an executor ignores the cooperative token, the engine checks
+`is_cancelled()` before starting each step. A non-cooperating executor can
+delay cancellation by the duration of its current step, but cannot prevent
+it once the step completes.
+
+### Resumability
+
+**Cancelled runs are terminal — not resumable.** Resume is for crashes and
+transient failures; cancellation is intentional (user, timeout, fail_fast).
+Reversing a cancellation would require state rollback semantics, which are
+out of scope.
+
+### Shipping layers
+
+- **Layer A (Phase 1):** Types — `ExecutionContext`, `CancellationToken`,
+  `CancellationReason`. Trait signatures updated to take `&ExecutionContext`.
+  Cooperative checks added in conductor executors where cheap. This shapes
+  Steps 1.2, 1.3, 1.4.
+- **Layer B (Phase 2):** `FlowEngine::cancel_run()`, in-memory token
+  registry, parallel fail_fast wiring, step-level timeout → `token.cancel()`,
+  `ActionExecutor::cancel()` escalation, cross-process DB-backed propagation,
+  `RunCancelled` event emission, `ConductorClaudeAgentExecutor::cancel()`
+  killing tmux windows.
+
+---
+
 ## What Stays in Each Layer
 
 ### `runkon-flow` (the published library)
@@ -471,7 +802,12 @@ The DSL is identical to a conductor workflow. Only the harness registration chan
 - Resumability and snapshot semantics
 - Context threading (`prior_context`, `prior_contexts`, `{{variable}}` substitution)
 - `WorkflowPersistence` trait + `InMemoryWorkflowPersistence` (for tests)
-- All six traits defined above
+- All six traits defined above (`ActionExecutor`, `ItemProvider`, `GateResolver`,
+  `TriggerSource`, `RunContext`, `WorkflowPersistence`)
+- `EventSink` trait + `EngineEvent` / `EngineEventData` types (ships no default
+  sink — hosts register their own)
+- `ExecutionContext` struct, `CancellationToken`, `CancellationReason` enum
+- `FlowEngine::cancel_run(run_id, reason)` external cancellation API
 - `FlowEngine` builder
 
 ### `conductor-core` (conductor's harness layer)

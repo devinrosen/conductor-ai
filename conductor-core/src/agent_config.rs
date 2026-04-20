@@ -104,10 +104,10 @@ pub struct AgentDef {
     pub can_commit: bool,
     /// Optional model override.
     pub model: Option<String>,
+    /// The runtime to use for this agent (defaults to "claude").
+    pub runtime: String,
     /// The prompt template (full markdown body after frontmatter).
     pub prompt: String,
-    /// Runtime identifier (e.g. "claude"). Defaults to "claude".
-    pub runtime: String,
 }
 
 /// Parse an agent `.md` file into an `AgentDef`.
@@ -131,8 +131,8 @@ fn parse_agent_file(path: &Path) -> Result<AgentDef> {
                 role: AgentRole::Reviewer,
                 can_commit: false,
                 model: None,
-                prompt: content.trim().to_string(),
                 runtime: default_runtime(),
+                prompt: content.trim().to_string(),
             });
         }
     };
@@ -161,8 +161,8 @@ fn parse_agent_file(path: &Path) -> Result<AgentDef> {
         role,
         can_commit: fm.can_commit,
         model: fm.model,
-        prompt: body.trim().to_string(),
         runtime: fm.runtime,
+        prompt: body.trim().to_string(),
     })
 }
 

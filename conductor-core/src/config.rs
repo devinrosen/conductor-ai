@@ -227,45 +227,45 @@ pub struct NotifyConfig {
 
 /// Configuration for a named agent runtime (RFC 007).
 ///
+/// # Example: Gemini CLI
 /// ```toml
 /// [runtimes.gemini]
 /// type = "cli"
 /// binary = "gemini"
-/// args = ["--model", "{{model}}", "--prompt", "{{prompt}}"]
-/// prompt_via = "arg"
+/// args = ["-m", "{{model}}", "-p", "{{prompt}}", "--approval-mode=yolo"]
+/// default_model = "gemini-2.5-flash"
+/// result_field = "response"
+/// token_fields = "stats.models.*.tokens.total"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RuntimeConfig {
-    /// Runtime kind: "cli", "api", or "script".
-    #[serde(rename = "type")]
-    pub runtime_type: String,
-    /// Path or name of the binary to invoke.
+    /// "cli", "api", or "script". Defaults to "cli".
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub runtime_type: Option<String>,
+    /// For "cli": binary name (e.g. "gemini"). Must be on PATH.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,
-    /// Argument list; supports `{{model}}` and `{{prompt}}` template vars.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// How to pass the prompt: "arg", "stdin", or "file".
+    /// For "cli": arg template. {{prompt}} and {{model}} are substituted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// For "cli": how to pass the prompt. "arg" (default) or "stdin".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_via: Option<String>,
-    /// JSON field in the response to extract as the result text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_field: Option<String>,
-    /// Environment variable name holding the API key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key_env: Option<String>,
-    /// Full shell command (alternative to binary + args).
-    ///
-    /// # Security
-    /// Implementors of `CliRuntime`/`ScriptRuntime` MUST NOT pass agent-controlled
-    /// prompt content into this field via `sh -c` without sanitization — doing so
-    /// allows shell injection. Prefer `binary` + `args` with `prompt_via = "stdin"`
-    /// or `"file"` to keep prompt data out of the command string entirely.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    /// Default model identifier passed to this runtime.
+    /// Default model ID passed as {{model}}. Overridden by agent frontmatter `model:`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
+    /// Dot-path into JSON stdout to extract result_text (e.g. "response").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_field: Option<String>,
+    /// Dot-path into JSON stdout to extract total token count (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_fields: Option<String>,
+    /// For "api": env var name holding the API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    /// For "script": shell command to execute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -8,15 +8,6 @@ use crate::error::Result;
 use super::{AgentRuntime, PollError, RuntimeRequest};
 
 /// Runtime that spawns a `conductor agent run` subprocess (headless mode).
-///
-/// The lifecycle is:
-/// 1. `spawn()` — builds args, spawns the subprocess, stores the `HeadlessHandle`.
-/// 2. `poll()` — drains stdout/stderr on background threads, waits for the
-///    subprocess to finish, then reads the final `AgentRun` from the DB.
-///
-/// The struct is intended to be used once per invocation (spawn then poll).
-/// The `Arc<Mutex<Option<…>>>` wrappers are present so the struct can be moved
-/// across thread boundaries if needed, not because concurrent access is expected.
 pub struct ClaudeRuntime {
     #[cfg(unix)]
     handle: Arc<Mutex<Option<crate::agent_runtime::HeadlessHandle>>>,
@@ -99,14 +90,12 @@ impl AgentRuntime for ClaudeRuntime {
     fn cancel(&self, run: &AgentRun) -> Result<()> {
         #[cfg(unix)]
         {
-            // If we still hold the handle (spawn was called but poll wasn't), abort it.
             if let Ok(mut guard) = self.handle.lock() {
                 if let Some(h) = guard.take() {
                     h.abort();
                     return Ok(());
                 }
             }
-            // Fall back to cancelling by subprocess PID.
             if let Some(pid) = run.subprocess_pid {
                 crate::process_utils::cancel_subprocess(pid as u32);
             }
@@ -135,7 +124,6 @@ fn poll_unix(
     let prompt_file = rt.prompt_file.lock().unwrap().take();
     let pid = handle.pid();
 
-    // Open a tracking connection to record PID and final run status.
     let tracking_conn =
         crate::db::open_database_compat(&crate::config::db_path()).map_err(|e| {
             PollError::Failed(format!("ClaudeRuntime: failed to open tracking DB: {e}"))
@@ -146,15 +134,12 @@ fn poll_unix(
         tracing::warn!("ClaudeRuntime: failed to persist subprocess pid {pid}: {e}");
     }
 
-    // Decompose the handle for concurrent stdout/stderr draining.
     let (stderr_pipe, stdout_pipe, finish) = handle.into_stderr_drain_parts();
 
     let run_id_owned = run_id.to_string();
     let log_path = crate::config::agent_log_path(run_id);
     let (tx, rx) = std::sync::mpsc::channel::<DrainOutcome>();
 
-    // Drain stderr on a dedicated thread so the kernel pipe buffer never fills
-    // while the main drain thread is processing stdout events.
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
         let reader = BufReader::new(stderr_pipe);
@@ -163,8 +148,6 @@ fn poll_unix(
         }
     });
 
-    // Drain stdout on a background thread that opens its own DB connection
-    // (rusqlite Connection is not Send).
     std::thread::spawn(move || {
         let conn = match crate::db::open_database_compat(&crate::config::db_path()) {
             Ok(c) => c,
@@ -192,7 +175,6 @@ fn poll_unix(
         let _ = tx.send(outcome);
     });
 
-    // Wait loop: check shutdown flag and step timeout every second.
     let start = std::time::Instant::now();
     let drain_outcome = loop {
         match rx.recv_timeout(std::time::Duration::from_secs(1)) {
@@ -205,7 +187,6 @@ fn poll_unix(
                         );
                         let _ = tracking_mgr.update_run_cancelled(run_id);
                         crate::process_utils::cancel_subprocess(pid);
-                        // Give the drain thread a moment to flush and exit.
                         let _ = rx.recv_timeout(std::time::Duration::from_secs(6));
                         return Err(PollError::Cancelled);
                     }
@@ -226,15 +207,10 @@ fn poll_unix(
     };
 
     match drain_outcome {
-        DrainOutcome::Completed => {
-            // Re-read the run from DB to get the final status, cost, tokens, etc.
-            tracking_mgr
-                .get_run(run_id)
-                .map_err(|e| PollError::Failed(format!("DB error after drain: {e}")))?
-                .ok_or_else(|| {
-                    PollError::Failed(format!("run {run_id} not found in DB after drain"))
-                })
-        }
+        DrainOutcome::Completed => tracking_mgr
+            .get_run(run_id)
+            .map_err(|e| PollError::Failed(format!("DB error after drain: {e}")))?
+            .ok_or_else(|| PollError::Failed(format!("run {run_id} not found in DB after drain"))),
         DrainOutcome::NoResult => {
             let _ =
                 tracking_mgr.update_run_failed_if_running(run_id, "agent exited without result");
