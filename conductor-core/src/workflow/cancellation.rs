@@ -7,8 +7,6 @@ use super::engine_error::EngineError;
 #[allow(dead_code)]
 struct CancellationInner {
     cancelled: AtomicBool,
-    // Only set on the false→true transition; `.lock().unwrap()` is safe because
-    // we never panic while holding this lock.
     reason: Mutex<Option<CancellationReason>>,
     parent: Option<Arc<CancellationInner>>,
 }
@@ -60,7 +58,7 @@ impl CancellationToken {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            *self.0.reason.lock().unwrap() = Some(reason);
+            *self.0.reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(reason);
         }
     }
 
@@ -73,7 +71,8 @@ impl CancellationToken {
 
     /// Returns the first cancellation reason found walking self → ancestors.
     pub(crate) fn reason(&self) -> Option<CancellationReason> {
-        self.0.find_in_chain(|n| n.reason.lock().unwrap().clone())
+        self.0
+            .find_in_chain(|n| n.reason.lock().unwrap_or_else(|e| e.into_inner()).clone())
     }
 
     /// Returns `Err(EngineError::Cancelled(...))` if this token or any ancestor is cancelled.
