@@ -132,7 +132,10 @@ mod tests {
             ]
         });
         let params = make_params(ApprovalMode::MinApprovals, 2);
-        assert!(matches!(evaluate_approval(&val, &params), GatePoll::Pending));
+        assert!(matches!(
+            evaluate_approval(&val, &params),
+            GatePoll::Pending
+        ));
     }
 
     #[test]
@@ -149,7 +152,10 @@ mod tests {
     fn test_evaluate_approval_review_decision_pending() {
         let val = json!({ "reviewDecision": "REVIEW_REQUIRED" });
         let params = make_params(ApprovalMode::ReviewDecision, 1);
-        assert!(matches!(evaluate_approval(&val, &params), GatePoll::Pending));
+        assert!(matches!(
+            evaluate_approval(&val, &params),
+            GatePoll::Pending
+        ));
     }
 
     #[test]
