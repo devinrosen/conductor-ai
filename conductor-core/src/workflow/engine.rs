@@ -24,7 +24,7 @@ use super::types::{
 /// Input keys that the workflow engine injects automatically from the run context
 /// (ticket and repo metadata). Consumers can use this slice to identify inputs
 /// that are read-only from the user's perspective.
-pub const ENGINE_INJECTED_KEYS: &[&str] = &[
+pub(crate) const ENGINE_INJECTED_KEYS: &[&str] = &[
     "ticket_id",
     "ticket_source_id",
     "ticket_source_type",
@@ -37,6 +37,22 @@ pub const ENGINE_INJECTED_KEYS: &[&str] = &[
     "repo_name",
     "workflow_run_id",
 ];
+
+/// Domain-identity context for a single workflow execution.
+///
+/// Holds the 8 fields that identify WHAT is being run (which worktree, which repo, etc.)
+/// as opposed to HOW it's running (engine infrastructure like managers, metrics, etc.).
+/// The `WorktreeRunContext` facade reads these fields via the `RunContext` trait.
+pub(super) struct WorktreeContext {
+    pub worktree_id: Option<String>,
+    pub working_dir: String,
+    pub worktree_slug: String,
+    pub repo_path: String,
+    pub ticket_id: Option<String>,
+    pub repo_id: Option<String>,
+    pub conductor_bin_dir: Option<std::path::PathBuf>,
+    pub extra_plugin_dirs: Vec<String>,
+}
 
 /// Pre-loaded context for resuming a workflow run.
 ///
@@ -58,8 +74,8 @@ fn resolve_vantage_lifecycle(
     conn: &Connection,
     state: &ExecutionState<'_>,
 ) -> Option<crate::vantage::VantageLifecycle> {
-    let ticket_id = state.ticket_id.as_deref()?;
-    let repo_id = state.repo_id.as_deref()?;
+    let ticket_id = state.worktree_ctx.ticket_id.as_deref()?;
+    let repo_id = state.worktree_ctx.repo_id.as_deref()?;
     crate::vantage::VantageLifecycle::resolve(conn, ticket_id, repo_id)
 }
 
@@ -69,12 +85,7 @@ pub(super) struct ExecutionState<'a> {
     pub config: &'a Config,
     pub workflow_run_id: String,
     pub workflow_name: String,
-    pub worktree_id: Option<String>,
-    pub working_dir: String,
-    pub worktree_slug: String,
-    pub repo_path: String,
-    pub ticket_id: Option<String>,
-    pub repo_id: Option<String>,
+    pub worktree_ctx: WorktreeContext,
     pub model: Option<String>,
     pub exec_config: WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
@@ -108,11 +119,6 @@ pub(super) struct ExecutionState<'a> {
     pub default_bot_name: Option<String>,
     /// Whether this run was triggered by a workflow hook (prevents infinite chains).
     pub triggered_by_hook: bool,
-    /// Directory containing the conductor binary, injected into script step PATH.
-    /// Resolved by the caller (binary crate) so the library doesn't call `current_exe()`.
-    pub conductor_bin_dir: Option<std::path::PathBuf>,
-    /// Additional plugin directories to pass to agent sessions.
-    pub extra_plugin_dirs: Vec<String>,
     /// Last time (Unix seconds) the heartbeat was written to the DB.
     ///
     /// Shared via `Arc` so sub-workflow `ExecutionState` instances cloned from
@@ -120,6 +126,8 @@ pub(super) struct ExecutionState<'a> {
     /// a root run calls into a child workflow.  Initialized to 0 (forces an
     /// immediate first tick); updated by `execute_nodes` at most once per 5s.
     pub last_heartbeat_at: Arc<AtomicI64>,
+    /// Provider registry initialized once at engine init, shared across all foreach steps.
+    pub registry: std::sync::Arc<crate::workflow::item_provider::ItemProviderRegistry>,
 }
 
 impl ExecutionState<'_> {
@@ -180,8 +188,8 @@ impl ExecutionState<'_> {
 pub(super) fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<OutputSchema> {
     let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
     crate::schema_config::load_schema(
-        &state.working_dir,
-        &state.repo_path,
+        &state.worktree_ctx.working_dir,
+        &state.worktree_ctx.repo_path,
         &schema_ref,
         Some(&state.workflow_name),
     )
@@ -484,12 +492,16 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         config,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
-        worktree_id: input.worktree_id.map(String::from),
-        working_dir: input.working_dir.to_string(),
-        worktree_slug,
-        repo_path: input.repo_path.to_string(),
-        ticket_id: input.ticket_id.map(String::from),
-        repo_id: effective_repo_id.map(String::from),
+        worktree_ctx: WorktreeContext {
+            worktree_id: input.worktree_id.map(String::from),
+            working_dir: input.working_dir.to_string(),
+            worktree_slug,
+            repo_path: input.repo_path.to_string(),
+            ticket_id: input.ticket_id.map(String::from),
+            repo_id: effective_repo_id.map(String::from),
+            conductor_bin_dir: input.conductor_bin_dir.clone(),
+            extra_plugin_dirs: input.extra_plugin_dirs.clone(),
+        },
         model: input.model.map(String::from),
         exec_config: input.exec_config.clone(),
         inputs: merged_inputs,
@@ -515,9 +527,8 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         resume_ctx: None,
         default_bot_name: input.default_bot_name.clone(),
         triggered_by_hook: input.triggered_by_hook,
-        conductor_bin_dir: input.conductor_bin_dir.clone(),
-        extra_plugin_dirs: input.extra_plugin_dirs.clone(),
         last_heartbeat_at: ExecutionState::new_heartbeat(),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -598,10 +609,10 @@ pub(super) fn run_workflow_engine(
         // Notify Vantage of completion (best-effort)
         if let Some(ref lc) = vantage_lc {
             let pr_url = state.inputs.get("pr_url").map(|s| s.as_str());
-            let wt_slug = if state.worktree_slug.is_empty() {
+            let wt_slug = if state.worktree_ctx.worktree_slug.is_empty() {
                 None
             } else {
-                Some(state.worktree_slug.as_str())
+                Some(state.worktree_ctx.worktree_slug.as_str())
             };
             if let Err(e) = lc.on_completed(pr_url, wt_slug) {
                 tracing::warn!("Vantage completion notification failed: {e}");
@@ -654,7 +665,7 @@ pub(super) fn run_workflow_engine(
 
     Ok(WorkflowResult {
         workflow_run_id: wf_run_id,
-        worktree_id: state.worktree_id.clone(),
+        worktree_id: state.worktree_ctx.worktree_id.clone(),
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
         total_cost: state.total_cost,
@@ -673,7 +684,7 @@ fn evaluate_hooks(
     workflow: &WorkflowDef,
     final_status: &WorkflowRunStatus,
 ) {
-    let hooks_config = match crate::hooks::load_hooks_config(&state.repo_path) {
+    let hooks_config = match crate::hooks::load_hooks_config(&state.worktree_ctx.repo_path) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("Failed to load hooks config: {e}");
@@ -695,8 +706,8 @@ fn evaluate_hooks(
         );
 
         let hook_wf = match crate::workflow_dsl::load_workflow_by_name(
-            &state.working_dir,
-            &state.repo_path,
+            &state.worktree_ctx.working_dir,
+            &state.worktree_ctx.repo_path,
             hook_wf_name,
         ) {
             Ok(wf) => wf,
@@ -710,7 +721,10 @@ fn evaluate_hooks(
         let mut hook_inputs = HashMap::new();
         hook_inputs.insert("run_id".to_string(), state.workflow_run_id.clone());
         hook_inputs.insert("workflow_name".to_string(), workflow.name.clone());
-        hook_inputs.insert("worktree_slug".to_string(), state.worktree_slug.clone());
+        hook_inputs.insert(
+            "worktree_slug".to_string(),
+            state.worktree_ctx.worktree_slug.clone(),
+        );
         if *final_status == WorkflowRunStatus::Failed {
             // Include error context from the body for failed runs.
             if let Some(summary) = state
@@ -733,14 +747,14 @@ fn evaluate_hooks(
             conn: state.conn,
             config: state.config,
             workflow: &hook_wf,
-            worktree_id: state.worktree_id.as_deref(),
-            working_dir: &state.working_dir,
-            repo_path: &state.repo_path,
+            worktree_id: state.worktree_ctx.worktree_id.as_deref(),
+            working_dir: &state.worktree_ctx.working_dir,
+            repo_path: &state.worktree_ctx.repo_path,
             model: state.model.as_deref(),
             exec_config: &exec_config,
             inputs: hook_inputs,
-            ticket_id: state.ticket_id.as_deref(),
-            repo_id: state.repo_id.as_deref(),
+            ticket_id: state.worktree_ctx.ticket_id.as_deref(),
+            repo_id: state.worktree_ctx.repo_id.as_deref(),
             depth: 0,
             parent_workflow_run_id: Some(&state.workflow_run_id),
             target_label: state.target_label.as_deref(),
@@ -748,9 +762,9 @@ fn evaluate_hooks(
             iteration: 0,
             run_id_notify: None,
             triggered_by_hook: true,
-            conductor_bin_dir: state.conductor_bin_dir.clone(),
+            conductor_bin_dir: state.worktree_ctx.conductor_bin_dir.clone(),
             force: false,
-            extra_plugin_dirs: state.extra_plugin_dirs.clone(),
+            extra_plugin_dirs: state.worktree_ctx.extra_plugin_dirs.clone(),
             parent_step_id: None,
         };
 
@@ -1062,12 +1076,16 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         config,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
-        worktree_id: wf_run.worktree_id.clone(),
-        working_dir: worktree_path,
-        worktree_slug,
-        repo_path,
-        ticket_id: wf_run.ticket_id.clone(),
-        repo_id: wf_run.repo_id.clone(),
+        worktree_ctx: WorktreeContext {
+            worktree_id: wf_run.worktree_id.clone(),
+            working_dir: worktree_path,
+            worktree_slug,
+            repo_path,
+            ticket_id: wf_run.ticket_id.clone(),
+            repo_id: wf_run.repo_id.clone(),
+            conductor_bin_dir: input.conductor_bin_dir.clone(),
+            extra_plugin_dirs: vec![],
+        },
         model: input.model.map(String::from),
         exec_config: WorkflowExecConfig::default(),
         inputs: wf_run.inputs.clone(),
@@ -1093,9 +1111,8 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         resume_ctx,
         default_bot_name: wf_run.default_bot_name.clone(),
         triggered_by_hook: wf_run.is_triggered_by_hook(),
-        conductor_bin_dir: input.conductor_bin_dir.clone(),
-        extra_plugin_dirs: vec![],
         last_heartbeat_at: ExecutionState::new_heartbeat(),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     };
 
     run_workflow_engine(&mut state, &workflow)

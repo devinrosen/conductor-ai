@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -226,6 +225,49 @@ pub struct NotifyConfig {
     pub hooks: Vec<HookConfig>,
 }
 
+/// Configuration for a named agent runtime (RFC 007).
+///
+/// # Example: Gemini CLI
+/// ```toml
+/// [runtimes.gemini]
+/// type = "cli"
+/// binary = "gemini"
+/// args = ["-m", "{{model}}", "-p", "{{prompt}}", "--approval-mode=yolo"]
+/// default_model = "gemini-2.5-flash"
+/// result_field = "response"
+/// token_fields = "stats.models.*.tokens.total"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    /// "cli", "api", or "script". Defaults to "cli".
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub runtime_type: Option<String>,
+    /// For "cli": binary name (e.g. "gemini"). Must be on PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// For "cli": arg template. {{prompt}} and {{model}} are substituted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// For "cli": how to pass the prompt. "arg" (default) or "stdin".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_via: Option<String>,
+    /// Default model ID passed as {{model}}. Overridden by agent frontmatter `model:`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    /// Dot-path into JSON stdout to extract result_text (e.g. "response").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_field: Option<String>,
+    /// Dot-path into JSON stdout to extract total token count (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_fields: Option<String>,
+    /// For "api": env var name holding the API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    /// For "script": shell command to execute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -240,6 +282,10 @@ pub struct Config {
     pub web_push: WebPushConfig,
     #[serde(default)]
     pub notify: NotifyConfig,
+    /// Named runtime configurations for non-Claude agent runtimes (RFC 007).
+    /// The built-in "claude" runtime does not require an entry here.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub runtimes: HashMap<String, RuntimeConfig>,
 }
 
 /// Top-level `[github]` section.

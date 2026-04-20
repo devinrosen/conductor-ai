@@ -51,10 +51,16 @@ struct AgentFrontmatter {
     can_commit: bool,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default = "default_runtime")]
+    runtime: String,
 }
 
 pub fn default_role() -> String {
     "reviewer".to_string()
+}
+
+fn default_runtime() -> String {
+    "claude".to_string()
 }
 
 /// Role type for an agent.
@@ -98,6 +104,8 @@ pub struct AgentDef {
     pub can_commit: bool,
     /// Optional model override.
     pub model: Option<String>,
+    /// The runtime to use for this agent (defaults to "claude").
+    pub runtime: String,
     /// The prompt template (full markdown body after frontmatter).
     pub prompt: String,
 }
@@ -123,6 +131,7 @@ fn parse_agent_file(path: &Path) -> Result<AgentDef> {
                 role: AgentRole::Reviewer,
                 can_commit: false,
                 model: None,
+                runtime: default_runtime(),
                 prompt: content.trim().to_string(),
             });
         }
@@ -152,6 +161,7 @@ fn parse_agent_file(path: &Path) -> Result<AgentDef> {
         role,
         can_commit: fm.can_commit,
         model: fm.model,
+        runtime: fm.runtime,
         prompt: body.trim().to_string(),
     })
 }

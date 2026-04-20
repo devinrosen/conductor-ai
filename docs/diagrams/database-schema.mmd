@@ -1,4 +1,4 @@
-%% Updated 2026-04-19 — Entity-relationship diagram for conductor.db (78 migrations)
+%% Updated 2026-04-20 — Entity-relationship diagram for conductor.db (80 migrations)
 erDiagram
 
     _conductor_meta {
@@ -62,6 +62,7 @@ erDiagram
         text repo_id FK
         text conversation_id FK
         int subprocess_pid
+        text runtime
     }
 
     conversations {
@@ -116,6 +117,7 @@ erDiagram
         text workspace_dir
         text created_at
         bool allow_agent_issue_creation
+        text runtime_overrides
     }
 
     ticket_dependencies {

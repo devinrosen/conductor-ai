@@ -191,6 +191,7 @@ fn global_mode_pr_run_uses_repo_id_fallback() {
         created_at: String::new(),
         model: None,
         allow_agent_issue_creation: false,
+        runtime_overrides: None,
     }];
     state.data.workflow_runs = vec![make_wf_run_with_label(
         "pr1",

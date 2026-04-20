@@ -88,6 +88,7 @@ fn data_refreshed_updates_repos() {
             created_at: "2024-01-01T00:00:00Z".to_string(),
             model: None,
             allow_agent_issue_creation: false,
+            runtime_overrides: None,
         },
         conductor_core::repo::Repo {
             id: "01BBB".to_string(),
@@ -99,6 +100,7 @@ fn data_refreshed_updates_repos() {
             created_at: "2024-01-01T00:00:00Z".to_string(),
             model: None,
             allow_agent_issue_creation: false,
+            runtime_overrides: None,
         },
     ];
 
@@ -471,6 +473,7 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             bot_name: None,
             conversation_id: None,
             subprocess_pid: None,
+            runtime: "claude".to_string(),
         },
     );
     app.show_confirm_quit();
@@ -1064,6 +1067,7 @@ fn repo_web_url_with_valid_github_remote() {
         created_at: "2024-01-01T00:00:00Z".into(),
         model: None,
         allow_agent_issue_creation: false,
+        runtime_overrides: None,
     };
     app.state.selected_repo_id = Some("r1".into());
     app.state.data.repos = vec![repo];
@@ -1321,6 +1325,7 @@ fn action_move_up_dispatches() {
         created_at: "2024-01-01T00:00:00Z".into(),
         model: None,
         allow_agent_issue_creation: false,
+        runtime_overrides: None,
     }];
     app.state.data.worktrees = vec![conductor_core::worktree::Worktree {
         id: "w1".into(),
@@ -1432,6 +1437,7 @@ fn workflow_picker_defs_loaded_worktree_target() {
         created_at: "2024-01-01T00:00:00Z".into(),
         model: None,
         allow_agent_issue_creation: false,
+        runtime_overrides: None,
     }];
     app.state.data.worktrees = vec![conductor_core::worktree::Worktree {
         id: "w1".into(),

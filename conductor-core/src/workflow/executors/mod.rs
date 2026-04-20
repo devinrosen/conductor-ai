@@ -4,7 +4,9 @@ mod call_workflow;
 mod control_flow;
 mod foreach;
 mod gate;
+mod gate_resolver;
 mod parallel;
+mod resolvers;
 mod script;
 
 #[cfg(test)]

@@ -246,15 +246,8 @@ pub struct ForEachNode {
     pub on_child_fail: OnChildFail,
 }
 
-/// The collection type for a foreach step.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ForeachOver {
-    Tickets,
-    Repos,
-    WorkflowRuns,
-    Worktrees,
-}
+/// The collection type for a foreach step — the registered provider name.
+pub type ForeachOver = String;
 
 /// Unified scope for foreach fan-outs.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -5,14 +5,19 @@
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
 mod batch_validate;
+pub(crate) mod cancellation;
+pub(crate) mod cancellation_reason;
 pub(crate) mod constants;
 pub(crate) mod engine;
+pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
 pub(crate) mod helpers;
+pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
 pub(crate) mod prompt_builder;
+pub(crate) mod run_context;
 pub(crate) mod status;
 pub(crate) mod types;
 
@@ -38,7 +43,14 @@ pub use constants::{
     REGRESSION_FAILURE_RATE_THRESHOLD_PP, REGRESSION_MIN_RECENT_RUNS, STEP_ROLE_FOREACH,
     STEP_ROLE_WORKFLOW,
 };
-pub use engine::ENGINE_INJECTED_KEYS;
+/// Returns the list of variable keys that the workflow engine injects automatically
+/// from run context (ticket and repo metadata, plus `workflow_run_id`).
+///
+/// Use this instead of importing `ENGINE_INJECTED_KEYS` directly.
+pub fn injected_variable_keys() -> &'static [&'static str] {
+    engine::ENGINE_INJECTED_KEYS
+}
+
 pub use engine::{
     apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
     resume_workflow_standalone, validate_resume_preconditions,

@@ -156,14 +156,15 @@ impl<'a> AgentManager<'a> {
             bot_name: bot_name.map(String::from),
             conversation_id: conversation_id.map(String::from),
             subprocess_pid: None,
+            runtime: "claude".to_string(),
         };
 
         self.conn.execute(
             "INSERT INTO agent_runs \
              (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, \
-              parent_run_id, bot_name, log_file, conversation_id) \
+              parent_run_id, bot_name, log_file, conversation_id, runtime) \
              VALUES (:id, :worktree_id, :repo_id, :prompt, :status, :started_at, :tmux_window, \
-                     :model, :parent_run_id, :bot_name, :log_file, :conversation_id)",
+                     :model, :parent_run_id, :bot_name, :log_file, :conversation_id, :runtime)",
             named_params! {
                 ":id": run.id,
                 ":worktree_id": run.worktree_id,
@@ -177,6 +178,7 @@ impl<'a> AgentManager<'a> {
                 ":bot_name": run.bot_name,
                 ":log_file": run.log_file,
                 ":conversation_id": run.conversation_id,
+                ":runtime": run.runtime,
             },
         )?;
 
@@ -399,6 +401,25 @@ impl<'a> AgentManager<'a> {
                 ":cache_creation_input_tokens": cache_creation_input_tokens,
                 ":id": run_id,
             },
+        )?;
+        Ok(())
+    }
+
+    /// Record the runtime name for an agent run.
+    pub fn update_run_runtime(&self, run_id: &str, runtime: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs SET runtime = :runtime WHERE id = :id",
+            named_params! { ":runtime": runtime, ":id": run_id },
+        )?;
+        Ok(())
+    }
+
+    /// Persist the tmux window name for an agent run so liveness checks and
+    /// the orphan reaper can find it.
+    pub fn update_run_tmux_window(&self, run_id: &str, window: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs SET tmux_window = :window WHERE id = :id",
+            named_params! { ":window": window, ":id": run_id },
         )?;
         Ok(())
     }
@@ -1328,5 +1349,27 @@ mod tests {
         );
 
         let _ = tmp;
+    }
+
+    #[test]
+    fn test_update_run_runtime() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "prompt", None, None).unwrap();
+        assert_eq!(run.runtime.as_str(), "claude");
+        mgr.update_run_runtime(&run.id, "gemini").unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.runtime.as_str(), "gemini");
+    }
+
+    #[test]
+    fn test_update_run_tmux_window() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "prompt", None, None).unwrap();
+        assert!(run.tmux_window.is_none());
+        mgr.update_run_tmux_window(&run.id, "cli-abc12345").unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.tmux_window.as_deref(), Some("cli-abc12345"));
     }
 }

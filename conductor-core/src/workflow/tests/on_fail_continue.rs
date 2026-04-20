@@ -224,13 +224,11 @@ fn test_script_on_fail_continue_skips_step() {
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
 
-    let mut state = ExecutionState {
-        working_dir: tmp.to_str().unwrap().to_string(),
-        repo_path: tmp.to_str().unwrap().to_string(),
-        worktree_id: Some("w1".to_string()),
-        workflow_run_id: run.id,
-        ..crate::workflow::tests::common::make_loop_test_state(&conn, config)
-    };
+    let mut state = crate::workflow::tests::common::make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = tmp.to_str().unwrap().to_string();
+    state.worktree_ctx.repo_path = tmp.to_str().unwrap().to_string();
+    state.worktree_ctx.worktree_id = Some("w1".to_string());
+    state.workflow_run_id = run.id;
     // Disable fail_fast so on_fail=continue is the only thing stopping failure propagation
     state.exec_config.fail_fast = false;
 
@@ -291,13 +289,11 @@ fn test_script_no_on_fail_still_fails_workflow() {
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
 
-    let mut state = ExecutionState {
-        working_dir: tmp.to_str().unwrap().to_string(),
-        repo_path: tmp.to_str().unwrap().to_string(),
-        worktree_id: Some("w1".to_string()),
-        workflow_run_id: run.id,
-        ..crate::workflow::tests::common::make_loop_test_state(&conn, config)
-    };
+    let mut state = crate::workflow::tests::common::make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = tmp.to_str().unwrap().to_string();
+    state.worktree_ctx.repo_path = tmp.to_str().unwrap().to_string();
+    state.worktree_ctx.worktree_id = Some("w1".to_string());
+    state.workflow_run_id = run.id;
     // fail_fast off so the error is from all_succeeded, not the error return
     state.exec_config.fail_fast = false;
 

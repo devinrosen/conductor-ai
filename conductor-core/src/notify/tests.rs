@@ -1664,6 +1664,7 @@ fn make_agent_run(id: &str, status: AgentRunStatus) -> AgentRun {
         bot_name: None,
         conversation_id: None,
         subprocess_pid: None,
+        runtime: "claude".to_string(),
     }
 }
 

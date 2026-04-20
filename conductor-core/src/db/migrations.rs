@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 75;
+pub const LATEST_SCHEMA_VERSION: u32 = 77;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1088,6 +1088,34 @@ pub fn run(conn: &Connection) -> Result<()> {
             conn.execute_batch(include_str!("migrations/075_workflow_run_dismissed.sql"))?;
         }
         bump_version(conn, 75)?;
+    }
+
+    // Migration 076: add runtime column to agent_runs (RFC 007 AgentRuntime trait).
+    if version < 76 {
+        let table_exists: bool = conn.prepare("SELECT 1 FROM agent_runs LIMIT 0").is_ok();
+        if table_exists {
+            let has_col: bool = conn
+                .prepare("SELECT runtime FROM agent_runs LIMIT 0")
+                .is_ok();
+            if !has_col {
+                conn.execute_batch(include_str!("migrations/076_agent_runs_runtime.sql"))?;
+            }
+        }
+        bump_version(conn, 76)?;
+    }
+
+    // Migration 077: add runtime_overrides column to repos (RFC 007 per-repo runtime config).
+    if version < 77 {
+        let table_exists: bool = conn.prepare("SELECT 1 FROM repos LIMIT 0").is_ok();
+        if table_exists {
+            let has_col: bool = conn
+                .prepare("SELECT runtime_overrides FROM repos LIMIT 0")
+                .is_ok();
+            if !has_col {
+                conn.execute_batch(include_str!("migrations/077_repos_runtime_overrides.sql"))?;
+            }
+        }
+        bump_version(conn, 77)?;
     }
 
     Ok(())
