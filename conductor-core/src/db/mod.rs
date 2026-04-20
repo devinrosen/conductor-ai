@@ -33,6 +33,16 @@ pub fn open_database_compat(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Open the database in compatibility mode for agent-facing code.
+///
+/// Wraps `open_database_compat(&db_path())` and maps any error to
+/// `ConductorError::Agent` with a message that includes `context` so callers
+/// can identify which runtime or thread failed to open the DB.
+pub fn open_agent_db(context: &str) -> Result<Connection> {
+    open_database_compat(&crate::config::db_path())
+        .map_err(|e| crate::error::ConductorError::Agent(format!("{context}: failed to open DB: {e}")))
+}
+
 /// Prepend `prefix` to every column token in a comma-separated column list.
 ///
 /// Splits `cols` on `','`, trims whitespace from each token, prepends `prefix`,
