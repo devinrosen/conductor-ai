@@ -23,6 +23,9 @@ pub struct Repo {
     pub model: Option<String>,
     /// Whether agents are allowed to create issues in the issue tracker for this repo.
     pub allow_agent_issue_creation: bool,
+    /// JSON-serialized per-repo runtime overrides (RFC 007). None means use global config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_overrides: Option<String>,
 }
 
 fn repo_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
@@ -106,6 +109,7 @@ impl<'a> RepoManager<'a> {
             created_at: now,
             model: None,
             allow_agent_issue_creation: false,
+            runtime_overrides: None,
         };
 
         self.conn.execute(
@@ -128,7 +132,8 @@ impl<'a> RepoManager<'a> {
         let repos = query_collect(
             self.conn,
             "SELECT id, slug, local_path, remote_url, workspace_dir, created_at, \
-             COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
+             COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation, \
+             runtime_overrides \
              FROM repos ORDER BY slug",
             [],
             |row| {
@@ -144,6 +149,7 @@ impl<'a> RepoManager<'a> {
                     allow_agent_issue_creation: row
                         .get::<_, i64>("allow_agent_issue_creation")
                         .map(|v| v != 0)?,
+                    runtime_overrides: row.get("runtime_overrides")?,
                 })
             },
         )?;
@@ -155,7 +161,8 @@ impl<'a> RepoManager<'a> {
             .query_row(
                 "SELECT id, slug, local_path, remote_url, workspace_dir, \
                  created_at, \
-                 COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
+                 COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation, \
+                 runtime_overrides \
                  FROM repos WHERE id = :id",
                 named_params! { ":id": id },
                 |row| {
@@ -171,6 +178,7 @@ impl<'a> RepoManager<'a> {
                         allow_agent_issue_creation: row
                             .get::<_, i64>("allow_agent_issue_creation")
                             .map(|v| v != 0)?,
+                        runtime_overrides: row.get("runtime_overrides")?,
                     })
                 },
             )
@@ -183,7 +191,8 @@ impl<'a> RepoManager<'a> {
             .query_row(
                 "SELECT id, slug, local_path, remote_url, workspace_dir, \
                  created_at, \
-                 COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
+                 COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation, \
+                 runtime_overrides \
                  FROM repos WHERE slug = :slug",
                 named_params! { ":slug": slug },
                 |row| {
@@ -199,6 +208,7 @@ impl<'a> RepoManager<'a> {
                         allow_agent_issue_creation: row
                             .get::<_, i64>("allow_agent_issue_creation")
                             .map(|v| v != 0)?,
+                        runtime_overrides: row.get("runtime_overrides")?,
                     })
                 },
             )
@@ -229,6 +239,12 @@ impl<'a> RepoManager<'a> {
         repo_config.defaults.model = model.map(|s| s.to_string());
         repo_config.save(repo_path)?;
         Ok(())
+    }
+
+    /// Returns the `.conductor/` directory inside the repo's local path.
+    /// Used to locate per-repo runtime configs (RFC 007).
+    pub fn runtime_config_dir(repo: &Repo) -> std::path::PathBuf {
+        std::path::PathBuf::from(&repo.local_path).join(".conductor")
     }
 
     pub fn unregister(&self, slug: &str) -> Result<()> {

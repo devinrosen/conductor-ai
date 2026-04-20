@@ -156,14 +156,15 @@ impl<'a> AgentManager<'a> {
             bot_name: bot_name.map(String::from),
             conversation_id: conversation_id.map(String::from),
             subprocess_pid: None,
+            runtime: "claude".to_string(),
         };
 
         self.conn.execute(
             "INSERT INTO agent_runs \
              (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, \
-              parent_run_id, bot_name, log_file, conversation_id) \
+              parent_run_id, bot_name, log_file, conversation_id, runtime) \
              VALUES (:id, :worktree_id, :repo_id, :prompt, :status, :started_at, :tmux_window, \
-                     :model, :parent_run_id, :bot_name, :log_file, :conversation_id)",
+                     :model, :parent_run_id, :bot_name, :log_file, :conversation_id, :runtime)",
             named_params! {
                 ":id": run.id,
                 ":worktree_id": run.worktree_id,
@@ -177,6 +178,7 @@ impl<'a> AgentManager<'a> {
                 ":bot_name": run.bot_name,
                 ":log_file": run.log_file,
                 ":conversation_id": run.conversation_id,
+                ":runtime": run.runtime,
             },
         )?;
 

@@ -73,6 +73,8 @@ pub struct AgentRun {
     /// PID of the headless subprocess running this agent (RFC 016).
     /// None for pre-migration rows or when the subprocess PID has not yet been stored by the workflow executor.
     pub subprocess_pid: Option<i64>,
+    /// Runtime identifier used to execute this run (RFC 007). Defaults to "claude".
+    pub runtime: String,
 }
 
 impl AgentRun {
