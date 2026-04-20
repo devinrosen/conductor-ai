@@ -21,6 +21,19 @@ struct CliState {
     start: std::time::Instant,
 }
 
+fn validate_run_id(run_id: &str) -> Result<()> {
+    if run_id
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(())
+    } else {
+        Err(ConductorError::Agent(format!(
+            "CliRuntime: invalid run_id '{run_id}': must contain only alphanumeric characters, hyphens, or underscores"
+        )))
+    }
+}
+
 impl CliRuntime {
     pub fn new(config: RuntimeConfig) -> Self {
         Self {
@@ -53,6 +66,8 @@ impl CliRuntime {
 
 impl AgentRuntime for CliRuntime {
     fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
+        validate_run_id(&request.run_id)?;
+
         let binary = self.config.binary.as_deref().ok_or_else(|| {
             ConductorError::Config("CliRuntime: `binary` is required".to_string())
         })?;
@@ -394,6 +409,41 @@ mod tests {
         let runtime = make_runtime("echo");
         // Either tmux isn't running (returns false) or window doesn't exist (returns false).
         assert!(!runtime.is_alive(&make_test_run(Some("no-such-window-xyz-99999".to_string()))));
+    }
+
+    #[test]
+    fn validate_run_id_accepts_ulid() {
+        assert!(validate_run_id("01KPNW475XS9WRY2XGPCVXKNRM").is_ok());
+    }
+
+    #[test]
+    fn validate_run_id_accepts_hyphenated() {
+        assert!(validate_run_id("run-01KPNW475XS9WRY2XGPCVXKNRM").is_ok());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_slash() {
+        assert!(validate_run_id("../../etc/cron.d/payload").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_forward_slash() {
+        assert!(validate_run_id("run/id").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_backslash() {
+        assert!(validate_run_id("run\\id").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_dotdot_embedded() {
+        assert!(validate_run_id("run..id").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_null_byte() {
+        assert!(validate_run_id("run\0id").is_err());
     }
 
     #[test]
