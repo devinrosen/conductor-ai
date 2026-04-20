@@ -37,8 +37,19 @@ pub(super) fn run_gh_json(
 /// without spawning a real subprocess.
 fn process_gh_output(success: bool, stdout: &[u8], stderr: &[u8]) -> Option<serde_json::Value> {
     if !success {
+        // Truncate and redact stderr before logging: gh CLI can include auth tokens/scopes
+        // in 401/403 error messages, so we emit only the first 200 characters.
         let stderr_str = String::from_utf8_lossy(stderr);
-        tracing::warn!("gh command exited non-zero: {}", stderr_str.trim());
+        let excerpt = stderr_str.trim();
+        let truncated = if excerpt.len() > 200 {
+            &excerpt[..200]
+        } else {
+            excerpt
+        };
+        tracing::warn!(
+            "gh command exited non-zero (stderr truncated): {}",
+            truncated
+        );
         return None;
     }
     let json_str = String::from_utf8_lossy(stdout);
