@@ -153,3 +153,122 @@ impl ItemProvider for TicketsProvider {
         Ok(edges)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers;
+    use crate::tickets::TicketSyncer;
+
+    fn make_ctx<'a>(
+        conn: &'a rusqlite::Connection,
+        config: &'a crate::config::Config,
+        repo_id: Option<&'a str>,
+    ) -> ProviderContext<'a> {
+        ProviderContext {
+            conn,
+            config,
+            repo_id,
+            worktree_id: None,
+        }
+    }
+
+    #[test]
+    fn test_tickets_items_missing_repo_id_returns_error() {
+        let conn = test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let ctx = make_ctx(&conn, &config, None);
+        let result = TicketsProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        assert!(
+            result.is_err(),
+            "items() without repo_id should return an error"
+        );
+        let Err(e) = result else {
+            panic!("expected error")
+        };
+        let msg = e.to_string();
+        assert!(
+            msg.contains("repo_id"),
+            "error message should mention repo_id"
+        );
+    }
+
+    #[test]
+    fn test_tickets_items_no_scope_returns_all() {
+        let conn = test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets(
+                "r1",
+                &[
+                    test_helpers::make_ticket("1", "A"),
+                    test_helpers::make_ticket("2", "B"),
+                ],
+            )
+            .unwrap();
+        let ctx = make_ctx(&conn, &config, Some("r1"));
+        let items = TicketsProvider
+            .items(&ctx, None, &HashMap::new(), &HashSet::new())
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|i| i.item_type == "ticket"));
+    }
+
+    #[test]
+    fn test_tickets_items_skips_existing_set() {
+        let conn = test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[test_helpers::make_ticket("1", "A")])
+            .unwrap();
+        // Fetch the inserted ticket to get its ID.
+        use crate::tickets::TicketFilter;
+        let all = syncer
+            .list_filtered(
+                Some("r1"),
+                &TicketFilter {
+                    labels: vec![],
+                    search: None,
+                    include_closed: false,
+                    unlabeled_only: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(all.len(), 1);
+        let mut existing = HashSet::new();
+        existing.insert(all[0].id.clone());
+        let ctx = make_ctx(&conn, &config, Some("r1"));
+        let items = TicketsProvider
+            .items(&ctx, None, &HashMap::new(), &existing)
+            .unwrap();
+        assert!(
+            items.is_empty(),
+            "ticket already in existing_set should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_tickets_items_worktree_scope_returns_error() {
+        let conn = test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let ctx = make_ctx(&conn, &config, Some("r1"));
+        let scope = ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+            base_branch: None,
+            has_open_pr: None,
+        });
+        let result = TicketsProvider.items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tickets_dependencies_empty_when_no_items() {
+        let conn = test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let edges = TicketsProvider
+            .dependencies(&conn, &config, "nonexistent-step")
+            .unwrap();
+        assert!(edges.is_empty());
+    }
+}

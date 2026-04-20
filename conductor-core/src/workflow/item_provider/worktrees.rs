@@ -159,3 +159,121 @@ fn dependencies_impl(
 
     Ok(edges.into_iter().collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers;
+    use crate::workflow_dsl::WorktreeScope;
+
+    fn make_ctx<'a>(
+        conn: &'a rusqlite::Connection,
+        config: &'a Config,
+        repo_id: Option<&'a str>,
+        worktree_id: Option<&'a str>,
+    ) -> ProviderContext<'a> {
+        ProviderContext {
+            conn,
+            config,
+            repo_id,
+            worktree_id,
+        }
+    }
+
+    #[test]
+    fn test_worktrees_items_missing_repo_id_returns_error() {
+        let conn = test_helpers::setup_db();
+        let config = Config::default();
+        let ctx = make_ctx(&conn, &config, None, None);
+        let result = WorktreesProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        assert!(result.is_err());
+        let Err(e) = result else {
+            panic!("expected error")
+        };
+        assert!(
+            e.to_string().contains("repo_id"),
+            "error should mention repo_id"
+        );
+    }
+
+    #[test]
+    fn test_worktrees_items_no_scope_no_worktree_id_returns_error() {
+        let conn = test_helpers::setup_db();
+        let config = Config::default();
+        // repo_id present but no scope and no worktree_id
+        let ctx = make_ctx(&conn, &config, Some("r1"), None);
+        let result = WorktreesProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        assert!(result.is_err());
+        let Err(e) = result else {
+            panic!("expected error")
+        };
+        let msg = e.to_string();
+        assert!(
+            msg.contains("base_branch") || msg.contains("worktree_id"),
+            "error should mention missing context"
+        );
+    }
+
+    fn insert_worktree_with_base_branch(
+        conn: &rusqlite::Connection,
+        id: &str,
+        repo_id: &str,
+        slug: &str,
+        base_branch: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, base_branch, created_at) \
+             VALUES (:id, :repo_id, :slug, :base_branch, '/tmp/ws', 'active', :base_branch, '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":id": id, ":repo_id": repo_id, ":slug": slug, ":base_branch": base_branch },
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_worktrees_items_with_base_branch_scope() {
+        let conn = test_helpers::setup_db();
+        insert_worktree_with_base_branch(&conn, "w2", "r1", "feat-child", "main");
+        let config = Config::default();
+        let scope = ForeachScope::Worktree(WorktreeScope {
+            base_branch: Some("main".to_string()),
+            has_open_pr: None,
+        });
+        let ctx = make_ctx(&conn, &config, Some("r1"), None);
+        let items = WorktreesProvider
+            .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].item_id, "w2");
+        assert_eq!(items[0].item_type, "worktree");
+    }
+
+    #[test]
+    fn test_worktrees_items_skips_existing_set() {
+        let conn = test_helpers::setup_db();
+        insert_worktree_with_base_branch(&conn, "w2", "r1", "feat-child", "main");
+        let config = Config::default();
+        let scope = ForeachScope::Worktree(WorktreeScope {
+            base_branch: Some("main".to_string()),
+            has_open_pr: None,
+        });
+        let mut existing = HashSet::new();
+        existing.insert("w2".to_string());
+        let ctx = make_ctx(&conn, &config, Some("r1"), None);
+        let items = WorktreesProvider
+            .items(&ctx, Some(&scope), &HashMap::new(), &existing)
+            .unwrap();
+        assert!(
+            items.is_empty(),
+            "worktree already in existing_set should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_worktrees_dependencies_empty_when_no_items() {
+        let conn = test_helpers::setup_db();
+        let config = Config::default();
+        let edges = WorktreesProvider
+            .dependencies(&conn, &config, "nonexistent-step")
+            .unwrap();
+        assert!(edges.is_empty());
+    }
+}
