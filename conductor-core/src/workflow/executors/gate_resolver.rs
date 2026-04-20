@@ -240,4 +240,95 @@ mod tests {
             "expected None when bot_name is None and no GitHub App configured"
         );
     }
+
+    fn make_params(mode: crate::workflow_dsl::ApprovalMode) -> GateParams {
+        GateParams {
+            gate_name: "test-gate".into(),
+            prompt: None,
+            min_approvals: 1,
+            approval_mode: mode,
+            options: vec![],
+            timeout_secs: 60,
+            bot_name: None,
+            step_id: "step-1".into(),
+        }
+    }
+
+    #[test]
+    fn test_pr_approval_resolver_poll_returns_pending_when_gh_unavailable() {
+        // When gh fails (nonexistent dir), poll() must return Pending without panicking.
+        let token_cache = Arc::new(GitHubTokenCache::new(None));
+        let resolvers =
+            build_default_gate_resolvers(PathBuf::from("/tmp/test.db"), Arc::clone(&token_cache));
+        let resolver = resolvers
+            .get("pr_approval")
+            .expect("pr_approval registered");
+        let config = Config::default();
+        let ctx = GateContext {
+            working_dir: "/nonexistent/conductor/test/dir",
+            config: &config,
+            default_bot_name: None,
+            token_cache: Arc::clone(&token_cache),
+            db_path: Path::new("/tmp/test.db"),
+        };
+        let params = make_params(crate::workflow_dsl::ApprovalMode::MinApprovals);
+        let poll = resolver
+            .poll("run-1", &params, &ctx)
+            .expect("poll must not error");
+        assert!(
+            matches!(poll, GatePoll::Pending),
+            "pr_approval poll must return Pending when gh is unavailable"
+        );
+    }
+
+    #[test]
+    fn test_pr_approval_resolver_poll_review_decision_pending_when_gh_unavailable() {
+        let token_cache = Arc::new(GitHubTokenCache::new(None));
+        let resolvers =
+            build_default_gate_resolvers(PathBuf::from("/tmp/test.db"), Arc::clone(&token_cache));
+        let resolver = resolvers
+            .get("pr_approval")
+            .expect("pr_approval registered");
+        let config = Config::default();
+        let ctx = GateContext {
+            working_dir: "/nonexistent/conductor/test/dir",
+            config: &config,
+            default_bot_name: None,
+            token_cache: Arc::clone(&token_cache),
+            db_path: Path::new("/tmp/test.db"),
+        };
+        let params = make_params(crate::workflow_dsl::ApprovalMode::ReviewDecision);
+        let poll = resolver
+            .poll("run-1", &params, &ctx)
+            .expect("poll must not error");
+        assert!(
+            matches!(poll, GatePoll::Pending),
+            "pr_approval ReviewDecision poll must return Pending when gh is unavailable"
+        );
+    }
+
+    #[test]
+    fn test_pr_checks_resolver_poll_returns_pending_when_gh_unavailable() {
+        // When gh fails (nonexistent dir), poll() must return Pending without panicking.
+        let token_cache = Arc::new(GitHubTokenCache::new(None));
+        let resolvers =
+            build_default_gate_resolvers(PathBuf::from("/tmp/test.db"), Arc::clone(&token_cache));
+        let resolver = resolvers.get("pr_checks").expect("pr_checks registered");
+        let config = Config::default();
+        let ctx = GateContext {
+            working_dir: "/nonexistent/conductor/test/dir",
+            config: &config,
+            default_bot_name: None,
+            token_cache: Arc::clone(&token_cache),
+            db_path: Path::new("/tmp/test.db"),
+        };
+        let params = make_params(crate::workflow_dsl::ApprovalMode::MinApprovals);
+        let poll = resolver
+            .poll("run-1", &params, &ctx)
+            .expect("poll must not error");
+        assert!(
+            matches!(poll, GatePoll::Pending),
+            "pr_checks poll must return Pending when gh is unavailable"
+        );
+    }
 }
