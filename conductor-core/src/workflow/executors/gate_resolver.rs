@@ -190,4 +190,54 @@ mod tests {
             "unknown gate type should not be registered"
         );
     }
+
+    #[test]
+    fn test_build_default_gate_resolvers_registers_all_four_types() {
+        let token_cache = Arc::new(GitHubTokenCache::new(None));
+        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"), token_cache);
+        assert!(
+            resolvers.contains_key("pr_approval"),
+            "pr_approval resolver must be registered"
+        );
+        assert!(
+            resolvers.contains_key("pr_checks"),
+            "pr_checks resolver must be registered"
+        );
+        assert!(
+            resolvers.contains_key("human_approval"),
+            "human_approval resolver must be registered"
+        );
+        assert!(
+            resolvers.contains_key("human_review"),
+            "human_review resolver must be registered"
+        );
+    }
+
+    #[test]
+    fn test_token_cache_ttl_success_path_override() {
+        // Test that the override path consistently returns the same token.
+        let cache = GitHubTokenCache::new(Some("my-override-token".into()));
+        let config = Config::default();
+
+        let first = cache.get(&config, None);
+        let second = cache.get(&config, None);
+
+        assert_eq!(first.as_deref(), Some("my-override-token"));
+        assert_eq!(
+            first, second,
+            "override token must be returned consistently on repeated calls"
+        );
+    }
+
+    #[test]
+    fn test_token_cache_bot_name_none_no_app_returns_none() {
+        // When no app is configured and bot_name is None, get() returns None.
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        let token = cache.get(&config, None);
+        assert!(
+            token.is_none(),
+            "expected None when bot_name is None and no GitHub App configured"
+        );
+    }
 }
