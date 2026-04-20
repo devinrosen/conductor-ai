@@ -124,8 +124,8 @@ fn poll_unix(
     let prompt_file = rt.prompt_file.lock().unwrap().take();
     let pid = handle.pid();
 
-    let tracking_conn = crate::db::open_agent_db("ClaudeRuntime")
-        .map_err(|e| PollError::Failed(e.to_string()))?;
+    let tracking_conn =
+        crate::db::open_agent_db("ClaudeRuntime").map_err(|e| PollError::Failed(e.to_string()))?;
     let tracking_mgr = crate::agent::AgentManager::new(&tracking_conn);
 
     if let Err(e) = tracking_mgr.update_run_subprocess_pid(run_id, pid) {

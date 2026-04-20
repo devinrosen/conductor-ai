@@ -170,8 +170,8 @@ impl AgentRuntime for CliRuntime {
             .take()
             .ok_or_else(|| PollError::Failed("CliRuntime::poll called before spawn".into()))?;
 
-        let conn = crate::db::open_agent_db("CliRuntime")
-            .map_err(|e| PollError::Failed(e.to_string()))?;
+        let conn =
+            crate::db::open_agent_db("CliRuntime").map_err(|e| PollError::Failed(e.to_string()))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
         let poll_start = std::time::Instant::now();

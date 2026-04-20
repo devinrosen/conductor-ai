@@ -39,8 +39,9 @@ pub fn open_database_compat(path: &Path) -> Result<Connection> {
 /// `ConductorError::Agent` with a message that includes `context` so callers
 /// can identify which runtime or thread failed to open the DB.
 pub fn open_agent_db(context: &str) -> Result<Connection> {
-    open_database_compat(&crate::config::db_path())
-        .map_err(|e| crate::error::ConductorError::Agent(format!("{context}: failed to open DB: {e}")))
+    open_database_compat(&crate::config::db_path()).map_err(|e| {
+        crate::error::ConductorError::Agent(format!("{context}: failed to open DB: {e}"))
+    })
 }
 
 /// Prepend `prefix` to every column token in a comma-separated column list.
