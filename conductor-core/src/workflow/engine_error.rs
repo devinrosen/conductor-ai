@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-pub(crate) use super::cancellation_reason::CancellationReason;
+use super::cancellation_reason::CancellationReason;
 
 #[allow(dead_code)]
 #[derive(Debug, Error)]
