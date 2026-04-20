@@ -62,8 +62,8 @@ fn execute_call_with_schema(
 
     let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        let working_dir = ctx.working_dir().to_string_lossy().into_owned();
-        let repo_path = ctx.repo_path().to_string_lossy().into_owned();
+        let working_dir = ctx.working_dir_str();
+        let repo_path = ctx.repo_path_str();
         let extra_plugin_dirs = ctx.extra_plugin_dirs().to_vec();
         let worktree_id: Option<String> = ctx.worktree_id().map(|s| s.to_string());
         (working_dir, repo_path, extra_plugin_dirs, worktree_id)

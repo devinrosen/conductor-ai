@@ -823,8 +823,8 @@ fn build_child_dispatch_params(
         extra_plugin_dirs,
     ) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        let working_dir = ctx.working_dir().to_string_lossy().into_owned();
-        let repo_path = ctx.repo_path().to_string_lossy().into_owned();
+        let working_dir = ctx.working_dir_str();
+        let repo_path = ctx.repo_path_str();
         let ticket_id: Option<String> = ctx.ticket_id().map(|s| s.to_string());
         let repo_id: Option<String> = ctx.repo_id().map(|s| s.to_string());
         let worktree_id: Option<String> = ctx.worktree_id().map(|s| s.to_string());
