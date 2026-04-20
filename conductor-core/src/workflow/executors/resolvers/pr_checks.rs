@@ -9,6 +9,7 @@ use crate::workflow::executors::gate_resolver::{
 use super::run_gh_json;
 
 pub(in crate::workflow::executors) struct PrChecksGateResolver {
+    #[allow(dead_code)]
     token_cache: Arc<GitHubTokenCache>,
 }
 
@@ -37,8 +38,7 @@ impl GateResolver for PrChecksGateResolver {
     }
 
     fn poll(&self, _run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll> {
-        let effective_bot = params.bot_name.as_deref().or(ctx.default_bot_name);
-        let gate_bot_token = self.token_cache.get(ctx.config, effective_bot);
+        let gate_bot_token = ctx.resolve_token(params);
         let token_ref = gate_bot_token.as_deref();
 
         if let Some(val) = run_gh_json(

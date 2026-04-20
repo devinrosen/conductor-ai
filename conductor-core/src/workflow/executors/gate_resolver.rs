@@ -49,6 +49,13 @@ pub(super) struct GateContext<'a> {
     pub db_path: &'a Path,
 }
 
+impl<'a> GateContext<'a> {
+    pub(super) fn resolve_token(&self, params: &GateParams) -> Option<String> {
+        let effective_bot = params.bot_name.as_deref().or(self.default_bot_name);
+        self.token_cache.get(self.config, effective_bot)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GateResolver trait
 // ---------------------------------------------------------------------------
