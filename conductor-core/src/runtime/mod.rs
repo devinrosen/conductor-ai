@@ -7,6 +7,7 @@
 
 pub mod claude;
 pub mod cli;
+pub mod script;
 
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -92,6 +93,7 @@ pub fn resolve_runtime(name: &str, config: &Config) -> Result<Box<dyn AgentRunti
     })?;
     match rt_config.runtime_type.as_deref().unwrap_or("cli") {
         "cli" => Ok(Box::new(cli::CliRuntime::new(rt_config.clone()))),
+        "script" => Ok(Box::new(script::ScriptRuntime::new(rt_config.clone()))),
         t => Err(ConductorError::Config(format!(
             "unsupported runtime type '{t}' for '{name}'"
         ))),
