@@ -36,6 +36,10 @@ impl AgentRuntime for ScriptRuntime {
             );
         }
 
+        // KNOWN LIMITATION: output() blocks the calling thread until the script exits.
+        // step_timeout and the shutdown AtomicBool (available in poll()) are not
+        // consulted here; callers that need cancellation should wrap spawn() in a
+        // thread and enforce the timeout externally.
         let output = std::process::Command::new("sh")
             .args(["-c", command])
             .env("CONDUCTOR_PROMPT", &request.prompt)
@@ -51,23 +55,25 @@ impl AgentRuntime for ScriptRuntime {
 
         if output.status.success() {
             let result_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if let Err(e) = agent_mgr.update_run_completed(
-                &request.run_id,
-                None,
-                Some(&result_text),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ) {
-                tracing::warn!(
-                    "ScriptRuntime: failed to mark run {} completed: {e}",
-                    request.run_id
-                );
-            }
+            agent_mgr
+                .update_run_completed(
+                    &request.run_id,
+                    None,
+                    Some(&result_text),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(|e| {
+                    ConductorError::Agent(format!(
+                        "ScriptRuntime: failed to mark run {} completed: {e}",
+                        request.run_id
+                    ))
+                })?;
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             let exit_code = output.status.code().unwrap_or(1);
@@ -76,12 +82,14 @@ impl AgentRuntime for ScriptRuntime {
             } else {
                 format!("process exited with code {exit_code}: {stderr}")
             };
-            if let Err(e) = agent_mgr.update_run_failed(&request.run_id, &err_msg) {
-                tracing::warn!(
-                    "ScriptRuntime: failed to mark run {} failed: {e}",
-                    request.run_id
-                );
-            }
+            agent_mgr
+                .update_run_failed(&request.run_id, &err_msg)
+                .map_err(|e| {
+                    ConductorError::Agent(format!(
+                        "ScriptRuntime: failed to mark run {} failed: {e}",
+                        request.run_id
+                    ))
+                })?;
         }
 
         Ok(())
@@ -99,7 +107,11 @@ impl AgentRuntime for ScriptRuntime {
 
         let run = agent_mgr
             .get_run(run_id)
-            .map_err(|e| PollError::Failed(format!("DB error: {e}")))?
+            .map_err(|e| {
+                PollError::Failed(format!(
+                    "ScriptRuntime: failed to fetch run {run_id} from DB: {e}"
+                ))
+            })?
             .ok_or_else(|| PollError::Failed(format!("run {run_id} not found in DB")))?;
 
         use crate::agent::status::AgentRunStatus;

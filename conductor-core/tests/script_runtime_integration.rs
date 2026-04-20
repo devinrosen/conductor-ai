@@ -153,6 +153,35 @@ fn test_script_runtime_nonzero_exit_is_failed() {
 }
 
 #[test]
+fn test_script_runtime_nonzero_exit_with_stderr() {
+    let _lock = DB_PATH_LOCK.lock().unwrap();
+    let run_id = format!("test-script-stderr-{}", ulid::Ulid::new());
+    let _db_guard = setup_test_db(&run_id);
+
+    let runtime = make_runtime(Some("echo 'something went wrong' >&2; exit 2"));
+    let req = make_request(&run_id, "prompt");
+
+    runtime
+        .spawn(&req)
+        .expect("spawn must succeed even for non-zero exit");
+
+    let result = runtime.poll(&run_id, None, Duration::from_secs(5));
+    match result {
+        Err(conductor_core::runtime::PollError::Failed(msg)) => {
+            assert!(
+                msg.contains("something went wrong"),
+                "error message must include stderr, got: {msg}"
+            );
+            assert!(
+                msg.contains("exit code 2") || msg.contains("code 2"),
+                "error message must include exit code, got: {msg}"
+            );
+        }
+        other => panic!("expected PollError::Failed with stderr content, got: {other:?}"),
+    }
+}
+
+#[test]
 fn test_script_runtime_resolve_via_config() {
     use conductor_core::config::{Config, RuntimeConfig};
     use std::collections::HashMap;
