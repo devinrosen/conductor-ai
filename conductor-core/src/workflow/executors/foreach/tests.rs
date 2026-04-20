@@ -1,6 +1,6 @@
 use super::*;
 use crate::tickets::{TicketInput, TicketLabelInput, TicketSyncer};
-use crate::workflow_dsl::{ForeachOver, ForeachScope, OnChildFail, OnCycle, TicketScope};
+use crate::workflow_dsl::{ForeachScope, OnChildFail, OnCycle, TicketScope};
 
 fn setup_db() -> rusqlite::Connection {
     crate::test_helpers::setup_db()
@@ -13,7 +13,7 @@ fn make_ticket(source_id: &str, title: &str) -> TicketInput {
 fn make_foreach_node_unlabeled() -> ForEachNode {
     ForEachNode {
         name: "test-foreach".to_string(),
-        over: ForeachOver::Tickets,
+        over: "tickets".to_string(),
         scope: Some(ForeachScope::Ticket(TicketScope::Unlabeled)),
         filter: std::collections::HashMap::new(),
         ordered: false,
@@ -95,6 +95,7 @@ fn test_collect_ticket_items_unlabeled_scope() {
         default_bot_name: None,
         triggered_by_hook: false,
         last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     };
 
     let node = make_foreach_node_unlabeled();
@@ -118,7 +119,7 @@ fn test_collect_ticket_items_unlabeled_scope() {
 #[test]
 fn test_resolve_child_context_ids_tickets_clears_worktree_id() {
     let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
-        ForeachOver::Tickets,
+        "tickets",
         "ticket-abc",
         &None,
         &Some("repo-1".to_string()),
@@ -135,7 +136,7 @@ fn test_resolve_child_context_ids_tickets_clears_worktree_id() {
 #[test]
 fn test_resolve_child_context_ids_repos_clears_worktree_id() {
     let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
-        ForeachOver::Repos,
+        "repos",
         "repo-xyz",
         &Some("ticket-parent".to_string()),
         &None,
@@ -152,7 +153,7 @@ fn test_resolve_child_context_ids_repos_clears_worktree_id() {
 #[test]
 fn test_resolve_child_context_ids_workflow_runs_passes_through_worktree_id() {
     let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
-        ForeachOver::WorkflowRuns,
+        "workflow_runs",
         "run-999",
         &Some("ticket-parent".to_string()),
         &Some("repo-parent".to_string()),
@@ -170,7 +171,7 @@ fn test_resolve_child_context_ids_workflow_runs_passes_through_worktree_id() {
 #[test]
 fn test_resolve_child_context_ids_workflow_runs_none_worktree_passthrough() {
     let (_, _, worktree_id) =
-        resolve_child_context_ids(ForeachOver::WorkflowRuns, "run-000", &None, &None, &None);
+        resolve_child_context_ids("workflow_runs", "run-000", &None, &None, &None);
     assert!(worktree_id.is_none());
 }
 
@@ -211,7 +212,7 @@ fn make_minimal_child_def() -> crate::workflow_dsl::WorkflowDef {
     }
 }
 
-fn make_foreach_node_for(over: ForeachOver) -> ForEachNode {
+fn make_foreach_node_for(over: String) -> ForEachNode {
     ForEachNode {
         name: "test-foreach".to_string(),
         over,
@@ -276,6 +277,7 @@ fn make_execution_state_with_worktree<'a>(
         default_bot_name: None,
         triggered_by_hook: false,
         last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     }
 }
 
@@ -303,7 +305,7 @@ fn test_dispatch_params_tickets_clears_worktree_id() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Tickets);
+    let node = make_foreach_node_for("tickets".to_string());
     let item = make_minimal_item("ticket-abc", "42", "ticket");
     let child_def = make_minimal_child_def();
 
@@ -338,7 +340,7 @@ fn test_dispatch_params_repos_clears_worktree_id() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Repos);
+    let node = make_foreach_node_for("repos".to_string());
     let item = make_minimal_item("repo-xyz", "my-repo", "repo");
     let child_def = make_minimal_child_def();
 
@@ -373,7 +375,7 @@ fn test_dispatch_params_workflow_runs_passes_worktree_id_through() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::WorkflowRuns);
+    let node = make_foreach_node_for("workflow_runs".to_string());
     let item = make_minimal_item("run-999", "some-workflow", "workflow_run");
     let child_def = make_minimal_child_def();
 
@@ -413,7 +415,7 @@ fn test_dispatch_params_worktrees_missing_worktree_falls_back_to_parent_dir() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Worktrees);
+    let node = make_foreach_node_for("worktrees".to_string());
     // item_id "wt-nonexistent" has no row in the DB — get_by_id() will error.
     let item = make_minimal_item("wt-nonexistent", "feat-missing", "worktree");
     let child_def = make_minimal_child_def();
@@ -459,7 +461,7 @@ fn test_dispatch_params_worktrees_uses_child_worktree_path() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Worktrees);
+    let node = make_foreach_node_for("worktrees".to_string());
     let item = make_minimal_item("wt-child", "feat-child", "worktree");
     let child_def = make_minimal_child_def();
 
@@ -473,7 +475,7 @@ fn test_dispatch_params_worktrees_uses_child_worktree_path() {
 #[test]
 fn test_resolve_child_context_ids_worktrees_sets_worktree_id() {
     let (ticket_id, repo_id, worktree_id) = resolve_child_context_ids(
-        ForeachOver::Worktrees,
+        "worktrees",
         "worktree-abc",
         &Some("ticket-parent".to_string()),
         &Some("repo-1".to_string()),
@@ -542,7 +544,7 @@ fn test_collect_worktree_items_matching_base_branch() {
 
     let node = ForEachNode {
         name: "test-wt-foreach".to_string(),
-        over: ForeachOver::Worktrees,
+        over: "worktrees".to_string(),
         scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
             base_branch: Some("release/1.0".to_string()),
             has_open_pr: None,
@@ -635,7 +637,7 @@ fn test_collect_worktree_items_inferred_base_uses_worktree_branch_not_parent() {
     // No base_branch in scope — engine must infer from context worktree's branch.
     let node = ForEachNode {
         name: "test-children".to_string(),
-        over: ForeachOver::Worktrees,
+        over: "worktrees".to_string(),
         scope: None,
         filter: std::collections::HashMap::new(),
         ordered: false,
@@ -703,7 +705,7 @@ fn test_collect_worktree_items_has_open_pr_filter() {
     // has_open_pr = Some(false): list_open_prs returns [] → all worktrees pass.
     let node_no_pr = ForEachNode {
         name: "wt-no-pr".to_string(),
-        over: ForeachOver::Worktrees,
+        over: "worktrees".to_string(),
         scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
             base_branch: Some("release/1.0".to_string()),
             has_open_pr: Some(false),
@@ -728,7 +730,7 @@ fn test_collect_worktree_items_has_open_pr_filter() {
     // has_open_pr = Some(true): list_open_prs returns [] → no worktrees pass.
     let node_has_pr = ForEachNode {
         name: "wt-has-pr".to_string(),
-        over: ForeachOver::Worktrees,
+        over: "worktrees".to_string(),
         scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
             base_branch: Some("release/1.0".to_string()),
             has_open_pr: Some(true),
@@ -824,7 +826,7 @@ fn test_has_open_pr_filter_false_no_prs() {
 fn make_foreach_node_continue() -> ForEachNode {
     ForEachNode {
         name: "test-foreach".to_string(),
-        over: ForeachOver::Tickets,
+        over: "tickets".to_string(),
         scope: None,
         filter: std::collections::HashMap::new(),
         ordered: false,
@@ -942,7 +944,7 @@ fn test_foreach_does_not_fail_item_on_first_failed_observation() {
         done_rx.recv().unwrap();
     });
 
-    let result = run_dispatch_loop(&mut state, &node, &step_id, &child_def, 1);
+    let result = run_dispatch_loop_for_test(&mut state, &node, &step_id, &child_def, 1);
     clear_between_cycle_hook();
     bg.join().unwrap();
     assert!(result.is_ok(), "dispatch loop should succeed: {:?}", result);
@@ -1019,7 +1021,7 @@ fn test_foreach_fails_item_after_two_consecutive_failed_observations() {
     // No sleep between cycles so the test runs fast.
     state.exec_config.poll_interval = Duration::ZERO;
 
-    let result = run_dispatch_loop(&mut state, &node, &step_id, &child_def, 1);
+    let result = run_dispatch_loop_for_test(&mut state, &node, &step_id, &child_def, 1);
     assert!(result.is_ok(), "dispatch loop should succeed: {:?}", result);
 
     let items = wf_mgr.get_fan_out_items(&step_id, None).unwrap();
@@ -1062,7 +1064,7 @@ fn test_build_item_vars_worktrees_all_fields() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Worktrees);
+    let node = make_foreach_node_for("worktrees".to_string());
     let item = make_minimal_item("wt-x", "feat-x", "worktree");
 
     let vars = build_item_vars(&mut state, &node, &item).unwrap();
@@ -1535,7 +1537,7 @@ fn test_collect_worktree_items_no_repo_id_returns_error() {
 
     let node = ForEachNode {
         name: "wt-foreach".to_string(),
-        over: ForeachOver::Worktrees,
+        over: "worktrees".to_string(),
         scope: Some(ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
             base_branch: Some("release/1.0".to_string()),
             has_open_pr: None,
@@ -1587,7 +1589,7 @@ fn test_collect_worktree_items_no_scope_no_worktree_id_errors() {
 
     let node = ForEachNode {
         name: "no-scope".to_string(),
-        over: ForeachOver::Worktrees,
+        over: "worktrees".to_string(),
         scope: None,
         filter: std::collections::HashMap::new(),
         ordered: false,
@@ -1647,7 +1649,7 @@ fn test_collect_worktree_items_infers_base_branch_from_context() {
 
     let node = ForEachNode {
         name: "infer-foreach".to_string(),
-        over: ForeachOver::Worktrees,
+        over: "worktrees".to_string(),
         scope: None,
         filter: std::collections::HashMap::new(),
         ordered: false,
@@ -1710,7 +1712,7 @@ fn test_build_item_vars_worktrees_null_optional_fields() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Worktrees);
+    let node = make_foreach_node_for("worktrees".to_string());
     let item = make_minimal_item("wt-null", "feat-null", "worktree");
 
     let vars = build_item_vars(&mut state, &node, &item).unwrap();
@@ -1780,7 +1782,7 @@ fn test_build_item_vars_worktrees_with_ticket_id() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Worktrees);
+    let node = make_foreach_node_for("worktrees".to_string());
     let item = make_minimal_item("wt-linked", "feat-linked", "worktree");
 
     let vars = build_item_vars(&mut state, &node, &item).unwrap();
@@ -1826,7 +1828,7 @@ fn test_build_item_vars_worktrees_missing_worktree_falls_back() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Worktrees);
+    let node = make_foreach_node_for("worktrees".to_string());
     let item = make_minimal_item("nonexistent-wt", "some-slug", "worktree");
 
     let vars = build_item_vars(&mut state, &node, &item).unwrap();
@@ -1868,7 +1870,7 @@ fn test_build_item_vars_tickets_missing_ticket_falls_back() {
         None,
     );
 
-    let node = make_foreach_node_for(ForeachOver::Tickets);
+    let node = make_foreach_node_for("tickets".to_string());
     let item = make_minimal_item("nonexistent-ticket", "ISSUE-99", "ticket");
 
     let vars = build_item_vars(&mut state, &node, &item).unwrap();
@@ -2071,7 +2073,7 @@ fn test_build_item_vars_repos_missing_repo_falls_back() {
     let mut state =
         make_execution_state_with_worktree(&conn, config, run.id, parent.id, None, None, None);
 
-    let node = make_foreach_node_for(ForeachOver::Repos);
+    let node = make_foreach_node_for("repos".to_string());
     let item = make_minimal_item("nonexistent-repo", "my-repo", "repo");
 
     let vars = build_item_vars(&mut state, &node, &item).unwrap();
@@ -2082,4 +2084,33 @@ fn test_build_item_vars_repos_missing_repo_falls_back() {
     assert_eq!(vars.get("item.slug").map(|s| s.as_str()), Some("my-repo"));
     assert!(!vars.contains_key("item.local_path"));
     assert!(!vars.contains_key("item.remote_url"));
+}
+
+#[test]
+fn test_execute_foreach_unknown_provider_returns_error() {
+    let conn = setup_db();
+    let config: &'static crate::config::Config =
+        Box::leak(Box::new(crate::config::Config::default()));
+    let mut state = crate::workflow::tests::common::make_loop_test_state(&conn, config);
+
+    let node = ForEachNode {
+        name: "test-unknown".to_string(),
+        over: "nonexistent_provider_xyz".to_string(),
+        scope: None,
+        filter: std::collections::HashMap::new(),
+        ordered: false,
+        on_cycle: crate::workflow_dsl::OnCycle::Fail,
+        max_parallel: 1,
+        workflow: "some-workflow".to_string(),
+        inputs: std::collections::HashMap::new(),
+        on_child_fail: OnChildFail::Continue,
+    };
+
+    let result = execute_foreach(&mut state, &node, 0);
+    assert!(result.is_err(), "unknown provider should return Err");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("unknown provider") || err_msg.contains("no ItemProvider"),
+        "error should mention unknown provider, got: {err_msg}"
+    );
 }

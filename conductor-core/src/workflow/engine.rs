@@ -126,6 +126,8 @@ pub(super) struct ExecutionState<'a> {
     /// a root run calls into a child workflow.  Initialized to 0 (forces an
     /// immediate first tick); updated by `execute_nodes` at most once per 5s.
     pub last_heartbeat_at: Arc<AtomicI64>,
+    /// Provider registry initialized once at engine init, shared across all foreach steps.
+    pub registry: std::sync::Arc<crate::workflow::item_provider::ItemProviderRegistry>,
 }
 
 impl ExecutionState<'_> {
@@ -526,6 +528,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         default_bot_name: input.default_bot_name.clone(),
         triggered_by_hook: input.triggered_by_hook,
         last_heartbeat_at: ExecutionState::new_heartbeat(),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -1109,6 +1112,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         default_bot_name: wf_run.default_bot_name.clone(),
         triggered_by_hook: wf_run.is_triggered_by_hook(),
         last_heartbeat_at: ExecutionState::new_heartbeat(),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     };
 
     run_workflow_engine(&mut state, &workflow)

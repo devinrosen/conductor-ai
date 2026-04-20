@@ -33,11 +33,12 @@ use crate::error::{ConductorError, Result};
 use crate::workflow::engine::{
     record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
 };
+use crate::workflow::item_provider::ProviderContext;
 use crate::workflow::prompt_builder::build_variable_map;
 use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::WorkflowExecStandalone;
-use crate::workflow_dsl::{ForEachNode, ForeachOver, ForeachScope, OnChildFail};
+use crate::workflow_dsl::{ForEachNode, OnChildFail};
 use crate::worktree::WorktreeManager;
 
 /// Execute a `foreach` step: fan out a child workflow over a collection of items.
@@ -112,6 +113,14 @@ pub fn execute_foreach(
         id
     };
 
+    // Validate the provider early so unknown-provider errors surface before workflow I/O.
+    let provider = state.registry.get(&node.over).ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "foreach '{}': unknown provider '{}' — no ItemProvider registered for this name",
+            node.name, node.over
+        ))
+    })?;
+
     let (working_dir, repo_path) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
         (
@@ -138,7 +147,30 @@ pub fn execute_foreach(
     let existing_ids = state.wf_mgr.get_existing_fan_out_item_ids(&step_id)?;
     let existing_set: HashSet<String> = existing_ids.into_iter().collect();
 
-    let items = collect_items(state, node, &existing_set)?;
+    let repo_id_owned = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        ctx.repo_id().map(String::from)
+    };
+    let worktree_id_owned = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        ctx.worktree_id().map(String::from)
+    };
+    let provider_ctx = ProviderContext {
+        conn: state.conn,
+        config: state.config,
+        repo_id: repo_id_owned.as_deref(),
+        worktree_id: worktree_id_owned.as_deref(),
+    };
+    let provider_items = provider.items(
+        &provider_ctx,
+        node.scope.as_ref(),
+        &node.filter,
+        &existing_set,
+    )?;
+    let items: Vec<(String, String, String)> = provider_items
+        .into_iter()
+        .map(|i| (i.item_type, i.item_id, i.item_ref))
+        .collect();
 
     // Write pending rows for newly discovered items.
     let total_items = {
@@ -203,7 +235,14 @@ pub fn execute_foreach(
     }
 
     // --- Phase 2: Dispatch loop ---
-    let result = run_dispatch_loop(state, node, &step_id, &child_def, iteration);
+    let result = run_dispatch_loop(
+        state,
+        node,
+        &step_id,
+        &child_def,
+        iteration,
+        provider.as_ref(),
+    );
 
     // --- Phase 3: Step completion ---
     // Reload counters from DB for accurate summary.
@@ -225,12 +264,7 @@ pub fn execute_foreach(
     let context = format!(
         "foreach {}: {completed_count} completed, {failed_count} failed, {skipped_count} skipped of {total} {}",
         node.name,
-        match node.over {
-            ForeachOver::Tickets => "tickets",
-            ForeachOver::Repos => "repos",
-            ForeachOver::WorkflowRuns => "workflow_runs",
-            ForeachOver::Worktrees => "worktrees",
-        },
+        node.over,
     );
 
     let step_succeeded = match result {
@@ -310,193 +344,7 @@ pub fn execute_foreach(
     Ok(())
 }
 
-/// Collect fan-out items from the DB, excluding any already in `existing_set`.
-/// Returns a Vec of (item_type, item_id, item_ref).
-fn collect_items(
-    state: &mut ExecutionState<'_>,
-    node: &ForEachNode,
-    existing_set: &HashSet<String>,
-) -> Result<Vec<(String, String, String)>> {
-    match node.over {
-        ForeachOver::Tickets => collect_ticket_items(state, node, existing_set),
-        ForeachOver::Repos => collect_repo_items(state, existing_set),
-        ForeachOver::WorkflowRuns => collect_workflow_run_items(state, node, existing_set),
-        ForeachOver::Worktrees => collect_worktree_items(state, node, existing_set),
-    }
-}
-
-fn collect_ticket_items(
-    state: &mut ExecutionState<'_>,
-    node: &ForEachNode,
-    existing_set: &HashSet<String>,
-) -> Result<Vec<(String, String, String)>> {
-    use crate::tickets::{TicketFilter, TicketSyncer};
-
-    let syncer = TicketSyncer::new(state.conn);
-
-    // Determine repo scope: require a repo_id for ticket fan-outs.
-    let repo_id_owned = {
-        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        ctx.repo_id().map(String::from)
-    };
-    let repo_id = repo_id_owned.as_deref().ok_or_else(|| {
-        ConductorError::Workflow(
-            "foreach over tickets requires a repo_id in the execution context".to_string(),
-        )
-    })?;
-
-    let mut items = Vec::new();
-
-    match &node.scope {
-        Some(ForeachScope::Ticket(ts)) => match ts {
-            crate::workflow_dsl::TicketScope::TicketId(ticket_id) => {
-                // Single ticket — just look it up directly.
-                match syncer.get_by_id(ticket_id) {
-                    Ok(t) if !existing_set.contains(&t.id) => {
-                        items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
-                    }
-                    Ok(_) => {} // Already in existing_set
-                    Err(crate::error::ConductorError::TicketNotFound { .. }) => {
-                        return Err(ConductorError::Workflow(format!(
-                            "foreach: ticket '{}' not found",
-                            ticket_id
-                        )));
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            crate::workflow_dsl::TicketScope::Label(label) => {
-                let filter = TicketFilter {
-                    labels: vec![label.clone()],
-                    search: None,
-                    include_closed: false,
-                    unlabeled_only: false,
-                };
-                let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-                for t in tickets {
-                    if !existing_set.contains(&t.id) {
-                        items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
-                    }
-                }
-            }
-            crate::workflow_dsl::TicketScope::Unlabeled => {
-                let filter = TicketFilter {
-                    labels: vec![],
-                    search: None,
-                    include_closed: false,
-                    unlabeled_only: true,
-                };
-                let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-                for t in tickets {
-                    if !existing_set.contains(&t.id) {
-                        items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
-                    }
-                }
-            }
-        },
-        Some(ForeachScope::Worktree(_)) => {
-            return Err(ConductorError::Workflow(
-                "foreach over = tickets does not accept a worktree scope; use over = worktrees instead".to_string(),
-            ));
-        }
-        None => {
-            // No ticket scope — collect all open tickets for the repo.
-            let filter = TicketFilter {
-                labels: vec![],
-                search: None,
-                include_closed: false,
-                unlabeled_only: false,
-            };
-            let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-            for t in tickets {
-                if !existing_set.contains(&t.id) {
-                    items.push(("ticket".to_string(), t.id.clone(), t.source_id.clone()));
-                }
-            }
-        }
-    }
-
-    Ok(items)
-}
-
-fn collect_repo_items(
-    state: &mut ExecutionState<'_>,
-    existing_set: &HashSet<String>,
-) -> Result<Vec<(String, String, String)>> {
-    use crate::repo::RepoManager;
-
-    let mgr = RepoManager::new(state.conn, state.config);
-    let repos = mgr.list()?;
-    let mut items = Vec::new();
-    for r in repos {
-        if !existing_set.contains(&r.id) {
-            items.push(("repo".to_string(), r.id.clone(), r.slug.clone()));
-        }
-    }
-    Ok(items)
-}
-
-fn collect_workflow_run_items(
-    state: &mut ExecutionState<'_>,
-    node: &ForEachNode,
-    existing_set: &HashSet<String>,
-) -> Result<Vec<(String, String, String)>> {
-    // Build filter from node.filter map.
-    let status_filter = node.filter.get("status").map(|s| s.as_str()).unwrap_or("");
-    let workflow_name_filter = node
-        .filter
-        .get("workflow_name")
-        .map(|s| s.as_str())
-        .unwrap_or("");
-
-    let terminal_statuses = ["completed", "failed", "cancelled"];
-    let statuses: Vec<&str> = if status_filter.is_empty() {
-        terminal_statuses.to_vec()
-    } else {
-        // Support comma-separated list of statuses
-        status_filter
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .collect()
-    };
-
-    // Build SQL query for terminal workflow runs.
-    let mut conditions: Vec<String> = Vec::new();
-    let placeholder_list: String = statuses
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("?{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(", ");
-    conditions.push(format!("status IN ({placeholder_list})"));
-
-    let mut param_values: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
-
-    if !workflow_name_filter.is_empty() {
-        param_values.push(workflow_name_filter.to_string());
-        conditions.push(format!("workflow_name = ?{}", param_values.len()));
-    }
-
-    // Query only the columns we actually need (id, workflow_name).
-    let sql_id_name = format!(
-        "SELECT id, workflow_name FROM workflow_runs WHERE {} ORDER BY started_at ASC",
-        conditions.join(" AND ")
-    );
-    let items: Vec<(String, String)> = crate::db::query_collect(
-        state.conn,
-        &sql_id_name,
-        rusqlite::params_from_iter(param_values.iter()),
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-    )?;
-
-    Ok(items
-        .into_iter()
-        .filter(|(id, _)| !existing_set.contains(id))
-        .map(|(id, wf_name)| ("workflow_run".to_string(), id, wf_name))
-        .collect())
-}
-
+#[cfg(test)]
 pub(super) fn filter_worktrees_by_open_pr(
     mut candidates: Vec<crate::worktree::Worktree>,
     want_open_pr: bool,
@@ -507,68 +355,6 @@ pub(super) fn filter_worktrees_by_open_pr(
     candidates
 }
 
-fn collect_worktree_items(
-    state: &mut ExecutionState<'_>,
-    node: &ForEachNode,
-    existing_set: &HashSet<String>,
-) -> Result<Vec<(String, String, String)>> {
-    // Require a repo_id for worktree fan-outs.
-    let repo_id_owned = {
-        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        ctx.repo_id().map(String::from)
-    };
-    let repo_id = repo_id_owned.as_deref().ok_or_else(|| {
-        ConductorError::Workflow(
-            "foreach over worktrees requires a repo_id in the execution context".to_string(),
-        )
-    })?;
-
-    // Extract base_branch from scope, or infer from the execution context worktree.
-    let base_branch_owned: String;
-    let wt_scope_opt = match &node.scope {
-        Some(ForeachScope::Worktree(s)) => Some(s),
-        _ => None,
-    };
-    let base_branch: &str = match wt_scope_opt.and_then(|s| s.base_branch.as_deref()) {
-        Some(b) => b,
-        None => {
-            let worktree_id_owned = {
-                let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-                ctx.worktree_id().map(String::from)
-            };
-            let wt_id = worktree_id_owned.as_deref().ok_or_else(|| {
-                ConductorError::Workflow(format!(
-                    "foreach '{}': over = worktrees requires either \
-                     scope = {{ base_branch = \"...\" }} or a worktree_id in the execution context",
-                    node.name
-                ))
-            })?;
-            let wt = WorktreeManager::new(state.conn, state.config).get_by_id(wt_id)?;
-            base_branch_owned = wt.branch.clone();
-            &base_branch_owned
-        }
-    };
-
-    let wt_mgr = WorktreeManager::new(state.conn, state.config);
-    let active_worktrees = wt_mgr.list_by_repo_id_and_base_branch(repo_id, base_branch)?;
-
-    let mut candidates: Vec<_> = active_worktrees
-        .into_iter()
-        .filter(|wt| !existing_set.contains(&wt.id))
-        .collect();
-
-    if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
-        let repo = crate::repo::RepoManager::new(state.conn, state.config).get_by_id(repo_id)?;
-        let open_prs = crate::github::list_open_prs(&repo.remote_url)?;
-        candidates = filter_worktrees_by_open_pr(candidates, want_open_pr, open_prs);
-    }
-
-    Ok(candidates
-        .into_iter()
-        .map(|wt| ("worktree".to_string(), wt.id, wt.slug))
-        .collect())
-}
-
 /// Run the dispatch loop. Returns Ok(true) on stall, Ok(false) on clean finish,
 /// Err on executor error.
 fn run_dispatch_loop(
@@ -577,10 +363,10 @@ fn run_dispatch_loop(
     step_id: &str,
     child_def: &crate::workflow_dsl::WorkflowDef,
     iteration: u32,
+    provider: &dyn crate::workflow::item_provider::ItemProvider,
 ) -> Result<bool> {
     // Effective on_child_fail: default to SkipDependents for ordered tickets/worktrees.
-    let ordered_dep_type =
-        node.ordered && (node.over == ForeachOver::Tickets || node.over == ForeachOver::Worktrees);
+    let ordered_dep_type = node.ordered && provider.supports_ordered();
     let on_child_fail = if node.on_child_fail == OnChildFail::Continue && ordered_dep_type {
         OnChildFail::SkipDependents
     } else {
@@ -589,11 +375,7 @@ fn run_dispatch_loop(
 
     // Load dependency edges once upfront (for ordered ticket/worktree fan-outs).
     let dep_edges: Vec<(String, String)> = if ordered_dep_type {
-        if node.over == ForeachOver::Tickets {
-            load_ticket_dep_edges(state, step_id)?
-        } else {
-            load_worktree_dep_edges(state, step_id)?
-        }
+        provider.dependencies(state.conn, state.config, step_id)?
     } else {
         vec![]
     };
@@ -785,21 +567,26 @@ fn run_dispatch_loop(
 /// an independent context instead of colliding with the parent's active-run guard.
 /// WorkflowRuns fan-outs pass the parent context through unchanged.
 fn resolve_child_context_ids(
-    over: ForeachOver,
+    over: &str,
     item_id: &str,
     parent_ticket_id: &Option<String>,
     parent_repo_id: &Option<String>,
     parent_worktree_id: &Option<String>,
 ) -> (Option<String>, Option<String>, Option<String>) {
     match over {
-        ForeachOver::Tickets => (Some(item_id.to_string()), parent_repo_id.clone(), None),
-        ForeachOver::Repos => (None, Some(item_id.to_string()), None),
-        ForeachOver::WorkflowRuns => (
+        "tickets" => (Some(item_id.to_string()), parent_repo_id.clone(), None),
+        "repos" => (None, Some(item_id.to_string()), None),
+        "workflow_runs" => (
             parent_ticket_id.clone(),
             parent_repo_id.clone(),
             parent_worktree_id.clone(),
         ),
-        ForeachOver::Worktrees => (None, parent_repo_id.clone(), Some(item_id.to_string())),
+        "worktrees" => (None, parent_repo_id.clone(), Some(item_id.to_string())),
+        _ => (
+            parent_ticket_id.clone(),
+            parent_repo_id.clone(),
+            parent_worktree_id.clone(),
+        ),
     }
 }
 
@@ -877,18 +664,16 @@ fn build_child_dispatch_params(
     }
 
     // Determine target_label from item context.
-    let target_label = match node.over {
-        ForeachOver::Tickets => Some(item.item_ref.clone()),
-        ForeachOver::Repos => Some(item.item_ref.clone()),
-        ForeachOver::WorkflowRuns => Some(format!("run:{}", item.item_ref)),
-        ForeachOver::Worktrees => Some(item.item_ref.clone()),
+    let target_label = match node.over.as_str() {
+        "workflow_runs" => Some(format!("run:{}", item.item_ref)),
+        _ => Some(item.item_ref.clone()),
     };
 
     // ticket_id, repo_id, and worktree_id: pass through based on item type.
     // For ticket/repo fan-outs, clear worktree_id so each child gets its own
     // independent context instead of colliding with the parent's active run.
     let (item_ticket_id, item_repo_id, item_worktree_id) = resolve_child_context_ids(
-        node.over.clone(),
+        &node.over,
         &item.item_id,
         &ticket_id,
         &repo_id,
@@ -897,7 +682,7 @@ fn build_child_dispatch_params(
 
     // For worktree fan-outs, run the child in the child worktree's directory,
     // not the parent's CWD (which may be a different worktree entirely).
-    let child_working_dir = if node.over == ForeachOver::Worktrees {
+    let child_working_dir = if node.over == "worktrees" {
         match WorktreeManager::new(state.conn, state.config).get_by_id(&item.item_id) {
             Ok(wt) => wt.path,
             Err(e) => {
@@ -1036,8 +821,8 @@ fn build_item_vars(
 ) -> Result<HashMap<String, String>> {
     let mut vars = HashMap::new();
 
-    match node.over {
-        ForeachOver::Tickets => {
+    match node.over.as_str() {
+        "tickets" => {
             // Load ticket fields.
             let syncer = crate::tickets::TicketSyncer::new(state.conn);
             match syncer.get_by_id(&item.item_id) {
@@ -1056,7 +841,7 @@ fn build_item_vars(
                 }
             }
         }
-        ForeachOver::Repos => {
+        "repos" => {
             // Load repo fields.
             let mgr = crate::repo::RepoManager::new(state.conn, state.config);
             match mgr.get_by_id(&item.item_id) {
@@ -1073,11 +858,11 @@ fn build_item_vars(
                 }
             }
         }
-        ForeachOver::WorkflowRuns => {
+        "workflow_runs" => {
             vars.insert("item.id".to_string(), item.item_id.clone());
             vars.insert("item.workflow_name".to_string(), item.item_ref.clone());
         }
-        ForeachOver::Worktrees => {
+        "worktrees" => {
             let wt_mgr = WorktreeManager::new(state.conn, state.config);
             match wt_mgr.get_by_id(&item.item_id) {
                 Ok(wt) => {
@@ -1101,104 +886,13 @@ fn build_item_vars(
                 }
             }
         }
+        _ => {
+            vars.insert("item.id".to_string(), item.item_id.clone());
+            vars.insert("item.ref".to_string(), item.item_ref.clone());
+        }
     }
 
     Ok(vars)
-}
-
-/// Load dependency edges (blocker_id → dependent_id) for tickets currently in the fan_out.
-fn load_ticket_dep_edges(
-    state: &mut ExecutionState<'_>,
-    step_id: &str,
-) -> Result<Vec<(String, String)>> {
-    let items = state.wf_mgr.get_fan_out_items(step_id, None)?;
-    let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
-    if item_ids.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let syncer = crate::tickets::TicketSyncer::new(state.conn);
-    let id_set: HashSet<&String> = item_ids.iter().collect();
-    let ticket_id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
-    let raw_edges = syncer
-        .get_blocking_edges_for_tickets(&ticket_id_refs)
-        .map_err(|e| ConductorError::Workflow(format!("foreach: dependency query failed: {e}")))?;
-
-    let edges: Vec<(String, String)> = raw_edges
-        .into_iter()
-        .filter(|(blocker_id, dependent_id)| {
-            id_set.contains(blocker_id) && id_set.contains(dependent_id)
-        })
-        .collect();
-    Ok(edges)
-}
-
-/// Load dependency edges (blocker_worktree_id → dependent_worktree_id) for worktrees in the fan_out.
-/// Pivots through worktree.ticket_id → ticket_dependencies.
-fn load_worktree_dep_edges(
-    state: &mut ExecutionState<'_>,
-    step_id: &str,
-) -> Result<Vec<(String, String)>> {
-    let items = state.wf_mgr.get_fan_out_items(step_id, None)?;
-    let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
-    if item_ids.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let id_set: HashSet<&String> = item_ids.iter().collect();
-
-    // Build worktree_id → ticket_id map for items that have a linked ticket.
-    // Use WorktreeManager.get_by_ids() to avoid raw SQL against the worktrees table.
-    let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
-    let wt_mgr = WorktreeManager::new(state.conn, state.config);
-    let worktrees = match wt_mgr.get_by_ids(&id_refs) {
-        Ok(wts) => wts,
-        Err(e) => {
-            tracing::warn!(
-                "foreach: could not fetch worktrees for dep edges: {e}; skipping ordering"
-            );
-            return Ok(vec![]);
-        }
-    };
-    let mut wt_ticket_map: HashMap<String, String> = HashMap::new();
-    for wt in worktrees {
-        if let Some(tid) = wt.ticket_id {
-            wt_ticket_map.insert(wt.id, tid);
-        }
-    }
-
-    // Build reverse map: ticket_id → worktree_id.
-    let ticket_wt_map: HashMap<String, String> = wt_ticket_map
-        .iter()
-        .map(|(wt_id, tid)| (tid.clone(), wt_id.clone()))
-        .collect();
-
-    // Batch-query all 'blocks' edges for our ticket set via TicketSyncer.
-    let ticket_ids: Vec<String> = wt_ticket_map.values().cloned().collect();
-    if ticket_ids.is_empty() {
-        return Ok(vec![]);
-    }
-    let ticket_id_refs: Vec<&str> = ticket_ids.iter().map(String::as_str).collect();
-    let syncer = crate::tickets::TicketSyncer::new(state.conn);
-    let dep_edges = syncer
-        .get_blocking_edges_for_tickets(&ticket_id_refs)
-        .map_err(|e| ConductorError::Workflow(format!("foreach: dependency query failed: {e}")))?;
-
-    // Translate ticket-level edges into worktree-to-worktree edges.
-    // Deduplicate with a HashSet to handle multiple worktrees sharing a ticket_id.
-    let mut edges: HashSet<(String, String)> = HashSet::new();
-    for (blocker_ticket_id, dependent_ticket_id) in dep_edges {
-        if let (Some(blocker_wt_id), Some(dependent_wt_id)) = (
-            ticket_wt_map.get(&blocker_ticket_id),
-            ticket_wt_map.get(&dependent_ticket_id),
-        ) {
-            if id_set.contains(blocker_wt_id) && id_set.contains(dependent_wt_id) {
-                edges.insert((blocker_wt_id.clone(), dependent_wt_id.clone()));
-            }
-        }
-    }
-
-    Ok(edges.into_iter().collect())
 }
 
 /// Check if all blockers of `item_id` are in 'completed' status.
@@ -1268,6 +962,127 @@ fn find_transitive_dependents(
 
 fn is_terminal_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
+}
+
+/// Test bridge: wraps run_dispatch_loop by looking up the provider from the default registry.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn run_dispatch_loop_for_test(
+    state: &mut ExecutionState<'_>,
+    node: &ForEachNode,
+    step_id: &str,
+    child_def: &crate::workflow_dsl::WorkflowDef,
+    iteration: u32,
+) -> Result<bool> {
+    let provider = state.registry.get(&node.over).ok_or_else(|| {
+        ConductorError::Workflow(format!("no provider for '{}' in test", node.over))
+    })?;
+    run_dispatch_loop(
+        state,
+        node,
+        step_id,
+        child_def,
+        iteration,
+        provider.as_ref(),
+    )
+}
+
+/// Test bridge: delegates to WorktreesProvider.dependencies().
+#[cfg(test)]
+fn load_worktree_dep_edges(
+    state: &mut ExecutionState<'_>,
+    step_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let provider = crate::workflow::item_provider::worktrees::WorktreesProvider;
+    crate::workflow::item_provider::ItemProvider::dependencies(
+        &provider,
+        state.conn,
+        state.config,
+        step_id,
+    )
+}
+
+/// Test bridge: delegates to TicketsProvider.dependencies().
+#[cfg(test)]
+fn load_ticket_dep_edges(
+    state: &mut ExecutionState<'_>,
+    step_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let provider = crate::workflow::item_provider::tickets::TicketsProvider;
+    crate::workflow::item_provider::ItemProvider::dependencies(
+        &provider,
+        state.conn,
+        state.config,
+        step_id,
+    )
+}
+
+/// Test bridge: delegates to the TicketsProvider via the registry.
+/// Kept for backward compatibility with unit tests.
+#[cfg(test)]
+fn collect_ticket_items(
+    state: &mut ExecutionState<'_>,
+    node: &ForEachNode,
+    existing_set: &HashSet<String>,
+) -> Result<Vec<(String, String, String)>> {
+    let repo_id_owned = {
+        let c = crate::workflow::run_context::WorktreeRunContext::new(state);
+        c.repo_id().map(String::from)
+    };
+    let ctx = crate::workflow::item_provider::ProviderContext {
+        conn: state.conn,
+        config: state.config,
+        repo_id: repo_id_owned.as_deref(),
+        worktree_id: None,
+    };
+    let provider = crate::workflow::item_provider::tickets::TicketsProvider;
+    let items = crate::workflow::item_provider::ItemProvider::items(
+        &provider,
+        &ctx,
+        node.scope.as_ref(),
+        &node.filter,
+        existing_set,
+    )?;
+    Ok(items
+        .into_iter()
+        .map(|i| (i.item_type, i.item_id, i.item_ref))
+        .collect())
+}
+
+/// Test bridge: delegates to the WorktreesProvider via the registry.
+/// Kept for backward compatibility with unit tests.
+#[cfg(test)]
+fn collect_worktree_items(
+    state: &mut ExecutionState<'_>,
+    node: &ForEachNode,
+    existing_set: &HashSet<String>,
+) -> Result<Vec<(String, String, String)>> {
+    let repo_id_owned = {
+        let c = crate::workflow::run_context::WorktreeRunContext::new(state);
+        c.repo_id().map(String::from)
+    };
+    let worktree_id_owned = {
+        let c = crate::workflow::run_context::WorktreeRunContext::new(state);
+        c.worktree_id().map(String::from)
+    };
+    let ctx = crate::workflow::item_provider::ProviderContext {
+        conn: state.conn,
+        config: state.config,
+        repo_id: repo_id_owned.as_deref(),
+        worktree_id: worktree_id_owned.as_deref(),
+    };
+    let provider = crate::workflow::item_provider::worktrees::WorktreesProvider;
+    let items = crate::workflow::item_provider::ItemProvider::items(
+        &provider,
+        &ctx,
+        node.scope.as_ref(),
+        &node.filter,
+        existing_set,
+    )?;
+    Ok(items
+        .into_iter()
+        .map(|i| (i.item_type, i.item_id, i.item_ref))
+        .collect())
 }
 
 #[cfg(test)]

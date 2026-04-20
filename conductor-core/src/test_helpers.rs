@@ -74,6 +74,46 @@ pub fn make_ticket(source_id: &str, title: &str) -> TicketInput {
     }
 }
 
+/// Build a `ProviderContext` for item-provider unit tests.
+pub fn make_provider_ctx<'a>(
+    conn: &'a rusqlite::Connection,
+    config: &'a crate::config::Config,
+    repo_id: Option<&'a str>,
+    worktree_id: Option<&'a str>,
+) -> crate::workflow::item_provider::ProviderContext<'a> {
+    crate::workflow::item_provider::ProviderContext {
+        conn,
+        config,
+        repo_id,
+        worktree_id,
+    }
+}
+
+/// Create an agent run attached to worktree `w1` and return its id.
+///
+/// Used in tests that need a parent run id before creating workflow runs.
+pub fn make_agent_parent_id(conn: &Connection) -> String {
+    let agent_mgr = crate::agent::AgentManager::new(conn);
+    agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap()
+        .id
+}
+
+/// Create a workflow run + foreach step and return the step id.
+///
+/// Suitable for tests that need a fan-out step to attach items to (e.g. dependency edge tests).
+pub fn make_foreach_step(conn: &Connection) -> String {
+    let parent_id = make_agent_parent_id(conn);
+    let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
+    let run = wf_mgr
+        .create_workflow_run("test-wf", Some("w1"), &parent_id, false, "manual", None)
+        .unwrap();
+    wf_mgr
+        .insert_step(&run.id, "foreach-step", "foreach", false, 0, 0)
+        .unwrap()
+}
+
 /// `setup_db()` + an agent_run `ar1` attached to worktree `w1`.
 ///
 /// Provides everything in `setup_db()` plus:

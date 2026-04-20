@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use super::types::{
-    Condition, ForeachOver, GateType, InputType, OnChildFail, ScriptNode, WorkflowDef, WorkflowNode,
+    Condition, GateType, InputType, OnChildFail, ScriptNode, WorkflowDef, WorkflowNode,
 };
 
 // ---------------------------------------------------------------------------
@@ -302,8 +302,8 @@ fn validate_foreach_node<F>(
 
     // Check 5: scope required for over = tickets (hard error); optional for over = worktrees (warning)
     if n.scope.is_none() {
-        match n.over {
-            ForeachOver::Tickets => {
+        match n.over.as_str() {
+            "tickets" => {
                 errors.push(ValidationError {
                     message: format!(
                         "foreach '{}': `scope` is required when over = tickets",
@@ -315,7 +315,7 @@ fn validate_foreach_node<F>(
                     ),
                 });
             }
-            ForeachOver::Worktrees => {
+            "worktrees" => {
                 warnings.push(format!(
                     "foreach '{}': no scope specified; base_branch will be inferred from the execution context worktree at runtime",
                     n.name
@@ -326,7 +326,7 @@ fn validate_foreach_node<F>(
     }
 
     // Check 6: ordered only valid for tickets or worktrees
-    if n.ordered && n.over != ForeachOver::Tickets && n.over != ForeachOver::Worktrees {
+    if n.ordered && n.over != "tickets" && n.over != "worktrees" {
         errors.push(ValidationError {
             message: format!(
                 "foreach '{}': ordered = true is only valid when over = tickets or over = worktrees",
@@ -352,7 +352,7 @@ fn validate_foreach_node<F>(
     }
 
     // Check 8: filter required for over = workflow_runs
-    if n.over == ForeachOver::WorkflowRuns && n.filter.is_empty() {
+    if n.over == "workflow_runs" && n.filter.is_empty() {
         errors.push(ValidationError {
             message: format!(
                 "foreach '{}': `filter` is required when over = workflow_runs",
@@ -365,7 +365,7 @@ fn validate_foreach_node<F>(
     }
 
     // Check 9: filter.status must be terminal for workflow_runs
-    if n.over == ForeachOver::WorkflowRuns {
+    if n.over == "workflow_runs" {
         if let Some(status) = n.filter.get("status") {
             if status == "running" || status == "paused" {
                 errors.push(ValidationError {
@@ -383,7 +383,7 @@ fn validate_foreach_node<F>(
     }
 
     // Warn if filter provided for repos (not evaluated in v1)
-    if n.over == ForeachOver::Repos && !n.filter.is_empty() {
+    if n.over == "repos" && !n.filter.is_empty() {
         errors.push(ValidationError {
             message: format!(
                 "foreach '{}': filter has no effect when over = repos (not implemented in v1)",
@@ -394,7 +394,7 @@ fn validate_foreach_node<F>(
     }
 
     // Warn if filter provided for worktrees (scope = base_branch is the filter mechanism)
-    if n.over == ForeachOver::Worktrees && !n.filter.is_empty() {
+    if n.over == "worktrees" && !n.filter.is_empty() {
         errors.push(ValidationError {
             message: format!(
                 "foreach '{}': filter has no effect when over = worktrees (use scope = {{ base_branch = \"...\" }} instead)",
@@ -635,7 +635,7 @@ mod tests {
     // validate_foreach_node tests
     // -----------------------------------------------------------------------
 
-    fn make_bare_foreach_node(over: ForeachOver) -> super::super::types::ForEachNode {
+    fn make_bare_foreach_node(over: String) -> super::super::types::ForEachNode {
         use super::super::types::{ForEachNode, OnChildFail, OnCycle};
         ForEachNode {
             name: "test-foreach".to_string(),
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_validate_foreach_worktrees_scope_emits_warning_not_error() {
-        let node = make_bare_foreach_node(ForeachOver::Worktrees);
+        let node = make_bare_foreach_node("worktrees".to_string());
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
         validate_foreach_node(&node, &mut errors, &mut warnings, &no_op_loader);
@@ -696,7 +696,7 @@ mod tests {
                 base_branch: Some("main".to_string()),
                 has_open_pr: None,
             })),
-            ..make_bare_foreach_node(ForeachOver::Worktrees)
+            ..make_bare_foreach_node("worktrees".to_string())
         };
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn test_validate_foreach_tickets_scope_required() {
-        let node = make_bare_foreach_node(ForeachOver::Tickets);
+        let node = make_bare_foreach_node("tickets".to_string());
         let mut errors = Vec::new();
         validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
         assert!(
@@ -733,7 +733,7 @@ mod tests {
         use super::super::types::ForEachNode;
         let node = ForEachNode {
             ordered: true,
-            ..make_bare_foreach_node(ForeachOver::Repos)
+            ..make_bare_foreach_node("repos".to_string())
         };
         let mut errors = Vec::new();
         validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
@@ -751,7 +751,7 @@ mod tests {
         let node = ForEachNode {
             on_child_fail: OnChildFail::SkipDependents,
             ordered: false,
-            ..make_bare_foreach_node(ForeachOver::Tickets)
+            ..make_bare_foreach_node("tickets".to_string())
         };
         let mut errors = Vec::new();
         validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn test_validate_foreach_workflow_runs_filter_required() {
-        let node = make_bare_foreach_node(ForeachOver::WorkflowRuns);
+        let node = make_bare_foreach_node("workflow_runs".to_string());
         let mut errors = Vec::new();
         validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
         assert!(
@@ -785,7 +785,7 @@ mod tests {
         filter.insert("status".to_string(), "running".to_string());
         let node = ForEachNode {
             filter,
-            ..make_bare_foreach_node(ForeachOver::WorkflowRuns)
+            ..make_bare_foreach_node("workflow_runs".to_string())
         };
         let mut errors = Vec::new();
         validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
@@ -809,7 +809,7 @@ mod tests {
                 base_branch: Some("main".to_string()),
                 has_open_pr: None,
             })),
-            ..make_bare_foreach_node(ForeachOver::Worktrees)
+            ..make_bare_foreach_node("worktrees".to_string())
         };
         let mut errors = Vec::new();
         validate_foreach_node(&node, &mut errors, &mut Vec::new(), &no_op_loader);
@@ -845,7 +845,7 @@ mod tests {
                 source_path: String::new(),
             })
         };
-        let node = make_bare_foreach_node(ForeachOver::Repos);
+        let node = make_bare_foreach_node("repos".to_string());
         let mut errors = Vec::new();
         validate_foreach_node(&node, &mut errors, &mut Vec::new(), &loader);
         assert!(
