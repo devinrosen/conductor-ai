@@ -74,6 +74,21 @@ pub fn make_ticket(source_id: &str, title: &str) -> TicketInput {
     }
 }
 
+/// Build a `ProviderContext` for item-provider unit tests.
+pub fn make_provider_ctx<'a>(
+    conn: &'a rusqlite::Connection,
+    config: &'a crate::config::Config,
+    repo_id: Option<&'a str>,
+    worktree_id: Option<&'a str>,
+) -> crate::workflow::item_provider::ProviderContext<'a> {
+    crate::workflow::item_provider::ProviderContext {
+        conn,
+        config,
+        repo_id,
+        worktree_id,
+    }
+}
+
 /// `setup_db()` + an agent_run `ar1` attached to worktree `w1`.
 ///
 /// Provides everything in `setup_db()` plus:

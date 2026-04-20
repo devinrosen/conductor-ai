@@ -166,25 +166,11 @@ mod tests {
     use crate::test_helpers;
     use crate::workflow_dsl::WorktreeScope;
 
-    fn make_ctx<'a>(
-        conn: &'a rusqlite::Connection,
-        config: &'a Config,
-        repo_id: Option<&'a str>,
-        worktree_id: Option<&'a str>,
-    ) -> ProviderContext<'a> {
-        ProviderContext {
-            conn,
-            config,
-            repo_id,
-            worktree_id,
-        }
-    }
-
     #[test]
     fn test_worktrees_items_missing_repo_id_returns_error() {
         let conn = test_helpers::setup_db();
         let config = Config::default();
-        let ctx = make_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
         let result = WorktreesProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
         assert!(result.is_err());
         let Err(e) = result else {
@@ -201,7 +187,7 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = Config::default();
         // repo_id present but no scope and no worktree_id
-        let ctx = make_ctx(&conn, &config, Some("r1"), None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
         let result = WorktreesProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
         assert!(result.is_err());
         let Err(e) = result else {
@@ -237,7 +223,7 @@ mod tests {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
         });
-        let ctx = make_ctx(&conn, &config, Some("r1"), None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
         let items = WorktreesProvider
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
@@ -257,7 +243,7 @@ mod tests {
         });
         let mut existing = HashSet::new();
         existing.insert("w2".to_string());
-        let ctx = make_ctx(&conn, &config, Some("r1"), None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
         let items = WorktreesProvider
             .items(&ctx, Some(&scope), &HashMap::new(), &existing)
             .unwrap();
@@ -268,6 +254,75 @@ mod tests {
     }
 
     #[test]
+    fn test_worktrees_items_worktree_id_fallback() {
+        // w1 from setup_db has branch='feat/test'; insert w2 with base_branch='feat/test'
+        let conn = test_helpers::setup_db();
+        insert_worktree_with_base_branch(&conn, "w2", "r1", "feat-child", "feat/test");
+        let config = Config::default();
+        // No scope — should resolve base_branch from w1.branch
+        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), Some("w1"));
+        let items = WorktreesProvider
+            .items(&ctx, None, &HashMap::new(), &HashSet::new())
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].item_id, "w2");
+    }
+
+    #[test]
+    fn test_filter_by_open_pr_keeps_matching() {
+        use crate::github::GithubPr;
+        use crate::worktree::WorktreeStatus;
+
+        let wts = vec![
+            Worktree {
+                id: "w1".into(),
+                repo_id: "r1".into(),
+                slug: "s1".into(),
+                branch: "feat/a".into(),
+                path: "/tmp/a".into(),
+                ticket_id: None,
+                status: WorktreeStatus::Active,
+                created_at: "2024-01-01T00:00:00Z".into(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            },
+            Worktree {
+                id: "w2".into(),
+                repo_id: "r1".into(),
+                slug: "s2".into(),
+                branch: "feat/b".into(),
+                path: "/tmp/b".into(),
+                ticket_id: None,
+                status: WorktreeStatus::Active,
+                created_at: "2024-01-01T00:00:00Z".into(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            },
+        ];
+        let prs = vec![GithubPr {
+            number: 1,
+            title: "PR A".into(),
+            url: String::new(),
+            author: String::new(),
+            state: "OPEN".into(),
+            head_ref_name: "feat/a".into(),
+            is_draft: false,
+            review_decision: None,
+            ci_status: String::new(),
+        }];
+
+        let with_pr = filter_by_open_pr(wts.clone(), true, prs.clone());
+        assert_eq!(with_pr.len(), 1);
+        assert_eq!(with_pr[0].id, "w1");
+
+        let without_pr = filter_by_open_pr(wts, false, prs);
+        assert_eq!(without_pr.len(), 1);
+        assert_eq!(without_pr[0].id, "w2");
+    }
+
+    #[test]
     fn test_worktrees_dependencies_empty_when_no_items() {
         let conn = test_helpers::setup_db();
         let config = Config::default();
@@ -275,5 +330,79 @@ mod tests {
             .dependencies(&conn, &config, "nonexistent-step")
             .unwrap();
         assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn test_worktrees_dependencies_returns_edges_via_tickets() {
+        let conn = test_helpers::setup_db();
+        let config = Config::default();
+
+        // Insert tickets: t2 blocked by t1.
+        let syncer = crate::tickets::TicketSyncer::new(&conn);
+        let t1_input = test_helpers::make_ticket("t1", "Blocker");
+        let t2_input = crate::tickets::TicketInput {
+            blocked_by: vec!["t1".to_string()],
+            ..test_helpers::make_ticket("t2", "Dependent")
+        };
+        syncer.upsert_tickets("r1", &[t1_input, t2_input]).unwrap();
+
+        let all_tickets = syncer
+            .list_filtered(
+                Some("r1"),
+                &crate::tickets::TicketFilter {
+                    labels: vec![],
+                    search: None,
+                    include_closed: false,
+                    unlabeled_only: false,
+                },
+            )
+            .unwrap();
+        let by_src: std::collections::HashMap<_, _> = all_tickets
+            .iter()
+            .map(|t| (t.source_id.as_str(), t.id.as_str()))
+            .collect();
+        let tid1 = by_src["t1"].to_string();
+        let tid2 = by_src["t2"].to_string();
+
+        // Insert worktrees linked to the tickets.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, ticket_id, base_branch, created_at) \
+             VALUES ('wt1', 'r1', 'wt1-slug', 'feat/wt1', '/tmp/wt1', 'active', :tid1, 'main', '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":tid1": &tid1 },
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, ticket_id, base_branch, created_at) \
+             VALUES ('wt2', 'r1', 'wt2-slug', 'feat/wt2', '/tmp/wt2', 'active', :tid2, 'main', '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":tid2": &tid2 },
+        ).unwrap();
+
+        // Create workflow run + step + fan-out items.
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = wf_mgr
+            .insert_step(&run.id, "foreach-step", "foreach", false, 0, 0)
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt1", "wt1-slug")
+            .unwrap();
+        wf_mgr
+            .insert_fan_out_item(&step_id, "worktree", "wt2", "wt2-slug")
+            .unwrap();
+
+        let edges = WorktreesProvider
+            .dependencies(&conn, &config, &step_id)
+            .unwrap();
+        assert_eq!(edges.len(), 1, "one blocking edge expected");
+        assert_eq!(
+            edges[0],
+            ("wt1".to_string(), "wt2".to_string()),
+            "wt1 blocks wt2"
+        );
     }
 }
