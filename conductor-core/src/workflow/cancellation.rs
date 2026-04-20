@@ -13,6 +13,21 @@ struct CancellationInner {
     parent: Option<Arc<CancellationInner>>,
 }
 
+impl CancellationInner {
+    fn find_in_chain<T>(&self, f: impl Fn(&CancellationInner) -> Option<T>) -> Option<T> {
+        let mut node = self;
+        loop {
+            if let Some(val) = f(node) {
+                return Some(val);
+            }
+            match &node.parent {
+                Some(p) => node = p,
+                None => return None,
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct CancellationToken(Arc<CancellationInner>);
@@ -51,31 +66,14 @@ impl CancellationToken {
 
     /// Returns true if this token or any ancestor is cancelled.
     pub(crate) fn is_cancelled(&self) -> bool {
-        let mut node = &self.0;
-        loop {
-            if node.cancelled.load(Ordering::SeqCst) {
-                return true;
-            }
-            match &node.parent {
-                Some(p) => node = p,
-                None => return false,
-            }
-        }
+        self.0
+            .find_in_chain(|n| n.cancelled.load(Ordering::SeqCst).then_some(()))
+            .is_some()
     }
 
     /// Returns the first cancellation reason found walking self → ancestors.
     pub(crate) fn reason(&self) -> Option<CancellationReason> {
-        let mut node = &self.0;
-        loop {
-            let r = node.reason.lock().unwrap().clone();
-            if r.is_some() {
-                return r;
-            }
-            match &node.parent {
-                Some(p) => node = p,
-                None => return None,
-            }
-        }
+        self.0.find_in_chain(|n| n.reason.lock().unwrap().clone())
     }
 
     /// Returns `Err(EngineError::Cancelled(...))` if this token or any ancestor is cancelled.
