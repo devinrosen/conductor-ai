@@ -109,3 +109,69 @@ pub fn resolve_runtime(name: &str, config: &Config) -> Result<Box<dyn AgentRunti
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, RuntimeConfig};
+    use std::collections::HashMap;
+
+    fn config_with_runtime(name: &str) -> Config {
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            name.to_string(),
+            RuntimeConfig {
+                runtime_type: name.to_string(),
+                binary: None,
+                args: vec![],
+                prompt_via: None,
+                result_field: None,
+                api_key_env: None,
+                command: None,
+                default_model: None,
+            },
+        );
+        Config {
+            runtimes,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn resolve_claude_returns_ok() {
+        let config = Config::default();
+        assert!(resolve_runtime("claude", &config).is_ok());
+    }
+
+    #[test]
+    fn resolve_unknown_runtime_returns_err_with_unknown_message() {
+        let config = Config::default();
+        let err = resolve_runtime("gemini", &config)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("unknown runtime 'gemini'"), "got: {err}");
+        assert!(err.contains("check the `runtime:` field"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_configured_but_unimplemented_runtime_returns_distinct_err() {
+        let config = config_with_runtime("gemini");
+        let err = resolve_runtime("gemini", &config)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            err.contains("defined in config but not yet implemented"),
+            "got: {err}"
+        );
+        assert!(err.contains("CliRuntime"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_configured_runtime_does_not_match_unknown_message() {
+        let config = config_with_runtime("codex");
+        let err = resolve_runtime("codex", &config).err().unwrap().to_string();
+        assert!(!err.contains("check the `runtime:` field"), "got: {err}");
+    }
+}

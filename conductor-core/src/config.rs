@@ -255,6 +255,12 @@ pub struct RuntimeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
     /// Full shell command (alternative to binary + args).
+    ///
+    /// # Security
+    /// Implementors of `CliRuntime`/`ScriptRuntime` MUST NOT pass agent-controlled
+    /// prompt content into this field via `sh -c` without sanitization — doing so
+    /// allows shell injection. Prefer `binary` + `args` with `prompt_via = "stdin"`
+    /// or `"file"` to keep prompt data out of the command string entirely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// Default model identifier passed to this runtime.

@@ -29,7 +29,7 @@ fn fail_attempt(
     attempt: u32,
     agent_label: &str,
 ) -> Result<()> {
-    if let Err(db_e) = agent_mgr.update_run_failed_if_running(run_id, err_msg) {
+    if let Err(db_e) = agent_mgr.update_run_failed(run_id, err_msg) {
         tracing::warn!(
             "Step '{}': failed to mark run failed in DB: {db_e}",
             agent_label
