@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::engine_error::{CancellationReason, EngineError};
+use super::cancellation_reason::CancellationReason;
+use super::engine_error::EngineError;
 
 #[allow(dead_code)]
 struct CancellationInner {
@@ -148,7 +149,6 @@ mod tests {
 
     #[test]
     fn error_if_cancelled_returns_cancelled_variant() {
-        use super::super::engine_error::EngineError;
         let token = CancellationToken::new();
         token.cancel(CancellationReason::Timeout);
         let err = token.error_if_cancelled().unwrap_err();
@@ -186,7 +186,6 @@ mod tests {
 
     #[test]
     fn error_if_cancelled_returns_err_for_inherited_parent_cancellation() {
-        use super::super::engine_error::EngineError;
         let parent = CancellationToken::new();
         let child = parent.child();
         parent.cancel(CancellationReason::UserRequested(Some("stop".into())));

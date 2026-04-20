@@ -1,14 +1,6 @@
 use thiserror::Error;
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CancellationReason {
-    UserRequested(Option<String>),
-    Timeout,
-    FailFast,
-    ParentCancelled,
-    EngineShutdown,
-}
+pub(crate) use super::cancellation_reason::CancellationReason;
 
 #[allow(dead_code)]
 #[derive(Debug, Error)]

@@ -6,6 +6,7 @@
 
 mod batch_validate;
 pub(crate) mod cancellation;
+pub(crate) mod cancellation_reason;
 pub(crate) mod constants;
 pub(crate) mod engine;
 pub(crate) mod engine_error;
