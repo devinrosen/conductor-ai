@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
 use crate::agent::types::AgentRun;
@@ -11,7 +11,7 @@ use super::{AgentRuntime, PollError, RuntimeRequest};
 /// JSON output file. Supports prompt injection via arg substitution or stdin.
 pub struct CliRuntime {
     config: RuntimeConfig,
-    state: Mutex<Option<CliState>>,
+    state: std::sync::Mutex<Option<CliState>>,
 }
 
 struct CliState {
@@ -25,12 +25,29 @@ impl CliRuntime {
     pub fn new(config: RuntimeConfig) -> Self {
         Self {
             config,
-            state: Mutex::new(None),
+            state: std::sync::Mutex::new(None),
         }
     }
 
     fn shell_single_quote(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
+    }
+
+    /// Kill the tmux window (best-effort) and mark the run cancelled in the DB.
+    fn teardown_window(
+        agent_mgr: &crate::agent::AgentManager<'_>,
+        run_id: &str,
+        window_name: &str,
+    ) {
+        let result = std::process::Command::new("tmux")
+            .args(["kill-window", "-t", window_name])
+            .output();
+        if let Err(e) = result {
+            tracing::warn!("CliRuntime: tmux kill-window failed: {e}");
+        }
+        if let Err(e) = agent_mgr.update_run_cancelled(run_id) {
+            tracing::warn!("CliRuntime: failed to mark run {run_id} cancelled: {e}");
+        }
     }
 }
 
@@ -82,14 +99,18 @@ impl AgentRuntime for CliRuntime {
 
         let output_path_str = output_path.to_string_lossy();
         let exit_code_path_str = exit_code_path.to_string_lossy();
+        // Quote the binary path to prevent injection via config values.
+        let binary_quoted = Self::shell_single_quote(binary);
 
         let shell_cmd = if prompt_via == "stdin" {
             let prompt_quoted = Self::shell_single_quote(&request.prompt);
             format!(
-                "echo {prompt_quoted} | {binary} {args_str} > {output_path_str}; echo $? > {exit_code_path_str}"
+                "echo {prompt_quoted} | {binary_quoted} {args_str} > {output_path_str}; echo $? > {exit_code_path_str}"
             )
         } else {
-            format!("{binary} {args_str} > {output_path_str}; echo $? > {exit_code_path_str}")
+            format!(
+                "{binary_quoted} {args_str} > {output_path_str}; echo $? > {exit_code_path_str}"
+            )
         };
 
         let window_name = format!("cli-{}", &request.run_id[..8.min(request.run_id.len())]);
@@ -107,6 +128,25 @@ impl AgentRuntime for CliRuntime {
             return Err(ConductorError::Agent(
                 "CliRuntime: tmux new-window failed".to_string(),
             ));
+        }
+
+        // Persist runtime name and tmux window to DB so is_alive(), cancel(), and
+        // the orphan reaper can operate correctly on this run.
+        let conn = crate::db::open_database_compat(&crate::config::db_path())
+            .map_err(|e| ConductorError::Agent(format!("CliRuntime: failed to open DB: {e}")))?;
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        if let Err(e) = agent_mgr.update_run_runtime(&request.run_id, &request.agent_def.runtime) {
+            tracing::warn!(
+                "CliRuntime: failed to persist runtime '{}' for run {}: {e}",
+                request.agent_def.runtime,
+                request.run_id
+            );
+        }
+        if let Err(e) = agent_mgr.update_run_tmux_window(&request.run_id, &window_name) {
+            tracing::warn!(
+                "CliRuntime: failed to persist tmux window '{window_name}' for run {}: {e}",
+                request.run_id
+            );
         }
 
         *self.state.lock().unwrap() = Some(CliState {
@@ -139,19 +179,13 @@ impl AgentRuntime for CliRuntime {
         loop {
             if let Some(flag) = shutdown {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    let _ = std::process::Command::new("tmux")
-                        .args(["kill-window", "-t", &state.window_name])
-                        .output();
-                    let _ = agent_mgr.update_run_cancelled(run_id);
+                    Self::teardown_window(&agent_mgr, run_id, &state.window_name);
                     return Err(PollError::Cancelled);
                 }
             }
 
             if poll_start.elapsed() > step_timeout {
-                let _ = std::process::Command::new("tmux")
-                    .args(["kill-window", "-t", &state.window_name])
-                    .output();
-                let _ = agent_mgr.update_run_cancelled(run_id);
+                Self::teardown_window(&agent_mgr, run_id, &state.window_name);
                 return Err(PollError::NoResult);
             }
 
@@ -183,20 +217,22 @@ impl AgentRuntime for CliRuntime {
                     let err_msg = result_text
                         .clone()
                         .unwrap_or_else(|| format!("process exited with code {exit_code}"));
-                    let _ = agent_mgr.update_run_failed(run_id, &err_msg);
-                } else {
-                    let _ = agent_mgr.update_run_completed(
-                        run_id,
-                        None,
-                        result_text.as_deref(),
-                        None,
-                        Some(1),
-                        Some(duration_ms),
-                        input_tokens,
-                        output_tokens,
-                        None,
-                        None,
-                    );
+                    if let Err(e) = agent_mgr.update_run_failed(run_id, &err_msg) {
+                        tracing::warn!("CliRuntime: failed to mark run {run_id} failed: {e}");
+                    }
+                } else if let Err(e) = agent_mgr.update_run_completed(
+                    run_id,
+                    None,
+                    result_text.as_deref(),
+                    None,
+                    Some(1),
+                    Some(duration_ms),
+                    input_tokens,
+                    output_tokens,
+                    None,
+                    None,
+                ) {
+                    tracing::warn!("CliRuntime: failed to mark run {run_id} completed: {e}");
                 }
 
                 return agent_mgr
@@ -265,7 +301,6 @@ mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
 
-    #[allow(dead_code)]
     fn make_runtime(binary: &str) -> CliRuntime {
         CliRuntime::new(RuntimeConfig {
             binary: Some(binary.to_string()),
@@ -308,5 +343,88 @@ mod tests {
         let (result, _, _) = parse_output(json, &config);
         // Falls back to raw content
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn binary_quoted_prevents_injection() {
+        // Ensure a binary path with spaces/special chars is single-quoted in the shell command.
+        let binary = "my binary; rm -rf ~/";
+        let quoted = CliRuntime::shell_single_quote(binary);
+        assert!(quoted.starts_with('\''));
+        assert!(!quoted.contains("rm -rf ~/;") || quoted.contains("\\'"));
+    }
+
+    #[test]
+    fn is_alive_returns_false_for_none_window() {
+        let runtime = make_runtime("echo");
+        let run = AgentRun {
+            id: "test".to_string(),
+            tmux_window: None,
+            worktree_id: None,
+            repo_id: None,
+            claude_session_id: None,
+            prompt: "p".to_string(),
+            status: crate::agent::status::AgentRunStatus::Running,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid: None,
+            runtime: "cli".to_string(),
+        };
+        assert!(!runtime.is_alive(&run));
+    }
+
+    #[test]
+    fn is_alive_returns_false_for_nonexistent_window() {
+        let runtime = make_runtime("echo");
+        let run = AgentRun {
+            id: "test".to_string(),
+            tmux_window: Some("no-such-window-xyz-99999".to_string()),
+            worktree_id: None,
+            repo_id: None,
+            claude_session_id: None,
+            prompt: "p".to_string(),
+            status: crate::agent::status::AgentRunStatus::Running,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid: None,
+            runtime: "cli".to_string(),
+        };
+        // Either tmux isn't running (returns false) or window doesn't exist (returns false).
+        assert!(!runtime.is_alive(&run));
+    }
+
+    #[test]
+    fn poll_before_spawn_returns_failed() {
+        let runtime = make_runtime("echo");
+        let result = runtime.poll("no-such-run", None, Duration::from_millis(10));
+        assert!(matches!(result, Err(PollError::Failed(_))));
     }
 }

@@ -414,6 +414,16 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Persist the tmux window name for an agent run so liveness checks and
+    /// the orphan reaper can find it.
+    pub fn update_run_tmux_window(&self, run_id: &str, window: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs SET tmux_window = :window WHERE id = :id",
+            named_params! { ":window": window, ":id": run_id },
+        )?;
+        Ok(())
+    }
+
     /// Store the OS PID for a headless agent run immediately after spawn.
     pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
         self.conn.execute(
@@ -1339,5 +1349,27 @@ mod tests {
         );
 
         let _ = tmp;
+    }
+
+    #[test]
+    fn test_update_run_runtime() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "prompt", None, None).unwrap();
+        assert_eq!(run.runtime.as_str(), "claude");
+        mgr.update_run_runtime(&run.id, "gemini").unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.runtime.as_str(), "gemini");
+    }
+
+    #[test]
+    fn test_update_run_tmux_window() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "prompt", None, None).unwrap();
+        assert!(run.tmux_window.is_none());
+        mgr.update_run_tmux_window(&run.id, "cli-abc12345").unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.tmux_window.as_deref(), Some("cli-abc12345"));
     }
 }
