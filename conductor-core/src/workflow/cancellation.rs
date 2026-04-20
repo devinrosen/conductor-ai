@@ -7,10 +7,23 @@ use super::engine_error::EngineError;
 #[allow(dead_code)]
 struct CancellationInner {
     cancelled: AtomicBool,
-    // Only set on the false→true transition; `.lock().unwrap()` is safe because
-    // we never panic while holding this lock.
     reason: Mutex<Option<CancellationReason>>,
     parent: Option<Arc<CancellationInner>>,
+}
+
+impl CancellationInner {
+    fn find_in_chain<T>(&self, f: impl Fn(&CancellationInner) -> Option<T>) -> Option<T> {
+        let mut node = self;
+        loop {
+            if let Some(val) = f(node) {
+                return Some(val);
+            }
+            match &node.parent {
+                Some(p) => node = p,
+                None => return None,
+            }
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -45,37 +58,21 @@ impl CancellationToken {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            *self.0.reason.lock().unwrap() = Some(reason);
+            *self.0.reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(reason);
         }
     }
 
     /// Returns true if this token or any ancestor is cancelled.
     pub(crate) fn is_cancelled(&self) -> bool {
-        let mut node = &self.0;
-        loop {
-            if node.cancelled.load(Ordering::SeqCst) {
-                return true;
-            }
-            match &node.parent {
-                Some(p) => node = p,
-                None => return false,
-            }
-        }
+        self.0
+            .find_in_chain(|n| n.cancelled.load(Ordering::SeqCst).then_some(()))
+            .is_some()
     }
 
     /// Returns the first cancellation reason found walking self → ancestors.
     pub(crate) fn reason(&self) -> Option<CancellationReason> {
-        let mut node = &self.0;
-        loop {
-            let r = node.reason.lock().unwrap().clone();
-            if r.is_some() {
-                return r;
-            }
-            match &node.parent {
-                Some(p) => node = p,
-                None => return None,
-            }
-        }
+        self.0
+            .find_in_chain(|n| n.reason.lock().unwrap_or_else(|e| e.into_inner()).clone())
     }
 
     /// Returns `Err(EngineError::Cancelled(...))` if this token or any ancestor is cancelled.
@@ -194,5 +191,24 @@ mod tests {
             err,
             EngineError::Cancelled(CancellationReason::UserRequested(_))
         ));
+    }
+
+    #[test]
+    fn poisoned_mutex_does_not_panic() {
+        let token = CancellationToken::new();
+        // Poison the reason mutex by panicking while holding it.
+        let inner = token.0.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = inner.reason.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+        // All public methods must survive a poisoned mutex without panicking.
+        assert!(!token.is_cancelled());
+        assert_eq!(token.reason(), None);
+        token.cancel(CancellationReason::Timeout);
+        assert!(token.is_cancelled());
+        assert_eq!(token.reason(), Some(CancellationReason::Timeout));
+        assert!(token.error_if_cancelled().is_err());
     }
 }
