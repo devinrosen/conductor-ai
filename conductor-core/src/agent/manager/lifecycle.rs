@@ -405,6 +405,15 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Record the runtime name for an agent run.
+    pub fn update_run_runtime(&self, run_id: &str, runtime: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs SET runtime = :runtime WHERE id = :id",
+            named_params! { ":runtime": runtime, ":id": run_id },
+        )?;
+        Ok(())
+    }
+
     /// Store the OS PID for a headless agent run immediately after spawn.
     pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
         self.conn.execute(

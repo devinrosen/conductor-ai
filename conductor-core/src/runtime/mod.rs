@@ -6,6 +6,7 @@
 //! - `RuntimeRequest` — carries per-invocation parameters from the workflow executor.
 
 pub mod claude;
+pub mod cli;
 
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -16,20 +17,11 @@ use crate::config::{AgentPermissionMode, Config};
 use crate::error::{ConductorError, Result};
 
 /// Trait implemented by every agent runtime.
-///
-/// The lifecycle within the workflow executor is:
-/// 1. `spawn(&request)` — launch the agent subprocess/API call.
-/// 2. `poll(run_id, shutdown, step_timeout)` — block until the agent completes.
-/// 3. On success `poll()` returns `Ok(AgentRun)` with the finalized run record.
-///
-/// `is_alive` and `cancel` are used by the orphan reaper and manual cancellation paths.
 pub trait AgentRuntime {
     /// Launch the agent for `request`. Stores the handle internally.
     fn spawn(&self, request: &RuntimeRequest) -> Result<()>;
 
     /// Block until the agent completes or is cancelled.
-    ///
-    /// Opens its own DB connections internally — the caller does not need to pass one.
     fn poll(
         &self,
         run_id: &str,
@@ -70,13 +62,10 @@ pub struct RuntimeRequest {
 #[derive(Debug)]
 pub enum PollError {
     /// Agent subprocess exited without emitting a `result` event.
-    /// The caller should retry (within the retry budget) or mark the step failed.
     NoResult,
     /// Workflow shutdown was requested while the agent was running.
-    /// The caller should update the step status and return immediately — do not retry.
     Cancelled,
-    /// Poll failed with an explanatory message (e.g. DB unavailable, not yet spawned).
-    /// The caller should treat this the same as `NoResult` for retry purposes.
+    /// Poll failed with an explanatory message.
     Failed(String),
 }
 
@@ -91,22 +80,61 @@ impl std::fmt::Display for PollError {
 }
 
 /// Resolve a runtime name to a boxed `AgentRuntime` implementation.
-///
-/// Returns the built-in `ClaudeRuntime` for the name `"claude"`.
-/// Returns `Err(ConductorError::Config(...))` for any other name in this release,
-/// with a distinct message when the runtime is present in `config.runtimes`
-/// (configured but not yet implemented) versus entirely unknown.
 pub fn resolve_runtime(name: &str, config: &Config) -> Result<Box<dyn AgentRuntime>> {
-    match name {
-        "claude" => Ok(Box::new(claude::ClaudeRuntime::new())),
-        other if config.runtimes.contains_key(other) => Err(ConductorError::Config(format!(
-            "runtime '{other}' is defined in config but not yet implemented in this release; \
-             only 'claude' is supported — CliRuntime and ScriptRuntime are planned for v0.7"
+    if name == "claude" {
+        return Ok(Box::new(claude::ClaudeRuntime::new()));
+    }
+    let rt_config = config.runtimes.get(name).ok_or_else(|| {
+        ConductorError::Config(format!(
+            "unknown runtime '{name}' — only 'claude' is built-in; \
+                 add a `[runtimes.{name}]` section to conductor.toml for CLI agents"
+        ))
+    })?;
+    match rt_config.runtime_type.as_deref().unwrap_or("cli") {
+        "cli" => Ok(Box::new(cli::CliRuntime::new(rt_config.clone()))),
+        t => Err(ConductorError::Config(format!(
+            "unsupported runtime type '{t}' for '{name}'"
         ))),
-        other => Err(ConductorError::Config(format!(
-            "unknown runtime '{other}' — only 'claude' is supported in this release; \
-             check the `runtime:` field in your agent frontmatter"
-        ))),
+    }
+}
+
+/// Extract a value from a serde_json::Value using a dot-separated path.
+///
+/// A `*` segment gathers all values at the current level and sums them if
+/// they are numbers (used for token_fields aggregation).
+pub fn extract_json_path(value: &serde_json::Value, path: &str) -> Option<serde_json::Value> {
+    let parts: Vec<&str> = path.split('.').collect();
+    extract_path_recursive(value, &parts)
+}
+
+fn extract_path_recursive(value: &serde_json::Value, parts: &[&str]) -> Option<serde_json::Value> {
+    if parts.is_empty() {
+        return Some(value.clone());
+    }
+    let head = parts[0];
+    let tail = &parts[1..];
+    if head == "*" {
+        let children: Vec<serde_json::Value> = match value {
+            serde_json::Value::Object(m) => m.values().cloned().collect(),
+            serde_json::Value::Array(a) => a.clone(),
+            _ => return None,
+        };
+        if tail.is_empty() {
+            return Some(serde_json::Value::Array(children));
+        }
+        let sum: f64 = children
+            .iter()
+            .filter_map(|child| extract_path_recursive(child, tail))
+            .filter_map(|v| v.as_f64())
+            .sum();
+        return Some(serde_json::json!(sum));
+    }
+    match value {
+        serde_json::Value::Object(m) => {
+            let child = m.get(head)?;
+            extract_path_recursive(child, tail)
+        }
+        _ => None,
     }
 }
 
@@ -114,21 +142,16 @@ pub fn resolve_runtime(name: &str, config: &Config) -> Result<Box<dyn AgentRunti
 mod tests {
     use super::*;
     use crate::config::{Config, RuntimeConfig};
+    use serde_json::json;
     use std::collections::HashMap;
 
-    fn config_with_runtime(name: &str) -> Config {
+    fn config_with_runtime(name: &str, rt_type: &str) -> Config {
         let mut runtimes = HashMap::new();
         runtimes.insert(
             name.to_string(),
             RuntimeConfig {
-                runtime_type: name.to_string(),
-                binary: None,
-                args: vec![],
-                prompt_via: None,
-                result_field: None,
-                api_key_env: None,
-                command: None,
-                default_model: None,
+                runtime_type: Some(rt_type.to_string()),
+                ..RuntimeConfig::default()
             },
         );
         Config {
@@ -144,34 +167,57 @@ mod tests {
     }
 
     #[test]
-    fn resolve_unknown_runtime_returns_err_with_unknown_message() {
+    fn resolve_unknown_runtime_returns_err() {
         let config = Config::default();
         let err = resolve_runtime("gemini", &config)
             .err()
             .unwrap()
             .to_string();
         assert!(err.contains("unknown runtime 'gemini'"), "got: {err}");
-        assert!(err.contains("check the `runtime:` field"), "got: {err}");
     }
 
     #[test]
-    fn resolve_configured_but_unimplemented_runtime_returns_distinct_err() {
-        let config = config_with_runtime("gemini");
-        let err = resolve_runtime("gemini", &config)
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(
-            err.contains("defined in config but not yet implemented"),
-            "got: {err}"
-        );
-        assert!(err.contains("CliRuntime"), "got: {err}");
+    fn resolve_configured_cli_runtime_returns_ok() {
+        let config = config_with_runtime("gemini", "cli");
+        assert!(resolve_runtime("gemini", &config).is_ok());
     }
 
     #[test]
-    fn resolve_configured_runtime_does_not_match_unknown_message() {
-        let config = config_with_runtime("codex");
-        let err = resolve_runtime("codex", &config).err().unwrap().to_string();
-        assert!(!err.contains("check the `runtime:` field"), "got: {err}");
+    fn resolve_unsupported_runtime_type_returns_err() {
+        let config = config_with_runtime("myapi", "api");
+        let err = resolve_runtime("myapi", &config).err().unwrap().to_string();
+        assert!(err.contains("unsupported runtime type"), "got: {err}");
+    }
+
+    #[test]
+    fn test_extract_simple_field() {
+        let v = json!({"response": "hello", "status": "ok"});
+        assert_eq!(extract_json_path(&v, "response"), Some(json!("hello")));
+    }
+
+    #[test]
+    fn test_extract_nested_field() {
+        let v = json!({"stats": {"total": 42}});
+        assert_eq!(extract_json_path(&v, "stats.total"), Some(json!(42)));
+    }
+
+    #[test]
+    fn test_extract_wildcard_sum() {
+        let v = json!({
+            "models": {
+                "a": {"tokens": {"total": 100}},
+                "b": {"tokens": {"total": 200}}
+            }
+        });
+        let result = extract_json_path(&v, "models.*.tokens.total");
+        assert!(result.is_some());
+        let n = result.unwrap().as_f64().unwrap();
+        assert!((n - 300.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_extract_missing_returns_none() {
+        let v = json!({"a": 1});
+        assert!(extract_json_path(&v, "b").is_none());
     }
 }
