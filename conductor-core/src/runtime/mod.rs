@@ -17,8 +17,6 @@ use crate::agent_config::AgentDef;
 use crate::config::{AgentPermissionMode, Config};
 use crate::error::{ConductorError, Result};
 
-pub use crate::text_util::validate_run_id;
-
 /// Trait implemented by every agent runtime.
 pub trait AgentRuntime {
     /// Launch the agent for `request`. Stores the handle internally.

@@ -53,7 +53,7 @@ impl CliRuntime {
 
 impl AgentRuntime for CliRuntime {
     fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
-        super::validate_run_id(&request.run_id)?;
+        crate::text_util::validate_run_id(&request.run_id)?;
 
         let binary = self.config.binary.as_deref().ok_or_else(|| {
             ConductorError::Config("CliRuntime: `binary` is required".to_string())

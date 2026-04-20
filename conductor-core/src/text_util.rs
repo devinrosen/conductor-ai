@@ -12,7 +12,7 @@ pub fn validate_run_id(run_id: &str) -> crate::error::Result<()> {
     {
         Ok(())
     } else {
-        Err(crate::error::ConductorError::Agent(format!(
+        Err(crate::error::ConductorError::InvalidInput(format!(
             "invalid run_id '{run_id}': must be non-empty and contain only alphanumeric characters, hyphens, or underscores"
         )))
     }
