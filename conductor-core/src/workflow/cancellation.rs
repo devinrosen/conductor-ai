@@ -1,17 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::engine_error::EngineError;
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CancellationReason {
-    UserRequested(Option<String>),
-    Timeout,
-    FailFast,
-    ParentCancelled,
-    EngineShutdown,
-}
+use super::engine_error::{CancellationReason, EngineError};
 
 #[allow(dead_code)]
 struct CancellationInner {
@@ -189,5 +179,17 @@ mod tests {
     fn error_if_cancelled_ok_when_not_cancelled() {
         let token = CancellationToken::new();
         assert!(token.error_if_cancelled().is_ok());
+    }
+
+    #[test]
+    fn error_if_cancelled_returns_err_for_inherited_parent_cancellation() {
+        let parent = CancellationToken::new();
+        let child = parent.child();
+        parent.cancel(CancellationReason::UserRequested(Some("stop".into())));
+        let err = child.error_if_cancelled().unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::Cancelled(CancellationReason::UserRequested(_))
+        ));
     }
 }
