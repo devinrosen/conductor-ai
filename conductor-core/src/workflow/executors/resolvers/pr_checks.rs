@@ -1,20 +1,14 @@
-use std::sync::Arc;
-
 use crate::error::Result;
 
-use crate::workflow::executors::gate_resolver::{
-    GateContext, GateParams, GatePoll, GateResolver, GitHubTokenCache,
-};
+use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GatePoll, GateResolver};
 
 use super::run_gh_json;
 
-pub(in crate::workflow::executors) struct PrChecksGateResolver {
-    token_cache: Arc<GitHubTokenCache>,
-}
+pub(in crate::workflow::executors) struct PrChecksGateResolver;
 
 impl PrChecksGateResolver {
-    pub(in crate::workflow::executors) fn new(token_cache: Arc<GitHubTokenCache>) -> Self {
-        Self { token_cache }
+    pub(in crate::workflow::executors) fn new() -> Self {
+        Self
     }
 }
 
@@ -31,14 +25,26 @@ fn parse_pr_checks(val: &serde_json::Value) -> bool {
     }
 }
 
+/// Convert parsed `gh pr checks` output into a `GatePoll`.
+///
+/// Extracted so tests can exercise the check evaluation logic without invoking
+/// a real `gh` subprocess.
+fn evaluate_checks(val: &serde_json::Value, gate_name: &str) -> GatePoll {
+    if parse_pr_checks(val) {
+        tracing::info!("Gate '{}': all checks passing", gate_name);
+        GatePoll::Approved(None)
+    } else {
+        GatePoll::Pending
+    }
+}
+
 impl GateResolver for PrChecksGateResolver {
     fn gate_type(&self) -> &str {
         "pr_checks"
     }
 
     fn poll(&self, _run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll> {
-        let effective_bot = params.bot_name.as_deref().or(ctx.default_bot_name);
-        let gate_bot_token = self.token_cache.get(ctx.config, effective_bot);
+        let gate_bot_token = ctx.resolve_token(params);
         let token_ref = gate_bot_token.as_deref();
 
         if let Some(val) = run_gh_json(
@@ -46,10 +52,7 @@ impl GateResolver for PrChecksGateResolver {
             ctx.working_dir,
             token_ref,
         ) {
-            if parse_pr_checks(&val) {
-                tracing::info!("Gate '{}': all checks passing", params.gate_name);
-                return Ok(GatePoll::Approved(None));
-            }
+            return Ok(evaluate_checks(&val, &params.gate_name));
         }
         Ok(GatePoll::Pending)
     }
@@ -59,6 +62,39 @@ impl GateResolver for PrChecksGateResolver {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_evaluate_checks_all_success_approved() {
+        let val = json!([
+            { "state": "SUCCESS" },
+            { "state": "SUCCESS" }
+        ]);
+        assert!(matches!(
+            evaluate_checks(&val, "test-gate"),
+            GatePoll::Approved(None)
+        ));
+    }
+
+    #[test]
+    fn test_evaluate_checks_with_failure_pending() {
+        let val = json!([
+            { "state": "SUCCESS" },
+            { "state": "FAILURE" }
+        ]);
+        assert!(matches!(
+            evaluate_checks(&val, "test-gate"),
+            GatePoll::Pending
+        ));
+    }
+
+    #[test]
+    fn test_evaluate_checks_empty_pending() {
+        let val = json!([]);
+        assert!(matches!(
+            evaluate_checks(&val, "test-gate"),
+            GatePoll::Pending
+        ));
+    }
 
     #[test]
     fn test_parse_pr_checks_all_success() {

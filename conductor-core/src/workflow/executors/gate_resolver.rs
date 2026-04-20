@@ -49,6 +49,13 @@ pub(super) struct GateContext<'a> {
     pub db_path: &'a Path,
 }
 
+impl<'a> GateContext<'a> {
+    pub(super) fn resolve_token(&self, params: &GateParams) -> Option<String> {
+        let effective_bot = params.bot_name.as_deref().or(self.default_bot_name);
+        self.token_cache.get(self.config, effective_bot)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GateResolver trait
 // ---------------------------------------------------------------------------
@@ -125,17 +132,10 @@ fn register(map: &mut HashMap<String, Box<dyn GateResolver>>, resolver: Box<dyn 
 
 pub(super) fn build_default_gate_resolvers(
     db_path: PathBuf,
-    token_cache: Arc<GitHubTokenCache>,
 ) -> HashMap<String, Box<dyn GateResolver>> {
     let mut map: HashMap<String, Box<dyn GateResolver>> = HashMap::new();
-    register(
-        &mut map,
-        Box::new(PrApprovalGateResolver::new(Arc::clone(&token_cache))),
-    );
-    register(
-        &mut map,
-        Box::new(PrChecksGateResolver::new(Arc::clone(&token_cache))),
-    );
+    register(&mut map, Box::new(PrApprovalGateResolver::new()));
+    register(&mut map, Box::new(PrChecksGateResolver::new()));
     register(
         &mut map,
         Box::new(HumanApprovalGateResolver::new(
@@ -183,8 +183,7 @@ mod tests {
 
     #[test]
     fn test_unknown_gate_type_returns_error() {
-        let token_cache = Arc::new(GitHubTokenCache::new(None));
-        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"), token_cache);
+        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"));
         assert!(
             !resolvers.contains_key("unknown_gate_xyz"),
             "unknown gate type should not be registered"
@@ -193,8 +192,7 @@ mod tests {
 
     #[test]
     fn test_build_default_gate_resolvers_registers_all_four_types() {
-        let token_cache = Arc::new(GitHubTokenCache::new(None));
-        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"), token_cache);
+        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"));
         assert!(
             resolvers.contains_key("pr_approval"),
             "pr_approval resolver must be registered"
@@ -259,8 +257,7 @@ mod tests {
         mode: crate::workflow_dsl::ApprovalMode,
     ) -> GatePoll {
         let token_cache = Arc::new(GitHubTokenCache::new(None));
-        let resolvers =
-            build_default_gate_resolvers(PathBuf::from("/tmp/test.db"), Arc::clone(&token_cache));
+        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"));
         let resolver = resolvers
             .get(resolver_key)
             .unwrap_or_else(|| panic!("{resolver_key} not registered"));
@@ -312,5 +309,55 @@ mod tests {
             matches!(poll, GatePoll::Pending),
             "pr_checks poll must return Pending when gh is unavailable"
         );
+    }
+
+    #[test]
+    fn test_resolve_token_uses_override_when_set() {
+        let token_cache = Arc::new(GitHubTokenCache::new(Some("override-tok".into())));
+        let config = Config::default();
+        let ctx = GateContext {
+            working_dir: "/tmp",
+            config: &config,
+            default_bot_name: None,
+            token_cache: Arc::clone(&token_cache),
+            db_path: Path::new("/tmp/test.db"),
+        };
+        let params = make_params(crate::workflow_dsl::ApprovalMode::MinApprovals);
+        assert_eq!(ctx.resolve_token(&params).as_deref(), Some("override-tok"));
+    }
+
+    #[test]
+    fn test_resolve_token_returns_none_when_no_app_and_no_override() {
+        let token_cache = Arc::new(GitHubTokenCache::new(None));
+        let config = Config::default();
+        let ctx = GateContext {
+            working_dir: "/tmp",
+            config: &config,
+            default_bot_name: None,
+            token_cache: Arc::clone(&token_cache),
+            db_path: Path::new("/tmp/test.db"),
+        };
+        let params = make_params(crate::workflow_dsl::ApprovalMode::MinApprovals);
+        assert!(
+            ctx.resolve_token(&params).is_none(),
+            "resolve_token must return None when no app and no override"
+        );
+    }
+
+    #[test]
+    fn test_resolve_token_prefers_params_bot_name_over_context_default() {
+        let token_cache = Arc::new(GitHubTokenCache::new(Some("override-tok".into())));
+        let config = Config::default();
+        let ctx = GateContext {
+            working_dir: "/tmp",
+            config: &config,
+            default_bot_name: Some("context-bot"),
+            token_cache: Arc::clone(&token_cache),
+            db_path: Path::new("/tmp/test.db"),
+        };
+        let mut params = make_params(crate::workflow_dsl::ApprovalMode::MinApprovals);
+        params.bot_name = Some("params-bot".into());
+        // Both have a name; with the override token, we just confirm it resolves successfully.
+        assert!(ctx.resolve_token(&params).is_some());
     }
 }
