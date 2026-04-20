@@ -79,9 +79,8 @@ impl ItemProvider for WorktreesProvider {
         true
     }
 
-    fn dependencies(&self, conn: &Connection, step_id: &str) -> Result<Vec<(String, String)>> {
-        let config = crate::config::load_config().unwrap_or_default();
-        dependencies_impl(conn, &config, step_id)
+    fn dependencies(&self, conn: &Connection, config: &Config, step_id: &str) -> Result<Vec<(String, String)>> {
+        dependencies_impl(conn, config, step_id)
     }
 }
 

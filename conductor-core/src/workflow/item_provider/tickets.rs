@@ -120,7 +120,7 @@ impl ItemProvider for TicketsProvider {
         true
     }
 
-    fn dependencies(&self, conn: &Connection, step_id: &str) -> Result<Vec<(String, String)>> {
+    fn dependencies(&self, conn: &Connection, _config: &crate::config::Config, step_id: &str) -> Result<Vec<(String, String)>> {
         use std::collections::HashSet;
 
         let mgr = crate::workflow::manager::WorkflowManager::new(conn);

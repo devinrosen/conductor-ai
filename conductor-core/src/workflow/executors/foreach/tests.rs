@@ -95,6 +95,7 @@ fn test_collect_ticket_items_unlabeled_scope() {
         default_bot_name: None,
         triggered_by_hook: false,
         last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     };
 
     let node = make_foreach_node_unlabeled();
@@ -276,6 +277,7 @@ fn make_execution_state_with_worktree<'a>(
         default_bot_name: None,
         triggered_by_hook: false,
         last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     }
 }
 
@@ -2082,4 +2084,33 @@ fn test_build_item_vars_repos_missing_repo_falls_back() {
     assert_eq!(vars.get("item.slug").map(|s| s.as_str()), Some("my-repo"));
     assert!(!vars.contains_key("item.local_path"));
     assert!(!vars.contains_key("item.remote_url"));
+}
+
+#[test]
+fn test_execute_foreach_unknown_provider_returns_error() {
+    let conn = setup_db();
+    let config: &'static crate::config::Config =
+        Box::leak(Box::new(crate::config::Config::default()));
+    let mut state = crate::workflow::tests::common::make_loop_test_state(&conn, config);
+
+    let node = ForEachNode {
+        name: "test-unknown".to_string(),
+        over: "nonexistent_provider_xyz".to_string(),
+        scope: None,
+        filter: std::collections::HashMap::new(),
+        ordered: false,
+        on_cycle: crate::workflow_dsl::OnCycle::Fail,
+        max_parallel: 1,
+        workflow: "some-workflow".to_string(),
+        inputs: std::collections::HashMap::new(),
+        on_child_fail: OnChildFail::Continue,
+    };
+
+    let result = execute_foreach(&mut state, &node, 0);
+    assert!(result.is_err(), "unknown provider should return Err");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("unknown provider") || err_msg.contains("no ItemProvider"),
+        "error should mention unknown provider, got: {err_msg}"
+    );
 }

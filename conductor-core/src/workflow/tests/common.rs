@@ -81,6 +81,7 @@ pub(in crate::workflow) fn base_execution_state<'a>(
         default_bot_name: None,
         triggered_by_hook: false,
         last_heartbeat_at: ExecutionState::new_heartbeat(),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
     }
 }
 

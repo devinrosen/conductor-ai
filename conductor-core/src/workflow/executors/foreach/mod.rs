@@ -33,7 +33,7 @@ use crate::error::{ConductorError, Result};
 use crate::workflow::engine::{
     record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
 };
-use crate::workflow::item_provider::{build_default_registry, ProviderContext};
+use crate::workflow::item_provider::ProviderContext;
 use crate::workflow::prompt_builder::build_variable_map;
 use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
@@ -113,6 +113,14 @@ pub fn execute_foreach(
         id
     };
 
+    // Validate the provider early so unknown-provider errors surface before workflow I/O.
+    let provider = state.registry.get(&node.over).ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "foreach '{}': unknown provider '{}' — no ItemProvider registered for this name",
+            node.name, node.over
+        ))
+    })?;
+
     let (working_dir, repo_path) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
         (
@@ -138,14 +146,6 @@ pub fn execute_foreach(
     // Check for existing fan_out_items rows (resume case).
     let existing_ids = state.wf_mgr.get_existing_fan_out_item_ids(&step_id)?;
     let existing_set: HashSet<String> = existing_ids.into_iter().collect();
-
-    let registry = build_default_registry();
-    let provider = registry.get(&node.over).ok_or_else(|| {
-        ConductorError::Workflow(format!(
-            "foreach '{}': unknown provider '{}' — no ItemProvider registered for this name",
-            node.name, node.over
-        ))
-    })?;
 
     let repo_id_owned = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
@@ -375,7 +375,7 @@ fn run_dispatch_loop(
 
     // Load dependency edges once upfront (for ordered ticket/worktree fan-outs).
     let dep_edges: Vec<(String, String)> = if ordered_dep_type {
-        provider.dependencies(state.conn, step_id)?
+        provider.dependencies(state.conn, state.config, step_id)?
     } else {
         vec![]
     };
@@ -886,7 +886,10 @@ fn build_item_vars(
                 }
             }
         }
-        _ => {}
+        _ => {
+            vars.insert("item.id".to_string(), item.item_id.clone());
+            vars.insert("item.ref".to_string(), item.item_ref.clone());
+        }
     }
 
     Ok(vars)
@@ -971,8 +974,7 @@ fn run_dispatch_loop_for_test(
     child_def: &crate::workflow_dsl::WorkflowDef,
     iteration: u32,
 ) -> Result<bool> {
-    let registry = build_default_registry();
-    let provider = registry.get(&node.over).ok_or_else(|| {
+    let provider = state.registry.get(&node.over).ok_or_else(|| {
         ConductorError::Workflow(format!("no provider for '{}' in test", node.over))
     })?;
     run_dispatch_loop(
@@ -992,7 +994,7 @@ fn load_worktree_dep_edges(
     step_id: &str,
 ) -> Result<Vec<(String, String)>> {
     let provider = crate::workflow::item_provider::worktrees::WorktreesProvider;
-    crate::workflow::item_provider::ItemProvider::dependencies(&provider, state.conn, step_id)
+    crate::workflow::item_provider::ItemProvider::dependencies(&provider, state.conn, state.config, step_id)
 }
 
 /// Test bridge: delegates to TicketsProvider.dependencies().
@@ -1002,7 +1004,7 @@ fn load_ticket_dep_edges(
     step_id: &str,
 ) -> Result<Vec<(String, String)>> {
     let provider = crate::workflow::item_provider::tickets::TicketsProvider;
-    crate::workflow::item_provider::ItemProvider::dependencies(&provider, state.conn, step_id)
+    crate::workflow::item_provider::ItemProvider::dependencies(&provider, state.conn, state.config, step_id)
 }
 
 /// Test bridge: delegates to the TicketsProvider via the registry.

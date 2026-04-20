@@ -39,8 +39,8 @@ pub trait ItemProvider: Send + Sync {
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>>;
 
-    fn dependencies(&self, conn: &Connection, step_id: &str) -> Result<Vec<(String, String)>> {
-        let _ = (conn, step_id);
+    fn dependencies(&self, conn: &Connection, config: &Config, step_id: &str) -> Result<Vec<(String, String)>> {
+        let _ = (conn, config, step_id);
         Ok(vec![])
     }
 
@@ -85,4 +85,58 @@ pub fn build_default_registry() -> ItemProviderRegistry {
     r.register(workflow_runs::WorkflowRunsProvider);
     r.register(worktrees::WorktreesProvider);
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct DummyProvider;
+    impl ItemProvider for DummyProvider {
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        fn items(
+            &self,
+            _ctx: &ProviderContext<'_>,
+            _scope: Option<&crate::workflow_dsl::ForeachScope>,
+            _filter: &HashMap<String, String>,
+            _existing_set: &HashSet<String>,
+        ) -> Result<Vec<FanOutItem>> {
+            Ok(vec![FanOutItem {
+                item_type: "dummy".to_string(),
+                item_id: "d1".to_string(),
+                item_ref: "ref1".to_string(),
+            }])
+        }
+    }
+
+    #[test]
+    fn test_registry_register_and_get() {
+        let mut registry = ItemProviderRegistry::new();
+        registry.register(DummyProvider);
+        let p = registry.get("dummy");
+        assert!(p.is_some(), "registered provider should be retrievable by name");
+        let missing = registry.get("nonexistent");
+        assert!(missing.is_none(), "unregistered provider should return None");
+    }
+
+    #[test]
+    fn test_registry_get_returns_same_name() {
+        let mut registry = ItemProviderRegistry::new();
+        registry.register(DummyProvider);
+        let p = registry.get("dummy").unwrap();
+        assert_eq!(p.name(), "dummy");
+    }
+
+    #[test]
+    fn test_build_default_registry_has_all_four_providers() {
+        let registry = build_default_registry();
+        for name in ["tickets", "repos", "workflow_runs", "worktrees"] {
+            assert!(
+                registry.get(name).is_some(),
+                "build_default_registry should register '{name}'"
+            );
+        }
+    }
 }
