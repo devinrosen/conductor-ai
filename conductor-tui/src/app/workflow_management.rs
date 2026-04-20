@@ -2169,6 +2169,7 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".to_string(),
             model: model.map(String::from),
             allow_agent_issue_creation: false,
+            runtime_overrides: None,
         }
     }
 

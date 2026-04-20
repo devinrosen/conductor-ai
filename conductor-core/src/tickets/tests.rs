@@ -1302,6 +1302,7 @@ fn make_repo() -> crate::repo::Repo {
         created_at: "2024-01-01T00:00:00Z".to_string(),
         model: None,
         allow_agent_issue_creation: false,
+        runtime_overrides: None,
     }
 }
 

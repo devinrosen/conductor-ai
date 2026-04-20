@@ -53,6 +53,7 @@ pub(crate) fn make_repo(id: &str, slug: &str) -> conductor_core::repo::Repo {
         created_at: String::new(),
         model: None,
         allow_agent_issue_creation: false,
+        runtime_overrides: None,
     }
 }
 

@@ -551,6 +551,7 @@ mod tests {
             bot_name: None,
             conversation_id: None,
             subprocess_pid: None,
+            runtime: "claude".to_string(),
         };
 
         let prompt = run.build_resume_prompt();

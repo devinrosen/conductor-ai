@@ -32,6 +32,7 @@ fn make_repos() -> Vec<Repo> {
             created_at: "2024-01-01T00:00:00Z".into(),
             model: None,
             allow_agent_issue_creation: false,
+            runtime_overrides: None,
         },
         Repo {
             id: "01REPO0000000000000000000B".into(),
@@ -43,6 +44,7 @@ fn make_repos() -> Vec<Repo> {
             created_at: "2024-01-02T00:00:00Z".into(),
             model: None,
             allow_agent_issue_creation: false,
+            runtime_overrides: None,
         },
     ]
 }

@@ -339,6 +339,7 @@ mod tests {
             role: crate::agent_config::AgentRole::Actor,
             can_commit: false,
             model: None,
+            runtime: "claude".to_string(),
         };
         let result = build_agent_prompt(&state, &agent_def, None, "", None);
         assert!(
@@ -357,6 +358,7 @@ mod tests {
             role: crate::agent_config::AgentRole::Actor,
             can_commit: false,
             model: None,
+            runtime: "claude".to_string(),
         };
         let error_msg = "schema validation failed: missing field 'context'";
         let result = build_agent_prompt(&state, &agent_def, None, "", Some(error_msg));
