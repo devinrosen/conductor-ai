@@ -49,8 +49,7 @@ impl AgentRuntime for ScriptRuntime {
                 ConductorError::Agent(format!("ScriptRuntime: failed to spawn command: {e}"))
             })?;
 
-        let conn = crate::db::open_database_compat(&crate::config::db_path())
-            .map_err(|e| ConductorError::Agent(format!("ScriptRuntime: failed to open DB: {e}")))?;
+        let conn = crate::db::open_agent_db("ScriptRuntime")?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
         if output.status.success() {
@@ -101,8 +100,8 @@ impl AgentRuntime for ScriptRuntime {
         _shutdown: Option<&Arc<AtomicBool>>,
         _step_timeout: Duration,
     ) -> std::result::Result<AgentRun, PollError> {
-        let conn = crate::db::open_database_compat(&crate::config::db_path())
-            .map_err(|e| PollError::Failed(format!("ScriptRuntime: failed to open DB: {e}")))?;
+        let conn = crate::db::open_agent_db("ScriptRuntime")
+            .map_err(|e| PollError::Failed(e.to_string()))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
         let run = agent_mgr
