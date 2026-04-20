@@ -23,7 +23,7 @@ fn test_foreach_over_tickets() {
     match &def.body[0] {
         WorkflowNode::ForEach(n) => {
             assert_eq!(n.name, "sprint-work");
-            assert_eq!(n.over, ForeachOver::Tickets);
+            assert_eq!(n.over, "tickets");
             assert!(n.ordered);
             assert_eq!(n.max_parallel, 3);
             assert_eq!(n.workflow, "ticket-to-pr");
@@ -56,7 +56,7 @@ fn test_foreach_over_tickets_label_scope() {
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::ForEach(n) => {
-            assert_eq!(n.over, ForeachOver::Tickets);
+            assert_eq!(n.over, "tickets");
             match &n.scope {
                 Some(ForeachScope::Ticket(TicketScope::Label(lbl))) => assert_eq!(lbl, "sprint-42"),
                 other => panic!("Expected Label scope, got {other:?}"),
@@ -82,7 +82,7 @@ fn test_foreach_over_repos() {
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::ForEach(n) => {
-            assert_eq!(n.over, ForeachOver::Repos);
+            assert_eq!(n.over, "repos");
             assert_eq!(n.max_parallel, 2);
             assert_eq!(n.on_child_fail, OnChildFail::Continue);
         }
@@ -107,7 +107,7 @@ fn test_foreach_over_workflow_runs() {
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::ForEach(n) => {
-            assert_eq!(n.over, ForeachOver::WorkflowRuns);
+            assert_eq!(n.over, "workflow_runs");
             assert_eq!(n.filter.get("status").map(|s| s.as_str()), Some("failed"));
         }
         other => panic!("Expected ForEach node, got {other:?}"),
@@ -220,7 +220,8 @@ fn test_foreach_missing_workflow() {
 }
 
 #[test]
-fn test_foreach_invalid_over_value() {
+fn test_foreach_unknown_over_value_parses_successfully() {
+    // Unknown provider names now parse successfully (runtime error at execution time).
     let input = r#"
         workflow test {
             foreach sprint {
@@ -231,9 +232,43 @@ fn test_foreach_invalid_over_value() {
         }
     "#;
     let result = parse_workflow_str(input, "test.wf");
-    assert!(result.is_err());
-    let err = format!("{}", result.unwrap_err());
-    assert!(err.contains("invalid over value"), "got: {err}");
+    assert!(
+        result.is_ok(),
+        "unknown over value should parse OK: {:?}",
+        result
+    );
+    match &result.unwrap().body[0] {
+        WorkflowNode::ForEach(n) => {
+            assert_eq!(n.over, "files", "over should capture the raw string");
+        }
+        other => panic!("Expected ForEach node, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_foreach_unknown_over_value_tasks() {
+    // New provider names (e.g. "tasks") must parse without error.
+    let input = r#"
+        workflow test {
+            foreach my-tasks {
+                over         = tasks
+                max_parallel = 2
+                workflow     = "handle-task"
+            }
+        }
+    "#;
+    let result = parse_workflow_str(input, "test.wf");
+    assert!(
+        result.is_ok(),
+        "unknown provider 'tasks' should parse successfully: {:?}",
+        result
+    );
+    match &result.unwrap().body[0] {
+        WorkflowNode::ForEach(n) => {
+            assert_eq!(n.over, "tasks");
+        }
+        other => panic!("Expected ForEach node, got {other:?}"),
+    }
 }
 
 #[test]
@@ -269,7 +304,7 @@ fn test_foreach_scope_unlabeled_true() {
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::ForEach(n) => {
-            assert_eq!(n.over, ForeachOver::Tickets);
+            assert_eq!(n.over, "tickets");
             match &n.scope {
                 Some(ForeachScope::Ticket(TicketScope::Unlabeled)) => {}
                 other => panic!("Expected Unlabeled scope, got {other:?}"),
@@ -340,7 +375,7 @@ fn test_foreach_over_worktrees_basic() {
     match &def.body[0] {
         WorkflowNode::ForEach(n) => {
             assert_eq!(n.name, "release-worktrees");
-            assert_eq!(n.over, ForeachOver::Worktrees);
+            assert_eq!(n.over, "worktrees");
             assert!(!n.ordered);
             assert_eq!(n.max_parallel, 3);
             assert_eq!(n.workflow, "ticket-to-pr");
@@ -374,7 +409,7 @@ fn test_foreach_over_worktrees_ordered() {
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::ForEach(n) => {
-            assert_eq!(n.over, ForeachOver::Worktrees);
+            assert_eq!(n.over, "worktrees");
             assert!(n.ordered);
             assert_eq!(n.on_cycle, OnCycle::Warn);
             match &n.scope {
@@ -429,7 +464,7 @@ fn test_foreach_over_worktrees_missing_scope() {
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::ForEach(n) => {
-            assert_eq!(n.over, ForeachOver::Worktrees);
+            assert_eq!(n.over, "worktrees");
             assert!(n.scope.is_none());
         }
         other => panic!("Expected ForEach node, got {other:?}"),

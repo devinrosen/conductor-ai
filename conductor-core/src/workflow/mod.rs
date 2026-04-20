@@ -13,6 +13,7 @@ pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
 pub(crate) mod helpers;
+pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
 pub(crate) mod prompt_builder;

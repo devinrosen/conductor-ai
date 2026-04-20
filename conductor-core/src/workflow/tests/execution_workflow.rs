@@ -2,8 +2,7 @@ use super::*;
 use crate::agent::AgentManager;
 use crate::error::ConductorError;
 use crate::workflow_dsl::{
-    AgentRef, CallNode, CallWorkflowNode, ForEachNode, ForeachOver, GateType, OnChildFail,
-    WorkflowNode,
+    AgentRef, CallNode, CallWorkflowNode, ForEachNode, GateType, OnChildFail, WorkflowNode,
 };
 
 #[test]
@@ -697,7 +696,7 @@ fn test_foreach_worktrees_uses_derived_repo_id_from_worktree() {
 
     let foreach_node = ForEachNode {
         name: "fan-out".to_string(),
-        over: ForeachOver::Worktrees,
+        over: "worktrees".to_string(),
         scope: None,
         filter: Default::default(),
         ordered: false,

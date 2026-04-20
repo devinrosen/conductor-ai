@@ -7,10 +7,10 @@ use crate::error::{ConductorError, Result};
 use super::lexer::{Lexer, Token};
 use super::types::{
     AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, ForEachNode,
-    ForeachOver, ForeachScope, GateNode, GateOptions, GateType, IfNode, InputDecl, InputType,
-    OnChildFail, OnCycle, OnFail, OnFailAction, OnMaxIter, OnTimeout, ParallelNode,
-    QualityGateConfig, ScriptNode, TicketScope, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
-    WorkflowTrigger, WorktreeScope,
+    ForeachScope, GateNode, GateOptions, GateType, IfNode, InputDecl, InputType, OnChildFail,
+    OnCycle, OnFail, OnFailAction, OnMaxIter, OnTimeout, ParallelNode, QualityGateConfig,
+    ScriptNode, TicketScope, UnlessNode, WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger,
+    WorktreeScope,
 };
 
 // ---------------------------------------------------------------------------
@@ -963,17 +963,8 @@ impl Parser {
         self.expect(&Token::RBrace)?;
 
         // Required: over
-        let over = match kvs.get("over").map(|v| v.as_str()) {
-            Some("tickets") => ForeachOver::Tickets,
-            Some("repos") => ForeachOver::Repos,
-            Some("workflow_runs") => ForeachOver::WorkflowRuns,
-            Some("worktrees") => ForeachOver::Worktrees,
-            Some(other) => {
-                return Err(format!(
-                    "foreach '{name}': invalid over value '{other}' \
-                     (expected: tickets, repos, workflow_runs, worktrees)"
-                ))
-            }
+        let over: String = match kvs.get("over").map(|v| v.as_str()) {
+            Some(s) => s.to_string(),
             None => return Err(format!("foreach '{name}': missing required key 'over'")),
         };
 
@@ -995,8 +986,8 @@ impl Parser {
         // Optional: scope (required for tickets and worktrees, validated at semantic layer)
         let scope = if let Some(s) = kvs.remove("scope") {
             match s {
-                KvValue::Map(m) => match over {
-                    ForeachOver::Worktrees => {
+                KvValue::Map(m) => match over.as_str() {
+                    "worktrees" => {
                         let base_branch = m.get("base_branch").cloned();
                         let has_open_pr = match m.get("has_open_pr").map(|s| s.as_str()) {
                             None => None,
@@ -1013,7 +1004,7 @@ impl Parser {
                             has_open_pr,
                         }))
                     }
-                    ForeachOver::Tickets => {
+                    "tickets" => {
                         if let Some(ticket_id) = m.get("ticket_id") {
                             Some(ForeachScope::Ticket(TicketScope::TicketId(
                                 ticket_id.clone(),
@@ -1036,8 +1027,7 @@ impl Parser {
                     }
                     _ => {
                         return Err(format!(
-                            "foreach '{name}': scope is not applicable for over = {:?}",
-                            over
+                            "foreach '{name}': scope is not applicable for over = '{over}'"
                         ))
                     }
                 },
