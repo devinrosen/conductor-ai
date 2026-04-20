@@ -113,8 +113,14 @@ mod tests {
 
         // Only the completed run should be returned (running is not terminal).
         let ids: Vec<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
-        assert!(ids.contains(&run1.id.as_str()), "completed run should be included");
-        assert!(!ids.contains(&run2.id.as_str()), "running run should be excluded");
+        assert!(
+            ids.contains(&run1.id.as_str()),
+            "completed run should be included"
+        );
+        assert!(
+            !ids.contains(&run2.id.as_str()),
+            "running run should be excluded"
+        );
     }
 
     #[test]
@@ -162,7 +168,13 @@ mod tests {
             .unwrap();
 
         let ids: Vec<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
-        assert!(ids.contains(&run1.id.as_str()), "failed run should be included");
-        assert!(!ids.contains(&run2.id.as_str()), "completed run should be excluded when filter=failed");
+        assert!(
+            ids.contains(&run1.id.as_str()),
+            "failed run should be included"
+        );
+        assert!(
+            !ids.contains(&run2.id.as_str()),
+            "completed run should be excluded when filter=failed"
+        );
     }
 }

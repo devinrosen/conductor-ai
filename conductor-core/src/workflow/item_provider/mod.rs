@@ -39,7 +39,12 @@ pub trait ItemProvider: Send + Sync {
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>>;
 
-    fn dependencies(&self, conn: &Connection, config: &Config, step_id: &str) -> Result<Vec<(String, String)>> {
+    fn dependencies(
+        &self,
+        conn: &Connection,
+        config: &Config,
+        step_id: &str,
+    ) -> Result<Vec<(String, String)>> {
         let _ = (conn, config, step_id);
         Ok(vec![])
     }
@@ -116,9 +121,15 @@ mod tests {
         let mut registry = ItemProviderRegistry::new();
         registry.register(DummyProvider);
         let p = registry.get("dummy");
-        assert!(p.is_some(), "registered provider should be retrievable by name");
+        assert!(
+            p.is_some(),
+            "registered provider should be retrievable by name"
+        );
         let missing = registry.get("nonexistent");
-        assert!(missing.is_none(), "unregistered provider should return None");
+        assert!(
+            missing.is_none(),
+            "unregistered provider should return None"
+        );
     }
 
     #[test]

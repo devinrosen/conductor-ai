@@ -994,7 +994,12 @@ fn load_worktree_dep_edges(
     step_id: &str,
 ) -> Result<Vec<(String, String)>> {
     let provider = crate::workflow::item_provider::worktrees::WorktreesProvider;
-    crate::workflow::item_provider::ItemProvider::dependencies(&provider, state.conn, state.config, step_id)
+    crate::workflow::item_provider::ItemProvider::dependencies(
+        &provider,
+        state.conn,
+        state.config,
+        step_id,
+    )
 }
 
 /// Test bridge: delegates to TicketsProvider.dependencies().
@@ -1004,7 +1009,12 @@ fn load_ticket_dep_edges(
     step_id: &str,
 ) -> Result<Vec<(String, String)>> {
     let provider = crate::workflow::item_provider::tickets::TicketsProvider;
-    crate::workflow::item_provider::ItemProvider::dependencies(&provider, state.conn, state.config, step_id)
+    crate::workflow::item_provider::ItemProvider::dependencies(
+        &provider,
+        state.conn,
+        state.config,
+        step_id,
+    )
 }
 
 /// Test bridge: delegates to the TicketsProvider via the registry.
