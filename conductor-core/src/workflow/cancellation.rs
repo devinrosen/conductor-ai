@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use super::engine_error::EngineError;
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CancellationReason {
@@ -85,11 +87,12 @@ impl CancellationToken {
         }
     }
 
-    /// Returns `Err(reason)` if this token or any ancestor is cancelled.
-    /// Callers that need `EngineError` can map: `.map_err(EngineError::Cancelled)`.
-    pub(crate) fn error_if_cancelled(&self) -> Result<(), CancellationReason> {
+    /// Returns `Err(EngineError::Cancelled(...))` if this token or any ancestor is cancelled.
+    pub(crate) fn error_if_cancelled(&self) -> Result<(), EngineError> {
         if self.is_cancelled() {
-            Err(self.reason().unwrap_or(CancellationReason::ParentCancelled))
+            Err(EngineError::Cancelled(
+                self.reason().unwrap_or(CancellationReason::ParentCancelled),
+            ))
         } else {
             Ok(())
         }
@@ -155,10 +158,14 @@ mod tests {
 
     #[test]
     fn error_if_cancelled_returns_cancelled_variant() {
+        use super::super::engine_error::EngineError;
         let token = CancellationToken::new();
         token.cancel(CancellationReason::Timeout);
         let err = token.error_if_cancelled().unwrap_err();
-        assert!(matches!(err, CancellationReason::Timeout));
+        assert!(matches!(
+            err,
+            EngineError::Cancelled(CancellationReason::Timeout)
+        ));
     }
 
     #[test]
@@ -189,10 +196,14 @@ mod tests {
 
     #[test]
     fn error_if_cancelled_returns_err_for_inherited_parent_cancellation() {
+        use super::super::engine_error::EngineError;
         let parent = CancellationToken::new();
         let child = parent.child();
         parent.cancel(CancellationReason::UserRequested(Some("stop".into())));
         let err = child.error_if_cancelled().unwrap_err();
-        assert!(matches!(err, CancellationReason::UserRequested(_)));
+        assert!(matches!(
+            err,
+            EngineError::Cancelled(CancellationReason::UserRequested(_))
+        ));
     }
 }
