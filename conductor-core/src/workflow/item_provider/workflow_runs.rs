@@ -60,14 +60,11 @@ mod tests {
         let config = Config::default();
 
         // Insert a completed run and a running run.
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
-        let parent = agent_mgr
-            .create_run(Some("w1"), "workflow", None, None)
-            .unwrap();
+        let parent_id = test_helpers::make_agent_parent_id(&conn);
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
 
         let run1 = wf_mgr
-            .create_workflow_run("wf-a", Some("w1"), &parent.id, false, "manual", None)
+            .create_workflow_run("wf-a", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(
@@ -79,7 +76,7 @@ mod tests {
             .unwrap();
 
         let run2 = wf_mgr
-            .create_workflow_run("wf-b", Some("w1"), &parent.id, false, "manual", None)
+            .create_workflow_run("wf-b", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(
@@ -113,14 +110,11 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = Config::default();
 
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
-        let parent = agent_mgr
-            .create_run(Some("w1"), "workflow", None, None)
-            .unwrap();
+        let parent_id = test_helpers::make_agent_parent_id(&conn);
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
 
         let run1 = wf_mgr
-            .create_workflow_run("wf-fail", Some("w1"), &parent.id, false, "manual", None)
+            .create_workflow_run("wf-fail", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(
@@ -132,7 +126,7 @@ mod tests {
             .unwrap();
 
         let run2 = wf_mgr
-            .create_workflow_run("wf-ok", Some("w1"), &parent.id, false, "manual", None)
+            .create_workflow_run("wf-ok", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(
@@ -168,14 +162,11 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = Config::default();
 
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
-        let parent = agent_mgr
-            .create_run(Some("w1"), "workflow", None, None)
-            .unwrap();
+        let parent_id = test_helpers::make_agent_parent_id(&conn);
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
 
         let run_a = wf_mgr
-            .create_workflow_run("wf-alpha", Some("w1"), &parent.id, false, "manual", None)
+            .create_workflow_run("wf-alpha", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(
@@ -187,7 +178,7 @@ mod tests {
             .unwrap();
 
         let run_b = wf_mgr
-            .create_workflow_run("wf-beta", Some("w1"), &parent.id, false, "manual", None)
+            .create_workflow_run("wf-beta", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(
@@ -216,14 +207,11 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = Config::default();
 
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
-        let parent = agent_mgr
-            .create_run(Some("w1"), "workflow", None, None)
-            .unwrap();
+        let parent_id = test_helpers::make_agent_parent_id(&conn);
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
 
         let run1 = wf_mgr
-            .create_workflow_run("wf-x", Some("w1"), &parent.id, false, "manual", None)
+            .create_workflow_run("wf-x", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(

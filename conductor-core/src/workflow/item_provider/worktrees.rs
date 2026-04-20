@@ -376,18 +376,8 @@ mod tests {
             rusqlite::named_params! { ":tid2": &tid2 },
         ).unwrap();
 
-        // Create workflow run + step + fan-out items.
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
-        let parent = agent_mgr
-            .create_run(Some("w1"), "workflow", None, None)
-            .unwrap();
+        let step_id = test_helpers::make_foreach_step(&conn);
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-        let run = wf_mgr
-            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-            .unwrap();
-        let step_id = wf_mgr
-            .insert_step(&run.id, "foreach-step", "foreach", false, 0, 0)
-            .unwrap();
         wf_mgr
             .insert_fan_out_item(&step_id, "worktree", "wt1", "wt1-slug")
             .unwrap();
