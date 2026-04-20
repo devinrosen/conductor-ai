@@ -12,6 +12,7 @@ use crate::workflow::output::parse_conductor_output;
 use crate::workflow::prompt_builder::{
     build_variable_map, substitute_variables, substitute_variables_keep_literal,
 };
+use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 
 // ---------------------------------------------------------------------------
@@ -127,6 +128,15 @@ pub fn execute_script(
     let pos = state.position;
     state.position += 1;
 
+    let (working_dir, repo_path, script_env) = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        (
+            ctx.working_dir().to_path_buf(),
+            ctx.repo_path().to_path_buf(),
+            ctx.script_env(),
+        )
+    };
+
     // Check skip on resume
     if should_skip(state, &node.name, iteration) {
         tracing::info!(
@@ -150,8 +160,8 @@ pub fn execute_script(
         std::env::var_os("HOME").map(|h| std::path::PathBuf::from(&h).join(".claude/skills"));
     let resolved_path = crate::workflow_dsl::resolve_script_path(
         &run_path_raw,
-        &state.working_dir,
-        &state.repo_path,
+        working_dir.to_str().unwrap_or(""),
+        repo_path.to_str().unwrap_or(""),
         skills_dir.as_deref(),
     )
     .ok_or_else(|| {
@@ -186,7 +196,7 @@ pub fn execute_script(
         // Create a temp file for the script's stdout+stderr.
         // Both streams are redirected here so that subprocess output never
         // reaches the terminal directly (which would corrupt TUI rendering).
-        let output_path = format!("{}/script-{}.out", state.working_dir, step_id);
+        let output_path = format!("{}/script-{}.out", working_dir.display(), step_id);
         let output_file = std::fs::File::create(&output_path).map_err(|e| {
             ConductorError::Workflow(format!(
                 "Script step '{}': failed to create output file: {e}",
@@ -216,15 +226,11 @@ pub fn execute_script(
             .or(state.default_bot_name.as_deref());
         let mut cmd = Command::new(&resolved_path);
         cmd.envs(&resolved_env)
+            .envs(&script_env)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdout(output_file)
             .stderr(stderr_file)
-            .current_dir(&state.working_dir);
-        // Inject conductor's binary directory into PATH so scripts can call `conductor`
-        if let Some(ref bin_dir) = state.conductor_bin_dir {
-            let path = std::env::var("PATH").unwrap_or_default();
-            cmd.env("PATH", format!("{}:{}", bin_dir.display(), path));
-        }
+            .current_dir(&working_dir);
         match crate::github_app::resolve_named_app_token(state.config, effective_bot, "script") {
             crate::github_app::TokenResolution::AppToken(token) => {
                 cmd.env("GH_TOKEN", token);

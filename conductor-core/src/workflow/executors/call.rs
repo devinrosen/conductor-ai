@@ -8,6 +8,7 @@ use crate::workflow::engine::{
 };
 use crate::workflow::output::interpret_agent_output;
 use crate::workflow::prompt_builder::build_agent_prompt;
+use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 
 pub fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32) -> Result<()> {
@@ -59,6 +60,15 @@ fn execute_call_with_schema(
     let pos = state.position;
     state.position += 1;
 
+    let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        let working_dir = ctx.working_dir_str();
+        let repo_path = ctx.repo_path_str();
+        let extra_plugin_dirs = ctx.extra_plugin_dirs().to_vec();
+        let worktree_id: Option<String> = ctx.worktree_id().map(|s| s.to_string());
+        (working_dir, repo_path, extra_plugin_dirs, worktree_id)
+    };
+
     let step_key_check = node.agent.step_key();
     if should_skip(state, &step_key_check, iteration) {
         tracing::info!(
@@ -71,7 +81,7 @@ fn execute_call_with_schema(
     }
 
     // Merge per-step plugin_dirs (from .wf) with repo-level extra_plugin_dirs.
-    let mut merged_plugin_dirs = state.extra_plugin_dirs.clone();
+    let mut merged_plugin_dirs = extra_plugin_dirs.clone();
     for dir in &node.plugin_dirs {
         if !merged_plugin_dirs.contains(dir) {
             merged_plugin_dirs.push(dir.clone());
@@ -80,8 +90,8 @@ fn execute_call_with_schema(
 
     // Load agent definition
     let agent_def = crate::agent_config::load_agent(
-        &state.working_dir,
-        &state.repo_path,
+        &working_dir,
+        &repo_path,
         &AgentSpec::from(&node.agent),
         Some(&state.workflow_name),
         &merged_plugin_dirs,
@@ -96,8 +106,8 @@ fn execute_call_with_schema(
 
     // Load and concatenate prompt snippets
     let snippet_text = crate::prompt_config::load_and_concat_snippets(
-        &state.working_dir,
-        &state.repo_path,
+        &working_dir,
+        &repo_path,
         with_refs,
         Some(&state.workflow_name),
     )?;
@@ -133,7 +143,7 @@ fn execute_call_with_schema(
             .as_deref()
             .or(state.default_bot_name.as_deref());
         let child_run = state.agent_mgr.create_child_run(
-            state.worktree_id.as_deref(),
+            worktree_id.as_deref(),
             &prompt,
             None,
             step_model,
@@ -298,7 +308,7 @@ fn execute_call_with_schema(
         // Build args and spawn headless subprocess
         let params = crate::agent_runtime::SpawnHeadlessParams {
             run_id: &child_run.id,
-            working_dir: &state.working_dir,
+            working_dir: &working_dir,
             prompt: &prompt,
             resume_session_id: None,
             model: step_model,

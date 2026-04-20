@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 use super::engine::{ExecutionState, ENGINE_INJECTED_KEYS};
 
@@ -8,6 +8,7 @@ use super::engine::{ExecutionState, ENGINE_INJECTED_KEYS};
 /// `WorktreeRunContext` is the concrete implementation backed by `ExecutionState`.
 /// The trait exists as a seam so future runtimes (Gemini CLI, script-only runs, etc.)
 /// can provide their own context without carrying the full `ExecutionState` shape.
+#[allow(dead_code)]
 pub(crate) trait RunContext {
     /// Returns the subset of variables that the engine injects from run metadata
     /// (ticket and repo fields, plus `workflow_run_id`). Keys are `&'static str`
@@ -16,15 +17,52 @@ pub(crate) trait RunContext {
     fn injected_variables(&self) -> HashMap<&'static str, String>;
 
     /// Absolute path to the working directory for this run.
-    // Step 1.1b will wire callers; defined here as part of the trait interface.
-    #[allow(dead_code)]
-    fn working_dir(&self) -> PathBuf;
+    fn working_dir(&self) -> &Path;
 
-    /// Environment variables to pass to script steps. Defaults to empty.
-    // Step 1.1b will wire callers; defined here as part of the trait interface.
-    #[allow(dead_code)]
+    /// Working directory as an owned `String` (convenience over `to_string_lossy`).
+    fn working_dir_str(&self) -> String {
+        self.working_dir().to_string_lossy().into_owned()
+    }
+
+    /// Absolute path to the repository root for this run.
+    fn repo_path(&self) -> &Path;
+
+    /// Repository path as an owned `String` (convenience over `to_string_lossy`).
+    fn repo_path_str(&self) -> String {
+        self.repo_path().to_string_lossy().into_owned()
+    }
+
+    /// Worktree ID, if this run is tied to a registered worktree.
+    fn worktree_id(&self) -> Option<&str>;
+
+    /// Worktree slug (empty string for repo-level runs).
+    fn worktree_slug(&self) -> &str;
+
+    /// Ticket ID linked to this run, if any.
+    fn ticket_id(&self) -> Option<&str>;
+
+    /// Repo ID for this run, if any.
+    fn repo_id(&self) -> Option<&str>;
+
+    /// Directory containing the conductor binary (for PATH injection in script steps).
+    fn conductor_bin_dir(&self) -> Option<&Path>;
+
+    /// Additional plugin directories passed via `--plugin-dir`.
+    fn extra_plugin_dirs(&self) -> &[String];
+
+    /// Environment variables to pass to script steps.
+    ///
+    /// Default implementation prepends `conductor_bin_dir` to PATH if set.
     fn script_env(&self) -> HashMap<String, String> {
-        HashMap::new()
+        let mut env = HashMap::new();
+        if let Some(bin_dir) = self.conductor_bin_dir() {
+            let existing_path = std::env::var("PATH").unwrap_or_default();
+            env.insert(
+                "PATH".to_string(),
+                format!("{}:{}", bin_dir.display(), existing_path),
+            );
+        }
+        env
     }
 }
 
@@ -37,8 +75,9 @@ pub(crate) struct WorktreeRunContext<'s, 'conn> {
 }
 
 impl<'s, 'conn> WorktreeRunContext<'s, 'conn> {
-    // pub(super): ExecutionState is pub(super), so the constructor is scoped to match.
-    pub(super) fn new(state: &'s ExecutionState<'conn>) -> Self {
+    // pub(in crate::workflow): accessible throughout the workflow module tree,
+    // including executors and manager helpers.
+    pub(in crate::workflow) fn new(state: &'s ExecutionState<'conn>) -> Self {
         WorktreeRunContext { state }
     }
 }
@@ -56,15 +95,43 @@ impl RunContext for WorktreeRunContext<'_, '_> {
         map
     }
 
-    fn working_dir(&self) -> PathBuf {
-        PathBuf::from(&self.state.working_dir)
+    fn working_dir(&self) -> &Path {
+        Path::new(&self.state.worktree_ctx.working_dir)
+    }
+
+    fn repo_path(&self) -> &Path {
+        Path::new(&self.state.worktree_ctx.repo_path)
+    }
+
+    fn worktree_id(&self) -> Option<&str> {
+        self.state.worktree_ctx.worktree_id.as_deref()
+    }
+
+    fn worktree_slug(&self) -> &str {
+        &self.state.worktree_ctx.worktree_slug
+    }
+
+    fn ticket_id(&self) -> Option<&str> {
+        self.state.worktree_ctx.ticket_id.as_deref()
+    }
+
+    fn repo_id(&self) -> Option<&str> {
+        self.state.worktree_ctx.repo_id.as_deref()
+    }
+
+    fn conductor_bin_dir(&self) -> Option<&Path> {
+        self.state.worktree_ctx.conductor_bin_dir.as_deref()
+    }
+
+    fn extra_plugin_dirs(&self) -> &[String] {
+        &self.state.worktree_ctx.extra_plugin_dirs
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::engine::ENGINE_INJECTED_KEYS;
+    use crate::workflow::engine::{WorktreeContext, ENGINE_INJECTED_KEYS};
 
     fn make_state_with_all_injected(conn: &rusqlite::Connection) -> ExecutionState<'_> {
         let config: &'static crate::config::Config =
@@ -89,8 +156,16 @@ mod tests {
         ExecutionState {
             workflow_run_id: "wfrun-xyz".to_string(),
             workflow_name: "test-wf".to_string(),
-            working_dir: "/home/user/repo/worktree".to_string(),
-            repo_path: "/home/user/repo".to_string(),
+            worktree_ctx: WorktreeContext {
+                working_dir: "/home/user/repo/worktree".to_string(),
+                repo_path: "/home/user/repo".to_string(),
+                worktree_id: None,
+                worktree_slug: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                conductor_bin_dir: None,
+                extra_plugin_dirs: vec![],
+            },
             inputs,
             ..crate::workflow::tests::common::base_execution_state(
                 conn,
@@ -197,14 +272,12 @@ mod tests {
     #[test]
     fn test_injected_variables_absent_keys_not_inserted() {
         let conn = crate::test_helpers::create_test_conn();
-        // Reuse the full-state helper then clear inputs so only workflow_run_id remains.
         let mut state = make_state_with_all_injected(&conn);
         state.workflow_run_id = "wf-empty".to_string();
         state.inputs.clear();
         let ctx = WorktreeRunContext::new(&state);
         let vars = ctx.injected_variables();
 
-        // Only workflow_run_id (from struct field) should be present; ticket/repo keys absent
         assert_eq!(vars.len(), 1);
         assert_eq!(
             vars.get("workflow_run_id").map(String::as_str),
@@ -217,14 +290,32 @@ mod tests {
         let conn = crate::test_helpers::create_test_conn();
         let state = make_state_with_all_injected(&conn);
         let ctx = WorktreeRunContext::new(&state);
-        assert_eq!(ctx.working_dir(), PathBuf::from("/home/user/repo/worktree"));
+        assert_eq!(
+            ctx.working_dir(),
+            std::path::Path::new("/home/user/repo/worktree")
+        );
     }
 
     #[test]
-    fn test_script_env_default_is_empty() {
+    fn test_script_env_empty_when_no_bin_dir() {
         let conn = crate::test_helpers::create_test_conn();
         let state = make_state_with_all_injected(&conn);
         let ctx = WorktreeRunContext::new(&state);
         assert!(ctx.script_env().is_empty());
+    }
+
+    #[test]
+    fn test_script_env_injects_path_when_bin_dir_set() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut state = make_state_with_all_injected(&conn);
+        state.worktree_ctx.conductor_bin_dir =
+            Some(std::path::PathBuf::from("/usr/local/bin/conductor-dir"));
+        let ctx = WorktreeRunContext::new(&state);
+        let env = ctx.script_env();
+        let path = env.get("PATH").expect("PATH should be set");
+        assert!(
+            path.starts_with("/usr/local/bin/conductor-dir:"),
+            "PATH should start with conductor_bin_dir, got: {path}"
+        );
     }
 }

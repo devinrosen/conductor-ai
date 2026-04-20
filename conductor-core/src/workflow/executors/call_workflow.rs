@@ -6,6 +6,7 @@ use crate::workflow::engine::{
     restore_step, should_skip, ExecutionState,
 };
 use crate::workflow::prompt_builder::build_variable_map;
+use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 
 pub fn execute_call_workflow(
@@ -15,6 +16,27 @@ pub fn execute_call_workflow(
 ) -> Result<()> {
     let pos = state.position;
     state.position += 1;
+
+    let (
+        working_dir,
+        repo_path,
+        worktree_id,
+        ticket_id,
+        repo_id,
+        conductor_bin_dir,
+        extra_plugin_dirs,
+    ) = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        (
+            ctx.working_dir().to_path_buf(),
+            ctx.repo_path().to_path_buf(),
+            ctx.worktree_id().map(String::from),
+            ctx.ticket_id().map(String::from),
+            ctx.repo_id().map(String::from),
+            ctx.conductor_bin_dir().map(|p| p.to_path_buf()),
+            ctx.extra_plugin_dirs().to_vec(),
+        )
+    };
 
     // Skip completed sub-workflow steps on resume
     let wf_step_name = format!("workflow:{}", node.workflow);
@@ -44,8 +66,8 @@ pub fn execute_call_workflow(
 
     // Load the child workflow definition once (it won't change between retries)
     let child_def = crate::workflow_dsl::load_workflow_by_name(
-        &state.working_dir,
-        &state.repo_path,
+        working_dir.to_str().unwrap_or(""),
+        repo_path.to_str().unwrap_or(""),
         &node.workflow,
     )
     .map_err(|e| {
@@ -98,7 +120,7 @@ pub fn execute_call_workflow(
             model: state.model.as_deref(),
             from_step: None,
             restart: false,
-            conductor_bin_dir: state.conductor_bin_dir.clone(),
+            conductor_bin_dir: conductor_bin_dir.clone(),
         };
 
         let msg = match crate::workflow::engine::resume_workflow(&resume_input) {
@@ -259,11 +281,11 @@ pub fn execute_call_workflow(
             conn: state.conn,
             config: state.config,
             workflow: &child_def,
-            worktree_id: state.worktree_id.as_deref(),
-            working_dir: &state.working_dir,
-            repo_path: &state.repo_path,
-            ticket_id: state.ticket_id.as_deref(),
-            repo_id: state.repo_id.as_deref(),
+            worktree_id: worktree_id.as_deref(),
+            working_dir: working_dir.to_str().unwrap_or(""),
+            repo_path: repo_path.to_str().unwrap_or(""),
+            ticket_id: ticket_id.as_deref(),
+            repo_id: repo_id.as_deref(),
             model: state.model.as_deref(),
             exec_config: &state.exec_config,
             inputs: child_inputs,
@@ -277,9 +299,9 @@ pub fn execute_call_workflow(
             iteration,
             run_id_notify: None,
             triggered_by_hook: state.triggered_by_hook,
-            conductor_bin_dir: state.conductor_bin_dir.clone(),
+            conductor_bin_dir: conductor_bin_dir.clone(),
             force: false,
-            extra_plugin_dirs: state.extra_plugin_dirs.clone(),
+            extra_plugin_dirs: extra_plugin_dirs.clone(),
             parent_step_id: Some(step_id.clone()),
         };
 

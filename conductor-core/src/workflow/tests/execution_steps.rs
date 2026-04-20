@@ -66,11 +66,9 @@ fn test_parallel_agent_completion_accumulates_tokens() {
             None,
         )
         .unwrap();
-    let mut state = ExecutionState {
-        workflow_run_id: run.id.clone(),
-        worktree_id: Some("w1".to_string()),
-        ..make_test_state(&conn)
-    };
+    let mut state = make_test_state(&conn);
+    state.workflow_run_id = run.id.clone();
+    state.worktree_ctx.worktree_id = Some("w1".to_string());
     // Patch in the wf_mgr that points at the same conn so flush_metrics can
     // find the workflow_run row.
     state.wf_mgr = WorkflowManager::new(&conn);

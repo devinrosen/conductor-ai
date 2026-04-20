@@ -6,9 +6,14 @@ use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{ApprovalMode, GateNode, GateOptions, GateType, OnFailAction, OnTimeout};
 
 use crate::workflow::engine::{restore_step, should_skip, ExecutionState};
+use crate::workflow::run_context::RunContext;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 
 pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32) -> Result<()> {
+    let working_dir = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        ctx.working_dir().to_path_buf()
+    };
     let pos = state.position;
     state.position += 1;
 
@@ -299,7 +304,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                         // Poll gh pr view for raw approval count
                         let mut cmd = Command::new("gh");
                         cmd.args(["pr", "view", "--json", "reviews,author"])
-                            .current_dir(&state.working_dir);
+                            .current_dir(&working_dir);
                         if let Some(ref token) = gate_bot_token {
                             cmd.env("GH_TOKEN", token);
                         }
@@ -353,7 +358,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                         // Poll gh pr view for GitHub's branch-protection-aware reviewDecision
                         let mut cmd = Command::new("gh");
                         cmd.args(["pr", "view", "--json", "reviewDecision"])
-                            .current_dir(&state.working_dir);
+                            .current_dir(&working_dir);
                         if let Some(ref token) = gate_bot_token {
                             cmd.env("GH_TOKEN", token);
                         }
@@ -402,7 +407,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                 let gate_bot_token = resolve_gate_token();
                 let mut cmd = Command::new("gh");
                 cmd.args(["pr", "checks", "--json", "state"])
-                    .current_dir(&state.working_dir);
+                    .current_dir(&working_dir);
                 if let Some(ref token) = gate_bot_token {
                     cmd.env("GH_TOKEN", token);
                 }

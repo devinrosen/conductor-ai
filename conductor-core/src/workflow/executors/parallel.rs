@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use crate::workflow::engine::{resolve_schema, restore_step, should_skip, ExecutionState};
 use crate::workflow::output::{interpret_agent_output, parse_conductor_output};
 use crate::workflow::prompt_builder::build_agent_prompt;
+use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::ContextEntry;
 
@@ -15,6 +16,15 @@ pub fn execute_parallel(
     node: &ParallelNode,
     iteration: u32,
 ) -> Result<()> {
+    let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        (
+            ctx.working_dir().to_path_buf(),
+            ctx.repo_path().to_path_buf(),
+            ctx.extra_plugin_dirs().to_vec(),
+            ctx.worktree_id().map(String::from),
+        )
+    };
     let group_id = crate::new_id();
     let pos_base = state.position;
 
@@ -68,11 +78,11 @@ pub fn execute_parallel(
         }
 
         let agent_def = crate::agent_config::load_agent(
-            &state.working_dir,
-            &state.repo_path,
+            working_dir.to_str().unwrap_or(""),
+            repo_path.to_str().unwrap_or(""),
             &AgentSpec::from(agent_ref),
             Some(&state.workflow_name),
-            &state.extra_plugin_dirs,
+            &extra_plugin_dirs,
         )?;
 
         // Check per-call `if` condition: skip this call unless the named prior step
@@ -129,8 +139,8 @@ pub fn execute_parallel(
         }
 
         let snippet_text = crate::prompt_config::load_and_concat_snippets(
-            &state.working_dir,
-            &state.repo_path,
+            working_dir.to_str().unwrap_or(""),
+            repo_path.to_str().unwrap_or(""),
             &effective_with,
             Some(&state.workflow_name),
         )?;
@@ -148,7 +158,7 @@ pub fn execute_parallel(
         state.wf_mgr.set_step_parallel_group(&step_id, &group_id)?;
 
         let child_run = state.agent_mgr.create_child_run(
-            state.worktree_id.as_deref(),
+            worktree_id.as_deref(),
             &prompt,
             None,
             step_model,
@@ -169,13 +179,13 @@ pub fn execute_parallel(
         // Build headless args and spawn
         let params = crate::agent_runtime::SpawnHeadlessParams {
             run_id: &child_run.id,
-            working_dir: &state.working_dir,
+            working_dir: working_dir.to_str().unwrap_or(""),
             prompt: &prompt,
             resume_session_id: None,
             model: step_model,
             bot_name: state.default_bot_name.as_deref(),
             permission_mode: Some(&permission_mode),
-            plugin_dirs: &state.extra_plugin_dirs,
+            plugin_dirs: &extra_plugin_dirs,
         };
         let (handle, prompt_file) = match crate::agent_runtime::try_spawn_headless_run(&params) {
             Ok(pair) => pair,
