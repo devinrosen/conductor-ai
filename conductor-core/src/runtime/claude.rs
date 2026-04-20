@@ -32,6 +32,7 @@ impl Default for ClaudeRuntime {
 
 impl AgentRuntime for ClaudeRuntime {
     fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
+        super::validate_run_id(&request.run_id)?;
         #[cfg(unix)]
         {
             let params = crate::agent_runtime::SpawnHeadlessParams {

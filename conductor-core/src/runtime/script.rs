@@ -22,6 +22,7 @@ impl ScriptRuntime {
 
 impl AgentRuntime for ScriptRuntime {
     fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
+        super::validate_run_id(&request.run_id)?;
         let command = self.config.command.as_deref().ok_or_else(|| {
             ConductorError::Config(
                 "ScriptRuntime: `command` is required in the runtime config".to_string(),
