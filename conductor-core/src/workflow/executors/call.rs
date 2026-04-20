@@ -8,6 +8,7 @@ use crate::workflow::engine::{
 };
 use crate::workflow::output::interpret_agent_output;
 use crate::workflow::prompt_builder::build_agent_prompt;
+use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 
 pub fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32) -> Result<()> {
@@ -59,10 +60,14 @@ fn execute_call_with_schema(
     let pos = state.position;
     state.position += 1;
 
-    let working_dir = state.worktree_ctx.working_dir.clone();
-    let repo_path = state.worktree_ctx.repo_path.clone();
-    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
-    let worktree_id = state.worktree_ctx.worktree_id.clone();
+    let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        let working_dir = ctx.working_dir().to_string_lossy().into_owned();
+        let repo_path = ctx.repo_path().to_string_lossy().into_owned();
+        let extra_plugin_dirs = ctx.extra_plugin_dirs().to_vec();
+        let worktree_id: Option<String> = ctx.worktree_id().map(|s| s.to_string());
+        (working_dir, repo_path, extra_plugin_dirs, worktree_id)
+    };
 
     let step_key_check = node.agent.step_key();
     if should_skip(state, &step_key_check, iteration) {
