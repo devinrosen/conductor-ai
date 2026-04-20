@@ -1,5 +1,23 @@
 use std::path::{Path, PathBuf};
 
+/// Validate that a `run_id` is safe to use as a filesystem path component.
+///
+/// Rejects empty strings, path separators, and any character outside
+/// `[A-Za-z0-9\-_]` to prevent path-traversal attacks.
+pub fn validate_run_id(run_id: &str) -> crate::error::Result<()> {
+    if !run_id.is_empty()
+        && run_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(())
+    } else {
+        Err(crate::error::ConductorError::Agent(format!(
+            "invalid run_id '{run_id}': must be non-empty and contain only alphanumeric characters, hyphens, or underscores"
+        )))
+    }
+}
+
 /// Slugify a string: lowercase, replace non-alphanumeric chars with hyphens,
 /// collapse consecutive hyphens, trim leading/trailing hyphens.
 pub(crate) fn slugify(s: &str) -> String {
@@ -168,6 +186,53 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── validate_run_id ───────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_run_id_accepts_ulid() {
+        assert!(validate_run_id("01KPNW475XS9WRY2XGPCVXKNRM").is_ok());
+    }
+
+    #[test]
+    fn validate_run_id_accepts_hyphenated() {
+        assert!(validate_run_id("run-01KPNW475XS9WRY2XGPCVXKNRM").is_ok());
+    }
+
+    #[test]
+    fn validate_run_id_accepts_underscore() {
+        assert!(validate_run_id("run_01KPNW475XS9WRY2XGPCVXKNRM").is_ok());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_empty_string() {
+        assert!(validate_run_id("").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_slash() {
+        assert!(validate_run_id("../../etc/cron.d/payload").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_forward_slash() {
+        assert!(validate_run_id("run/id").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_backslash() {
+        assert!(validate_run_id("run\\id").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_dotdot_embedded() {
+        assert!(validate_run_id("run..id").is_err());
+    }
+
+    #[test]
+    fn validate_run_id_rejects_null_byte() {
+        assert!(validate_run_id("run\0id").is_err());
+    }
 
     #[test]
     fn test_resolve_conductor_subdir_empty_worktree_path() {
