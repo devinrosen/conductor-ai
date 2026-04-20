@@ -1,6 +1,6 @@
 //! ClaudeRuntime — wraps the existing headless subprocess spawn/poll logic.
 
-use std::sync::{Arc, Mutex, atomic::AtomicBool};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use crate::agent::types::AgentRun;
 use crate::error::Result;
@@ -200,7 +200,9 @@ fn poll_unix(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(flag) = shutdown {
                     if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        tracing::warn!("ClaudeRuntime: shutdown requested, cancelling run {run_id}");
+                        tracing::warn!(
+                            "ClaudeRuntime: shutdown requested, cancelling run {run_id}"
+                        );
                         let _ = tracking_mgr.update_run_cancelled(run_id);
                         crate::process_utils::cancel_subprocess(pid);
                         // Give the drain thread a moment to flush and exit.
@@ -234,8 +236,8 @@ fn poll_unix(
                 })
         }
         DrainOutcome::NoResult => {
-            let _ = tracking_mgr
-                .update_run_failed_if_running(run_id, "agent exited without result");
+            let _ =
+                tracking_mgr.update_run_failed_if_running(run_id, "agent exited without result");
             Err(PollError::NoResult)
         }
     }

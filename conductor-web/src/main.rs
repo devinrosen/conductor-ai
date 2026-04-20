@@ -832,6 +832,7 @@ mod tests {
             bot_name: None,
             conversation_id: None,
             subprocess_pid: None,
+            runtime: "claude".to_string(),
         }
     }
 

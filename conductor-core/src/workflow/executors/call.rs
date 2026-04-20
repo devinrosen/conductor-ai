@@ -299,33 +299,30 @@ fn execute_call_with_schema(
         }
 
         // Resolve runtime for this agent and spawn via trait dispatch.
-        let runtime =
-            match crate::runtime::resolve_runtime(&agent_def.runtime, state.config) {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    tracing::warn!("Step '{}': {err_msg}", agent_label);
-                    if let Err(db_e) =
-                        state.agent_mgr.update_run_failed(&child_run.id, &err_msg)
-                    {
-                        tracing::warn!(
-                            "Step '{}': failed to mark run failed in DB: {db_e}",
-                            agent_label
-                        );
-                    }
-                    state.wf_mgr.update_step_status(
-                        &step_id,
-                        WorkflowStepStatus::Failed,
-                        Some(&child_run.id),
-                        Some(&err_msg),
-                        None,
-                        None,
-                        Some(attempt as i64),
-                    )?;
-                    last_error = err_msg;
-                    continue;
+        let runtime = match crate::runtime::resolve_runtime(&agent_def.runtime, state.config) {
+            Ok(rt) => rt,
+            Err(e) => {
+                let err_msg = e.to_string();
+                tracing::warn!("Step '{}': {err_msg}", agent_label);
+                if let Err(db_e) = state.agent_mgr.update_run_failed(&child_run.id, &err_msg) {
+                    tracing::warn!(
+                        "Step '{}': failed to mark run failed in DB: {db_e}",
+                        agent_label
+                    );
                 }
-            };
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    Some(&child_run.id),
+                    Some(&err_msg),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                last_error = err_msg;
+                continue;
+            }
+        };
 
         let request = crate::runtime::RuntimeRequest {
             run_id: child_run.id.clone(),
