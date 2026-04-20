@@ -1,4 +1,4 @@
-use crate::agent::AgentRunStatus;
+use crate::agent::{AgentManager, AgentRunStatus};
 use crate::agent_config::AgentSpec;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::CallNode;
@@ -6,10 +6,45 @@ use crate::workflow_dsl::CallNode;
 use crate::workflow::engine::{
     handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip, ExecutionState,
 };
+use crate::workflow::manager::WorkflowManager;
 use crate::workflow::output::interpret_agent_output;
 use crate::workflow::prompt_builder::build_agent_prompt;
 use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
+
+/// Mark a single retry attempt as failed in the DB and advance the step status.
+///
+/// Does not set `last_error` or `continue` — callers do that so the distinct
+/// warning message and retry logic remain visible at the call site.
+///
+/// Takes the managers separately so Rust can see that only specific fields of
+/// `ExecutionState` are borrowed, leaving sibling fields (e.g. `model`) free
+/// for the caller's own borrows.
+fn fail_attempt(
+    agent_mgr: &AgentManager<'_>,
+    wf_mgr: &WorkflowManager<'_>,
+    step_id: &str,
+    run_id: &str,
+    err_msg: &str,
+    attempt: u32,
+    agent_label: &str,
+) -> Result<()> {
+    if let Err(db_e) = agent_mgr.update_run_failed_if_running(run_id, err_msg) {
+        tracing::warn!(
+            "Step '{}': failed to mark run failed in DB: {db_e}",
+            agent_label
+        );
+    }
+    wf_mgr.update_step_status(
+        step_id,
+        WorkflowStepStatus::Failed,
+        Some(run_id),
+        Some(err_msg),
+        None,
+        None,
+        Some(attempt as i64),
+    )
+}
 
 pub fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32) -> Result<()> {
     // Call-level output overrides block-level; if neither is set, use None.
@@ -304,20 +339,14 @@ fn execute_call_with_schema(
             Err(e) => {
                 let err_msg = e.to_string();
                 tracing::warn!("Step '{}': {err_msg}", agent_label);
-                if let Err(db_e) = state.agent_mgr.update_run_failed(&child_run.id, &err_msg) {
-                    tracing::warn!(
-                        "Step '{}': failed to mark run failed in DB: {db_e}",
-                        agent_label
-                    );
-                }
-                state.wf_mgr.update_step_status(
+                fail_attempt(
+                    &state.agent_mgr,
+                    &state.wf_mgr,
                     &step_id,
-                    WorkflowStepStatus::Failed,
-                    Some(&child_run.id),
-                    Some(&err_msg),
-                    None,
-                    None,
-                    Some(attempt as i64),
+                    &child_run.id,
+                    &err_msg,
+                    attempt,
+                    agent_label,
                 )?;
                 last_error = err_msg;
                 continue;
@@ -347,20 +376,14 @@ fn execute_call_with_schema(
         if let Err(e) = runtime.spawn(&request) {
             let err_msg = e.to_string();
             tracing::warn!("Step '{}': spawn failed: {err_msg}", agent_label);
-            if let Err(db_e) = state.agent_mgr.update_run_failed(&child_run.id, &err_msg) {
-                tracing::warn!(
-                    "Step '{}': failed to mark run failed in DB: {db_e}",
-                    agent_label
-                );
-            }
-            state.wf_mgr.update_step_status(
+            fail_attempt(
+                &state.agent_mgr,
+                &state.wf_mgr,
                 &step_id,
-                WorkflowStepStatus::Failed,
-                Some(&child_run.id),
-                Some(&err_msg),
-                None,
-                None,
-                Some(attempt as i64),
+                &child_run.id,
+                &err_msg,
+                attempt,
+                agent_label,
             )?;
             last_error = err_msg;
             continue;
@@ -392,23 +415,14 @@ fn execute_call_with_schema(
                     attempt + 1,
                     max_attempts,
                 );
-                if let Err(db_e) = state
-                    .agent_mgr
-                    .update_run_failed_if_running(&child_run.id, &err_msg)
-                {
-                    tracing::warn!(
-                        "Step '{}': failed to mark run as failed: {db_e}",
-                        agent_label
-                    );
-                }
-                state.wf_mgr.update_step_status(
+                fail_attempt(
+                    &state.agent_mgr,
+                    &state.wf_mgr,
                     &step_id,
-                    WorkflowStepStatus::Failed,
-                    Some(&child_run.id),
-                    Some(&err_msg),
-                    None,
-                    None,
-                    Some(attempt as i64),
+                    &child_run.id,
+                    &err_msg,
+                    attempt,
+                    agent_label,
                 )?;
                 last_error = err_msg;
                 continue;

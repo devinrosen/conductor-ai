@@ -93,10 +93,16 @@ impl std::fmt::Display for PollError {
 /// Resolve a runtime name to a boxed `AgentRuntime` implementation.
 ///
 /// Returns the built-in `ClaudeRuntime` for the name `"claude"`.
-/// Returns `Err(ConductorError::Config(...))` for any other name in this release.
-pub fn resolve_runtime(name: &str, _config: &Config) -> Result<Box<dyn AgentRuntime>> {
+/// Returns `Err(ConductorError::Config(...))` for any other name in this release,
+/// with a distinct message when the runtime is present in `config.runtimes`
+/// (configured but not yet implemented) versus entirely unknown.
+pub fn resolve_runtime(name: &str, config: &Config) -> Result<Box<dyn AgentRuntime>> {
     match name {
         "claude" => Ok(Box::new(claude::ClaudeRuntime::new())),
+        other if config.runtimes.contains_key(other) => Err(ConductorError::Config(format!(
+            "runtime '{other}' is defined in config but not yet implemented in this release; \
+             only 'claude' is supported — CliRuntime and ScriptRuntime are planned for v0.7"
+        ))),
         other => Err(ConductorError::Config(format!(
             "unknown runtime '{other}' — only 'claude' is supported in this release; \
              check the `runtime:` field in your agent frontmatter"
