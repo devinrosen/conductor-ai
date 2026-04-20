@@ -192,4 +192,23 @@ mod tests {
             EngineError::Cancelled(CancellationReason::UserRequested(_))
         ));
     }
+
+    #[test]
+    fn poisoned_mutex_does_not_panic() {
+        let token = CancellationToken::new();
+        // Poison the reason mutex by panicking while holding it.
+        let inner = token.0.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = inner.reason.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+        // All public methods must survive a poisoned mutex without panicking.
+        assert!(!token.is_cancelled());
+        assert_eq!(token.reason(), None);
+        token.cancel(CancellationReason::Timeout);
+        assert!(token.is_cancelled());
+        assert_eq!(token.reason(), Some(CancellationReason::Timeout));
+        assert!(token.error_if_cancelled().is_err());
+    }
 }
