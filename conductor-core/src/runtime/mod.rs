@@ -57,6 +57,8 @@ pub struct RuntimeRequest {
     pub bot_name: Option<String>,
     /// Extra plugin directories to search for agent definitions.
     pub plugin_dirs: Vec<String>,
+    /// Absolute path to the SQLite database file.
+    pub db_path: PathBuf,
 }
 
 /// Error returned by `AgentRuntime::poll`.

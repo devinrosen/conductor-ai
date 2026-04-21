@@ -12,6 +12,7 @@ pub struct ClaudeRuntime {
     #[cfg(unix)]
     handle: Arc<Mutex<Option<crate::agent_runtime::HeadlessHandle>>>,
     prompt_file: Arc<Mutex<Option<std::path::PathBuf>>>,
+    db_path: Arc<Mutex<Option<std::path::PathBuf>>>,
 }
 
 impl ClaudeRuntime {
@@ -20,6 +21,7 @@ impl ClaudeRuntime {
             #[cfg(unix)]
             handle: Arc::new(Mutex::new(None)),
             prompt_file: Arc::new(Mutex::new(None)),
+            db_path: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -52,6 +54,9 @@ impl AgentRuntime for ClaudeRuntime {
             }
             if let Ok(mut guard) = self.prompt_file.lock() {
                 *guard = Some(pf);
+            }
+            if let Ok(mut guard) = self.db_path.lock() {
+                *guard = Some(request.db_path.clone());
             }
             Ok(())
         }
@@ -127,10 +132,16 @@ fn poll_unix(
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
     let prompt_file = rt.prompt_file.lock().ok().and_then(|mut g| g.take());
+    let db_path = rt
+        .db_path
+        .lock()
+        .map_err(|_| PollError::Failed("ClaudeRuntime db_path mutex poisoned".into()))?
+        .clone()
+        .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
     let pid = handle.pid();
 
-    let tracking_conn =
-        crate::db::open_agent_db("ClaudeRuntime").map_err(|e| PollError::Failed(e.to_string()))?;
+    let tracking_conn = crate::db::open_database_compat(&db_path)
+        .map_err(|e| PollError::Failed(format!("ClaudeRuntime: failed to open DB: {e}")))?;
     let tracking_mgr = crate::agent::AgentManager::new(&tracking_conn);
 
     if let Err(e) = tracking_mgr.update_run_subprocess_pid(run_id, pid) {
@@ -152,7 +163,7 @@ fn poll_unix(
     });
 
     std::thread::spawn(move || {
-        let conn = match crate::db::open_agent_db("ClaudeRuntime") {
+        let conn = match crate::db::open_database_compat(&db_path) {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("ClaudeRuntime drain thread: failed to open DB: {e}");
@@ -228,10 +239,6 @@ mod tests {
     use crate::agent::status::AgentRunStatus;
     use crate::agent_config::{AgentDef, AgentRole};
     use crate::config::AgentPermissionMode;
-    use std::sync::Mutex;
-
-    /// Serializes tests that mutate CONDUCTOR_DB_PATH to prevent races.
-    static DB_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn make_request(run_id: &str) -> RuntimeRequest {
         RuntimeRequest {
@@ -251,6 +258,7 @@ mod tests {
             config_dir: None,
             bot_name: None,
             plugin_dirs: vec![],
+            db_path: crate::config::db_path(),
         }
     }
 
@@ -441,7 +449,6 @@ mod tests {
         use std::process::Stdio;
         let tmp = tempfile::tempdir().expect("tempdir");
         let db_file = tmp.path().join("test.db");
-        std::env::set_var("CONDUCTOR_DB_PATH", &db_file);
         let child = std::process::Command::new("sleep")
             .arg("1000")
             .stdout(Stdio::piped())
@@ -452,6 +459,7 @@ mod tests {
             .expect("HeadlessHandle::from_child failed");
         let runtime = ClaudeRuntime::new();
         *runtime.handle.lock().unwrap() = Some(handle);
+        *runtime.db_path.lock().unwrap() = Some(db_file);
         (runtime, tmp)
     }
 
@@ -459,7 +467,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_shutdown_flag_returns_cancelled() {
-        let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
         let (runtime, _tmp) = make_sleeping_runtime();
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -468,8 +475,6 @@ mod tests {
             Some(&shutdown),
             std::time::Duration::from_secs(60),
         );
-
-        std::env::remove_var("CONDUCTOR_DB_PATH");
 
         assert!(
             matches!(result, Err(PollError::Cancelled)),
@@ -481,7 +486,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_timeout_returns_no_result() {
-        let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
         let (runtime, _tmp) = make_sleeping_runtime();
 
         let result = runtime.poll(
@@ -489,8 +493,6 @@ mod tests {
             None,
             std::time::Duration::from_millis(10),
         );
-
-        std::env::remove_var("CONDUCTOR_DB_PATH");
 
         assert!(
             matches!(result, Err(PollError::NoResult)),

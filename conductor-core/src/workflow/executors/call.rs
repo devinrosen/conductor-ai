@@ -363,6 +363,7 @@ fn execute_call_with_schema(
             config_dir: None,
             bot_name: effective_bot_name.map(String::from),
             plugin_dirs: merged_plugin_dirs.clone(),
+            db_path: crate::config::db_path(),
         };
 
         tracing::info!(
