@@ -157,6 +157,14 @@ fn resolve_parent_branch(conn: &Connection, ticket_id: &str, repo_id: &str) -> O
     None
 }
 
+/// Options for [`WorktreeManager::set_base_branch`].
+#[derive(Debug, Default)]
+pub struct SetBaseBranchOptions {
+    /// When `true`, rebase the worktree branch onto the new base before recording it.
+    /// When `false` (default), reject with an error if the new base is not an ancestor of HEAD.
+    pub rebase: bool,
+}
+
 /// Options for creating a new worktree.
 ///
 /// Passed to [`WorktreeManager::create`] to avoid a long positional argument list.
@@ -986,14 +994,14 @@ impl<'a> WorktreeManager<'a> {
 
     /// Set (or clear) the worktree's base branch.
     /// Pass `None` to reset to the repo default branch (skips git validation).
-    /// When `rebase` is false and the new base is not an ancestor of HEAD, returns an error.
-    /// When `rebase` is true, rebases the worktree branch onto the new base (blocked if dirty).
+    /// When `opts.rebase` is false and the new base is not an ancestor of HEAD, returns an error.
+    /// When `opts.rebase` is true, rebases the worktree branch onto the new base (blocked if dirty).
     pub fn set_base_branch(
         &self,
         repo_slug: &str,
         name: &str,
         base_branch: Option<&str>,
-        rebase: bool,
+        opts: SetBaseBranchOptions,
     ) -> Result<()> {
         if let Some(new_base) = base_branch {
             if new_base.starts_with('-') {
@@ -1018,7 +1026,7 @@ impl<'a> WorktreeManager<'a> {
 
             let base_ref = format!("origin/{new_base}");
             if !Self::is_ancestor(wt_path, &base_ref)? {
-                if !rebase {
+                if !opts.rebase {
                     return Err(ConductorError::InvalidInput(format!(
                         "'{new_base}' is not an ancestor of the worktree HEAD. \
                          The branch was forked from a different base. \
@@ -2147,7 +2155,12 @@ mod tests {
 
         let mgr = WorktreeManager::new(&conn, &config);
         // Clearing to None should succeed without touching git
-        let result = mgr.set_base_branch("test-repo", "feat-test", None, false);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            None,
+            SetBaseBranchOptions::default(),
+        );
         assert!(
             result.is_ok(),
             "clearing base_branch should always succeed: {result:?}"
@@ -2166,7 +2179,12 @@ mod tests {
 
         let mgr = WorktreeManager::new(&conn, &config);
         // origin/other exists but is a divergent commit — not an ancestor of feat/test HEAD.
-        let result = mgr.set_base_branch("test-repo", "feat-test", Some("other"), false);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("other"),
+            SetBaseBranchOptions::default(),
+        );
         assert!(
             matches!(result, Err(ConductorError::InvalidInput(_))),
             "expected InvalidInput for non-ancestor base, got: {result:?}"
@@ -2190,7 +2208,12 @@ mod tests {
 
         let mgr = WorktreeManager::new(&conn, &config);
         // "main" IS an ancestor of feat/test (feat/test was branched off main)
-        let result = mgr.set_base_branch("test-repo", "feat-test", Some("main"), false);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("main"),
+            SetBaseBranchOptions::default(),
+        );
         assert!(
             result.is_ok(),
             "main is an ancestor of feat/test: {result:?}"
@@ -2228,7 +2251,12 @@ mod tests {
 
         let mgr = WorktreeManager::new(&conn, &config);
         // "newbase" is NOT an ancestor of feat/test; with rebase=true the worktree should be rebased.
-        let result = mgr.set_base_branch("test-repo", "feat-test", Some("newbase"), true);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("newbase"),
+            SetBaseBranchOptions { rebase: true },
+        );
         assert!(
             result.is_ok(),
             "rebase onto non-ancestor should succeed: {result:?}"
@@ -2253,8 +2281,12 @@ mod tests {
         insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
 
         let mgr = WorktreeManager::new(&conn, &config);
-        let result =
-            mgr.set_base_branch("test-repo", "feat-test", Some("--upload-pack=cmd"), false);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("--upload-pack=cmd"),
+            SetBaseBranchOptions::default(),
+        );
         assert!(
             matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("must not start with")),
             "expected InvalidInput for dash-prefixed branch name, got: {result:?}"
@@ -2280,7 +2312,12 @@ mod tests {
 
         let mgr = WorktreeManager::new(&conn, &config);
         // origin/newbase-dirty is NOT an ancestor of feat/test; rebase=true → dirty check fires.
-        let result = mgr.set_base_branch("test-repo", "feat-test", Some("newbase-dirty"), true);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("newbase-dirty"),
+            SetBaseBranchOptions { rebase: true },
+        );
         assert!(
             matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("uncommitted")),
             "expected uncommitted-changes error for dirty rebase, got: {result:?}"

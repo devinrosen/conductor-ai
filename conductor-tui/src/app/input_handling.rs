@@ -839,8 +839,13 @@ impl App {
                     let db = conductor_core::config::db_path();
                     let conn = conductor_core::db::open_database(&db)?;
                     let mgr = WorktreeManager::new(&conn, &config);
-                    mgr.set_base_branch(&repo_slug, &wt_slug, new_base.as_deref(), false)
-                        .map_err(anyhow::Error::from)?;
+                    mgr.set_base_branch(
+                        &repo_slug,
+                        &wt_slug,
+                        new_base.as_deref(),
+                        conductor_core::worktree::SetBaseBranchOptions::default(),
+                    )
+                    .map_err(anyhow::Error::from)?;
                     Ok(format!("Base branch set to {label}"))
                 })();
                 let _ = bg_tx.send(crate::action::Action::SetBaseBranchComplete {

@@ -1242,8 +1242,13 @@ fn test_set_base_branch() {
     assert_eq!(wt.as_deref(), Some("develop"));
 
     // Clear base branch (reset to repo default) — None skips git validation
-    mgr.set_base_branch("test-repo", "feat-test", None, false)
-        .unwrap();
+    mgr.set_base_branch(
+        "test-repo",
+        "feat-test",
+        None,
+        SetBaseBranchOptions::default(),
+    )
+    .unwrap();
     let wt: Option<String> = conn
         .query_row(
             "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
@@ -1260,7 +1265,12 @@ fn test_set_base_branch_not_found() {
     let config = Config::default();
     let mgr = WorktreeManager::new(&conn, &config);
 
-    let result = mgr.set_base_branch("test-repo", "nonexistent", Some("develop"), false);
+    let result = mgr.set_base_branch(
+        "test-repo",
+        "nonexistent",
+        Some("develop"),
+        SetBaseBranchOptions::default(),
+    );
     assert!(result.is_err());
     match result.unwrap_err() {
         ConductorError::WorktreeNotFound { slug } => {

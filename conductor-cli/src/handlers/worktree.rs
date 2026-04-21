@@ -187,7 +187,12 @@ pub fn handle_worktree(
             rebase,
         } => {
             let mgr = WorktreeManager::new(conn, config);
-            mgr.set_base_branch(&repo, &name, base_branch.as_deref(), rebase)?;
+            mgr.set_base_branch(
+                &repo,
+                &name,
+                base_branch.as_deref(),
+                conductor_core::worktree::SetBaseBranchOptions { rebase },
+            )?;
             match base_branch {
                 Some(b) => println!("Base branch for {name} set to: {b}"),
                 None => println!("Base branch for {name} cleared (will use repo default)"),
@@ -220,7 +225,7 @@ pub fn handle_worktree(
 
 #[cfg(test)]
 mod tests {
-    use conductor_core::worktree::WorktreeManager;
+    use conductor_core::worktree::{SetBaseBranchOptions, WorktreeManager};
 
     #[test]
     fn test_set_base_branch_clear_succeeds() {
@@ -228,7 +233,12 @@ mod tests {
         let config = conductor_core::config::Config::default();
         let mgr = WorktreeManager::new(&conn, &config);
         // Clearing (None) requires no git ops — always succeeds on a DB-only path.
-        let result = mgr.set_base_branch("test-repo", "feat-test", None, false);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            None,
+            SetBaseBranchOptions::default(),
+        );
         assert!(result.is_ok(), "clear should succeed: {result:?}");
     }
 
@@ -237,7 +247,12 @@ mod tests {
         let conn = conductor_core::test_helpers::setup_db();
         let config = conductor_core::config::Config::default();
         let mgr = WorktreeManager::new(&conn, &config);
-        let result = mgr.set_base_branch("test-repo", "feat-test", Some("--bad"), false);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("--bad"),
+            SetBaseBranchOptions::default(),
+        );
         assert!(
             result.is_err(),
             "dash-prefixed branch name should be rejected: {result:?}"
@@ -251,7 +266,12 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         // With rebase=true and a non-existent ref the ancestry check will error — the
         // important thing is the rebase path is reached (error is NOT the "pass rebase=true" hint).
-        let result = mgr.set_base_branch("test-repo", "feat-test", Some("release/v1"), true);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("release/v1"),
+            SetBaseBranchOptions { rebase: true },
+        );
         assert!(
             result.is_err(),
             "expected error for non-existent ref: {result:?}"

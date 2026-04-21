@@ -7,7 +7,8 @@ mod tests;
 
 pub use git_helpers::MainHealthStatus;
 pub use manager::{
-    get_ticket_id_by_branch, label_to_branch_prefix, WorktreeCreateOptions, WorktreeManager,
+    get_ticket_id_by_branch, label_to_branch_prefix, SetBaseBranchOptions, WorktreeCreateOptions,
+    WorktreeManager,
 };
 pub use types::{Worktree, WorktreeStatus, WorktreeWithStatus};
 

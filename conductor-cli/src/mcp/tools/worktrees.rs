@@ -258,7 +258,8 @@ pub(super) fn tool_set_base_branch(
         Err(e) => return tool_err(e),
     };
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    match wt_mgr.set_base_branch(repo_slug, name, base_branch, rebase) {
+    let opts = conductor_core::worktree::SetBaseBranchOptions { rebase };
+    match wt_mgr.set_base_branch(repo_slug, name, base_branch, opts) {
         Ok(()) => {
             let label = base_branch.unwrap_or("(repo default)");
             tool_ok(format!("Base branch for '{name}' set to {label}."))
@@ -832,16 +833,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_tool_set_base_branch_rebase_json_bool_accepted() {
-        // JSON boolean true should be accepted (not rejected as invalid arg type)
+    /// Assert the `rebase` parameter value is accepted (no parse error) — the tool will still
+    /// return an error because "nonexistent" repo doesn't exist, but it must not be a type error.
+    fn assert_rebase_arg_accepted(rebase_value: Value) {
         let (_f, db) = make_test_db();
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("nonexistent".into()));
         args.insert("name".into(), Value::String("feat-wt".into()));
-        args.insert("rebase".into(), Value::Bool(true));
+        args.insert("rebase".into(), rebase_value);
         let result = tool_set_base_branch(&db, &args);
-        // Error is expected (no such repo), but must NOT be a parameter-parse error
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -849,67 +849,27 @@ mod tests {
             .unwrap_or("");
         assert!(
             !text.contains("invalid") && !text.contains("unknown parameter"),
-            "rebase JSON bool should be accepted without parse error, got: {text}"
+            "rebase arg should be accepted without parse error, got: {text}"
         );
+    }
+
+    #[test]
+    fn test_tool_set_base_branch_rebase_json_bool_accepted() {
+        assert_rebase_arg_accepted(Value::Bool(true));
     }
 
     #[test]
     fn test_tool_set_base_branch_rebase_string_bool_accepted() {
-        // String "true" should also be accepted via the str-fallback path
-        let (_f, db) = make_test_db();
-        let mut args = serde_json::Map::new();
-        args.insert("repo".into(), Value::String("nonexistent".into()));
-        args.insert("name".into(), Value::String("feat-wt".into()));
-        args.insert("rebase".into(), Value::String("true".into()));
-        let result = tool_set_base_branch(&db, &args);
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0]
-            .as_text()
-            .map(|t| t.text.as_str())
-            .unwrap_or("");
-        assert!(
-            !text.contains("invalid") && !text.contains("unknown parameter"),
-            "rebase string 'true' should be accepted without parse error, got: {text}"
-        );
+        assert_rebase_arg_accepted(Value::String("true".into()));
     }
 
     #[test]
     fn test_tool_set_base_branch_rebase_json_bool_false_accepted() {
-        // JSON boolean false should be accepted (not rejected as invalid arg type)
-        let (_f, db) = make_test_db();
-        let mut args = serde_json::Map::new();
-        args.insert("repo".into(), Value::String("nonexistent".into()));
-        args.insert("name".into(), Value::String("feat-wt".into()));
-        args.insert("rebase".into(), Value::Bool(false));
-        let result = tool_set_base_branch(&db, &args);
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0]
-            .as_text()
-            .map(|t| t.text.as_str())
-            .unwrap_or("");
-        assert!(
-            !text.contains("invalid") && !text.contains("unknown parameter"),
-            "rebase JSON bool false should be accepted without parse error, got: {text}"
-        );
+        assert_rebase_arg_accepted(Value::Bool(false));
     }
 
     #[test]
     fn test_tool_set_base_branch_rebase_string_false_accepted() {
-        // String "false" should also be accepted via the str-fallback path
-        let (_f, db) = make_test_db();
-        let mut args = serde_json::Map::new();
-        args.insert("repo".into(), Value::String("nonexistent".into()));
-        args.insert("name".into(), Value::String("feat-wt".into()));
-        args.insert("rebase".into(), Value::String("false".into()));
-        let result = tool_set_base_branch(&db, &args);
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0]
-            .as_text()
-            .map(|t| t.text.as_str())
-            .unwrap_or("");
-        assert!(
-            !text.contains("invalid") && !text.contains("unknown parameter"),
-            "rebase string 'false' should be accepted without parse error, got: {text}"
-        );
+        assert_rebase_arg_accepted(Value::String("false".into()));
     }
 }
