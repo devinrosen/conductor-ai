@@ -116,3 +116,43 @@ where
     let rows = stmt.query_map(params, f)?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn open_database_success() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = open_database(tmp.path()).expect("open_database should succeed");
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let fk: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+    }
+
+    #[test]
+    fn open_database_compat_success() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = open_database_compat(tmp.path()).expect("open_database_compat should succeed");
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let fk: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+    }
+
+    #[test]
+    fn open_database_compat_error_on_bad_path() {
+        let bad = std::path::Path::new("/tmp/conductor_no_such_dir_xyz/test.db");
+        assert!(open_database_compat(bad).is_err());
+    }
+}
