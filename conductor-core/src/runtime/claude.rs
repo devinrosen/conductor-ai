@@ -224,6 +224,10 @@ mod tests {
     use crate::agent::status::AgentRunStatus;
     use crate::agent_config::{AgentDef, AgentRole};
     use crate::config::AgentPermissionMode;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate CONDUCTOR_DB_PATH to prevent races.
+    static DB_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn make_request(run_id: &str) -> RuntimeRequest {
         RuntimeRequest {
@@ -360,5 +364,139 @@ mod tests {
         let runtime = ClaudeRuntime::new();
         let run = make_test_run(Some(dead_pid));
         assert!(runtime.cancel(&run).is_ok());
+    }
+
+    // spawn() reaches the binary-exec path when run_id is valid — on unix this
+    // attempts to exec the conductor binary (not present in test env), so the
+    // error is Workflow (exec failure), not InvalidInput (validation failure).
+    #[cfg(unix)]
+    #[test]
+    fn spawn_valid_run_id_reaches_exec_attempt() {
+        let runtime = ClaudeRuntime::new();
+        let request = make_request("valid-run-id-01");
+        let result = runtime.spawn(&request);
+        // The subprocess spawn will fail because the conductor binary is not
+        // present in the test binary's directory, but the error must come from
+        // the exec attempt (Workflow), not from run_id validation (InvalidInput).
+        match result {
+            Ok(()) => {} // binary happened to be present — success is fine
+            Err(crate::error::ConductorError::Workflow(_)) => {} // expected in CI
+            Err(other) => panic!("expected Ok or Workflow error, got: {other:?}"),
+        }
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn spawn_returns_platform_error_on_non_unix() {
+        let runtime = ClaudeRuntime::new();
+        let request = make_request("valid-run-id-01");
+        let err = runtime
+            .spawn(&request)
+            .expect_err("expected Err on non-Unix platform");
+        assert!(
+            matches!(err, crate::error::ConductorError::Workflow(_)),
+            "expected Workflow error, got: {err:?}"
+        );
+    }
+
+    // cancel() takes the handle and calls abort() — the handle field is cleared.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_with_live_handle_aborts_and_clears_handle() {
+        use std::process::Stdio;
+        let child = std::process::Command::new("sleep")
+            .arg("1000")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("sleep should be available");
+        let handle = crate::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child failed");
+        let runtime = ClaudeRuntime::new();
+        *runtime.handle.lock().unwrap() = Some(handle);
+        let run = make_test_run(None);
+        assert!(runtime.cancel(&run).is_ok());
+        // handle must have been taken (aborted)
+        assert!(
+            runtime.handle.lock().unwrap().is_none(),
+            "handle should be None after cancel"
+        );
+    }
+
+    // poll() returns Cancelled when the shutdown flag is set.
+    #[cfg(unix)]
+    #[test]
+    fn poll_shutdown_flag_returns_cancelled() {
+        use std::process::Stdio;
+
+        let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db_file = tmp.path().join("test.db");
+        std::env::set_var("CONDUCTOR_DB_PATH", &db_file);
+
+        // sleep keeps stdout open indefinitely so the drain thread never sends a
+        // result — the shutdown flag must be what terminates poll().
+        let child = std::process::Command::new("sleep")
+            .arg("1000")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("sleep should be available");
+        let handle = crate::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child failed");
+        let runtime = ClaudeRuntime::new();
+        *runtime.handle.lock().unwrap() = Some(handle);
+
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let result = runtime.poll(
+            "test-shutdown-run",
+            Some(&shutdown),
+            std::time::Duration::from_secs(60),
+        );
+
+        std::env::remove_var("CONDUCTOR_DB_PATH");
+
+        assert!(
+            matches!(result, Err(PollError::Cancelled)),
+            "expected Cancelled, got: {result:?}"
+        );
+    }
+
+    // poll() returns NoResult when step_timeout elapses before the agent finishes.
+    #[cfg(unix)]
+    #[test]
+    fn poll_timeout_returns_no_result() {
+        use std::process::Stdio;
+
+        let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db_file = tmp.path().join("test.db");
+        std::env::set_var("CONDUCTOR_DB_PATH", &db_file);
+
+        // sleep keeps stdout open so the drain thread blocks — the step_timeout
+        // must be what terminates poll(), not a spontaneous drain completion.
+        let child = std::process::Command::new("sleep")
+            .arg("1000")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("sleep should be available");
+        let handle = crate::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child failed");
+        let runtime = ClaudeRuntime::new();
+        *runtime.handle.lock().unwrap() = Some(handle);
+
+        let result = runtime.poll(
+            "test-timeout-run",
+            None,
+            std::time::Duration::from_millis(10),
+        );
+
+        std::env::remove_var("CONDUCTOR_DB_PATH");
+
+        assert!(
+            matches!(result, Err(PollError::NoResult)),
+            "expected NoResult, got: {result:?}"
+        );
     }
 }
