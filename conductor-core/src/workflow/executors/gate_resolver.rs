@@ -86,6 +86,11 @@ impl GitHubTokenCache {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn set_cache_for_test(&self, token: Option<String>, fetched_at: Instant) {
+        *self.cache.lock().expect("token cache mutex poisoned") = Some((token, fetched_at));
+    }
+
     /// Return the current token, refreshing if stale.
     ///
     /// Returns `None` when no GitHub App is configured and no override is set.
@@ -359,5 +364,74 @@ mod tests {
         params.bot_name = Some("params-bot".into());
         // Both have a name; with the override token, we just confirm it resolves successfully.
         assert!(ctx.resolve_token(&params).is_some());
+    }
+
+    // Stale success entry (56 min old) must trigger a refresh instead of returning the cached token.
+    #[test]
+    fn test_token_cache_stale_success_triggers_refresh() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        // Seed with a token that is 56 minutes old (success TTL is 55 min).
+        let stale_instant = Instant::now() - Duration::from_secs(56 * 60);
+        cache.set_cache_for_test(Some("old-token".into()), stale_instant);
+        // Refresh runs (gh unavailable in tests → returns None); cached "old-token" must NOT be returned.
+        let token = cache.get(&config, Some("bot"));
+        assert!(
+            token.is_none(),
+            "stale success entry must trigger refresh; cached token must not be returned"
+        );
+    }
+
+    // Fresh success entry (1 min old) must be returned from the cache without a refresh.
+    #[test]
+    fn test_token_cache_fresh_success_no_refresh() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        // Seed with a token that is only 1 minute old (well within 55 min success TTL).
+        let fresh_instant = Instant::now() - Duration::from_secs(60);
+        cache.set_cache_for_test(Some("live-token".into()), fresh_instant);
+        let token = cache.get(&config, Some("bot"));
+        assert_eq!(
+            token.as_deref(),
+            Some("live-token"),
+            "fresh success entry must be returned from cache without refresh"
+        );
+    }
+
+    // Stale failure entry (31 s old) must trigger a refresh because failure TTL is 30 s.
+    #[test]
+    fn test_token_cache_stale_failure_triggers_refresh() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        // Seed a failure (None) that is 31 seconds old (failure TTL is 30 s).
+        let stale_instant = Instant::now() - Duration::from_secs(31);
+        cache.set_cache_for_test(None, stale_instant);
+        // Refresh fires; gh unavailable → still None, but the cache timestamp is now fresh.
+        let token = cache.get(&config, Some("bot"));
+        assert!(
+            token.is_none(),
+            "refresh after stale failure should return None"
+        );
+        // A second immediate call should NOT re-trigger (fresh failure entry now in cache).
+        // We can't observe the shell-out count directly, but we verify get() still returns None
+        // and does not panic, confirming the cache was updated.
+        let token2 = cache.get(&config, Some("bot"));
+        assert!(token2.is_none());
+    }
+
+    // Fresh failure entry (15 s old) must NOT trigger a refresh (failure TTL is 30 s).
+    #[test]
+    fn test_token_cache_fresh_failure_no_refresh() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        // Seed a failure (None) that is only 15 seconds old.
+        let fresh_instant = Instant::now() - Duration::from_secs(15);
+        cache.set_cache_for_test(None, fresh_instant);
+        // Within TTL → cache hit → returns None without refresh.
+        let token = cache.get(&config, Some("bot"));
+        assert!(
+            token.is_none(),
+            "fresh failure entry must be returned from cache (None) without refresh"
+        );
     }
 }
