@@ -1620,7 +1620,14 @@ bot_name = "my-bot"
         assert_eq!(rc.binary.as_deref(), Some("gemini"));
         assert_eq!(
             rc.args.as_deref(),
-            Some(&["-m".to_string(), "{{model}}".to_string(), "-p".to_string(), "{{prompt}}".to_string()][..])
+            Some(
+                &[
+                    "-m".to_string(),
+                    "{{model}}".to_string(),
+                    "-p".to_string(),
+                    "{{prompt}}".to_string()
+                ][..]
+            )
         );
         assert_eq!(rc.prompt_via.as_deref(), Some("stdin"));
         assert_eq!(rc.default_model.as_deref(), Some("gemini-2.5-flash"));
