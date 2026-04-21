@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 77;
+pub const LATEST_SCHEMA_VERSION: u32 = 78;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1116,6 +1116,20 @@ pub fn run(conn: &Connection) -> Result<()> {
             }
         }
         bump_version(conn, 77)?;
+    }
+
+    // Migration 078: drop tmux_window column from agent_runs (CliRuntime no longer uses tmux).
+    if version < 78 {
+        let table_exists: bool = conn.prepare("SELECT 1 FROM agent_runs LIMIT 0").is_ok();
+        if table_exists {
+            let has_col: bool = conn
+                .prepare("SELECT tmux_window FROM agent_runs LIMIT 0")
+                .is_ok();
+            if has_col {
+                conn.execute_batch(include_str!("migrations/078_drop_tmux_window.sql"))?;
+            }
+        }
+        bump_version(conn, 78)?;
     }
 
     Ok(())

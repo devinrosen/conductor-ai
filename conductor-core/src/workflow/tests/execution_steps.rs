@@ -16,7 +16,7 @@ fn test_parallel_agent_completion_accumulates_tokens() {
 
     // Create two "completed" agent runs that simulate parallel agent results.
     let run_a = agent_mgr
-        .create_run(Some("w1"), "reviewer-a", None, None)
+        .create_run(Some("w1"), "reviewer-a", None)
         .unwrap();
     agent_mgr
         .update_run_completed(
@@ -34,7 +34,7 @@ fn test_parallel_agent_completion_accumulates_tokens() {
         .unwrap();
 
     let run_b = agent_mgr
-        .create_run(Some("w1"), "reviewer-b", None, None)
+        .create_run(Some("w1"), "reviewer-b", None)
         .unwrap();
     agent_mgr
         .update_run_completed(
@@ -52,9 +52,7 @@ fn test_parallel_agent_completion_accumulates_tokens() {
         .unwrap();
 
     // Build a state with a real workflow run so flush_metrics has a valid row.
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -523,9 +521,7 @@ fn test_if_step_not_found_skips() {
 fn test_condition_skipped_steps_not_in_completed_keys() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)

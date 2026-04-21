@@ -12,20 +12,9 @@ impl<'a> AgentManager<'a> {
         &self,
         worktree_id: Option<&str>,
         prompt: &str,
-        tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(
-            worktree_id,
-            None,
-            prompt,
-            tmux_window,
-            model,
-            None,
-            None,
-            None,
-            None,
-        )
+        self.create_run_with_parent(worktree_id, None, prompt, model, None, None, None, None)
     }
 
     /// Create a run scoped to a repo (no worktree). Used for read-only repo agents.
@@ -33,27 +22,15 @@ impl<'a> AgentManager<'a> {
         &self,
         repo_id: &str,
         prompt: &str,
-        tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(
-            None,
-            Some(repo_id),
-            prompt,
-            tmux_window,
-            model,
-            None,
-            None,
-            None,
-            None,
-        )
+        self.create_run_with_parent(None, Some(repo_id), prompt, model, None, None, None, None)
     }
 
     pub fn create_child_run(
         &self,
         worktree_id: Option<&str>,
         prompt: &str,
-        tmux_window: Option<&str>,
         model: Option<&str>,
         parent_run_id: &str,
         bot_name: Option<&str>,
@@ -62,7 +39,6 @@ impl<'a> AgentManager<'a> {
             worktree_id,
             None,
             prompt,
-            tmux_window,
             model,
             Some(parent_run_id),
             bot_name,
@@ -76,7 +52,6 @@ impl<'a> AgentManager<'a> {
         &self,
         worktree_id: &str,
         prompt: &str,
-        tmux_window: Option<&str>,
         model: Option<&str>,
         conversation_id: &str,
     ) -> Result<AgentRun> {
@@ -84,7 +59,6 @@ impl<'a> AgentManager<'a> {
             Some(worktree_id),
             None,
             prompt,
-            tmux_window,
             model,
             None,
             None,
@@ -98,7 +72,6 @@ impl<'a> AgentManager<'a> {
         &self,
         repo_id: &str,
         prompt: &str,
-        tmux_window: Option<&str>,
         model: Option<&str>,
         conversation_id: &str,
     ) -> Result<AgentRun> {
@@ -106,7 +79,6 @@ impl<'a> AgentManager<'a> {
             None,
             Some(repo_id),
             prompt,
-            tmux_window,
             model,
             None,
             None,
@@ -121,7 +93,6 @@ impl<'a> AgentManager<'a> {
         worktree_id: Option<&str>,
         repo_id: Option<&str>,
         prompt: &str,
-        tmux_window: Option<&str>,
         model: Option<&str>,
         parent_run_id: Option<&str>,
         bot_name: Option<&str>,
@@ -144,7 +115,6 @@ impl<'a> AgentManager<'a> {
             duration_ms: None,
             started_at: now.clone(),
             ended_at: None,
-            tmux_window: tmux_window.map(String::from),
             log_file: log_file.map(String::from),
             model: model.map(String::from),
             plan: None,
@@ -161,9 +131,9 @@ impl<'a> AgentManager<'a> {
 
         self.conn.execute(
             "INSERT INTO agent_runs \
-             (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, \
+             (id, worktree_id, repo_id, prompt, status, started_at, model, \
               parent_run_id, bot_name, log_file, conversation_id, runtime) \
-             VALUES (:id, :worktree_id, :repo_id, :prompt, :status, :started_at, :tmux_window, \
+             VALUES (:id, :worktree_id, :repo_id, :prompt, :status, :started_at, \
                      :model, :parent_run_id, :bot_name, :log_file, :conversation_id, :runtime)",
             named_params! {
                 ":id": run.id,
@@ -172,7 +142,6 @@ impl<'a> AgentManager<'a> {
                 ":prompt": run.prompt,
                 ":status": run.status,
                 ":started_at": run.started_at,
-                ":tmux_window": run.tmux_window,
                 ":model": run.model,
                 ":parent_run_id": run.parent_run_id,
                 ":bot_name": run.bot_name,
@@ -414,16 +383,6 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Persist the tmux window name for an agent run so liveness checks and
-    /// the orphan reaper can find it.
-    pub fn update_run_tmux_window(&self, run_id: &str, window: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE agent_runs SET tmux_window = :window WHERE id = :id",
-            named_params! { ":window": window, ":id": run_id },
-        )?;
-        Ok(())
-    }
-
     /// Store the OS PID for a headless agent run immediately after spawn.
     pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
         self.conn.execute(
@@ -505,7 +464,6 @@ impl<'a> AgentManager<'a> {
             original.worktree_id.as_deref(),
             original.repo_id.as_deref(),
             &original.prompt,
-            original.tmux_window.as_deref(),
             original.model.as_deref(),
             Some(run_id),
             original.bot_name.as_deref(),
@@ -552,12 +510,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
         assert_eq!(run.prompt, "Fix the bug");
-        assert!(run.tmux_window.is_none());
 
         let runs = mgr.list_for_worktree("w1").unwrap();
         assert_eq!(runs.len(), 1);
@@ -565,27 +520,11 @@ mod tests {
     }
 
     #[test]
-    fn test_create_with_tmux_window() {
-        let conn = setup_db();
-        let mgr = AgentManager::new(&conn);
-
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", Some("feat-test"), None)
-            .unwrap();
-        assert_eq!(run.tmux_window.as_deref(), Some("feat-test"));
-
-        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(fetched.tmux_window.as_deref(), Some("feat-test"));
-    }
-
-    #[test]
     fn test_update_completed() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         mgr.update_run_completed(
             &run.id,
             Some("sess-123"),
@@ -611,9 +550,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         mgr.update_run_failed(&run.id, "Something went wrong")
             .unwrap();
 
@@ -627,9 +564,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         mgr.update_run_cancelled(&run.id).unwrap();
 
         let latest = mgr.latest_for_worktree("w1").unwrap().unwrap();
@@ -642,9 +577,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", Some("feat-test"), None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         assert!(run.log_file.is_none());
 
         mgr.update_run_log_file(&run.id, "/tmp/agent-logs/test.log")
@@ -662,9 +595,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         mgr.update_run_failed_with_session(&run.id, "Context exhausted", Some("sess-456"))
             .unwrap();
 
@@ -679,9 +610,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         assert!(run.claude_session_id.is_none());
 
         mgr.update_run_session_id(&run.id, "sess-early").unwrap();
@@ -695,9 +624,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         // Session ID was saved eagerly during stream
         mgr.update_run_session_id(&run.id, "sess-eager").unwrap();
         // Fail without passing session_id (uses COALESCE to keep existing)
@@ -713,7 +640,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, Some("claude-sonnet-4-6"))
+            .create_run(Some("w1"), "Fix the bug", Some("claude-sonnet-4-6"))
             .unwrap();
         assert_eq!(run.model.as_deref(), Some("claude-sonnet-4-6"));
 
@@ -726,9 +653,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         assert!(run.input_tokens.is_none());
 
         mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
@@ -751,9 +676,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
 
         mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
             .unwrap();
@@ -773,9 +696,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         mgr.update_run_tokens_partial(&run.id, 100, 50, 20, 10)
             .unwrap();
 
@@ -806,9 +727,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         assert!(run.model.is_none());
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
@@ -821,12 +740,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run(
-                Some("w1"),
-                "Fix the bug",
-                Some("feat-test"),
-                Some("claude-sonnet-4-6"),
-            )
+            .create_run(Some("w1"), "Fix the bug", Some("claude-sonnet-4-6"))
             .unwrap();
         mgr.update_run_failed(&run.id, "Crashed").unwrap();
 
@@ -834,7 +748,6 @@ mod tests {
         assert_eq!(restarted.status, AgentRunStatus::Running);
         assert_eq!(restarted.prompt, "Fix the bug");
         assert_eq!(restarted.model.as_deref(), Some("claude-sonnet-4-6"));
-        assert_eq!(restarted.tmux_window.as_deref(), Some("feat-test"));
         assert_eq!(restarted.parent_run_id.as_deref(), Some(run.id.as_str()));
         assert_ne!(restarted.id, run.id);
 
@@ -849,12 +762,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run(
-                Some("w1"),
-                "Fix the bug",
-                Some("feat-test"),
-                Some("claude-sonnet-4-6"),
-            )
+            .create_run(Some("w1"), "Fix the bug", Some("claude-sonnet-4-6"))
             .unwrap();
         mgr.update_run_cancelled(&run.id).unwrap();
 
@@ -874,9 +782,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         // Run is still Running — restart should fail
         let result = mgr.restart_run(&run.id);
         assert!(result.is_err());
@@ -895,9 +801,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_repo_run("r1", "Analyse the repo", Some("repo-test-abc"), None)
-            .unwrap();
+        let run = mgr.create_repo_run("r1", "Analyse the repo", None).unwrap();
         mgr.update_run_failed(&run.id, "Crashed").unwrap();
 
         let restarted = mgr.restart_run(&run.id).unwrap();
@@ -912,14 +816,11 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_repo_run("r1", "Analyse the repo", Some("repo-test-abc"), None)
-            .unwrap();
+        let run = mgr.create_repo_run("r1", "Analyse the repo", None).unwrap();
 
         assert_eq!(run.repo_id.as_deref(), Some("r1"));
         assert!(run.worktree_id.is_none());
         assert_eq!(run.prompt, "Analyse the repo");
-        assert_eq!(run.tmux_window.as_deref(), Some("repo-test-abc"));
         assert_eq!(run.status, AgentRunStatus::Running);
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
@@ -937,7 +838,6 @@ mod tests {
                 Some("w1"),
                 None,
                 "Fix the bug",
-                Some("feat-test"),
                 None,
                 None,
                 None,
@@ -959,7 +859,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.update_run_failed(&run.id, "original error").unwrap();
 
         // Calling the if_running variant on an already-failed run must be a no-op.
@@ -983,7 +883,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.update_run_completed_if_running(&run.id, "done")
             .unwrap();
 
@@ -1011,7 +911,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.update_run_failed(&run.id, "original error").unwrap();
 
         // Calling the if_running variant on an already-failed run must be a no-op.
@@ -1032,7 +932,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
 
         mgr.update_run_completed_if_running_full(
             &run.id,
@@ -1072,7 +972,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.update_run_session_id(&run.id, "sess-early").unwrap();
 
         mgr.update_run_completed_if_running_full(
@@ -1107,7 +1007,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.update_run_failed(&run.id, "original error").unwrap();
 
         // Guard must prevent overwriting a finalized run
@@ -1148,7 +1048,7 @@ mod tests {
 
         // Create a run with a known model
         let run = mgr
-            .create_run(Some("w1"), "test", None, Some("original-model"))
+            .create_run(Some("w1"), "test", Some("original-model"))
             .unwrap();
         assert_eq!(run.model.as_deref(), Some("original-model"));
 
@@ -1189,7 +1089,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.request_feedback(&run.id, "what should I do?", None)
             .expect("request_feedback must succeed");
 
@@ -1223,7 +1123,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.cancel_run(&run.id, None).unwrap();
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
@@ -1237,7 +1137,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.cancel_run(&run.id, None).unwrap();
         // Second cancel should succeed — the UPDATE is a no-op but still OK.
         mgr.cancel_run(&run.id, None).unwrap();
@@ -1256,7 +1156,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         // i64::MAX is guaranteed not to be a real PID on any platform.
         mgr.cancel_run(&run.id, Some(i64::MAX)).unwrap();
 
@@ -1270,9 +1170,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
 
         let pid_err = "disk I/O error";
         let msg = format!("failed to persist subprocess pid: {pid_err}");
@@ -1315,7 +1213,7 @@ mod tests {
             "/tmp/ws/feat-test",
         );
         let run = AgentManager::new(&conn)
-            .create_run(Some("w1"), "test prompt", None, None)
+            .create_run(Some("w1"), "test prompt", None)
             .expect("create run");
         let run_id = run.id.clone();
 
@@ -1355,21 +1253,10 @@ mod tests {
     fn test_update_run_runtime() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run(Some("w1"), "prompt", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "prompt", None).unwrap();
         assert_eq!(run.runtime.as_str(), "claude");
         mgr.update_run_runtime(&run.id, "gemini").unwrap();
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.runtime.as_str(), "gemini");
-    }
-
-    #[test]
-    fn test_update_run_tmux_window() {
-        let conn = setup_db();
-        let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run(Some("w1"), "prompt", None, None).unwrap();
-        assert!(run.tmux_window.is_none());
-        mgr.update_run_tmux_window(&run.id, "cli-abc12345").unwrap();
-        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(fetched.tmux_window.as_deref(), Some("cli-abc12345"));
     }
 }

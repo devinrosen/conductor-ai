@@ -115,6 +115,8 @@ pub fn build_agent_args_with_mode(
     permission_mode: Option<&crate::config::AgentPermissionMode>,
     extra_plugin_dirs: &[String],
 ) -> std::result::Result<Vec<Cow<'static, str>>, String> {
+    crate::text_util::validate_run_id(run_id).map_err(|e| e.to_string())?;
+
     let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
 
     #[cfg(unix)]
@@ -1122,7 +1124,7 @@ mod tests {
     fn drain_stream_json_completed_on_result_event() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         let json_lines = concat!(
             "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-1\"}\n",
@@ -1143,7 +1145,7 @@ mod tests {
     fn drain_stream_json_no_result_returns_no_result() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         let json_lines =
             "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-1\"}\n";
@@ -1162,7 +1164,7 @@ mod tests {
     fn drain_stream_json_error_result_event() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         let json_lines =
             "{\"type\":\"result\",\"is_error\":true,\"result\":\"something went wrong\"}\n";
@@ -1183,7 +1185,7 @@ mod tests {
     fn drain_stream_json_token_update() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         let json_lines = concat!(
             "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n",
@@ -1206,7 +1208,7 @@ mod tests {
     fn drain_stream_json_result_persists_cost_turns_duration() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         // Result event with cost, turns, duration, and final token usage
         let json_lines = concat!(
@@ -1318,6 +1320,25 @@ mod tests {
         assert!(
             err.contains("no stdout pipe"),
             "error message should mention 'no stdout pipe', got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_agent_args_with_mode_rejects_invalid_run_id() {
+        let err = super::build_agent_args_with_mode(
+            "../../etc/cron.d/payload",
+            "/tmp/wt",
+            "prompt",
+            None,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .expect_err("expected Err for path-traversal run_id");
+        assert!(
+            err.contains("invalid run_id"),
+            "error should mention 'invalid run_id', got: {err}"
         );
     }
 

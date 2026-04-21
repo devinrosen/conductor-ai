@@ -274,9 +274,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let t = "2024-01-01T00:00:00Z";
 
         let ev1 = mgr
@@ -310,8 +308,8 @@ mod tests {
         let mgr = AgentManager::new(&conn);
         let t = "2024-01-01T00:00:00Z";
 
-        let run_a = mgr.create_run(Some("w1"), "Run A", None, None).unwrap();
-        let run_b = mgr.create_run(Some("w1"), "Run B", None, None).unwrap();
+        let run_a = mgr.create_run(Some("w1"), "Run A", None).unwrap();
+        let run_b = mgr.create_run(Some("w1"), "Run B", None).unwrap();
 
         mgr.create_event(&run_a.id, "tool", "Event for A", t, None)
             .unwrap();
@@ -337,9 +335,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
         let t = "2024-01-01T00:00:00Z";
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let ev1 = mgr
             .create_event(&run.id, "tool", "[Bash] cargo build", t, None)
             .unwrap();
@@ -371,9 +367,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let t0 = "2024-01-01T00:00:00Z";
         let t1 = "2024-01-01T00:00:02Z";
         let t2 = "2024-01-01T00:00:05Z";
@@ -405,15 +399,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run1 = mgr
-            .create_run(Some("w1"), "First task", None, None)
-            .unwrap();
-        let run2 = mgr
-            .create_run(Some("w1"), "Second task", None, None)
-            .unwrap();
-        let run3 = mgr
-            .create_run(Some("w2"), "Other task", None, None)
-            .unwrap();
+        let run1 = mgr.create_run(Some("w1"), "First task", None).unwrap();
+        let run2 = mgr.create_run(Some("w1"), "Second task", None).unwrap();
+        let run3 = mgr.create_run(Some("w2"), "Other task", None).unwrap();
 
         let t = "2024-01-01T00:00:00Z";
         mgr.create_event(&run1.id, "text", "Planning", t, None)
@@ -440,7 +428,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let prompt_text = "Fix the login bug";
-        let run = mgr.create_run(Some("w1"), prompt_text, None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), prompt_text, None).unwrap();
 
         let t0 = "2024-01-01T00:00:00Z";
         let t1 = "2024-01-01T00:00:01Z";
@@ -470,9 +458,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let t = "2024-01-01T00:00:00Z";
         mgr.create_event(&run.id, "text", "hello", t, None).unwrap();
         mgr.create_event(&run.id, "tool", "[Bash] ls", t, None)
@@ -493,12 +479,8 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run1 = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
-        let run2 = mgr
-            .create_run(Some("w2"), "Other task", None, None)
-            .unwrap();
+        let run1 = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
+        let run2 = mgr.create_run(Some("w2"), "Other task", None).unwrap();
 
         // No issues yet
         assert!(mgr
@@ -564,15 +546,11 @@ mod tests {
         let t = "2024-01-01T00:00:00Z";
 
         // Create repo-scoped runs for r1
-        let repo_run1 = mgr
-            .create_repo_run("r1", "Repo task 1", None, None)
-            .unwrap();
-        let repo_run2 = mgr
-            .create_repo_run("r1", "Repo task 2", None, None)
-            .unwrap();
+        let repo_run1 = mgr.create_repo_run("r1", "Repo task 1", None).unwrap();
+        let repo_run2 = mgr.create_repo_run("r1", "Repo task 2", None).unwrap();
 
         // Create a worktree-scoped run for the same repo — should be excluded
-        let wt_run = mgr.create_run(Some("w1"), "WT task", None, None).unwrap();
+        let wt_run = mgr.create_run(Some("w1"), "WT task", None).unwrap();
 
         mgr.create_event(&repo_run1.id, "text", "Planning repo", t, None)
             .unwrap();

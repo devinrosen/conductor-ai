@@ -376,7 +376,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     // Create parent agent run (uses empty worktree_id for ephemeral PR runs).
     let parent_prompt = format!("Workflow: {} — {}", workflow.name, workflow.description);
-    let parent_run = agent_mgr.create_run(input.worktree_id, &parent_prompt, None, input.model)?;
+    let parent_run = agent_mgr.create_run(input.worktree_id, &parent_prompt, input.model)?;
 
     // Create workflow run record with snapshot and target FKs in a single INSERT
     let trigger_str = if input.triggered_by_hook {

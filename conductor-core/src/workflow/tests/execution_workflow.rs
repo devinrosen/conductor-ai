@@ -11,9 +11,7 @@ fn test_cannot_start_workflow_run_when_active() {
     let config = Config::default();
     let exec_config = WorkflowExecConfig::default();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("running-wf", Some("w1"), &parent.id, false, "manual", None)
@@ -47,9 +45,7 @@ fn test_can_start_workflow_run_after_completion() {
     let config = Config::default();
     let exec_config = WorkflowExecConfig::default();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("done-wf", Some("w1"), &parent.id, false, "manual", None)
@@ -84,9 +80,7 @@ fn test_child_workflow_not_blocked_by_parent() {
     let config = Config::default();
     let exec_config = WorkflowExecConfig::default();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("parent-wf", Some("w1"), &parent.id, false, "manual", None)
@@ -802,9 +796,7 @@ fn test_parent_step_id_writes_child_run_id_to_step() {
 
     // Set up a parent workflow run with a placeholder "call-child" step.
     let agent_mgr = AgentManager::new(&conn);
-    let parent_agent_run = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent_agent_run = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let parent_run = wf_mgr
         .create_workflow_run(

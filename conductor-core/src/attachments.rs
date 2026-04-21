@@ -24,6 +24,8 @@ pub fn write_attachments_and_augment_prompt(
     prompt: &str,
     attachments: &[AttachmentFile<'_>],
 ) -> Result<String> {
+    crate::text_util::validate_run_id(run_id)?;
+
     if attachments.is_empty() {
         return Ok(prompt.to_string());
     }
@@ -77,6 +79,24 @@ pub fn write_attachments_and_augment_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_attachments_rejects_path_traversal_run_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = write_attachments_and_augment_prompt(
+            "../../etc/cron.d/payload",
+            tmp.path().to_str().unwrap(),
+            "prompt",
+            &[AttachmentFile {
+                filename: "file.txt",
+                mime_type: "text/plain",
+                data: b"data",
+            }],
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("invalid run_id"), "unexpected error: {msg}");
+    }
 
     #[test]
     fn write_attachments_empty_returns_original_prompt() {

@@ -252,9 +252,7 @@ fn test_summary_labels_never_executed_failed_step() {
     let config = make_resume_config();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
@@ -298,9 +296,7 @@ fn test_summary_does_not_label_started_failed_step() {
     let config = make_resume_config();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)

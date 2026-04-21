@@ -28,7 +28,7 @@ fn setup_db() -> rusqlite::Connection {
 
 fn make_parent_id(conn: &rusqlite::Connection, wt_id: &str) -> String {
     AgentManager::new(conn)
-        .create_run(Some(wt_id), "workflow", None, None)
+        .create_run(Some(wt_id), "workflow", None)
         .unwrap()
         .id
 }
@@ -1573,7 +1573,7 @@ fn test_cancel_run_kills_child_agent_subprocess() {
 
     // Create a child agent run with a fake subprocess_pid.
     let child_run = agent_mgr
-        .create_run(Some("w1"), "agent prompt", None, None)
+        .create_run(Some("w1"), "agent prompt", None)
         .unwrap();
     agent_mgr
         .update_run_subprocess_pid(&child_run.id, u32::MAX)
@@ -1697,7 +1697,7 @@ fn test_fail_workflow_run_returns_parent_id() {
     let wf_mgr = WorkflowManager::new(&conn);
 
     let parent_run = agent_mgr
-        .create_run(Some("w1"), "workflow parent", None, None)
+        .create_run(Some("w1"), "workflow parent", None)
         .unwrap();
     let wf_run = wf_mgr
         .create_workflow_run("wf", Some("w1"), &parent_run.id, false, "manual", None)

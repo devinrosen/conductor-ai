@@ -104,7 +104,7 @@ pub fn handle_worktree(
                             );
                             let model = resolved_model.as_deref();
                             let agent_mgr = AgentManager::new(conn);
-                            let run = agent_mgr.create_run(Some(&wt.id), &prompt, None, model)?;
+                            let run = agent_mgr.create_run(Some(&wt.id), &prompt, model)?;
                             run_agent(
                                 conn,
                                 &run.id,
@@ -180,6 +180,24 @@ pub fn handle_worktree(
                 println!("Cleaned up {count} merged worktree(s).");
             }
         }
+        WorktreeCommands::SetBaseBranch {
+            repo,
+            name,
+            base_branch,
+            rebase,
+        } => {
+            let mgr = WorktreeManager::new(conn, config);
+            mgr.set_base_branch(
+                &repo,
+                &name,
+                base_branch.as_deref(),
+                conductor_core::worktree::SetBaseBranchOptions { rebase },
+            )?;
+            match base_branch {
+                Some(b) => println!("Base branch for {name} set to: {b}"),
+                None => println!("Base branch for {name} cleared (will use repo default)"),
+            }
+        }
         WorktreeCommands::CreateStack {
             repo,
             root_branch,
@@ -203,4 +221,65 @@ pub fn handle_worktree(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use conductor_core::worktree::{SetBaseBranchOptions, WorktreeManager};
+
+    #[test]
+    fn test_set_base_branch_clear_succeeds() {
+        let conn = conductor_core::test_helpers::setup_db();
+        let config = conductor_core::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        // Clearing (None) requires no git ops — always succeeds on a DB-only path.
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            None,
+            SetBaseBranchOptions::default(),
+        );
+        assert!(result.is_ok(), "clear should succeed: {result:?}");
+    }
+
+    #[test]
+    fn test_set_base_branch_rejects_dash_branch() {
+        let conn = conductor_core::test_helpers::setup_db();
+        let config = conductor_core::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("--bad"),
+            SetBaseBranchOptions::default(),
+        );
+        assert!(
+            result.is_err(),
+            "dash-prefixed branch name should be rejected: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_set_base_branch_rebase_flag_forwarded() {
+        let conn = conductor_core::test_helpers::setup_db();
+        let config = conductor_core::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        // With rebase=true and a non-existent ref the ancestry check will error — the
+        // important thing is the rebase path is reached (error is NOT the "pass rebase=true" hint).
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("release/v1"),
+            SetBaseBranchOptions { rebase: true },
+        );
+        assert!(
+            result.is_err(),
+            "expected error for non-existent ref: {result:?}"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            !msg.contains("Pass rebase=true"),
+            "rebase flag should be forwarded, not prompt user to set it: {msg}"
+        );
+    }
 }

@@ -349,7 +349,7 @@ fn test_call_workflow_resume_failure_stops_without_new_child() {
 
     // Create parent workflow run.
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent_agent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent_agent = agent_mgr.create_run(None, "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let parent_run = wf_mgr
         .create_workflow_run("parent-wf", None, &parent_agent.id, false, "manual", None)
@@ -378,7 +378,7 @@ fn test_call_workflow_resume_failure_stops_without_new_child() {
     let child_snapshot = serde_json::to_string(&child_snap).unwrap();
 
     // Create child workflow run linked to the parent, with repo_id set.
-    let child_agent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let child_agent = agent_mgr.create_run(None, "workflow", None).unwrap();
     let child_run = wf_mgr
         .create_workflow_run_with_targets(
             "child",
@@ -440,7 +440,7 @@ fn test_call_workflow_resume_error_stops_without_new_child() {
 
     // Create parent workflow run.
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent_agent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent_agent = agent_mgr.create_run(None, "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let parent_run = wf_mgr
         .create_workflow_run("parent-wf", None, &parent_agent.id, false, "manual", None)
@@ -502,7 +502,7 @@ fn test_call_workflow_resume_failure_triggers_on_fail_agent() {
 
     // Create parent workflow run.
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent_agent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent_agent = agent_mgr.create_run(None, "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let parent_run = wf_mgr
         .create_workflow_run("parent-wf", None, &parent_agent.id, false, "manual", None)

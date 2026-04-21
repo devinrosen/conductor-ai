@@ -180,7 +180,6 @@ fn execute_call_with_schema(
         let child_run = state.agent_mgr.create_child_run(
             worktree_id.as_deref(),
             &prompt,
-            None,
             step_model,
             &state.parent_run_id,
             effective_bot_name,
@@ -358,11 +357,10 @@ fn execute_call_with_schema(
             agent_def: agent_def.clone(),
             prompt: prompt.clone(),
             working_dir: std::path::PathBuf::from(&working_dir),
-            permission_mode: state.config.general.agent_permission_mode,
             model: step_model.map(String::from),
-            config_dir: None,
             bot_name: effective_bot_name.map(String::from),
             plugin_dirs: merged_plugin_dirs.clone(),
+            db_path: crate::config::db_path(),
         };
 
         tracing::info!(

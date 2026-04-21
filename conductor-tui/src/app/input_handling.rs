@@ -821,19 +821,37 @@ impl App {
             let idx = index.unwrap_or(selected);
             let new_base = items.get(idx).and_then(|item| item.branch.clone());
 
-            let wm = WorktreeManager::new(&self.conn, &self.config);
-            match wm.set_base_branch(&repo_slug, &wt_slug, new_base.as_deref()) {
-                Ok(()) => {
-                    let label = new_base.as_deref().unwrap_or("(repo default)");
-                    self.state.status_message = Some(format!("Base branch set to {label}"));
-                    self.refresh_data();
-                }
-                Err(e) => {
-                    self.state.modal = Modal::Error {
-                        message: format!("Failed to set base branch: {e}"),
-                    };
-                }
-            }
+            let Some(bg_tx) = self.bg_tx.clone() else {
+                self.state.modal = Modal::Error {
+                    message: "Cannot set base branch: background sender not ready.".into(),
+                };
+                return;
+            };
+
+            self.state.modal = Modal::Progress {
+                message: "Updating base branch…".to_string(),
+            };
+
+            let config = self.config.clone();
+            let label = new_base.as_deref().unwrap_or("(repo default)").to_string();
+            std::thread::spawn(move || {
+                let result = (|| -> anyhow::Result<String> {
+                    let db = conductor_core::config::db_path();
+                    let conn = conductor_core::db::open_database(&db)?;
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    mgr.set_base_branch(
+                        &repo_slug,
+                        &wt_slug,
+                        new_base.as_deref(),
+                        conductor_core::worktree::SetBaseBranchOptions::default(),
+                    )
+                    .map_err(anyhow::Error::from)?;
+                    Ok(format!("Base branch set to {label}"))
+                })();
+                let _ = bg_tx.send(crate::action::Action::SetBaseBranchComplete {
+                    result: result.map_err(|e| e.to_string()),
+                });
+            });
         }
     }
 
@@ -1155,6 +1173,90 @@ mod tests {
         app.handle_branch_pick(Some(0));
         // Modal should stay None (no-op).
         assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    // ---------- Base branch picker tests ----------
+
+    fn base_branch_picker_modal(selected: usize) -> Modal {
+        let items = vec![
+            crate::state::BranchPickerItem::default(),
+            crate::state::BranchPickerItem {
+                branch: Some("main".to_string()),
+                ..Default::default()
+            },
+        ];
+        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
+        Modal::BaseBranchPicker {
+            repo_slug: "test-repo".to_string(),
+            wt_slug: "feat-test".to_string(),
+            items: ordered,
+            tree_positions,
+            selected,
+        }
+    }
+
+    #[test]
+    fn base_branch_pick_bg_tx_none_shows_error_modal() {
+        let mut app = make_app();
+        // bg_tx is None in a freshly-created App (no event loop started).
+        app.state.modal = base_branch_picker_modal(1);
+        app.handle_base_branch_pick(Some(1));
+        assert!(
+            matches!(app.state.modal, Modal::Error { .. }),
+            "expected Error modal when bg_tx is None, got {:?}",
+            app.state.modal
+        );
+    }
+
+    #[test]
+    fn base_branch_pick_shows_progress_modal() {
+        let mut app = make_app();
+        let (bg_tx, _rx) = crate::event::BackgroundSender::channel_for_test();
+        app.bg_tx = Some(bg_tx);
+        app.state.modal = base_branch_picker_modal(1);
+        app.handle_base_branch_pick(Some(1));
+        assert!(
+            matches!(app.state.modal, Modal::Progress { .. }),
+            "expected Progress modal after dispatching background work, got {:?}",
+            app.state.modal
+        );
+    }
+
+    #[test]
+    fn base_branch_pick_sends_complete_action_to_bg_tx() {
+        let mut app = make_app();
+        let (bg_tx, rx) = crate::event::BackgroundSender::channel_for_test();
+        app.bg_tx = Some(bg_tx);
+        app.state.modal = base_branch_picker_modal(1);
+        app.handle_base_branch_pick(Some(1));
+        // Give the spawned thread a moment to finish and send.
+        let action = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("expected SetBaseBranchComplete action from background thread within 5s");
+        assert!(
+            matches!(action, crate::action::Action::SetBaseBranchComplete { .. }),
+            "expected SetBaseBranchComplete, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn base_branch_pick_out_of_bounds_uses_repo_default() {
+        let mut app = make_app();
+        let (bg_tx, rx) = crate::event::BackgroundSender::channel_for_test();
+        app.bg_tx = Some(bg_tx);
+        app.state.modal = base_branch_picker_modal(0);
+        // index 999 is beyond the items list → new_base = None (repo default)
+        app.handle_base_branch_pick(Some(999));
+        // The thread sends SetBaseBranchComplete regardless; just verify it sends.
+        let action = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("expected action from background thread within 5s");
+        assert!(
+            matches!(action, crate::action::Action::SetBaseBranchComplete { .. }),
+            "expected SetBaseBranchComplete, got {:?}",
+            action
+        );
     }
 
     #[test]

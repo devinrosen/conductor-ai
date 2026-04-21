@@ -2804,7 +2804,7 @@ mod tests {
         use conductor_core::agent::AgentManager;
         let mgr = AgentManager::new(db);
         let run = mgr
-            .create_run(Some(worktree_id), prompt, None, None)
+            .create_run(Some(worktree_id), prompt, None)
             .expect("create agent run");
         mgr.update_run_log_file(&run.id, log_file)
             .expect("set log_file");

@@ -1,21 +1,15 @@
-use std::sync::Arc;
-
 use crate::error::Result;
 use crate::workflow_dsl::ApprovalMode;
 
-use crate::workflow::executors::gate_resolver::{
-    GateContext, GateParams, GatePoll, GateResolver, GitHubTokenCache,
-};
+use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GatePoll, GateResolver};
 
 use super::run_gh_json;
 
-pub(in crate::workflow::executors) struct PrApprovalGateResolver {
-    token_cache: Arc<GitHubTokenCache>,
-}
+pub(in crate::workflow::executors) struct PrApprovalGateResolver;
 
 impl PrApprovalGateResolver {
-    pub(in crate::workflow::executors) fn new(token_cache: Arc<GitHubTokenCache>) -> Self {
-        Self { token_cache }
+    pub(in crate::workflow::executors) fn new() -> Self {
+        Self
     }
 }
 
@@ -44,56 +38,125 @@ fn parse_review_decision(val: &serde_json::Value) -> bool {
     val["reviewDecision"].as_str() == Some("APPROVED")
 }
 
+/// Convert parsed gh output into a `GatePoll` for a given approval mode.
+///
+/// Extracted so tests can exercise the approval logic without invoking a real
+/// `gh` subprocess.
+fn evaluate_approval(val: &serde_json::Value, params: &GateParams) -> GatePoll {
+    match params.approval_mode {
+        ApprovalMode::MinApprovals => {
+            if parse_min_approvals(val, params.min_approvals) {
+                tracing::info!(
+                    "Gate '{}': sufficient approvals (required {})",
+                    params.gate_name,
+                    params.min_approvals
+                );
+                GatePoll::Approved(None)
+            } else {
+                GatePoll::Pending
+            }
+        }
+        ApprovalMode::ReviewDecision => {
+            let decision = val["reviewDecision"].as_str().unwrap_or("");
+            tracing::info!("Gate '{}': reviewDecision = {}", params.gate_name, decision);
+            if parse_review_decision(val) {
+                GatePoll::Approved(None)
+            } else {
+                GatePoll::Pending
+            }
+        }
+    }
+}
+
 impl GateResolver for PrApprovalGateResolver {
     fn gate_type(&self) -> &str {
         "pr_approval"
     }
 
     fn poll(&self, _run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll> {
-        let effective_bot = params.bot_name.as_deref().or(ctx.default_bot_name);
-        let gate_bot_token = self.token_cache.get(ctx.config, effective_bot);
+        let gate_bot_token = ctx.resolve_token(params);
         let token_ref = gate_bot_token.as_deref();
 
-        match params.approval_mode {
-            ApprovalMode::MinApprovals => {
-                if let Some(val) = run_gh_json(
-                    &["pr", "view", "--json", "reviews,author"],
-                    ctx.working_dir,
-                    token_ref,
-                ) {
-                    if parse_min_approvals(&val, params.min_approvals) {
-                        tracing::info!(
-                            "Gate '{}': sufficient approvals (required {})",
-                            params.gate_name,
-                            params.min_approvals
-                        );
-                        return Ok(GatePoll::Approved(None));
-                    }
-                }
-                Ok(GatePoll::Pending)
-            }
-            ApprovalMode::ReviewDecision => {
-                if let Some(val) = run_gh_json(
-                    &["pr", "view", "--json", "reviewDecision"],
-                    ctx.working_dir,
-                    token_ref,
-                ) {
-                    let decision = val["reviewDecision"].as_str().unwrap_or("");
-                    tracing::info!("Gate '{}': reviewDecision = {}", params.gate_name, decision);
-                    if parse_review_decision(&val) {
-                        return Ok(GatePoll::Approved(None));
-                    }
-                }
-                Ok(GatePoll::Pending)
-            }
+        let args = match params.approval_mode {
+            ApprovalMode::MinApprovals => ["pr", "view", "--json", "reviews,author"].as_slice(),
+            ApprovalMode::ReviewDecision => ["pr", "view", "--json", "reviewDecision"].as_slice(),
+        };
+        if let Some(val) = run_gh_json(args, ctx.working_dir, token_ref) {
+            return Ok(evaluate_approval(&val, params));
         }
+        Ok(GatePoll::Pending)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow_dsl::ApprovalMode;
     use serde_json::json;
+
+    fn make_params(mode: ApprovalMode, min_approvals: u32) -> GateParams {
+        GateParams {
+            gate_name: "test-gate".into(),
+            prompt: None,
+            min_approvals,
+            approval_mode: mode,
+            options: vec![],
+            timeout_secs: 60,
+            bot_name: None,
+            step_id: "step-1".into(),
+        }
+    }
+
+    #[test]
+    fn test_evaluate_approval_min_approvals_approved() {
+        let val = json!({
+            "author": { "login": "alice" },
+            "reviews": [
+                { "state": "APPROVED", "author": { "login": "bob" } },
+                { "state": "APPROVED", "author": { "login": "carol" } }
+            ]
+        });
+        let params = make_params(ApprovalMode::MinApprovals, 2);
+        assert!(matches!(
+            evaluate_approval(&val, &params),
+            GatePoll::Approved(None)
+        ));
+    }
+
+    #[test]
+    fn test_evaluate_approval_min_approvals_pending() {
+        let val = json!({
+            "author": { "login": "alice" },
+            "reviews": [
+                { "state": "APPROVED", "author": { "login": "bob" } }
+            ]
+        });
+        let params = make_params(ApprovalMode::MinApprovals, 2);
+        assert!(matches!(
+            evaluate_approval(&val, &params),
+            GatePoll::Pending
+        ));
+    }
+
+    #[test]
+    fn test_evaluate_approval_review_decision_approved() {
+        let val = json!({ "reviewDecision": "APPROVED" });
+        let params = make_params(ApprovalMode::ReviewDecision, 1);
+        assert!(matches!(
+            evaluate_approval(&val, &params),
+            GatePoll::Approved(None)
+        ));
+    }
+
+    #[test]
+    fn test_evaluate_approval_review_decision_pending() {
+        let val = json!({ "reviewDecision": "REVIEW_REQUIRED" });
+        let params = make_params(ApprovalMode::ReviewDecision, 1);
+        assert!(matches!(
+            evaluate_approval(&val, &params),
+            GatePoll::Pending
+        ));
+    }
 
     #[test]
     fn test_parse_min_approvals_approved() {

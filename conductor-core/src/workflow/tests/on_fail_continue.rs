@@ -216,9 +216,7 @@ fn test_script_on_fail_continue_skips_step() {
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -281,9 +279,7 @@ fn test_script_no_on_fail_still_fails_workflow() {
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)

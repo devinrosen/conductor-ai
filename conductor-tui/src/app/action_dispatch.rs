@@ -1182,6 +1182,20 @@ impl App {
                     }
                 }
             }
+            Action::SetBaseBranchComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(msg) => {
+                        self.state.status_message = Some(msg);
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Failed to set base branch: {e}"),
+                        };
+                    }
+                }
+            }
             Action::WorktreeDeleteComplete { wt_slug, result } => {
                 self.state.modal = Modal::None;
                 match result {
@@ -1527,5 +1541,61 @@ impl App {
                 self.state.modal = Modal::Error { message: e };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::action::Action;
+    use crate::state::Modal;
+
+    fn make_test_app() -> App {
+        let conn = conductor_core::test_helpers::create_test_conn();
+        App::new(
+            conn,
+            conductor_core::config::Config::default(),
+            crate::theme::Theme::default(),
+        )
+    }
+
+    #[test]
+    fn set_base_branch_complete_ok_sets_status_message() {
+        let mut app = make_test_app();
+        app.state.modal = Modal::Progress {
+            message: "Setting base branch…".into(),
+        };
+        app.handle_action(Action::SetBaseBranchComplete {
+            result: Ok("Base branch set to main".into()),
+        });
+        assert!(
+            matches!(app.state.modal, Modal::None),
+            "modal should be cleared on success"
+        );
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Base branch set to main"),
+            "status message should reflect the success text"
+        );
+    }
+
+    #[test]
+    fn set_base_branch_complete_err_shows_error_modal() {
+        let mut app = make_test_app();
+        app.state.modal = Modal::Progress {
+            message: "Setting base branch…".into(),
+        };
+        app.handle_action(Action::SetBaseBranchComplete {
+            result: Err("branch not found".into()),
+        });
+        assert!(
+            matches!(&app.state.modal, Modal::Error { message } if message.contains("branch not found")),
+            "error modal should show the failure reason: {:?}",
+            app.state.modal
+        );
+        assert!(
+            app.state.status_message.is_none(),
+            "status message should not be set on failure"
+        );
     }
 }

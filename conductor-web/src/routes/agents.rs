@@ -436,13 +436,12 @@ pub async fn start_agent(
             agent_mgr.create_child_run(
                 Some(&worktree_id),
                 &body.prompt,
-                None,
                 model.as_deref(),
                 parent_id,
                 None,
             )?
         } else {
-            agent_mgr.create_run(Some(&worktree_id), &body.prompt, None, model.as_deref())?
+            agent_mgr.create_run(Some(&worktree_id), &body.prompt, model.as_deref())?
         };
 
         (
@@ -1215,7 +1214,7 @@ pub async fn start_repo_agent(
                 .and_then(|run| run.claude_session_id)
         };
 
-        let run = agent_mgr.create_repo_run(&repo_id, &body.prompt, None, model.as_deref())?;
+        let run = agent_mgr.create_repo_run(&repo_id, &body.prompt, model.as_deref())?;
 
         (run, repo.local_path.clone(), resume_session_id, model)
     };
@@ -1587,7 +1586,7 @@ mod tests {
             "/tmp/ws/feat-test",
         );
         let run = AgentManager::new(&conn)
-            .create_run(Some("w1"), "test prompt", None, None)
+            .create_run(Some("w1"), "test prompt", None)
             .expect("create run");
         let run_id = run.id.clone();
         let state = AppState {
@@ -1683,7 +1682,7 @@ mod tests {
             "/tmp/ws/feat-test",
         );
         let run = AgentManager::new(&real_conn)
-            .create_run(Some("w1"), "test prompt", None, None)
+            .create_run(Some("w1"), "test prompt", None)
             .expect("create run");
         let run_id = run.id.clone();
         drop(real_conn);
@@ -1788,7 +1787,7 @@ mod tests {
             "/tmp/ws/feat-test",
         );
         let run = AgentManager::new(&conn)
-            .create_run(Some("w1"), "test prompt", None, None)
+            .create_run(Some("w1"), "test prompt", None)
             .expect("create run");
         let run_id = run.id.clone();
         let state = AppState {

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -12,16 +13,21 @@ use super::{AgentRuntime, PollError, RuntimeRequest};
 /// capturing stdout as `result_text`. No tmux dependency.
 pub struct ScriptRuntime {
     config: RuntimeConfig,
+    db_path: std::sync::Mutex<PathBuf>,
 }
 
 impl ScriptRuntime {
     pub fn new(config: RuntimeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            db_path: std::sync::Mutex::new(crate::config::db_path()),
+        }
     }
 }
 
 impl AgentRuntime for ScriptRuntime {
     fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
+        crate::text_util::validate_run_id(&request.run_id)?;
         let command = self.config.command.as_deref().ok_or_else(|| {
             ConductorError::Config(
                 "ScriptRuntime: `command` is required in the runtime config".to_string(),
@@ -49,7 +55,11 @@ impl AgentRuntime for ScriptRuntime {
                 ConductorError::Agent(format!("ScriptRuntime: failed to spawn command: {e}"))
             })?;
 
-        let conn = crate::db::open_database_compat(&crate::config::db_path())
+        if let Ok(mut guard) = self.db_path.lock() {
+            *guard = request.db_path.clone();
+        }
+
+        let conn = crate::db::open_database_compat(&request.db_path)
             .map_err(|e| ConductorError::Agent(format!("ScriptRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
@@ -101,7 +111,8 @@ impl AgentRuntime for ScriptRuntime {
         _shutdown: Option<&Arc<AtomicBool>>,
         _step_timeout: Duration,
     ) -> std::result::Result<AgentRun, PollError> {
-        let conn = crate::db::open_database_compat(&crate::config::db_path())
+        let db_path = self.db_path.lock().unwrap().clone();
+        let conn = crate::db::open_database_compat(&db_path)
             .map_err(|e| PollError::Failed(format!("ScriptRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
@@ -150,7 +161,6 @@ mod tests {
     fn make_test_run() -> AgentRun {
         AgentRun {
             id: "test".to_string(),
-            tmux_window: None,
             worktree_id: None,
             repo_id: None,
             claude_session_id: None,

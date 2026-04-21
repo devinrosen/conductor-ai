@@ -477,7 +477,7 @@ impl App {
         prompt: String,
         worktree_id: String,
         worktree_path: String,
-        worktree_slug: String,
+        _worktree_slug: String,
         resume_session_id: Option<String>,
         model: Option<String>,
     ) {
@@ -501,12 +501,7 @@ impl App {
             };
             let mgr = AgentManager::new(&conn);
 
-            let run = match mgr.create_run(
-                Some(&worktree_id),
-                &prompt,
-                Some(&worktree_slug),
-                model.as_deref(),
-            ) {
+            let run = match mgr.create_run(Some(&worktree_id), &prompt, model.as_deref()) {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(Action::AgentLaunchComplete {
@@ -653,7 +648,7 @@ impl App {
             };
             let mgr = AgentManager::new(&conn);
 
-            let run = match mgr.create_repo_run(&repo_id, &prompt, None, None) {
+            let run = match mgr.create_repo_run(&repo_id, &prompt, None) {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(Action::RepoAgentLaunched {

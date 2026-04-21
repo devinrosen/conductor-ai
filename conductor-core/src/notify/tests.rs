@@ -1652,7 +1652,6 @@ fn make_agent_run(id: &str, status: AgentRunStatus) -> AgentRun {
         duration_ms: None,
         started_at: "2026-01-01T00:00:00Z".to_string(),
         ended_at: None,
-        tmux_window: None,
         log_file: None,
         model: None,
         plan: None,

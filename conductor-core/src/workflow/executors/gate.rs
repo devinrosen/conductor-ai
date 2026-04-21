@@ -217,7 +217,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
 
     // Build the token cache and resolver registry.
     let token_cache = Arc::new(GitHubTokenCache::new(None));
-    let resolvers = build_default_gate_resolvers(db_path.clone(), Arc::clone(&token_cache));
+    let resolvers = build_default_gate_resolvers(db_path.clone());
 
     let resolver = resolvers.get(gate_type_str).ok_or_else(|| {
         ConductorError::Workflow(format!("no registered GateResolver for '{gate_type_str}'"))

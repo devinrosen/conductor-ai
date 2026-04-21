@@ -395,9 +395,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.id, run.id);
         assert_eq!(fetched.prompt, "Fix the bug");
@@ -424,8 +422,7 @@ mod tests {
         assert!(!mgr.has_runs_for_worktree("w1").unwrap());
 
         // Create a run
-        mgr.create_run(Some("w1"), "First prompt", None, None)
-            .unwrap();
+        mgr.create_run(Some("w1"), "First prompt", None).unwrap();
         assert!(mgr.has_runs_for_worktree("w1").unwrap());
 
         // Different worktree still has no runs
@@ -438,15 +435,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create runs for two different worktrees
-        let _run1 = mgr
-            .create_run(Some("w1"), "First prompt", None, None)
-            .unwrap();
-        let run2 = mgr
-            .create_run(Some("w1"), "Second prompt", None, None)
-            .unwrap();
-        let run3 = mgr
-            .create_run(Some("w2"), "Other prompt", None, None)
-            .unwrap();
+        let _run1 = mgr.create_run(Some("w1"), "First prompt", None).unwrap();
+        let run2 = mgr.create_run(Some("w1"), "Second prompt", None).unwrap();
+        let run3 = mgr.create_run(Some("w2"), "Other prompt", None).unwrap();
 
         let map = mgr.latest_runs_by_worktree().unwrap();
         assert_eq!(map.len(), 2);
@@ -460,12 +451,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create an ephemeral run with no worktree_id
-        mgr.create_run(None, "ephemeral prompt", None, None)
-            .unwrap();
+        mgr.create_run(None, "ephemeral prompt", None).unwrap();
         // Create a run with a real worktree_id
-        let run_w1 = mgr
-            .create_run(Some("w1"), "real prompt", None, None)
-            .unwrap();
+        let run_w1 = mgr.create_run(Some("w1"), "real prompt", None).unwrap();
 
         let map = mgr.latest_runs_by_worktree().unwrap();
         // Only the run with a worktree_id should appear
@@ -480,13 +468,11 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr
-            .create_run(Some("w1"), "Supervisor task", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Supervisor task", None).unwrap();
         assert!(parent.parent_run_id.is_none());
 
         let child = mgr
-            .create_child_run(Some("w1"), "Sub-task A", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Sub-task A", None, &parent.id, None)
             .unwrap();
         assert_eq!(child.parent_run_id.as_deref(), Some(parent.id.as_str()));
 
@@ -499,20 +485,16 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr
-            .create_run(Some("w1"), "Supervisor", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Supervisor", None).unwrap();
         let _child1 = mgr
-            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Child 1", None, &parent.id, None)
             .unwrap();
         let _child2 = mgr
-            .create_child_run(Some("w1"), "Child 2", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Child 2", None, &parent.id, None)
             .unwrap();
 
         // Unrelated run should not appear
-        let _other = mgr
-            .create_run(Some("w1"), "Independent", None, None)
-            .unwrap();
+        let _other = mgr.create_run(Some("w1"), "Independent", None).unwrap();
 
         let children = mgr.list_child_runs(&parent.id).unwrap();
         assert_eq!(children.len(), 2);
@@ -527,19 +509,19 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Build a tree: parent -> child1, child2 -> grandchild
-        let parent = mgr.create_run(Some("w1"), "Root task", None, None).unwrap();
+        let parent = mgr.create_run(Some("w1"), "Root task", None).unwrap();
         let child1 = mgr
-            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Child 1", None, &parent.id, None)
             .unwrap();
         let _child2 = mgr
-            .create_child_run(Some("w2"), "Child 2", None, None, &parent.id, None)
+            .create_child_run(Some("w2"), "Child 2", None, &parent.id, None)
             .unwrap();
         let _grandchild = mgr
-            .create_child_run(Some("w1"), "Grandchild", None, None, &child1.id, None)
+            .create_child_run(Some("w1"), "Grandchild", None, &child1.id, None)
             .unwrap();
 
         // Unrelated run
-        let _other = mgr.create_run(Some("w1"), "Other", None, None).unwrap();
+        let _other = mgr.create_run(Some("w1"), "Other", None).unwrap();
 
         let tree = mgr.get_run_tree(&parent.id).unwrap();
         assert_eq!(tree.len(), 4); // parent + 2 children + 1 grandchild
@@ -551,15 +533,11 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr
-            .create_run(Some("w1"), "Supervisor", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Supervisor", None).unwrap();
         let _child = mgr
-            .create_child_run(Some("w1"), "Child", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Child", None, &parent.id, None)
             .unwrap();
-        let standalone = mgr
-            .create_run(Some("w1"), "Standalone", None, None)
-            .unwrap();
+        let standalone = mgr.create_run(Some("w1"), "Standalone", None).unwrap();
 
         let root_runs = mgr.list_root_runs_for_worktree("w1").unwrap();
         assert_eq!(root_runs.len(), 2);
@@ -574,9 +552,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr.create_run(Some("w1"), "Parent", None, None).unwrap();
+        let parent = mgr.create_run(Some("w1"), "Parent", None).unwrap();
         let child = mgr
-            .create_child_run(Some("w1"), "Child", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Child", None, &parent.id, None)
             .unwrap();
 
         // Delete the parent — ON DELETE SET NULL should clear child's parent_run_id
@@ -595,9 +573,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
-        let r2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
-        let r3 = mgr.create_run(Some("w1"), "Task 3", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "Task 2", None).unwrap();
+        let r3 = mgr.create_run(Some("w1"), "Task 3", None).unwrap();
 
         let ids = vec![r1.id.as_str(), r2.id.as_str()];
         let result = mgr.get_runs_by_ids(&ids).unwrap();
@@ -615,7 +593,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let _r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        let _r1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
 
         let result = mgr.get_runs_by_ids(&[]).unwrap();
         assert!(result.is_empty());
@@ -626,7 +604,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
 
         let ids = vec![r1.id.as_str(), "nonexistent-id-xyz"];
         let result = mgr.get_runs_by_ids(&ids).unwrap();
@@ -641,8 +619,8 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
-        let r2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "Task 2", None).unwrap();
 
         let runs = mgr.list_agent_runs(None, None, None, 50, 0).unwrap();
         assert_eq!(runs.len(), 2);
@@ -657,12 +635,8 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // w1 and w2 are both seeded; create runs in each
-        let r1 = mgr
-            .create_run(Some("w1"), "Task in w1", None, None)
-            .unwrap();
-        let _r2 = mgr
-            .create_run(Some("w2"), "Task in w2", None, None)
-            .unwrap();
+        let r1 = mgr.create_run(Some("w1"), "Task in w1", None).unwrap();
+        let _r2 = mgr.create_run(Some("w2"), "Task in w2", None).unwrap();
 
         let runs = mgr.list_agent_runs(Some("w1"), None, None, 50, 0).unwrap();
         assert_eq!(runs.len(), 1);
@@ -674,8 +648,8 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
-        let r2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "Task 2", None).unwrap();
         mgr.update_run_completed(
             &r2.id,
             None,
@@ -720,8 +694,8 @@ mod tests {
         ).unwrap();
 
         let mgr = AgentManager::new(&conn);
-        let r1 = mgr.create_run(Some("w1"), "r1 task", None, None).unwrap();
-        let _r3 = mgr.create_run(Some("w3"), "r2 task", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "r1 task", None).unwrap();
+        let _r3 = mgr.create_run(Some("w3"), "r2 task", None).unwrap();
 
         let runs = mgr.list_agent_runs(None, Some("r1"), None, 50, 0).unwrap();
         assert_eq!(runs.len(), 1);
@@ -745,15 +719,11 @@ mod tests {
         ).unwrap();
 
         let mgr = AgentManager::new(&conn);
-        let r1_running = mgr
-            .create_run(Some("w1"), "r1 running task", None, None)
-            .unwrap();
+        let r1_running = mgr.create_run(Some("w1"), "r1 running task", None).unwrap();
         let r1_completed = mgr
-            .create_run(Some("w1"), "r1 completed task", None, None)
+            .create_run(Some("w1"), "r1 completed task", None)
             .unwrap();
-        let _r2_running = mgr
-            .create_run(Some("w3"), "r2 running task", None, None)
-            .unwrap();
+        let _r2_running = mgr.create_run(Some("w3"), "r2 running task", None).unwrap();
 
         mgr.update_run_completed(
             &r1_completed.id,
@@ -801,8 +771,8 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
-        let r2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "Task 2", None).unwrap();
         mgr.update_run_completed(
             &r1.id,
             None,
@@ -830,7 +800,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         for i in 0..5 {
-            mgr.create_run(Some("w1"), &format!("Task {i}"), None, None)
+            mgr.create_run(Some("w1"), &format!("Task {i}"), None)
                 .unwrap();
         }
 
@@ -857,15 +827,9 @@ mod tests {
         ).unwrap();
 
         let mgr = AgentManager::new(&conn);
-        let r1a = mgr
-            .create_run(Some("w1"), "Task for r1 w1", None, None)
-            .unwrap();
-        let r1b = mgr
-            .create_run(Some("w2"), "Task for r1 w2", None, None)
-            .unwrap();
-        let _r2 = mgr
-            .create_run(Some("w3"), "Task for r2", None, None)
-            .unwrap();
+        let r1a = mgr.create_run(Some("w1"), "Task for r1 w1", None).unwrap();
+        let r1b = mgr.create_run(Some("w2"), "Task for r1 w2", None).unwrap();
+        let _r2 = mgr.create_run(Some("w3"), "Task for r2", None).unwrap();
 
         let runs = mgr.list_for_repo("r1").unwrap();
         assert_eq!(runs.len(), 2);
@@ -882,9 +846,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr.create_run(Some("w1"), "Parent", None, None).unwrap();
+        let parent = mgr.create_run(Some("w1"), "Parent", None).unwrap();
         let run = mgr
-            .create_child_run(Some("w1"), "Task", None, None, &parent.id, Some("my-bot"))
+            .create_child_run(Some("w1"), "Task", None, &parent.id, Some("my-bot"))
             .unwrap();
         assert_eq!(run.bot_name.as_deref(), Some("my-bot"));
 
@@ -902,13 +866,11 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a top-level parent run
-        let parent = mgr
-            .create_run(Some("w1"), "Parent task", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Parent task", None).unwrap();
 
         // Create a child run on the same worktree (simulates a sub-agent)
         let child = mgr
-            .create_child_run(Some("w1"), "Child task", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Child task", None, &parent.id, None)
             .unwrap();
 
         // latest_run_for_worktree should return only the parent (top-level) run,
@@ -930,16 +892,12 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create two top-level runs for the same worktree
-        let _older = mgr
-            .create_run(Some("w1"), "Older task", None, None)
-            .unwrap();
-        let newer = mgr
-            .create_run(Some("w1"), "Newer task", None, None)
-            .unwrap();
+        let _older = mgr.create_run(Some("w1"), "Older task", None).unwrap();
+        let newer = mgr.create_run(Some("w1"), "Newer task", None).unwrap();
 
         // Also create a child of the newer run
         let _child = mgr
-            .create_child_run(Some("w1"), "Child of newer", None, None, &newer.id, None)
+            .create_child_run(Some("w1"), "Child of newer", None, &newer.id, None)
             .unwrap();
 
         let latest = mgr.latest_run_for_worktree("w1").unwrap().unwrap();
@@ -964,13 +922,11 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a parent run on w1
-        let parent = mgr
-            .create_run(Some("w1"), "Parent task", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Parent task", None).unwrap();
 
         // Create a child run on w2, parented to the w1 run
         let _child = mgr
-            .create_child_run(Some("w2"), "Child task", None, None, &parent.id, None)
+            .create_child_run(Some("w2"), "Child task", None, &parent.id, None)
             .unwrap();
 
         // w2 only has a child run — parent_run_id IS NULL filter should exclude it
@@ -987,13 +943,11 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a parent run on w1
-        let parent = mgr
-            .create_run(Some("w1"), "Parent task", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Parent task", None).unwrap();
 
         // Create a child run on w2, parented to the w1 run
         let child = mgr
-            .create_child_run(Some("w2"), "Child task", None, None, &parent.id, None)
+            .create_child_run(Some("w2"), "Child task", None, &parent.id, None)
             .unwrap();
 
         // latest_for_worktree sees all runs — returns the child
@@ -1018,13 +972,11 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a top-level parent run on w1
-        let parent = mgr
-            .create_run(Some("w1"), "Parent task", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Parent task", None).unwrap();
 
         // Create a child run on w1 (newer) parented to the same parent
         let child = mgr
-            .create_child_run(Some("w1"), "Child task", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Child task", None, &parent.id, None)
             .unwrap();
 
         // latest_for_worktree sees all runs — returns the child (newest)
@@ -1066,16 +1018,10 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create runs across repos
-        let _r1_old = mgr
-            .create_run(Some("w1"), "Old r1 task", None, None)
-            .unwrap();
-        let r1_new = mgr
-            .create_run(Some("w1"), "New r1 task", None, None)
-            .unwrap();
-        let r1_w2 = mgr
-            .create_run(Some("w2"), "r1 w2 task", None, None)
-            .unwrap();
-        let _r2 = mgr.create_run(Some("w3"), "r2 task", None, None).unwrap();
+        let _r1_old = mgr.create_run(Some("w1"), "Old r1 task", None).unwrap();
+        let r1_new = mgr.create_run(Some("w1"), "New r1 task", None).unwrap();
+        let r1_w2 = mgr.create_run(Some("w2"), "r1 w2 task", None).unwrap();
+        let _r2 = mgr.create_run(Some("w3"), "r2 task", None).unwrap();
 
         // Repo r1 should only include w1 and w2
         let map = mgr.latest_runs_by_worktree_for_repo("r1").unwrap();
@@ -1096,14 +1042,10 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a repo-scoped run (no worktree)
-        let repo_run = mgr
-            .create_repo_run("r1", "Analyse the repo", None, None)
-            .unwrap();
+        let repo_run = mgr.create_repo_run("r1", "Analyse the repo", None).unwrap();
 
         // Create a worktree-scoped run (should not appear)
-        let _wt_run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let _wt_run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
 
         let runs = mgr.list_repo_scoped("r1").unwrap();
         assert_eq!(runs.len(), 1);
@@ -1125,12 +1067,8 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let _older = mgr
-            .create_repo_run("r1", "First question", None, None)
-            .unwrap();
-        let newer = mgr
-            .create_repo_run("r1", "Second question", None, None)
-            .unwrap();
+        let _older = mgr.create_repo_run("r1", "First question", None).unwrap();
+        let newer = mgr.create_repo_run("r1", "Second question", None).unwrap();
 
         // Set a session ID on the latest run so we can verify it's returned
         mgr.update_run_session_id(&newer.id, "sess-repo-latest")
@@ -1164,9 +1102,7 @@ mod tests {
         );
 
         // Create a completed run with a session ID
-        let run = mgr
-            .create_repo_run("r1", "Analyse the repo", None, None)
-            .unwrap();
+        let run = mgr.create_repo_run("r1", "Analyse the repo", None).unwrap();
         mgr.update_run_completed(
             &run.id,
             Some("sess-abc"),
@@ -1218,13 +1154,12 @@ mod tests {
         assert!(map.is_empty());
 
         // Create repo-scoped runs
-        let _r1_old = mgr.create_repo_run("r1", "Old prompt", None, None).unwrap();
-        let r1_new = mgr.create_repo_run("r1", "New prompt", None, None).unwrap();
-        let r2_only = mgr.create_repo_run("r2", "R2 prompt", None, None).unwrap();
+        let _r1_old = mgr.create_repo_run("r1", "Old prompt", None).unwrap();
+        let r1_new = mgr.create_repo_run("r1", "New prompt", None).unwrap();
+        let r2_only = mgr.create_repo_run("r2", "R2 prompt", None).unwrap();
 
         // Also create a worktree-scoped run — should NOT appear
-        mgr.create_run(Some("w1"), "Worktree task", None, None)
-            .unwrap();
+        mgr.create_run(Some("w1"), "Worktree task", None).unwrap();
 
         let map = mgr.latest_repo_scoped_runs_all().unwrap();
         assert_eq!(map.len(), 2);

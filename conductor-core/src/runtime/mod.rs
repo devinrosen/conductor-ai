@@ -14,7 +14,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use crate::agent::types::AgentRun;
 use crate::agent_config::AgentDef;
-use crate::config::{AgentPermissionMode, Config};
+use crate::config::Config;
 use crate::error::{ConductorError, Result};
 
 /// Trait implemented by every agent runtime.
@@ -47,16 +47,14 @@ pub struct RuntimeRequest {
     pub prompt: String,
     /// Absolute path to the worktree root.
     pub working_dir: PathBuf,
-    /// Claude permission mode (skip-permissions, auto-mode, plan, repo-safe).
-    pub permission_mode: AgentPermissionMode,
     /// Optional model override.
     pub model: Option<String>,
-    /// Custom Claude config directory (from `general.claude_config_dir`).
-    pub config_dir: Option<String>,
     /// Bot identity name (from step or workflow default).
     pub bot_name: Option<String>,
     /// Extra plugin directories to search for agent definitions.
     pub plugin_dirs: Vec<String>,
+    /// Absolute path to the SQLite database file.
+    pub db_path: PathBuf,
 }
 
 /// Error returned by `AgentRuntime::poll`.
@@ -83,7 +81,11 @@ impl std::fmt::Display for PollError {
 /// Resolve a runtime name to a boxed `AgentRuntime` implementation.
 pub fn resolve_runtime(name: &str, config: &Config) -> Result<Box<dyn AgentRuntime>> {
     if name == "claude" {
-        return Ok(Box::new(claude::ClaudeRuntime::new()));
+        let options = claude::ClaudeRuntimeOptions {
+            permission_mode: config.general.agent_permission_mode,
+            config_dir: config.general.claude_config_dir.clone(),
+        };
+        return Ok(Box::new(claude::ClaudeRuntime::new(options)));
     }
     let rt_config = config.runtimes.get(name).ok_or_else(|| {
         ConductorError::Config(format!(

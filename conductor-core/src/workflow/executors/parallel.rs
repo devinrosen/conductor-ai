@@ -160,7 +160,6 @@ pub fn execute_parallel(
         let child_run = state.agent_mgr.create_child_run(
             worktree_id.as_deref(),
             &prompt,
-            None,
             step_model,
             &state.parent_run_id,
             state.default_bot_name.as_deref(),
@@ -239,7 +238,7 @@ pub fn execute_parallel(
         let outcome_tx = completion_tx.clone();
         let child_index = children.len(); // index this child will have in children vec
         let drain_handle = std::thread::spawn(move || {
-            let conn = match crate::db::open_database_compat(&crate::config::db_path()) {
+            let conn = match crate::db::open_agent_db("parallel drain") {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!(

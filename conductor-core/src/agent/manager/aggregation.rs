@@ -266,7 +266,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Two completed runs on w1
-        let run1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        let run1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
         mgr.update_run_completed(
             &run1.id,
             None,
@@ -281,7 +281,7 @@ mod tests {
         )
         .unwrap();
 
-        let run2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        let run2 = mgr.create_run(Some("w1"), "Task 2", None).unwrap();
         mgr.update_run_completed(
             &run2.id,
             None,
@@ -297,7 +297,7 @@ mod tests {
         .unwrap();
 
         // One completed run on w2
-        let run3 = mgr.create_run(Some("w2"), "Task 3", None, None).unwrap();
+        let run3 = mgr.create_run(Some("w2"), "Task 3", None).unwrap();
         mgr.update_run_completed(
             &run3.id,
             None,
@@ -313,9 +313,7 @@ mod tests {
         .unwrap();
 
         // A running (non-completed) run on w1 — must NOT be included
-        let _run4 = mgr
-            .create_run(Some("w1"), "In progress", None, None)
-            .unwrap();
+        let _run4 = mgr.create_run(Some("w1"), "In progress", None).unwrap();
 
         let totals = mgr.totals_by_worktree().unwrap();
         assert_eq!(totals.len(), 2);
@@ -339,15 +337,15 @@ mod tests {
         assert!(counts.is_empty());
 
         // Create runs: two running in w1 (repo r1), one waiting_for_feedback in w2 (repo r1)
-        let _run1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
-        let _run2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
-        let run3 = mgr.create_run(Some("w2"), "Task 3", None, None).unwrap();
+        let _run1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
+        let _run2 = mgr.create_run(Some("w1"), "Task 2", None).unwrap();
+        let run3 = mgr.create_run(Some("w2"), "Task 3", None).unwrap();
         // Set run3 to waiting_for_feedback via request_feedback
         mgr.request_feedback(&run3.id, "What should I do?", None)
             .unwrap();
 
         // Also create a completed run — should not appear in counts
-        let run4 = mgr.create_run(Some("w1"), "Task 4", None, None).unwrap();
+        let run4 = mgr.create_run(Some("w1"), "Task 4", None).unwrap();
         mgr.update_run_completed(
             &run4.id,
             None,
@@ -384,8 +382,8 @@ mod tests {
         ).unwrap();
 
         let mgr = AgentManager::new(&conn);
-        let _r1 = mgr.create_run(Some("w1"), "r1 task", None, None).unwrap();
-        let _r2 = mgr.create_run(Some("w3"), "r2 task", None, None).unwrap();
+        let _r1 = mgr.create_run(Some("w1"), "r1 task", None).unwrap();
+        let _r2 = mgr.create_run(Some("w3"), "r2 task", None).unwrap();
 
         let counts = mgr.active_run_counts_by_repo().unwrap();
         assert_eq!(counts.len(), 2);
@@ -410,9 +408,7 @@ mod tests {
         conn.execute("UPDATE worktrees SET ticket_id = 't1' WHERE id = 'w2'", [])
             .unwrap();
 
-        let run1 = mgr
-            .create_run(Some("w1"), "First task", None, None)
-            .unwrap();
+        let run1 = mgr.create_run(Some("w1"), "First task", None).unwrap();
         mgr.update_run_completed(
             &run1.id,
             None,
@@ -426,9 +422,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let run2 = mgr
-            .create_run(Some("w1"), "Second task", None, None)
-            .unwrap();
+        let run2 = mgr.create_run(Some("w1"), "Second task", None).unwrap();
         mgr.update_run_completed(
             &run2.id,
             None,
@@ -442,9 +436,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let run3 = mgr
-            .create_run(Some("w2"), "Third task", None, None)
-            .unwrap();
+        let run3 = mgr.create_run(Some("w2"), "Third task", None).unwrap();
         mgr.update_run_completed(
             &run3.id,
             None,
@@ -459,9 +451,7 @@ mod tests {
         )
         .unwrap();
 
-        let _run4 = mgr
-            .create_run(Some("w1"), "In progress", None, None)
-            .unwrap();
+        let _run4 = mgr.create_run(Some("w1"), "In progress", None).unwrap();
 
         let totals = mgr.totals_by_ticket_all().unwrap();
         assert_eq!(totals.len(), 1);
@@ -489,9 +479,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr
-            .create_run(Some("w1"), "Supervisor", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Supervisor", None).unwrap();
         mgr.update_run_completed(
             &parent.id,
             None,
@@ -507,7 +495,7 @@ mod tests {
         .unwrap();
 
         let child1 = mgr
-            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Child 1", None, &parent.id, None)
             .unwrap();
         mgr.update_run_completed(
             &child1.id,
@@ -524,7 +512,7 @@ mod tests {
         .unwrap();
 
         let child2 = mgr
-            .create_child_run(Some("w2"), "Child 2", None, None, &parent.id, None)
+            .create_child_run(Some("w2"), "Child 2", None, &parent.id, None)
             .unwrap();
         mgr.update_run_completed(
             &child2.id,
@@ -541,7 +529,7 @@ mod tests {
         .unwrap();
 
         let _running = mgr
-            .create_child_run(Some("w1"), "Still running", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Still running", None, &parent.id, None)
             .unwrap();
 
         let totals = mgr.aggregate_run_tree(&parent.id).unwrap();
@@ -568,7 +556,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, Some("claude-sonnet-4-6"))
+            .create_run(Some("w1"), "Fix the bug", Some("claude-sonnet-4-6"))
             .unwrap();
         mgr.update_run_completed(
             &run.id,
@@ -598,7 +586,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run1 = mgr
-            .create_run(Some("w1"), "Implement feature", None, Some("sonnet"))
+            .create_run(Some("w1"), "Implement feature", Some("sonnet"))
             .unwrap();
         mgr.update_run_completed(
             &run1.id,
@@ -618,7 +606,6 @@ mod tests {
             .create_run(
                 Some("w1"),
                 "PR review swarm for branch 'feat/test'. Coordinating 2 reviewer agents.",
-                None,
                 Some("haiku"),
             )
             .unwrap();
@@ -626,7 +613,6 @@ mod tests {
             .create_child_run(
                 Some("w1"),
                 "Review correctness",
-                None,
                 Some("haiku"),
                 &review.id,
                 None,
@@ -675,7 +661,7 @@ mod tests {
 
         // 1. Initial implementation run
         let run1 = mgr
-            .create_run(Some("w1"), "Implement the feature", None, Some("sonnet"))
+            .create_run(Some("w1"), "Implement the feature", Some("sonnet"))
             .unwrap();
         mgr.update_run_completed(
             &run1.id,
@@ -696,7 +682,6 @@ mod tests {
             .create_run(
                 Some("w1"),
                 "PR review swarm for branch 'feat/test'.",
-                None,
                 Some("haiku"),
             )
             .unwrap();
@@ -716,7 +701,7 @@ mod tests {
 
         // 3. Fix run — non-review prompt after a review: triggers the `else if review_count > 0` branch
         let fix = mgr
-            .create_run(Some("w1"), "Address review comments", None, Some("sonnet"))
+            .create_run(Some("w1"), "Address review comments", Some("sonnet"))
             .unwrap();
         mgr.update_run_completed(
             &fix.id,
@@ -744,11 +729,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let parent = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let child = mgr
-            .create_child_run(Some("w1"), "Sub-task", None, None, &parent.id, None)
+            .create_child_run(Some("w1"), "Sub-task", None, &parent.id, None)
             .unwrap();
         mgr.update_run_completed(
             &parent.id,
@@ -816,7 +799,7 @@ mod tests {
             .unwrap();
 
         // Create completed runs for both repos
-        let run1 = mgr.create_run(Some("w1"), "r1 task", None, None).unwrap();
+        let run1 = mgr.create_run(Some("w1"), "r1 task", None).unwrap();
         mgr.update_run_completed(
             &run1.id,
             None,
@@ -831,7 +814,7 @@ mod tests {
         )
         .unwrap();
 
-        let run2 = mgr.create_run(Some("w3"), "r2 task", None, None).unwrap();
+        let run2 = mgr.create_run(Some("w3"), "r2 task", None).unwrap();
         mgr.update_run_completed(
             &run2.id,
             None,
@@ -848,9 +831,7 @@ mod tests {
 
         // Add a non-completed (running) run for r1/t1 — should be excluded by the
         // `status = 'completed'` filter and not inflate totals.
-        let _running_run = mgr
-            .create_run(Some("w1"), "still running", None, None)
-            .unwrap();
+        let _running_run = mgr.create_run(Some("w1"), "still running", None).unwrap();
 
         // Repo r1 should only include t1, and the running run should be excluded
         let r1_totals = mgr.totals_by_ticket_for_repo("r1").unwrap();

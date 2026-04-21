@@ -379,7 +379,7 @@ mod tests {
         let conn = open_database(db_path).expect("open db");
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr
-            .create_run(None, "workflow", None, None)
+            .create_run(None, "workflow", None)
             .expect("create agent run");
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
@@ -397,7 +397,7 @@ mod tests {
         use conductor_core::agent::AgentManager;
         let mgr = AgentManager::new(conn);
         let run = mgr
-            .create_run(None, "agent", None, None)
+            .create_run(None, "agent", None)
             .expect("create agent run");
         mgr.update_run_log_file(&run.id, log_path)
             .expect("set log_file");
@@ -413,7 +413,7 @@ mod tests {
         let conn = open_database(db_path).expect("open db");
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr
-            .create_run(None, "workflow", None, None)
+            .create_run(None, "workflow", None)
             .expect("create parent run");
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
@@ -507,12 +507,8 @@ mod tests {
             ).unwrap();
 
             let agent_mgr = AgentManager::new(&conn);
-            let p1 = agent_mgr
-                .create_run(Some("w1"), "wf-a", None, None)
-                .unwrap();
-            let p2 = agent_mgr
-                .create_run(Some("w2"), "wf-b", None, None)
-                .unwrap();
+            let p1 = agent_mgr.create_run(Some("w1"), "wf-a", None).unwrap();
+            let p2 = agent_mgr.create_run(Some("w2"), "wf-b", None).unwrap();
 
             let wf_mgr = WorkflowManager::new(&conn);
             wf_mgr
@@ -615,7 +611,7 @@ mod tests {
         let mgr = WorkflowManager::new(&conn);
 
         let parent = agent_mgr
-            .create_run(None, "workflow", None, None)
+            .create_run(None, "workflow", None)
             .expect("create agent run");
 
         // Create one run for repo-A and one for repo-B
@@ -896,7 +892,7 @@ mod tests {
         // Create a workflow run linked to both the worktree and the repo.
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr
-            .create_run(None, "workflow", None, None)
+            .create_run(None, "workflow", None)
             .expect("create agent run");
         WorkflowManager::new(&conn)
             .create_workflow_run_with_targets(
@@ -1035,7 +1031,7 @@ mod tests {
         let conn = open_database(&db).expect("open db");
         let agent_mgr = AgentManager::new(&conn);
         let child_run = agent_mgr
-            .create_run(None, "agent", None, None)
+            .create_run(None, "agent", None)
             .expect("create child run");
         conn.execute(
             "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
