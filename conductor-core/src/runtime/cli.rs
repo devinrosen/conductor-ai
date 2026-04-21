@@ -180,13 +180,20 @@ impl AgentRuntime for CliRuntime {
         loop {
             if let Some(flag) = shutdown {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    let _ = Self::teardown_window(&agent_mgr, run_id, Some(&state.window_name));
+                    if let Err(e) =
+                        Self::teardown_window(&agent_mgr, run_id, Some(&state.window_name))
+                    {
+                        tracing::warn!("CliRuntime: teardown_window failed during shutdown: {e}");
+                    }
                     return Err(PollError::Cancelled);
                 }
             }
 
             if poll_start.elapsed() > step_timeout {
-                let _ = Self::teardown_window(&agent_mgr, run_id, Some(&state.window_name));
+                if let Err(e) = Self::teardown_window(&agent_mgr, run_id, Some(&state.window_name))
+                {
+                    tracing::warn!("CliRuntime: teardown_window failed on timeout: {e}");
+                }
                 return Err(PollError::NoResult);
             }
 

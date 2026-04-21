@@ -377,6 +377,46 @@ fn test_cli_runtime_cancel_kills_window_and_marks_cancelled() {
 }
 
 #[test]
+fn test_cli_runtime_cancel_with_no_tmux_window_marks_cancelled() {
+    let run_id = format!("cancel-no-tmux-{}", ulid::Ulid::new());
+    let db_guard = setup_test_db(&run_id);
+
+    let conn =
+        conductor_core::db::open_database(db_guard.path()).expect("open test db for cancel test");
+    let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
+
+    let run = agent_mgr
+        .get_run(&run_id)
+        .expect("get_run must succeed")
+        .expect("run must exist in DB");
+
+    assert!(
+        run.tmux_window.is_none(),
+        "tmux_window must be None for this test"
+    );
+
+    let runtime = make_runtime("/bin/echo", "response", None);
+    runtime
+        .cancel(&run)
+        .expect("cancel must succeed when tmux_window is None");
+
+    let updated = agent_mgr
+        .get_run(&run_id)
+        .expect("get_run must succeed after cancel")
+        .expect("run must still exist in DB after cancel");
+
+    assert_eq!(
+        updated.status,
+        conductor_core::agent::AgentRunStatus::Cancelled,
+        "status must be Cancelled after cancel() even without a tmux window"
+    );
+    assert!(
+        updated.ended_at.is_some(),
+        "ended_at must be set after cancel()"
+    );
+}
+
+#[test]
 fn test_cli_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime("/bin/echo", "response", None);
     let req = RuntimeRequest {
