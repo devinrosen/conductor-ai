@@ -371,7 +371,7 @@ fn execute_call_with_schema(
             agent_def.runtime,
         );
 
-        if let Err(e) = runtime.spawn(&request) {
+        if let Err(e) = runtime.spawn_validated(&request) {
             let err_msg = e.to_string();
             tracing::warn!("Step '{}': spawn failed: {err_msg}", agent_label);
             fail_attempt(

@@ -101,7 +101,7 @@ fn test_cli_runtime_success() {
         db_path: _db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn(&req).expect("spawn must succeed");
+    runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
         .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
@@ -143,7 +143,7 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
         db_path: _db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn(&req).expect("spawn must succeed");
+    runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
         .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
@@ -212,7 +212,9 @@ exit 0"#
         db_path: _db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn(&req).expect("stdin spawn must succeed");
+    runtime
+        .spawn_validated(&req)
+        .expect("stdin spawn must succeed");
 
     let result = runtime
         .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
@@ -266,7 +268,7 @@ fn spawn_slow_script(
         db_path: db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn(&req).expect("spawn must succeed");
+    runtime.spawn_validated(&req).expect("spawn must succeed");
 
     (f, db_guard, runtime, run_id, lock)
 }
@@ -370,7 +372,7 @@ fn test_cli_runtime_rejects_invalid_run_id() {
         db_path: conductor_core::config::db_path(),
     };
     let err = runtime
-        .spawn(&req)
+        .spawn_validated(&req)
         .expect_err("spawn must reject path-traversal run_id");
     assert!(
         err.to_string().contains("invalid run_id"),

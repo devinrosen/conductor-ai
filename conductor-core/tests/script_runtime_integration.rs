@@ -39,7 +39,7 @@ fn test_script_runtime_success() {
     let runtime = make_runtime(Some("echo hello"));
     let req = make_request(&run_id, "test prompt", _db_guard.path().to_path_buf());
 
-    runtime.spawn(&req).expect("spawn must succeed");
+    runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
         .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
@@ -68,7 +68,7 @@ fn test_script_runtime_captures_conductor_prompt() {
         _db_guard.path().to_path_buf(),
     );
 
-    runtime.spawn(&req).expect("spawn must succeed");
+    runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
         .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
@@ -94,7 +94,7 @@ fn test_script_runtime_missing_command_errors() {
     let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
 
     let err = runtime
-        .spawn(&req)
+        .spawn_validated(&req)
         .expect_err("spawn must fail without command");
     assert!(
         err.to_string().contains("command"),
@@ -111,7 +111,7 @@ fn test_script_runtime_nonzero_exit_is_failed() {
     let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
 
     runtime
-        .spawn(&req)
+        .spawn_validated(&req)
         .expect("spawn must succeed even for non-zero exit");
 
     let result = runtime.poll(&run_id, None, Duration::from_secs(5), _db_guard.path());
@@ -130,7 +130,7 @@ fn test_script_runtime_nonzero_exit_with_stderr() {
     let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
 
     runtime
-        .spawn(&req)
+        .spawn_validated(&req)
         .expect("spawn must succeed even for non-zero exit");
 
     let result = runtime.poll(&run_id, None, Duration::from_secs(5), _db_guard.path());
@@ -184,7 +184,7 @@ fn test_script_runtime_rejects_invalid_run_id() {
         conductor_core::config::db_path(),
     );
     let err = runtime
-        .spawn(&req)
+        .spawn_validated(&req)
         .expect_err("spawn must reject path-traversal run_id");
     assert!(
         err.to_string().contains("invalid run_id"),
