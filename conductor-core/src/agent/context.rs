@@ -199,9 +199,7 @@ mod tests {
     fn test_build_startup_context_with_worktree_no_ticket() {
         let conn = setup_conn();
         let mgr = AgentManager::new(&conn);
-        let run = mgr
-            .create_run(Some("w1"), "initial prompt", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "initial prompt", None).unwrap();
 
         // "w1" is the test worktree with branch "feat/test" (from setup_db).
         let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &run.id, "/tmp");
@@ -217,9 +215,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create and complete a prior run.
-        let prior = mgr
-            .create_run(Some("w1"), "do the thing", None, None)
-            .unwrap();
+        let prior = mgr.create_run(Some("w1"), "do the thing", None).unwrap();
         mgr.update_run_completed(
             &prior.id,
             None,
@@ -235,7 +231,7 @@ mod tests {
         .unwrap();
 
         // Create a new (current) run.
-        let current = mgr.create_run(Some("w1"), "follow-up", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "follow-up", None).unwrap();
         assert_eq!(current.status, AgentRunStatus::Running);
 
         let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &current.id, "/tmp");
@@ -251,7 +247,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Only one run exists — the current one. No prior run section should appear.
-        let run = mgr.create_run(Some("w1"), "only run", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "only run", None).unwrap();
         let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &run.id, "/tmp");
         assert!(
             !ctx.contains("**Prior run outcome"),
@@ -273,7 +269,7 @@ mod tests {
             .unwrap();
 
         let mgr = AgentManager::new(&conn);
-        let current = mgr.create_run(Some("w1"), "Fix it", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Fix it", None).unwrap();
 
         let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Ticket:** #42 — Fix payment bug"));
@@ -285,9 +281,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a prior completed run with a plan
-        let prior = mgr
-            .create_run(Some("w1"), "Prior work", None, None)
-            .unwrap();
+        let prior = mgr.create_run(Some("w1"), "Prior work", None).unwrap();
         let steps = vec![
             PlanStep {
                 description: "Read the code".to_string(),
@@ -322,9 +316,7 @@ mod tests {
         .unwrap();
 
         // Create current run
-        let current = mgr
-            .create_run(Some("w1"), "Continue work", None, None)
-            .unwrap();
+        let current = mgr.create_run(Some("w1"), "Continue work", None).unwrap();
 
         let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Plan steps (from prior run):**"));
@@ -339,9 +331,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a prior run with a very long result
-        let prior = mgr
-            .create_run(Some("w1"), "Prior task", None, None)
-            .unwrap();
+        let prior = mgr.create_run(Some("w1"), "Prior task", None).unwrap();
         let long_result = "x".repeat(1000);
         mgr.update_run_completed(
             &prior.id,
@@ -357,7 +347,7 @@ mod tests {
         )
         .unwrap();
 
-        let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Next", None).unwrap();
 
         let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Prior run outcome (completed):**"));

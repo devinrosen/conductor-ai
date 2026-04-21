@@ -95,7 +95,7 @@ pub fn make_provider_ctx<'a>(
 pub fn make_agent_parent_id(conn: &Connection) -> String {
     let agent_mgr = crate::agent::AgentManager::new(conn);
     agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
+        .create_run(Some("w1"), "workflow", None)
         .unwrap()
         .id
 }

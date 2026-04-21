@@ -461,7 +461,6 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             duration_ms: None,
             started_at: "2024-01-01T00:00:00Z".into(),
             ended_at: None,
-            tmux_window: None,
             log_file: None,
             model: None,
             plan: None,

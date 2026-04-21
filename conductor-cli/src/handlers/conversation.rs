@@ -182,7 +182,7 @@ mod tests {
 
         let agent_mgr = AgentManager::new(&conn);
         agent_mgr
-            .create_run_for_conversation("wt3", "hello", None, None, &conv.id)
+            .create_run_for_conversation("wt3", "hello", None, &conv.id)
             .unwrap();
 
         // The active run should block the clear.

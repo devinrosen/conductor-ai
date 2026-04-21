@@ -160,7 +160,6 @@ pub fn execute_parallel(
         let child_run = state.agent_mgr.create_child_run(
             worktree_id.as_deref(),
             &prompt,
-            None,
             step_model,
             &state.parent_run_id,
             state.default_bot_name.as_deref(),

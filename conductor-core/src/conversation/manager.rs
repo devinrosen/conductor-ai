@@ -201,7 +201,6 @@ impl<'a> ConversationManager<'a> {
         &self,
         conversation_id: &str,
         prompt: &str,
-        tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<(crate::agent::AgentRun, Option<String>)> {
         let conv = self.get(conversation_id)?.ok_or_else(|| {
@@ -221,14 +220,12 @@ impl<'a> ConversationManager<'a> {
             ConversationScope::Worktree => agent_mgr.create_run_for_conversation(
                 &conv.scope_id,
                 prompt,
-                tmux_window,
                 model,
                 conversation_id,
             )?,
             ConversationScope::Repo => agent_mgr.create_repo_run_for_conversation(
                 &conv.scope_id,
                 prompt,
-                tmux_window,
                 model,
                 conversation_id,
             )?,
@@ -367,7 +364,7 @@ mod tests {
         let conv = mgr.create(ConversationScope::Repo, "r1").unwrap();
 
         let (run, session_id) = mgr
-            .send_message(&conv.id, "What does this repo do?", None, None)
+            .send_message(&conv.id, "What does this repo do?", None)
             .unwrap();
 
         assert_eq!(run.conversation_id.as_deref(), Some(conv.id.as_str()));
@@ -381,7 +378,7 @@ mod tests {
 
         // Second message must be rejected — there's an active run.
         let err = mgr
-            .send_message(&conv.id, "Another message", None, None)
+            .send_message(&conv.id, "Another message", None)
             .unwrap_err();
         assert!(err.to_string().contains("active agent run"));
     }
@@ -396,7 +393,7 @@ mod tests {
 
         // Create two completed runs: the second (newer) should win.
         let run1 = agent_mgr
-            .create_repo_run_for_conversation("r1", "q1", None, None, &conv.id)
+            .create_repo_run_for_conversation("r1", "q1", None, &conv.id)
             .unwrap();
         agent_mgr
             .update_run_completed(
@@ -414,7 +411,7 @@ mod tests {
             .unwrap();
 
         let run2 = agent_mgr
-            .create_repo_run_for_conversation("r1", "q2", None, None, &conv.id)
+            .create_repo_run_for_conversation("r1", "q2", None, &conv.id)
             .unwrap();
         agent_mgr
             .update_run_completed(
@@ -466,7 +463,7 @@ mod tests {
         // Create a running agent run linked to this conversation.
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         agent_mgr
-            .create_repo_run_for_conversation("r1", "hello", None, None, &conv.id)
+            .create_repo_run_for_conversation("r1", "hello", None, &conv.id)
             .unwrap();
 
         let err = mgr.delete(&conv.id).unwrap_err();
@@ -487,7 +484,7 @@ mod tests {
 
         // Create a run and immediately mark it completed so delete is not blocked.
         let run = agent_mgr
-            .create_repo_run_for_conversation("r1", "q", None, None, &conv.id)
+            .create_repo_run_for_conversation("r1", "q", None, &conv.id)
             .unwrap();
         agent_mgr
             .update_run_completed(
@@ -519,10 +516,10 @@ mod tests {
 
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         let run1 = agent_mgr
-            .create_repo_run_for_conversation("r1", "first", None, None, &conv.id)
+            .create_repo_run_for_conversation("r1", "first", None, &conv.id)
             .unwrap();
         let run2 = agent_mgr
-            .create_repo_run_for_conversation("r1", "second", None, None, &conv.id)
+            .create_repo_run_for_conversation("r1", "second", None, &conv.id)
             .unwrap();
 
         let with_runs = mgr.get_with_runs(&conv.id).unwrap().unwrap();

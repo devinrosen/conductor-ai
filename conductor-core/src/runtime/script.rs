@@ -161,7 +161,6 @@ mod tests {
     fn make_test_run() -> AgentRun {
         AgentRun {
             id: "test".to_string(),
-            tmux_window: None,
             worktree_id: None,
             repo_id: None,
             claude_session_id: None,

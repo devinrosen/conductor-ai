@@ -1545,9 +1545,7 @@ mod tests {
     /// Insert an agent_run with an optional subprocess_pid; returns the agent run id.
     fn insert_agent_run_with_pid(conn: &rusqlite::Connection, pid: Option<i64>) -> String {
         let agent_mgr = crate::agent::AgentManager::new(conn);
-        let run = agent_mgr
-            .create_run(Some("w1"), "prompt", None, None)
-            .unwrap();
+        let run = agent_mgr.create_run(Some("w1"), "prompt", None).unwrap();
         if let Some(p) = pid {
             conn.execute(
                 "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",

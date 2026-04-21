@@ -9,9 +9,7 @@ use std::collections::HashMap;
 fn test_create_workflow_run() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -34,9 +32,7 @@ fn test_create_workflow_run() {
 fn test_create_workflow_run_with_snapshot() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -61,9 +57,7 @@ fn test_create_workflow_run_with_snapshot() {
 fn test_create_workflow_run_with_repo_id_round_trip() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -106,9 +100,7 @@ fn test_active_run_counts_by_repo_empty() {
 fn test_active_run_counts_by_repo_with_runs() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let mgr = WorkflowManager::new(&conn);
 
     // Create one pending and one running run for repo r1.
@@ -159,9 +151,7 @@ fn test_active_run_counts_by_repo_with_runs() {
 fn test_active_run_counts_by_repo_excludes_completed() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let mgr = WorkflowManager::new(&conn);
 
     let run = mgr
@@ -195,9 +185,7 @@ fn test_active_run_counts_by_repo_excludes_completed() {
 fn test_create_workflow_run_with_ticket_id_round_trip() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     insert_test_ticket(&conn, "tkt-rt-1", "r1");
 
@@ -231,9 +219,7 @@ fn test_create_workflow_run_with_ticket_id_round_trip() {
 fn test_insert_step_with_iteration() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -255,9 +241,7 @@ fn test_insert_step_with_iteration() {
 fn test_insert_step_running_is_atomic() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -287,9 +271,7 @@ fn test_insert_step_running_is_atomic() {
 fn test_update_step_with_markers() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -322,9 +304,7 @@ fn test_update_step_with_markers() {
 fn test_update_step_status_full_with_structured_output() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -358,9 +338,7 @@ fn test_update_step_status_full_with_structured_output() {
 fn test_update_step_status_full_without_structured_output() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -391,9 +369,7 @@ fn test_update_step_status_full_without_structured_output() {
 fn test_update_step_status_full_with_step_error() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -427,8 +403,8 @@ fn test_update_step_status_full_with_step_error() {
 fn test_list_workflow_runs() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
-    let p2 = agent_mgr.create_run(Some("w1"), "wf2", None, None).unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
+    let p2 = agent_mgr.create_run(Some("w1"), "wf2", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     mgr.create_workflow_run("test-a", Some("w1"), &p1.id, false, "manual", None)
@@ -452,8 +428,8 @@ fn test_list_all_workflow_runs_cross_worktree() {
     .unwrap();
 
     let agent_mgr = AgentManager::new(&conn);
-    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
-    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None, None).unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
+    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     mgr.create_workflow_run("flow-a", Some("w1"), &p1.id, false, "manual", None)
@@ -477,7 +453,7 @@ fn test_list_all_workflow_runs_respects_limit() {
     let mgr = WorkflowManager::new(&conn);
     for i in 0..5 {
         let p = agent_mgr
-            .create_run(Some("w1"), &format!("wf{i}"), None, None)
+            .create_run(Some("w1"), &format!("wf{i}"), None)
             .unwrap();
         mgr.create_workflow_run(
             &format!("flow-{i}"),
@@ -509,15 +485,13 @@ fn test_list_all_workflow_runs_includes_ephemeral() {
     let mgr = WorkflowManager::new(&conn);
 
     // Create a normal run (with worktree)
-    let parent1 = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent1 = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     mgr.create_workflow_run("normal-wf", Some("w1"), &parent1.id, false, "manual", None)
         .unwrap();
 
     // Create an ephemeral run (no worktree)
     let parent2 = agent_mgr
-        .create_run(None, "ephemeral workflow", None, None)
+        .create_run(None, "ephemeral workflow", None)
         .unwrap();
     let ephemeral = mgr
         .create_workflow_run("ephemeral-wf", None, &parent2.id, false, "manual", None)
@@ -543,8 +517,8 @@ fn test_list_all_workflow_runs_excludes_merged_worktree() {
     .unwrap();
 
     let agent_mgr = AgentManager::new(&conn);
-    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
-    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None, None).unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
+    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
@@ -569,8 +543,8 @@ fn test_list_all_workflow_runs_excludes_abandoned_worktree() {
     .unwrap();
 
     let agent_mgr = AgentManager::new(&conn);
-    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
-    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None, None).unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
+    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
@@ -590,12 +564,12 @@ fn test_list_all_workflow_runs_includes_ephemeral_and_active() {
     let mgr = WorkflowManager::new(&conn);
 
     // Active worktree run
-    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
     mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
         .unwrap();
 
     // Ephemeral run (no worktree)
-    let p2 = agent_mgr.create_run(None, "wf2", None, None).unwrap();
+    let p2 = agent_mgr.create_run(None, "wf2", None).unwrap();
     mgr.create_workflow_run("ephemeral-run", None, &p2.id, false, "manual", None)
         .unwrap();
 
@@ -613,12 +587,12 @@ fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
     let mgr = WorkflowManager::new(&conn);
 
     // Create one run and leave it in Pending state.
-    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
     mgr.create_workflow_run("pending-run", Some("w1"), &p1.id, false, "manual", None)
         .unwrap();
 
     // Create a second run and advance it to Completed.
-    let p2 = agent_mgr.create_run(Some("w1"), "wf2", None, None).unwrap();
+    let p2 = agent_mgr.create_run(Some("w1"), "wf2", None).unwrap();
     let r2 = mgr
         .create_workflow_run("done-run", Some("w1"), &p2.id, false, "manual", None)
         .unwrap();
@@ -646,7 +620,7 @@ fn test_list_all_workflow_runs_filtered_paginated_offset() {
 
     for i in 0..4 {
         let p = agent_mgr
-            .create_run(Some("w1"), &format!("wf{i}"), None, None)
+            .create_run(Some("w1"), &format!("wf{i}"), None)
             .unwrap();
         mgr.create_workflow_run(
             &format!("flow-{i}"),
@@ -690,8 +664,8 @@ fn test_list_workflow_runs_by_repo_id_excludes_merged_worktree() {
     .unwrap();
 
     let agent_mgr = AgentManager::new(&conn);
-    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
-    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None, None).unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
+    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     // Use create_workflow_run_with_targets to set repo_id so the query can filter by it
@@ -738,8 +712,8 @@ fn test_list_workflow_runs_for_scope_scoped() {
     .unwrap();
 
     let agent_mgr = AgentManager::new(&conn);
-    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
-    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None, None).unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
+    let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     mgr.create_workflow_run("only-w1", Some("w1"), &p1.id, false, "manual", None)
@@ -764,7 +738,7 @@ fn test_list_workflow_runs_for_scope_global_limit() {
     let mgr = WorkflowManager::new(&conn);
     for i in 0..5 {
         let p = agent_mgr
-            .create_run(Some("w1"), &format!("wf{i}"), None, None)
+            .create_run(Some("w1"), &format!("wf{i}"), None)
             .unwrap();
         mgr.create_workflow_run(
             &format!("flow-{i}"),
@@ -792,9 +766,7 @@ fn test_get_workflow_run_not_found() {
 fn test_get_step_by_id() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -820,10 +792,10 @@ fn test_get_step_by_id() {
 fn test_purge_all_terminal_statuses() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
-    let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
-    let a3 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
-    let a4 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let a2 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let a3 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let a4 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let r_completed = mgr
@@ -865,8 +837,8 @@ fn test_purge_all_terminal_statuses() {
 fn test_purge_single_status_filter() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
-    let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let a2 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let r_completed = mgr
@@ -907,8 +879,8 @@ fn test_purge_repo_scoped() {
     .unwrap();
 
     let agent_mgr = AgentManager::new(&conn);
-    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
-    let a2 = agent_mgr.create_run(Some("w2"), "wf", None, None).unwrap();
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let a2 = agent_mgr.create_run(Some("w2"), "wf", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run_r1 = mgr
@@ -935,7 +907,7 @@ fn test_purge_repo_scoped() {
 fn test_purge_cascade_deletes_steps() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -958,8 +930,8 @@ fn test_purge_cascade_deletes_steps() {
 fn test_purge_count_matches_purge() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
-    let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let a2 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let r1 = mgr
@@ -985,7 +957,7 @@ fn test_purge_count_matches_purge() {
 fn test_purge_noop_when_no_matches() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -1022,8 +994,8 @@ fn test_purge_repo_scoped_does_not_delete_global_runs() {
     let agent_mgr = AgentManager::new(&conn);
 
     // Create a global run (no worktree) and a run scoped to w1.
-    let a_global = agent_mgr.create_run(None, "wf", None, None).unwrap();
-    let a_w1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a_global = agent_mgr.create_run(None, "wf", None).unwrap();
+    let a_w1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run_global = mgr
@@ -1157,9 +1129,7 @@ fn test_delete_run_recursive_removes_child_runs() {
     let conn = setup_db();
     // Create parent run
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent_agent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent_agent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let mgr = WorkflowManager::new(&conn);
     let parent_run = mgr
         .create_workflow_run(
@@ -1173,9 +1143,7 @@ fn test_delete_run_recursive_removes_child_runs() {
         .unwrap();
 
     // Create a child run (parent_workflow_run_id points to parent_run)
-    let child_agent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let child_agent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let child_run = mgr
         .create_workflow_run_with_targets(
             "child-wf",
@@ -1208,8 +1176,8 @@ fn test_delete_run_recursive_removes_child_runs() {
 fn test_delete_run_does_not_affect_sibling_runs() {
     let conn = setup_db();
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
-    let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let a2 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run1 = mgr
@@ -1257,7 +1225,7 @@ fn test_cancel_run_running_with_active_steps() {
     // Insert a Running step with a child agent run
     let child_agent_mgr = AgentManager::new(&conn);
     let child = child_agent_mgr
-        .create_run(Some("w1"), "child-step", None, None)
+        .create_run(Some("w1"), "child-step", None)
         .unwrap();
 
     let step_id = mgr
@@ -1450,8 +1418,8 @@ fn test_find_resumable_child_run_picks_most_recent() {
 
     // Insert two failed child runs with distinct timestamps
     let agent_mgr = AgentManager::new(&conn);
-    let p1 = agent_mgr.create_run(None, "workflow", None, None).unwrap();
-    let p2 = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let p1 = agent_mgr.create_run(None, "workflow", None).unwrap();
+    let p2 = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at, \
@@ -1666,9 +1634,7 @@ fn insert_running_script_step_with_pid(
 /// Helper: create a workflow_run and return its id.
 fn make_workflow_run_id(conn: &Connection) -> String {
     let agent_mgr = AgentManager::new(conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let mgr = WorkflowManager::new(conn);
     let run = mgr
         .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
@@ -1761,9 +1727,7 @@ fn test_reap_orphaned_script_steps_skips_agent_step() {
     // Insert an actor step with child_run_id set — simulates an agent step.
     let step_id = crate::new_id();
     let agent_mgr = AgentManager::new(&conn);
-    let child_run = agent_mgr
-        .create_run(Some("w1"), "agent", None, None)
-        .unwrap();
+    let child_run = agent_mgr.create_run(Some("w1"), "agent", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, \
@@ -1843,7 +1807,7 @@ fn test_list_workflow_runs_paginated_limit_and_offset() {
     // Create 5 runs for worktree w1
     for i in 0..5 {
         let p = agent_mgr
-            .create_run(Some("w1"), &format!("wf-paginated-{i}"), None, None)
+            .create_run(Some("w1"), &format!("wf-paginated-{i}"), None)
             .unwrap();
         mgr.create_workflow_run(
             &format!("paginated-flow-{i}"),
@@ -1894,12 +1858,8 @@ fn test_list_workflow_runs_paginated_filters_by_worktree() {
     let agent_mgr = AgentManager::new(&conn);
     let mgr = WorkflowManager::new(&conn);
 
-    let p1 = agent_mgr
-        .create_run(Some("w1"), "wf-w1", None, None)
-        .unwrap();
-    let p2 = agent_mgr
-        .create_run(Some("w2"), "wf-w2", None, None)
-        .unwrap();
+    let p1 = agent_mgr.create_run(Some("w1"), "wf-w1", None).unwrap();
+    let p2 = agent_mgr.create_run(Some("w2"), "wf-w2", None).unwrap();
     mgr.create_workflow_run("run-w1", Some("w1"), &p1.id, false, "manual", None)
         .unwrap();
     mgr.create_workflow_run("run-w2", Some("w2"), &p2.id, false, "manual", None)
@@ -1923,7 +1883,7 @@ fn test_list_workflow_runs_by_repo_id_offset_pagination() {
     // Create 4 runs for repo r1 (all on active worktree w1)
     for i in 0..4 {
         let p = agent_mgr
-            .create_run(Some("w1"), &format!("wf-repo-{i}"), None, None)
+            .create_run(Some("w1"), &format!("wf-repo-{i}"), None)
             .unwrap();
         mgr.create_workflow_run_with_targets(
             &format!("repo-flow-{i}"),
@@ -2293,9 +2253,7 @@ fn test_backfill_migration_sets_repo_id_on_historical_runs() {
 
     // Create a workflow run with worktree_id but NULL repo_id (historical data).
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
@@ -2377,9 +2335,7 @@ fn test_backfill_migration_leaves_null_when_worktree_deleted() {
     let conn = setup_db();
 
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     // Insert a run referencing worktree w1, then orphan it by pointing
     // worktree_id at a non-existent ID (simulating a deleted worktree row).
@@ -2518,9 +2474,7 @@ fn test_get_steps_for_runs_multiple_runs() {
     let (mgr, _p1, run1) = make_workflow_run(&conn);
 
     let agent_mgr = AgentManager::new(&conn);
-    let p2 = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let p2 = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let run2 = mgr
         .create_workflow_run("wf2", Some("w1"), &p2.id, false, "manual", None)
         .unwrap();
@@ -2589,7 +2543,7 @@ fn test_get_active_steps_for_runs_empty_ids() {
 /// Insert a workflow run in 'running' status with no parent_workflow_run_id.
 fn insert_running_root_run(conn: &Connection, run_id: &str) {
     let agent_mgr = AgentManager::new(conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -2734,7 +2688,7 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     .unwrap();
     // Insert a sub-workflow with parent_workflow_run_id set.
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -2831,7 +2785,7 @@ fn insert_running_root_run_with_label(
     target_label: Option<&str>,
 ) {
     let agent_mgr = AgentManager::new(conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -2920,7 +2874,7 @@ fn test_detect_stale_workflow_runs_skips_sub_workflows() {
     insert_running_root_run_with_label(&conn, "root-run", "parent-wf", None);
     // Insert a sub-workflow with old running step.
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -2959,7 +2913,7 @@ fn insert_child_workflow_run(
     status: &str,
 ) {
     let agent_mgr = AgentManager::new(conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -3118,9 +3072,7 @@ fn test_reap_stale_reaps_dead_agent() {
     insert_running_root_run_with_label(&conn, "stale-run", "deploy", Some("repo/wt"));
     // Create a child agent run — no live subprocess.
     let agent_mgr = AgentManager::new(&conn);
-    let child = agent_mgr
-        .create_run(None, "step prompt", None, None)
-        .unwrap();
+    let child = agent_mgr.create_run(None, "step prompt", None).unwrap();
     // Insert step referencing that child agent run (no subprocess_pid → treated as dead).
     conn.execute(
         "INSERT INTO workflow_run_steps \
@@ -3153,9 +3105,7 @@ fn test_reap_stale_skips_live_agent() {
     let conn = setup_db();
     insert_running_root_run_with_label(&conn, "alive-run", "deploy", None);
     let agent_mgr = AgentManager::new(&conn);
-    let child = agent_mgr
-        .create_run(None, "step prompt", None, None)
-        .unwrap();
+    let child = agent_mgr.create_run(None, "step prompt", None).unwrap();
     // Set subprocess_pid to current process PID (alive).
     let live_pid = std::process::id() as i64;
     conn.execute(
@@ -3183,9 +3133,7 @@ fn test_reap_stale_reaps_step_with_no_pid() {
     insert_running_root_run_with_label(&conn, "no-pid-run", "deploy", None);
     // Child agent run with no subprocess PID → treated as dead.
     let agent_mgr = AgentManager::new(&conn);
-    let child = agent_mgr
-        .create_run(None, "step prompt", None, None)
-        .unwrap();
+    let child = agent_mgr.create_run(None, "step prompt", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, \
@@ -3215,7 +3163,7 @@ fn test_detect_stuck_finds_run_with_only_terminal_steps() {
     let conn = setup_db();
     // Insert a running root run whose only step is completed (old ended_at).
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -3243,7 +3191,7 @@ fn test_detect_stuck_finds_run_with_only_terminal_steps() {
 fn test_detect_stuck_skips_run_with_active_steps() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -3275,7 +3223,7 @@ fn test_detect_stuck_skips_run_with_active_steps() {
 fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -3287,9 +3235,7 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
     .unwrap();
 
     // Create a child agent run and mark it completed via SQL.
-    let child = agent_mgr
-        .create_run(None, "step prompt", None, None)
-        .unwrap();
+    let child = agent_mgr.create_run(None, "step prompt", None).unwrap();
     conn.execute(
         "UPDATE agent_runs SET status = 'completed' WHERE id = :id",
         named_params! { ":id": child.id },
@@ -3572,9 +3518,7 @@ fn create_agent_step(
     subprocess_pid: i64,
 ) -> (String, String) {
     let agent_mgr = AgentManager::new(conn);
-    let agent = agent_mgr
-        .create_run(Some("w1"), step_name, None, None)
-        .unwrap();
+    let agent = agent_mgr.create_run(Some("w1"), step_name, None).unwrap();
     conn.execute(
         "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
         named_params! { ":pid": subprocess_pid, ":id": agent.id },
@@ -3783,7 +3727,7 @@ fn insert_orphaned_root_run(
     last_heartbeat: Option<&str>,
 ) -> String {
     let agent_mgr = AgentManager::new(conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     let id = crate::new_id();
     conn.execute(
         "INSERT INTO workflow_runs \
@@ -3939,7 +3883,7 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
 
     // First create a parent run (to satisfy FK).
     let parent_agent = AgentManager::new(&conn)
-        .create_run(None, "workflow", None, None)
+        .create_run(None, "workflow", None)
         .unwrap();
     let parent_run_id = crate::new_id();
     conn.execute(
@@ -3953,7 +3897,7 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
 
     // Now create a sub-workflow run with parent_workflow_run_id set.
     let child_agent = AgentManager::new(&conn)
-        .create_run(None, "workflow", None, None)
+        .create_run(None, "workflow", None)
         .unwrap();
     let child_run_id = crate::new_id();
     conn.execute(
@@ -3990,9 +3934,7 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
 fn test_step_error_persisted_on_schema_validation_failure() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr

@@ -7,9 +7,7 @@ use crate::agent::AgentManager;
 fn test_gate_approve() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -43,9 +41,7 @@ fn test_gate_approve() {
 fn test_gate_reject() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -117,9 +113,7 @@ fn test_gate_timeout_continue() {
 fn test_gate_pr_approval_approve() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -145,9 +139,7 @@ fn test_gate_pr_approval_approve() {
 fn test_gate_pr_approval_reject() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -176,9 +168,7 @@ fn test_gate_pr_approval_reject() {
 fn test_gate_pr_checks_approve() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -273,9 +263,7 @@ fn test_gate_timeout_zero_seconds() {
 fn test_gate_multiselect_options_and_approval() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -333,9 +321,7 @@ fn test_gate_multiselect_options_and_approval() {
 fn test_gate_approve_empty_selections() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr

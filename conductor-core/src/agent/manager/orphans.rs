@@ -218,9 +218,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "test prompt", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "test prompt", None).unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
 
         let reaped = mgr.reap_orphaned_runs().unwrap();
@@ -241,9 +239,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "test prompt", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "test prompt", None).unwrap();
         mgr.update_run_completed(
             &run.id,
             None,
@@ -271,9 +267,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create an agent run with no subprocess PID (would normally be reaped).
-        let parent_run = mgr
-            .create_run(Some("w1"), "workflow parent", None, None)
-            .unwrap();
+        let parent_run = mgr.create_run(Some("w1"), "workflow parent", None).unwrap();
         assert_eq!(parent_run.status, AgentRunStatus::Running);
 
         // Insert an active workflow run referencing this agent run as its parent.
@@ -303,9 +297,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let r1 = mgr.create_run(Some("w1"), "prompt 1", None, None).unwrap();
-        let r2 = mgr.create_run(Some("w1"), "prompt 2", None, None).unwrap();
-        let r3 = mgr.create_run(Some("w1"), "prompt 3", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "prompt 1", None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "prompt 2", None).unwrap();
+        let r3 = mgr.create_run(Some("w1"), "prompt 3", None).unwrap();
         mgr.update_run_completed(
             &r3.id,
             None,
@@ -352,9 +346,7 @@ mod tests {
         // Give the OS a moment to fully reap the child.
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let run = mgr
-            .create_run(Some("w1"), "headless task", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "headless task", None).unwrap();
         // Set subprocess_pid to the dead PID.
         conn.execute(
             "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
@@ -391,7 +383,7 @@ mod tests {
         let live_pid = child.id();
 
         let run = mgr
-            .create_run(Some("w1"), "headless task recycled", None, None)
+            .create_run(Some("w1"), "headless task recycled", None)
             .unwrap();
 
         // Backdate started_at to 2020 — far outside the 60-second tolerance.
@@ -435,9 +427,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Parent run of an active workflow (no subprocess_pid by design).
-        let parent_run = mgr
-            .create_run(Some("w1"), "workflow parent", None, None)
-            .unwrap();
+        let parent_run = mgr.create_run(Some("w1"), "workflow parent", None).unwrap();
 
         // Insert an active workflow run whose parent is the run above.
         let wf_run_id = crate::new_id();
@@ -451,7 +441,7 @@ mod tests {
 
         // Child run (e.g. plan step) — subprocess_pid not yet stored.
         let child_run = mgr
-            .create_child_run(Some("w1"), "plan prompt", None, None, &parent_run.id, None)
+            .create_child_run(Some("w1"), "plan prompt", None, &parent_run.id, None)
             .unwrap();
         assert_eq!(child_run.status, AgentRunStatus::Running);
         assert!(child_run.subprocess_pid.is_none());
@@ -482,9 +472,7 @@ mod tests {
         parent_status: &str,
         wf_status: &str,
     ) -> String {
-        let run = mgr
-            .create_run(Some("w1"), "test prompt", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "test prompt", None).unwrap();
         conn.execute(
             "UPDATE agent_runs SET status = :status, ended_at = '2025-01-01T00:01:00Z' WHERE id = :id",
             rusqlite::named_params! { ":status": parent_status, ":id": run.id },
@@ -680,7 +668,7 @@ mod tests {
         let live_pid = std::process::id();
 
         let run = mgr
-            .create_run(Some("w1"), "headless task alive", None, None)
+            .create_run(Some("w1"), "headless task alive", None)
             .unwrap();
         conn.execute(
             "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",

@@ -1030,7 +1030,7 @@ mod tests {
     fn test_try_recover_from_log_at_completed() {
         let conn = crate::agent::manager::setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None).unwrap();
 
         let tmp_dir = tempfile::tempdir().unwrap();
         write_result_log(tmp_dir.path(), &run.id, false, "all done");
@@ -1046,7 +1046,7 @@ mod tests {
     fn test_try_recover_from_log_at_error_result() {
         let conn = crate::agent::manager::setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None).unwrap();
 
         let tmp_dir = tempfile::tempdir().unwrap();
         write_result_log(tmp_dir.path(), &run.id, true, "something went wrong");
@@ -1068,7 +1068,7 @@ mod tests {
     fn test_try_recover_from_log_at_missing_log() {
         let conn = crate::agent::manager::setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None).unwrap();
 
         let tmp_dir = tempfile::tempdir().unwrap();
         // No log file written — should return None without touching the DB.
@@ -1083,7 +1083,7 @@ mod tests {
     fn test_try_recover_from_log_at_no_result_event() {
         let conn = crate::agent::manager::setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None).unwrap();
 
         let tmp_dir = tempfile::tempdir().unwrap();
         // Log exists but contains no result event.

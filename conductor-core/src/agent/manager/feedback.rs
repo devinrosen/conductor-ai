@@ -459,9 +459,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
 
         let fb = mgr
@@ -482,9 +480,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let fb = mgr
             .request_feedback(&run.id, "Proceed with refactor?", None)
             .unwrap();
@@ -503,9 +499,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let fb = mgr
             .request_feedback(&run.id, "Need approval", None)
             .unwrap();
@@ -524,9 +518,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
 
         assert!(mgr.pending_feedback_for_run(&run.id).unwrap().is_none());
 
@@ -543,9 +535,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
 
         assert!(mgr.pending_feedback_for_worktree("w1").unwrap().is_none());
 
@@ -563,9 +553,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
 
         let fb1 = mgr.request_feedback(&run.id, "Question 1", None).unwrap();
         mgr.submit_feedback(&fb1.id, "Answer 1").unwrap();
@@ -579,9 +567,7 @@ mod tests {
         assert_eq!(all[1].prompt, "Question 1");
         assert_eq!(all[1].status, FeedbackStatus::Responded);
 
-        let run2 = mgr
-            .create_run(Some("w2"), "Other task", None, None)
-            .unwrap();
+        let run2 = mgr.create_run(Some("w2"), "Other task", None).unwrap();
         assert!(mgr.list_feedback_for_run(&run2.id).unwrap().is_empty());
 
         mgr.dismiss_feedback(&fb2.id).unwrap();
@@ -592,9 +578,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
         conn.execute(
@@ -611,9 +595,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let fb = mgr.request_feedback(&run.id, "Proceed?", None).unwrap();
 
         mgr.submit_feedback(&fb.id, "Yes").unwrap();
@@ -635,9 +617,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
         mgr.dismiss_feedback(&fb.id).unwrap();
@@ -666,9 +646,7 @@ mod tests {
     fn list_all_pending_feedback_requests_returns_pending_only() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr
-            .create_run(Some("w1"), "test prompt", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "test prompt", None).unwrap();
 
         let req1 = mgr.request_feedback(&run.id, "question 1", None).unwrap();
         let req2 = mgr.request_feedback(&run.id, "question 2", None).unwrap();
@@ -686,8 +664,8 @@ mod tests {
     fn list_all_pending_feedback_requests_across_runs() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
-        let run1 = mgr.create_run(Some("w1"), "run 1", None, None).unwrap();
-        let run2 = mgr.create_run(Some("w2"), "run 2", None, None).unwrap();
+        let run1 = mgr.create_run(Some("w1"), "run 1", None).unwrap();
+        let run2 = mgr.create_run(Some("w2"), "run 2", None).unwrap();
 
         mgr.request_feedback(&run1.id, "from run 1", None).unwrap();
         mgr.request_feedback(&run2.id, "from run 2", None).unwrap();
@@ -704,9 +682,7 @@ mod tests {
     fn test_request_feedback_with_structured_params() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
 
         let params = FeedbackRequestParams {
             feedback_type: FeedbackType::SingleSelect,
@@ -742,9 +718,7 @@ mod tests {
     fn test_request_feedback_select_requires_options() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
 
         let params = FeedbackRequestParams {
             feedback_type: FeedbackType::SingleSelect,
@@ -765,7 +739,7 @@ mod tests {
     fn test_dismiss_expired_feedback_requests() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
 
         // Create a feedback request with a 0-second timeout (already expired)
         let params = FeedbackRequestParams {
@@ -778,7 +752,7 @@ mod tests {
             .unwrap();
 
         // Also create one without a timeout (should NOT be dismissed)
-        let run2 = mgr.create_run(Some("w2"), "task2", None, None).unwrap();
+        let run2 = mgr.create_run(Some("w2"), "task2", None).unwrap();
         let fb2 = mgr.request_feedback(&run2.id, "no timeout", None).unwrap();
 
         let dismissed = mgr.dismiss_expired_feedback_requests().unwrap();
@@ -803,7 +777,7 @@ mod tests {
         insert_conversation(&conn, "conv1", "w1");
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .create_run_for_conversation("w1", "task", None, "conv1")
             .unwrap();
         let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
@@ -837,7 +811,7 @@ mod tests {
         insert_conversation(&conn, "conv1", "w1");
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .create_run_for_conversation("w1", "task", None, "conv1")
             .unwrap();
         let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
@@ -856,7 +830,7 @@ mod tests {
         insert_conversation(&conn, "conv1", "w1");
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .create_run_for_conversation("w1", "task", None, "conv1")
             .unwrap();
 
         let err = mgr
@@ -874,10 +848,10 @@ mod tests {
         insert_conversation(&conn, "conv1", "w1");
         let mgr = AgentManager::new(&conn);
         let run1 = mgr
-            .create_run_for_conversation("w1", "task1", None, None, "conv1")
+            .create_run_for_conversation("w1", "task1", None, "conv1")
             .unwrap();
         let run2 = mgr
-            .create_run_for_conversation("w2", "task2", None, None, "conv1")
+            .create_run_for_conversation("w2", "task2", None, "conv1")
             .unwrap();
         let fb2 = mgr.request_feedback(&run2.id, "Approve?", None).unwrap();
 
@@ -899,7 +873,7 @@ mod tests {
         insert_conversation(&conn, "conv1", "w1");
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .create_run_for_conversation("w1", "task", None, "conv1")
             .unwrap();
         mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
@@ -930,7 +904,7 @@ mod tests {
         insert_conversation(&conn, "conv1", "w1");
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .create_run_for_conversation("w1", "task", None, "conv1")
             .unwrap();
 
         let err = mgr
@@ -948,7 +922,7 @@ mod tests {
         insert_conversation(&conn, "conv1", "w1");
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run_for_conversation("w1", "task", None, None, "conv1")
+            .create_run_for_conversation("w1", "task", None, "conv1")
             .unwrap();
 
         let err = mgr

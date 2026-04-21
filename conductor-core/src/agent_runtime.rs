@@ -1124,7 +1124,7 @@ mod tests {
     fn drain_stream_json_completed_on_result_event() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         let json_lines = concat!(
             "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-1\"}\n",
@@ -1145,7 +1145,7 @@ mod tests {
     fn drain_stream_json_no_result_returns_no_result() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         let json_lines =
             "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-test\",\"session_id\":\"sess-1\"}\n";
@@ -1164,7 +1164,7 @@ mod tests {
     fn drain_stream_json_error_result_event() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         let json_lines =
             "{\"type\":\"result\",\"is_error\":true,\"result\":\"something went wrong\"}\n";
@@ -1185,7 +1185,7 @@ mod tests {
     fn drain_stream_json_token_update() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         let json_lines = concat!(
             "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n",
@@ -1208,7 +1208,7 @@ mod tests {
     fn drain_stream_json_result_persists_cost_turns_duration() {
         let conn = test_db();
         let mgr = crate::agent::AgentManager::new(&conn);
-        let run = mgr.create_run(None, "test prompt", None, None).unwrap();
+        let run = mgr.create_run(None, "test prompt", None).unwrap();
 
         // Result event with cost, turns, duration, and final token usage
         let json_lines = concat!(

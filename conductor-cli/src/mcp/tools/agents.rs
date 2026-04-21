@@ -285,12 +285,8 @@ mod tests {
                 [],
             ).unwrap();
             let mgr = AgentManager::new(&conn);
-            let r1 = mgr
-                .create_run(Some("w1"), "running task", None, None)
-                .unwrap();
-            let r2 = mgr
-                .create_run(Some("w1"), "completed task", None, None)
-                .unwrap();
+            let r1 = mgr.create_run(Some("w1"), "running task", None).unwrap();
+            let r2 = mgr.create_run(Some("w1"), "completed task", None).unwrap();
             mgr.update_run_completed(
                 &r2.id,
                 None,
@@ -338,9 +334,7 @@ mod tests {
                 [],
             ).unwrap();
             let mgr = AgentManager::new(&conn);
-            let run = mgr
-                .create_run(Some("w1"), "needs feedback", None, None)
-                .unwrap();
+            let run = mgr.create_run(Some("w1"), "needs feedback", None).unwrap();
             // Transition to waiting_for_feedback via request_feedback
             mgr.request_feedback(&run.id, "Please approve?", None)
                 .unwrap();
@@ -392,7 +386,7 @@ mod tests {
         let conn = open_database(&db).expect("open db");
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run(None, "do something", None, None)
+            .create_run(None, "do something", None)
             .expect("create run");
 
         let mut args = serde_json::Map::new();
@@ -419,7 +413,7 @@ mod tests {
         let conn = open_database(&db).expect("open db");
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run(None, "do something", None, None)
+            .create_run(None, "do something", None)
             .expect("create run");
         // Create a pending feedback request (this also sets run status to waiting_for_feedback)
         mgr.request_feedback(&run.id, "Should I proceed?", None)

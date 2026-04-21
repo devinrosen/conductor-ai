@@ -1,11 +1,10 @@
 //! Integration tests for CliRuntime.
 //!
-//! Uses a mock shell script to simulate a CLI agent. Requires tmux to be
-//! available on the system; tests are skipped when tmux is absent.
+//! Uses a mock shell script to simulate a CLI agent. No tmux dependency.
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use conductor_core::agent_config::{AgentDef, AgentRole};
@@ -14,14 +13,8 @@ use conductor_core::config::RuntimeConfig;
 use conductor_core::runtime::cli::CliRuntime;
 use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
 
-fn tmux_available() -> bool {
-    // tmux must be installed AND have an active server session
-    std::process::Command::new("tmux")
-        .arg("info")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+// Serializes tests that mutate CONDUCTOR_DB_PATH so they don't race.
+static DB_PATH_LOCK: Mutex<()> = Mutex::new(());
 
 fn make_mock_script(json_body: &str, exit_code: i32) -> (tempfile::NamedTempFile, String) {
     let mut f = tempfile::Builder::new()
@@ -90,12 +83,11 @@ fn assert_run_cancelled(db_guard: &tempfile::NamedTempFile, run_id: &str) {
     );
 }
 
-fn setup_test_db(run_id: &str) -> tempfile::NamedTempFile {
+fn setup_test_db(run_id: &str) -> (tempfile::NamedTempFile, std::sync::MutexGuard<'static, ()>) {
+    let lock = DB_PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::NamedTempFile::new().expect("temp db file");
     let path = tmp.path().to_string_lossy().to_string();
 
-    // Point CliRuntime at our test DB for this process (test threads are
-    // serialised by cargo test when using env vars in a single binary).
     std::env::set_var("CONDUCTOR_DB_PATH", &path);
 
     let conn = conductor_core::db::open_database(tmp.path()).expect("open test db");
@@ -108,22 +100,17 @@ fn setup_test_db(run_id: &str) -> tempfile::NamedTempFile {
     )
     .expect("insert run");
 
-    tmp
+    (tmp, lock)
 }
 
 #[test]
 fn test_cli_runtime_success() {
-    if !tmux_available() {
-        eprintln!("skipping cli_runtime test: tmux not available");
-        return;
-    }
-
     let json_body = r#"{"response":"hello world","stats":{"total_tokens":42}}"#;
     let (_guard, script_path) = make_mock_script(json_body, 0);
     let runtime = make_runtime(&script_path, "response", Some("stats.total_tokens"));
 
     let run_id = format!("test-cli-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
+    let (_db_guard, _lock) = setup_test_db(&run_id);
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
@@ -150,8 +137,8 @@ fn test_cli_runtime_success() {
         conductor_core::agent::AgentRunStatus::Completed
     );
     assert!(
-        result.tmux_window.is_some(),
-        "tmux_window must be persisted so is_alive() and orphan reaper can track the run"
+        result.subprocess_pid.is_some(),
+        "subprocess_pid must be persisted so is_alive() and orphan reaper can track the run"
     );
     assert_eq!(
         result.input_tokens,
@@ -162,17 +149,12 @@ fn test_cli_runtime_success() {
 
 /// Assert that a non-zero exit code causes the run to be marked `Failed`.
 fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
-    if !tmux_available() {
-        eprintln!("skipping cli_runtime test: tmux not available");
-        return;
-    }
-
     let json_body = r#"{"response":"error"}"#;
     let (_guard, script_path) = make_mock_script(json_body, exit_code);
     let runtime = make_runtime(&script_path, "response", None);
 
     let run_id = format!("{}-{}", run_id_prefix, ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
+    let (_db_guard, _lock) = setup_test_db(&run_id);
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
@@ -217,11 +199,6 @@ fn test_cli_runtime_exit_code_53_is_error() {
 
 #[test]
 fn test_cli_runtime_stdin_mode() {
-    if !tmux_available() {
-        eprintln!("skipping cli_runtime stdin test: tmux not available");
-        return;
-    }
-
     // Script that reads stdin and echoes it as JSON output.
     let mut f = tempfile::Builder::new()
         .suffix(".sh")
@@ -248,7 +225,7 @@ exit 0"#
     });
 
     let run_id = format!("test-stdin-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
+    let (_db_guard, _lock) = setup_test_db(&run_id);
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
@@ -278,7 +255,7 @@ exit 0"#
 
 /// Spawn a slow-sleeping script via CliRuntime and return the handles needed
 /// to call `poll()` in the test.  Returns `(script_guard, db_guard, runtime,
-/// run_id)` — callers must keep all guards alive for the duration of the test.
+/// run_id, lock)` — callers must keep all guards alive for the duration of the test.
 fn spawn_slow_script(
     id_prefix: &str,
 ) -> (
@@ -286,6 +263,7 @@ fn spawn_slow_script(
     tempfile::NamedTempFile,
     CliRuntime,
     String,
+    std::sync::MutexGuard<'static, ()>,
 ) {
     let mut f = tempfile::Builder::new()
         .suffix(".sh")
@@ -303,7 +281,7 @@ fn spawn_slow_script(
     });
 
     let run_id = format!("{}-{}", id_prefix, ulid::Ulid::new());
-    let db_guard = setup_test_db(&run_id);
+    let (db_guard, lock) = setup_test_db(&run_id);
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
@@ -320,17 +298,12 @@ fn spawn_slow_script(
 
     runtime.spawn(&req).expect("spawn must succeed");
 
-    (f, db_guard, runtime, run_id)
+    (f, db_guard, runtime, run_id, lock)
 }
 
 #[test]
 fn test_cli_runtime_timeout_returns_no_result() {
-    if !tmux_available() {
-        eprintln!("skipping cli_runtime timeout test: tmux not available");
-        return;
-    }
-
-    let (_script, _db, runtime, run_id) = spawn_slow_script("test-timeout");
+    let (_script, _db, runtime, run_id, _lock) = spawn_slow_script("test-timeout");
     let result = runtime.poll(&run_id, None, Duration::from_millis(200));
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::NoResult)),
@@ -340,12 +313,7 @@ fn test_cli_runtime_timeout_returns_no_result() {
 
 #[test]
 fn test_cli_runtime_shutdown_flag_cancels_poll() {
-    if !tmux_available() {
-        eprintln!("skipping cli_runtime shutdown test: tmux not available");
-        return;
-    }
-
-    let (_script, _db, runtime, run_id) = spawn_slow_script("test-shutdown");
+    let (_script, _db, runtime, run_id, _lock) = spawn_slow_script("test-shutdown");
     // Pre-set the shutdown flag so poll() exits on the first iteration.
     let shutdown = Arc::new(AtomicBool::new(true));
     let result = runtime.poll(&run_id, Some(&shutdown), Duration::from_secs(10));
@@ -356,15 +324,10 @@ fn test_cli_runtime_shutdown_flag_cancels_poll() {
 }
 
 #[test]
-fn test_cli_runtime_cancel_kills_window_and_marks_cancelled() {
-    if !tmux_available() {
-        eprintln!("skipping cli_runtime cancel test: tmux not available");
-        return;
-    }
+fn test_cli_runtime_cancel_kills_process_and_marks_cancelled() {
+    let (_script, db_guard, runtime, run_id, _lock) = spawn_slow_script("test-cancel");
 
-    let (_script, db_guard, runtime, run_id) = spawn_slow_script("test-cancel");
-
-    // Fetch the run from DB to get tmux_window name.
+    // Fetch the run from DB to get subprocess_pid.
     let conn =
         conductor_core::db::open_database(db_guard.path()).expect("open test db for cancel test");
     let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
@@ -374,14 +337,14 @@ fn test_cli_runtime_cancel_kills_window_and_marks_cancelled() {
         .expect("run must exist in DB");
 
     assert!(
-        run.tmux_window.is_some(),
-        "tmux_window must be set after spawn"
+        run.subprocess_pid.is_some(),
+        "subprocess_pid must be set after spawn"
     );
     assert!(runtime.is_alive(&run), "run must be alive before cancel");
 
     runtime.cancel(&run).expect("cancel must succeed");
 
-    // Window should be gone.
+    // Process should be gone.
     assert!(
         !runtime.is_alive(&run),
         "run must not be alive after cancel"
@@ -392,9 +355,9 @@ fn test_cli_runtime_cancel_kills_window_and_marks_cancelled() {
 }
 
 #[test]
-fn test_cli_runtime_cancel_with_no_tmux_window_marks_cancelled() {
-    let run_id = format!("cancel-no-tmux-{}", ulid::Ulid::new());
-    let db_guard = setup_test_db(&run_id);
+fn test_cli_runtime_cancel_with_no_pid_marks_cancelled() {
+    let run_id = format!("cancel-no-pid-{}", ulid::Ulid::new());
+    let (db_guard, _lock) = setup_test_db(&run_id);
 
     let conn =
         conductor_core::db::open_database(db_guard.path()).expect("open test db for cancel test");
@@ -406,14 +369,14 @@ fn test_cli_runtime_cancel_with_no_tmux_window_marks_cancelled() {
         .expect("run must exist in DB");
 
     assert!(
-        run.tmux_window.is_none(),
-        "tmux_window must be None for this test"
+        run.subprocess_pid.is_none(),
+        "subprocess_pid must be None for this test"
     );
 
     let runtime = make_runtime("/bin/echo", "response", None);
     runtime
         .cancel(&run)
-        .expect("cancel must succeed when tmux_window is None");
+        .expect("cancel must succeed when subprocess_pid is None");
 
     assert_run_cancelled(&db_guard, &run_id);
 }

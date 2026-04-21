@@ -46,9 +46,7 @@ fn test_collect_ticket_items_unlabeled_scope() {
 
     // Build a minimal ExecutionState.
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -287,9 +285,7 @@ fn test_dispatch_params_tickets_clears_worktree_id() {
     let config: &'static crate::config::Config =
         Box::leak(Box::new(crate::config::Config::default()));
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -322,9 +318,7 @@ fn test_dispatch_params_repos_clears_worktree_id() {
     let config: &'static crate::config::Config =
         Box::leak(Box::new(crate::config::Config::default()));
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -357,9 +351,7 @@ fn test_dispatch_params_workflow_runs_passes_worktree_id_through() {
     let config: &'static crate::config::Config =
         Box::leak(Box::new(crate::config::Config::default()));
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -396,9 +388,7 @@ fn test_dispatch_params_worktrees_missing_worktree_falls_back_to_parent_dir() {
     let config: &'static crate::config::Config =
         Box::leak(Box::new(crate::config::Config::default()));
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -443,9 +433,7 @@ fn test_dispatch_params_worktrees_uses_child_worktree_path() {
         .unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -524,9 +512,7 @@ fn test_collect_worktree_items_matching_base_branch() {
         ).unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -610,7 +596,7 @@ fn test_collect_worktree_items_inferred_base_uses_worktree_branch_not_parent() {
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
     let parent = agent_mgr
-        .create_run(Some("wt-release"), "workflow", None, None)
+        .create_run(Some("wt-release"), "workflow", None)
         .unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
@@ -684,9 +670,7 @@ fn test_collect_worktree_items_has_open_pr_filter() {
         ).unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -861,9 +845,7 @@ fn test_foreach_does_not_fail_item_on_first_failed_observation() {
     crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp/ws");
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -872,9 +854,7 @@ fn test_foreach_does_not_fail_item_on_first_failed_observation() {
         .insert_step(&run.id, "foreach-step", "foreach", false, 0, 1)
         .unwrap();
 
-    let child_agent = agent_mgr
-        .create_run(Some("w1"), "child", None, None)
-        .unwrap();
+    let child_agent = agent_mgr.create_run(Some("w1"), "child", None).unwrap();
     let child_run = wf_mgr
         .create_workflow_run(
             "child-wf",
@@ -969,9 +949,7 @@ fn test_foreach_fails_item_after_two_consecutive_failed_observations() {
         Box::leak(Box::new(crate::config::Config::default()));
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -980,9 +958,7 @@ fn test_foreach_fails_item_after_two_consecutive_failed_observations() {
         .insert_step(&run.id, "foreach-step", "foreach", false, 0, 1)
         .unwrap();
 
-    let child_agent = agent_mgr
-        .create_run(Some("w1"), "child", None, None)
-        .unwrap();
+    let child_agent = agent_mgr.create_run(Some("w1"), "child", None).unwrap();
     let child_run = wf_mgr
         .create_workflow_run(
             "child-wf",
@@ -1046,9 +1022,7 @@ fn test_build_item_vars_worktrees_all_fields() {
         ).unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1126,9 +1100,7 @@ fn test_load_worktree_dep_edges_basic() {
 
     // Create a workflow run + step + fan_out_items for the two worktrees.
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1186,9 +1158,7 @@ fn test_load_worktree_dep_edges_no_tickets() {
     .unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1272,9 +1242,7 @@ fn test_load_worktree_dep_edges_mixed_some_with_tickets() {
         .unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1343,9 +1311,7 @@ fn test_load_ticket_dep_edges_basic() {
         .unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1409,9 +1375,7 @@ fn test_load_ticket_dep_edges_no_deps() {
         .unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1472,9 +1436,7 @@ fn test_load_ticket_dep_edges_filters_external_blocker() {
         .unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1516,9 +1478,7 @@ fn test_collect_worktree_items_no_repo_id_returns_error() {
         Box::leak(Box::new(crate::config::Config::default()));
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1568,9 +1528,7 @@ fn test_collect_worktree_items_no_scope_no_worktree_id_errors() {
         Box::leak(Box::new(crate::config::Config::default()));
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1628,9 +1586,7 @@ fn test_collect_worktree_items_infers_base_branch_from_context() {
         ).unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1694,9 +1650,7 @@ fn test_build_item_vars_worktrees_null_optional_fields() {
         .unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1764,9 +1718,7 @@ fn test_build_item_vars_worktrees_with_ticket_id() {
         .unwrap();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1810,9 +1762,7 @@ fn test_build_item_vars_worktrees_missing_worktree_falls_back() {
         Box::leak(Box::new(crate::config::Config::default()));
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1852,9 +1802,7 @@ fn test_build_item_vars_tickets_missing_ticket_falls_back() {
         Box::leak(Box::new(crate::config::Config::default()));
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1903,9 +1851,7 @@ fn test_foreach_resume_reuses_existing_step_and_resets_orphaned_items() {
         Box::leak(Box::new(crate::config::Config::default()));
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -1995,9 +1941,7 @@ fn test_foreach_resume_preserves_running_items_with_child_run_id() {
     let conn = setup_db();
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
@@ -2062,9 +2006,7 @@ fn test_build_item_vars_repos_missing_repo_falls_back() {
         Box::leak(Box::new(crate::config::Config::default()));
 
     let agent_mgr = crate::agent::AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
