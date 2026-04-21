@@ -46,6 +46,38 @@ pub fn execute_call_workflow(
         return Ok(());
     }
 
+    // Guard A: predecessor must be completed before we advance to this step.
+    if pos > 0
+        && !state
+            .wf_mgr
+            .predecessor_completed(&state.workflow_run_id, pos, iteration as i64)?
+    {
+        tracing::warn!(
+            "call_workflow '{}': predecessor at position {} is not completed; \
+             skipping to prevent premature advancement (run {})",
+            node.workflow,
+            pos - 1,
+            state.workflow_run_id,
+        );
+        return Ok(());
+    }
+
+    // Guard B: don't insert a duplicate step row when an active row already exists.
+    if state
+        .wf_mgr
+        .active_step_exists(&state.workflow_run_id, pos, iteration as i64, &wf_step_name)?
+    {
+        tracing::warn!(
+            "call_workflow '{}': active step already exists at position {} (iter {}); \
+             skipping duplicate insertion (run {})",
+            node.workflow,
+            pos,
+            iteration,
+            state.workflow_run_id,
+        );
+        return Ok(());
+    }
+
     let child_depth = state.depth + 1;
     if child_depth > crate::workflow_dsl::MAX_WORKFLOW_DEPTH {
         let msg = format!(

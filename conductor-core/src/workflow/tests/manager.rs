@@ -4308,3 +4308,75 @@ fn test_update_step_child_run_id_nonexistent_step() {
     mgr.update_step_child_run_id("nonexistent-step-id", "any-child-run-id")
         .unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// predecessor_completed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_predecessor_completed_pos_zero_always_true() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // No rows at all — pos 0 should always return true.
+    assert!(mgr.predecessor_completed(&run.id, 0, 0).unwrap());
+}
+
+#[test]
+fn test_predecessor_completed_true_when_prev_completed() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr.insert_step(&run.id, "step-a", "actor", false, 0, 0).unwrap();
+    mgr.update_step_status(&step_id, WorkflowStepStatus::Completed, None, None, None, None, Some(0)).unwrap();
+    // Predecessor at pos 0 is completed → pos 1 check should return true.
+    assert!(mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+}
+
+#[test]
+fn test_predecessor_completed_false_when_prev_running() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr.insert_step(&run.id, "step-a", "actor", false, 0, 0).unwrap();
+    mgr.update_step_status(&step_id, WorkflowStepStatus::Running, None, None, None, None, None).unwrap();
+    assert!(!mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+}
+
+#[test]
+fn test_predecessor_completed_false_when_no_prev_row() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // No step at position 0, iteration 0 → pos 1 predecessor check returns false.
+    assert!(!mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// active_step_exists
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_active_step_exists_true_for_running() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr.insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0).unwrap();
+    mgr.update_step_status(&step_id, WorkflowStepStatus::Running, None, None, None, None, Some(0)).unwrap();
+    assert!(mgr.active_step_exists(&run.id, 2, 0, "workflow:lint-fix").unwrap());
+}
+
+#[test]
+fn test_active_step_exists_false_for_failed() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr.insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0).unwrap();
+    mgr.update_step_status(&step_id, WorkflowStepStatus::Failed, None, None, None, None, Some(0)).unwrap();
+    // Failed is terminal — retries are allowed, so active_step_exists returns false.
+    assert!(!mgr.active_step_exists(&run.id, 2, 0, "workflow:lint-fix").unwrap());
+}
+
+#[test]
+fn test_active_step_exists_false_different_step_name() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // An active row exists at pos 2 but for a different step name (parallel step).
+    let step_id = mgr.insert_step(&run.id, "workflow:other-step", "workflow", false, 2, 0).unwrap();
+    mgr.update_step_status(&step_id, WorkflowStepStatus::Running, None, None, None, None, Some(0)).unwrap();
+    assert!(!mgr.active_step_exists(&run.id, 2, 0, "workflow:lint-fix").unwrap());
+}

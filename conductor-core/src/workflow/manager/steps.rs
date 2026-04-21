@@ -292,6 +292,59 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Returns true if the predecessor step (position - 1) has status 'completed'.
+    /// Always returns true when position == 0 (no predecessor).
+    pub fn predecessor_completed(
+        &self,
+        workflow_run_id: &str,
+        position: i64,
+        iteration: i64,
+    ) -> Result<bool> {
+        if position == 0 {
+            return Ok(true);
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT 1 FROM workflow_run_steps \
+             WHERE workflow_run_id = :wrid AND position = :pos AND iteration = :iter \
+             AND status = 'completed' LIMIT 1",
+        )?;
+        let exists = stmt
+            .exists(named_params![
+                ":wrid": workflow_run_id,
+                ":pos": position - 1,
+                ":iter": iteration,
+            ])
+            .map_err(ConductorError::Database)?;
+        Ok(exists)
+    }
+
+    /// Returns true if a non-terminal step row already exists at the given
+    /// position/iteration/step_name combination.  Including step_name ensures
+    /// parallel steps at the same position (different names) are not blocked.
+    pub fn active_step_exists(
+        &self,
+        workflow_run_id: &str,
+        position: i64,
+        iteration: i64,
+        step_name: &str,
+    ) -> Result<bool> {
+        let mut stmt = self.conn.prepare(
+            "SELECT 1 FROM workflow_run_steps \
+             WHERE workflow_run_id = :wrid AND position = :pos AND iteration = :iter \
+             AND step_name = :name \
+             AND status IN ('pending', 'running', 'waiting', 'completed') LIMIT 1",
+        )?;
+        let exists = stmt
+            .exists(named_params![
+                ":wrid": workflow_run_id,
+                ":pos": position,
+                ":iter": iteration,
+                ":name": step_name,
+            ])
+            .map_err(ConductorError::Database)?;
+        Ok(exists)
+    }
+
     /// Validate that gate selections are within the allowed options for this step.
     fn validate_gate_selections(&self, step_id: &str, selections: &[String]) -> Result<()> {
         // Get the stored gate options for this step
