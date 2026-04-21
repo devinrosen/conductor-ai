@@ -379,3 +379,104 @@ fn test_cli_runtime_rejects_invalid_run_id() {
         "error must mention invalid run_id, got: {err}"
     );
 }
+
+// Regression test: poll() must not panic when the output file is unreadable after the
+// process exits. Instead it must log the error and return the fallback result.
+#[cfg(unix)]
+#[test]
+fn test_cli_runtime_poll_handles_unreadable_output_file() {
+    // A script that exits immediately with code 0 so poll() reaches the file-read path.
+    let (_script, script_path) = make_mock_script("{}", 0);
+    let runtime = make_runtime(&script_path, "response", None);
+
+    let run_id = format!("test-unreadable-{}", ulid::Ulid::new());
+    let (_db_guard, _lock) = setup_test_db(&run_id);
+
+    let req = RuntimeRequest {
+        run_id: run_id.clone(),
+        agent_def: common::make_agent_def("cli"),
+        prompt: "test".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        bot_name: None,
+        plugin_dirs: vec![],
+        db_path: _db_guard.path().to_path_buf(),
+    };
+
+    runtime.spawn_validated(&req).expect("spawn must succeed");
+
+    // Give the process time to exit so try_wait() returns Some(status).
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Make the output file unreadable to trigger the error-logging path.
+    let output_path = conductor_core::config::conductor_dir()
+        .join("workspaces")
+        .join(&run_id)
+        .join("output.json");
+    std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod output file to 000");
+
+    // poll() must not panic and must return Ok with the run marked Completed.
+    let result = runtime
+        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
+        .expect("poll must succeed even when output file is unreadable");
+
+    // Restore permissions so the temp directory can be cleaned up.
+    let _ = std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o644));
+
+    assert_eq!(
+        result.status,
+        conductor_core::agent::AgentRunStatus::Completed,
+        "run must be Completed when process exits 0 even if output file is unreadable"
+    );
+}
+
+// Regression: when a non-zero exit process has an unreadable output file, poll() must
+// still return Ok (not panic) and mark the run Failed with the fallback exit-code message.
+#[cfg(unix)]
+#[test]
+fn test_cli_runtime_poll_handles_unreadable_output_file_on_error_exit() {
+    let (_script, script_path) = make_mock_script("{}", 1);
+    let runtime = make_runtime(&script_path, "response", None);
+
+    let run_id = format!("test-unreadable-err-{}", ulid::Ulid::new());
+    let (_db_guard, _lock) = setup_test_db(&run_id);
+
+    let req = RuntimeRequest {
+        run_id: run_id.clone(),
+        agent_def: common::make_agent_def("cli"),
+        prompt: "test".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        bot_name: None,
+        plugin_dirs: vec![],
+        db_path: _db_guard.path().to_path_buf(),
+    };
+
+    runtime.spawn_validated(&req).expect("spawn must succeed");
+    std::thread::sleep(Duration::from_millis(200));
+
+    let output_path = conductor_core::config::conductor_dir()
+        .join("workspaces")
+        .join(&run_id)
+        .join("output.json");
+    std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod output file to 000");
+
+    let result = runtime
+        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
+        .expect("poll must succeed even when output file is unreadable");
+
+    let _ = std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o644));
+
+    assert_eq!(
+        result.status,
+        conductor_core::agent::AgentRunStatus::Failed,
+        "run must be Failed when process exits 1 even if output file is unreadable"
+    );
+    assert!(
+        result.result_text.as_deref().unwrap_or("").contains("process exited with code 1"),
+        "result_text must contain fallback exit-code message, got: {:?}",
+        result.result_text
+    );
+}
