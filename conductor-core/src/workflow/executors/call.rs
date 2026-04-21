@@ -391,6 +391,7 @@ fn execute_call_with_schema(
             &child_run.id,
             state.exec_config.shutdown.as_ref(),
             state.exec_config.step_timeout,
+            &request.db_path,
         ) {
             Err(crate::runtime::PollError::Cancelled) => {
                 let cancel_msg = "executor shutdown requested".to_string();

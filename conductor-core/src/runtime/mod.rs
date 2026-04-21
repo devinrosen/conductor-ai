@@ -28,6 +28,7 @@ pub trait AgentRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: std::time::Duration,
+        db_path: &std::path::Path,
     ) -> std::result::Result<AgentRun, PollError>;
 
     /// Returns true if the agent process / session represented by `run` is still live.

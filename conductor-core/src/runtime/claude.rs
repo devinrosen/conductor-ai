@@ -21,7 +21,6 @@ pub struct ClaudeRuntime {
     #[cfg(unix)]
     handle: Arc<Mutex<Option<crate::agent_runtime::HeadlessHandle>>>,
     prompt_file: Arc<Mutex<Option<std::path::PathBuf>>>,
-    db_path: Arc<Mutex<Option<std::path::PathBuf>>>,
 }
 
 impl ClaudeRuntime {
@@ -31,7 +30,6 @@ impl ClaudeRuntime {
             #[cfg(unix)]
             handle: Arc::new(Mutex::new(None)),
             prompt_file: Arc::new(Mutex::new(None)),
-            db_path: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -65,9 +63,6 @@ impl AgentRuntime for ClaudeRuntime {
             if let Ok(mut guard) = self.prompt_file.lock() {
                 *guard = Some(pf);
             }
-            if let Ok(mut guard) = self.db_path.lock() {
-                *guard = Some(request.db_path.clone());
-            }
             Ok(())
         }
         #[cfg(not(unix))]
@@ -84,14 +79,15 @@ impl AgentRuntime for ClaudeRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: std::time::Duration,
+        db_path: &std::path::Path,
     ) -> std::result::Result<AgentRun, PollError> {
         #[cfg(unix)]
         {
-            poll_unix(self, run_id, shutdown, step_timeout)
+            poll_unix(self, run_id, shutdown, step_timeout, db_path)
         }
         #[cfg(not(unix))]
         {
-            let _ = (run_id, shutdown, step_timeout);
+            let _ = (run_id, shutdown, step_timeout, db_path);
             Err(PollError::Failed(
                 "ClaudeRuntime poll is not supported on non-Unix platforms".into(),
             ))
@@ -131,6 +127,7 @@ fn poll_unix(
     run_id: &str,
     shutdown: Option<&Arc<AtomicBool>>,
     step_timeout: std::time::Duration,
+    db_path: &std::path::Path,
 ) -> std::result::Result<AgentRun, PollError> {
     use crate::agent_runtime::DrainOutcome;
 
@@ -142,15 +139,9 @@ fn poll_unix(
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
     let prompt_file = rt.prompt_file.lock().ok().and_then(|mut g| g.take());
-    let db_path = rt
-        .db_path
-        .lock()
-        .map_err(|_| PollError::Failed("ClaudeRuntime db_path mutex poisoned".into()))?
-        .clone()
-        .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
     let pid = handle.pid();
 
-    let tracking_conn = crate::db::open_database_compat(&db_path)
+    let tracking_conn = crate::db::open_database_compat(db_path)
         .map_err(|e| PollError::Failed(format!("ClaudeRuntime: failed to open DB: {e}")))?;
     let tracking_mgr = crate::agent::AgentManager::new(&tracking_conn);
 
@@ -172,8 +163,10 @@ fn poll_unix(
         }
     });
 
+    // The drain thread must open its own connection: rusqlite::Connection is !Send.
+    let db_path_owned = db_path.to_path_buf();
     std::thread::spawn(move || {
-        let conn = match crate::db::open_database_compat(&db_path) {
+        let conn = match crate::db::open_database_compat(&db_path_owned) {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("ClaudeRuntime drain thread: failed to open DB: {e}");
@@ -322,7 +315,12 @@ mod tests {
     #[test]
     fn poll_before_spawn_returns_failed() {
         let runtime = ClaudeRuntime::default();
-        let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
+        let result = runtime.poll(
+            "some-run-id",
+            None,
+            std::time::Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
         assert!(
             matches!(result, Err(PollError::Failed(_))),
             "expected Failed, got: {result:?}"
@@ -333,7 +331,12 @@ mod tests {
     #[test]
     fn poll_fails_on_non_unix() {
         let runtime = ClaudeRuntime::default();
-        let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
+        let result = runtime.poll(
+            "some-run-id",
+            None,
+            std::time::Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
         assert!(
             matches!(result, Err(PollError::Failed(_))),
             "expected Failed on non-Unix, got: {result:?}"
@@ -448,10 +451,10 @@ mod tests {
     }
 
     // Spawns a `sleep 1000` child and wraps it in a ClaudeRuntime ready for
-    // poll() tests.  Returns (runtime, tmp) — caller must hold `tmp` alive for
-    // the duration of the test so the temp dir is not cleaned up early.
+    // poll() tests.  Returns (runtime, tmp, db_file) — caller must hold `tmp`
+    // alive for the duration of the test so the temp dir is not cleaned up early.
     #[cfg(unix)]
-    fn make_sleeping_runtime() -> (ClaudeRuntime, tempfile::TempDir) {
+    fn make_sleeping_runtime() -> (ClaudeRuntime, tempfile::TempDir, std::path::PathBuf) {
         use std::process::Stdio;
         let tmp = tempfile::tempdir().expect("tempdir");
         let db_file = tmp.path().join("test.db");
@@ -465,21 +468,21 @@ mod tests {
             .expect("HeadlessHandle::from_child failed");
         let runtime = ClaudeRuntime::default();
         *runtime.handle.lock().unwrap() = Some(handle);
-        *runtime.db_path.lock().unwrap() = Some(db_file);
-        (runtime, tmp)
+        (runtime, tmp, db_file)
     }
 
     // poll() returns Cancelled when the shutdown flag is set.
     #[cfg(unix)]
     #[test]
     fn poll_shutdown_flag_returns_cancelled() {
-        let (runtime, _tmp) = make_sleeping_runtime();
+        let (runtime, _tmp, db_file) = make_sleeping_runtime();
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let result = runtime.poll(
             "test-shutdown-run",
             Some(&shutdown),
             std::time::Duration::from_secs(60),
+            &db_file,
         );
 
         assert!(
@@ -492,12 +495,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_timeout_returns_no_result() {
-        let (runtime, _tmp) = make_sleeping_runtime();
+        let (runtime, _tmp, db_file) = make_sleeping_runtime();
 
         let result = runtime.poll(
             "test-timeout-run",
             None,
             std::time::Duration::from_millis(10),
+            &db_file,
         );
 
         assert!(

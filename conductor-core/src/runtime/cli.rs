@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -13,7 +12,6 @@ use super::{AgentRuntime, PollError, RuntimeRequest};
 pub struct CliRuntime {
     config: RuntimeConfig,
     state: std::sync::Mutex<Option<CliState>>,
-    db_path: std::sync::Mutex<PathBuf>,
 }
 
 struct CliState {
@@ -28,7 +26,6 @@ impl CliRuntime {
         Self {
             config,
             state: std::sync::Mutex::new(None),
-            db_path: std::sync::Mutex::new(crate::config::db_path()),
         }
     }
 }
@@ -103,7 +100,6 @@ impl AgentRuntime for CliRuntime {
 
         let pid = child.id();
 
-        *self.db_path.lock().unwrap() = request.db_path.clone();
         let conn = crate::db::open_database_compat(&request.db_path)
             .map_err(|e| ConductorError::Agent(format!("CliRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
@@ -135,6 +131,7 @@ impl AgentRuntime for CliRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: Duration,
+        db_path: &std::path::Path,
     ) -> std::result::Result<AgentRun, PollError> {
         let mut state = self
             .state
@@ -143,8 +140,7 @@ impl AgentRuntime for CliRuntime {
             .take()
             .ok_or_else(|| PollError::Failed("CliRuntime::poll called before spawn".into()))?;
 
-        let db_path = self.db_path.lock().unwrap().clone();
-        let conn = crate::db::open_database_compat(&db_path)
+        let conn = crate::db::open_database_compat(db_path)
             .map_err(|e| PollError::Failed(format!("CliRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
@@ -399,7 +395,12 @@ mod tests {
     #[test]
     fn poll_before_spawn_returns_failed() {
         let runtime = make_runtime("echo");
-        let result = runtime.poll("no-such-run", None, Duration::from_millis(10));
+        let result = runtime.poll(
+            "no-such-run",
+            None,
+            Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
         assert!(matches!(result, Err(PollError::Failed(_))));
     }
 }

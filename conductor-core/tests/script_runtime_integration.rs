@@ -65,7 +65,7 @@ fn test_script_runtime_success() {
     runtime.spawn(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(5))
+        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
         .expect("poll must succeed");
 
     assert_eq!(
@@ -94,7 +94,7 @@ fn test_script_runtime_captures_conductor_prompt() {
     runtime.spawn(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(5))
+        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
         .expect("poll must succeed");
 
     assert_eq!(
@@ -137,7 +137,7 @@ fn test_script_runtime_nonzero_exit_is_failed() {
         .spawn(&req)
         .expect("spawn must succeed even for non-zero exit");
 
-    let result = runtime.poll(&run_id, None, Duration::from_secs(5));
+    let result = runtime.poll(&run_id, None, Duration::from_secs(5), _db_guard.path());
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::Failed(_))),
         "non-zero exit must map to PollError::Failed, got: {result:?}"
@@ -156,7 +156,7 @@ fn test_script_runtime_nonzero_exit_with_stderr() {
         .spawn(&req)
         .expect("spawn must succeed even for non-zero exit");
 
-    let result = runtime.poll(&run_id, None, Duration::from_secs(5));
+    let result = runtime.poll(&run_id, None, Duration::from_secs(5), _db_guard.path());
     match result {
         Err(conductor_core::runtime::PollError::Failed(msg)) => {
             assert!(
