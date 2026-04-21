@@ -307,7 +307,12 @@ fn test_cli_runtime_shutdown_flag_cancels_poll() {
     let (_script, _db, runtime, run_id, _lock) = spawn_slow_script("test-shutdown");
     // Pre-set the shutdown flag so poll() exits on the first iteration.
     let shutdown = Arc::new(AtomicBool::new(true));
-    let result = runtime.poll(&run_id, Some(&shutdown), Duration::from_secs(10), _db.path());
+    let result = runtime.poll(
+        &run_id,
+        Some(&shutdown),
+        Duration::from_secs(10),
+        _db.path(),
+    );
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::Cancelled)),
         "poll with shutdown flag set must return Cancelled, got: {result:?}"
