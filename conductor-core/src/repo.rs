@@ -28,6 +28,28 @@ pub struct Repo {
     pub runtime_overrides: Option<String>,
 }
 
+const REPO_SELECT: &str =
+    "SELECT id, slug, local_path, remote_url, workspace_dir, created_at, \
+     COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation, \
+     runtime_overrides FROM repos";
+
+fn row_to_repo(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
+    Ok(Repo {
+        id: row.get("id")?,
+        slug: row.get("slug")?,
+        local_path: row.get("local_path")?,
+        remote_url: row.get("remote_url")?,
+        default_branch: String::new(),
+        workspace_dir: row.get("workspace_dir")?,
+        created_at: row.get("created_at")?,
+        model: None,
+        allow_agent_issue_creation: row
+            .get::<_, i64>("allow_agent_issue_creation")
+            .map(|v| v != 0)?,
+        runtime_overrides: row.get("runtime_overrides")?,
+    })
+}
+
 fn repo_not_found(slug: impl Into<String>) -> impl FnOnce(rusqlite::Error) -> ConductorError {
     let slug = slug.into();
     move |e| match e {
@@ -131,27 +153,9 @@ impl<'a> RepoManager<'a> {
     pub fn list(&self) -> Result<Vec<Repo>> {
         let repos = query_collect(
             self.conn,
-            "SELECT id, slug, local_path, remote_url, workspace_dir, created_at, \
-             COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation, \
-             runtime_overrides \
-             FROM repos ORDER BY slug",
+            &format!("{REPO_SELECT} ORDER BY slug"),
             [],
-            |row| {
-                Ok(Repo {
-                    id: row.get("id")?,
-                    slug: row.get("slug")?,
-                    local_path: row.get("local_path")?,
-                    remote_url: row.get("remote_url")?,
-                    default_branch: String::new(),
-                    workspace_dir: row.get("workspace_dir")?,
-                    created_at: row.get("created_at")?,
-                    model: None,
-                    allow_agent_issue_creation: row
-                        .get::<_, i64>("allow_agent_issue_creation")
-                        .map(|v| v != 0)?,
-                    runtime_overrides: row.get("runtime_overrides")?,
-                })
-            },
+            row_to_repo,
         )?;
         Ok(repos.into_iter().map(|r| r.enrich(self.config)).collect())
     }
@@ -159,28 +163,9 @@ impl<'a> RepoManager<'a> {
     pub fn get_by_id(&self, id: &str) -> Result<Repo> {
         self.conn
             .query_row(
-                "SELECT id, slug, local_path, remote_url, workspace_dir, \
-                 created_at, \
-                 COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation, \
-                 runtime_overrides \
-                 FROM repos WHERE id = :id",
+                &format!("{REPO_SELECT} WHERE id = :id"),
                 named_params! { ":id": id },
-                |row| {
-                    Ok(Repo {
-                        id: row.get("id")?,
-                        slug: row.get("slug")?,
-                        local_path: row.get("local_path")?,
-                        remote_url: row.get("remote_url")?,
-                        default_branch: String::new(),
-                        workspace_dir: row.get("workspace_dir")?,
-                        created_at: row.get("created_at")?,
-                        model: None,
-                        allow_agent_issue_creation: row
-                            .get::<_, i64>("allow_agent_issue_creation")
-                            .map(|v| v != 0)?,
-                        runtime_overrides: row.get("runtime_overrides")?,
-                    })
-                },
+                row_to_repo,
             )
             .map(|r| r.enrich(self.config))
             .map_err(repo_not_found(id))
@@ -189,28 +174,9 @@ impl<'a> RepoManager<'a> {
     pub fn get_by_slug(&self, slug: &str) -> Result<Repo> {
         self.conn
             .query_row(
-                "SELECT id, slug, local_path, remote_url, workspace_dir, \
-                 created_at, \
-                 COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation, \
-                 runtime_overrides \
-                 FROM repos WHERE slug = :slug",
+                &format!("{REPO_SELECT} WHERE slug = :slug"),
                 named_params! { ":slug": slug },
-                |row| {
-                    Ok(Repo {
-                        id: row.get("id")?,
-                        slug: row.get("slug")?,
-                        local_path: row.get("local_path")?,
-                        remote_url: row.get("remote_url")?,
-                        default_branch: String::new(),
-                        workspace_dir: row.get("workspace_dir")?,
-                        created_at: row.get("created_at")?,
-                        model: None,
-                        allow_agent_issue_creation: row
-                            .get::<_, i64>("allow_agent_issue_creation")
-                            .map(|v| v != 0)?,
-                        runtime_overrides: row.get("runtime_overrides")?,
-                    })
-                },
+                row_to_repo,
             )
             .map(|r| r.enrich(self.config))
             .map_err(repo_not_found(slug))
