@@ -31,7 +31,7 @@ impl CliRuntime {
 }
 
 impl AgentRuntime for CliRuntime {
-    fn spawn_impl(&self, request: &RuntimeRequest) -> Result<()> {
+    fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
         let binary = self.config.binary.as_deref().ok_or_else(|| {
             ConductorError::Config("CliRuntime: `binary` is required".to_string())
         })?;

@@ -41,7 +41,7 @@ impl Default for ClaudeRuntime {
 }
 
 impl AgentRuntime for ClaudeRuntime {
-    fn spawn_impl(&self, request: &RuntimeRequest) -> Result<()> {
+    fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
         #[cfg(unix)]
         {
             let params = crate::agent_runtime::SpawnHeadlessParams {
