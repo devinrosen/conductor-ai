@@ -71,6 +71,25 @@ fn make_agent_def() -> AgentDef {
 ///
 /// The DB path is set via `CONDUCTOR_DB_PATH` so `CliRuntime::spawn/poll`
 /// use the same file.
+fn assert_run_cancelled(db_guard: &tempfile::NamedTempFile, run_id: &str) {
+    let conn =
+        conductor_core::db::open_database(db_guard.path()).expect("open test db for cancel check");
+    let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
+    let updated = agent_mgr
+        .get_run(run_id)
+        .expect("get_run must succeed after cancel")
+        .expect("run must still exist in DB after cancel");
+    assert_eq!(
+        updated.status,
+        conductor_core::agent::AgentRunStatus::Cancelled,
+        "status must be Cancelled after cancel()"
+    );
+    assert!(
+        updated.ended_at.is_some(),
+        "ended_at must be set after cancel()"
+    );
+}
+
 fn setup_test_db(run_id: &str) -> tempfile::NamedTempFile {
     let tmp = tempfile::NamedTempFile::new().expect("temp db file");
     let path = tmp.path().to_string_lossy().to_string();
@@ -360,20 +379,7 @@ fn test_cli_runtime_cancel_kills_window_and_marks_cancelled() {
     );
 
     // DB row must be updated to Cancelled with ended_at set.
-    let updated = agent_mgr
-        .get_run(&run_id)
-        .expect("get_run must succeed after cancel")
-        .expect("run must still exist in DB after cancel");
-
-    assert_eq!(
-        updated.status,
-        conductor_core::agent::AgentRunStatus::Cancelled,
-        "status must be Cancelled after cancel()"
-    );
-    assert!(
-        updated.ended_at.is_some(),
-        "ended_at must be set after cancel()"
-    );
+    assert_run_cancelled(&db_guard, &run_id);
 }
 
 #[test]
@@ -400,20 +406,7 @@ fn test_cli_runtime_cancel_with_no_tmux_window_marks_cancelled() {
         .cancel(&run)
         .expect("cancel must succeed when tmux_window is None");
 
-    let updated = agent_mgr
-        .get_run(&run_id)
-        .expect("get_run must succeed after cancel")
-        .expect("run must still exist in DB after cancel");
-
-    assert_eq!(
-        updated.status,
-        conductor_core::agent::AgentRunStatus::Cancelled,
-        "status must be Cancelled after cancel() even without a tmux window"
-    );
-    assert!(
-        updated.ended_at.is_some(),
-        "ended_at must be set after cancel()"
-    );
+    assert_run_cancelled(&db_guard, &run_id);
 }
 
 #[test]
