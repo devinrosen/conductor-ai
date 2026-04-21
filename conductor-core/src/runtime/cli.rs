@@ -257,8 +257,11 @@ impl AgentRuntime for CliRuntime {
             }
         }
 
-        let conn = crate::db::open_database_compat(&crate::config::db_path())
-            .map_err(|e| crate::error::ConductorError::Agent(format!("CliRuntime::cancel: failed to open DB: {e}")))?;
+        let conn = crate::db::open_database_compat(&crate::config::db_path()).map_err(|e| {
+            crate::error::ConductorError::Agent(format!(
+                "CliRuntime::cancel: failed to open DB: {e}"
+            ))
+        })?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         agent_mgr.update_run_cancelled(&run.id)
     }
