@@ -176,6 +176,84 @@ fn test_cli_runtime_exit_code_42_is_error() {
 }
 
 #[test]
+fn test_cli_runtime_exit_code_1_is_error() {
+    if !tmux_available() {
+        eprintln!("skipping cli_runtime test: tmux not available");
+        return;
+    }
+
+    let json_body = r#"{"response":"generic error"}"#;
+    let (_guard, script_path) = make_mock_script(json_body, 1);
+    let runtime = make_runtime(&script_path, "response", None);
+
+    let run_id = format!("test-cli1-{}", ulid::Ulid::new());
+    let _db_guard = setup_test_db(&run_id);
+
+    let req = RuntimeRequest {
+        run_id: run_id.clone(),
+        agent_def: make_agent_def(),
+        prompt: "bad prompt".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        permission_mode: AgentPermissionMode::SkipPermissions,
+        config_dir: None,
+        bot_name: None,
+        plugin_dirs: vec![],
+    };
+
+    runtime.spawn(&req).expect("spawn must succeed");
+
+    let result = runtime
+        .poll(&run_id, None, Duration::from_secs(10))
+        .expect("poll must succeed — even failed runs are returned as Ok(AgentRun)");
+
+    assert_eq!(
+        result.status,
+        conductor_core::agent::AgentRunStatus::Failed,
+        "exit code 1 must map to a failed run"
+    );
+}
+
+#[test]
+fn test_cli_runtime_exit_code_53_is_error() {
+    if !tmux_available() {
+        eprintln!("skipping cli_runtime test: tmux not available");
+        return;
+    }
+
+    let json_body = r#"{"response":"turn limit reached"}"#;
+    let (_guard, script_path) = make_mock_script(json_body, 53);
+    let runtime = make_runtime(&script_path, "response", None);
+
+    let run_id = format!("test-cli53-{}", ulid::Ulid::new());
+    let _db_guard = setup_test_db(&run_id);
+
+    let req = RuntimeRequest {
+        run_id: run_id.clone(),
+        agent_def: make_agent_def(),
+        prompt: "bad prompt".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        permission_mode: AgentPermissionMode::SkipPermissions,
+        config_dir: None,
+        bot_name: None,
+        plugin_dirs: vec![],
+    };
+
+    runtime.spawn(&req).expect("spawn must succeed");
+
+    let result = runtime
+        .poll(&run_id, None, Duration::from_secs(10))
+        .expect("poll must succeed — even failed runs are returned as Ok(AgentRun)");
+
+    assert_eq!(
+        result.status,
+        conductor_core::agent::AgentRunStatus::Failed,
+        "exit code 53 (turn limit) must map to a failed run"
+    );
+}
+
+#[test]
 fn test_cli_runtime_stdin_mode() {
     if !tmux_available() {
         eprintln!("skipping cli_runtime stdin test: tmux not available");
