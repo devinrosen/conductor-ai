@@ -1019,10 +1019,23 @@ impl<'a> WorktreeManager<'a> {
             let wt_path = std::path::Path::new(&worktree.path);
 
             // Fetch the remote ref so the ancestor check is current.
-            let _ = Command::new("git")
-                .args(["fetch", "origin", "--", new_base])
+            let fetch_result = Command::new("git")
+                .args(["fetch", "origin", new_base])
                 .current_dir(wt_path)
-                .status();
+                .output();
+            match fetch_result {
+                Ok(out) if !out.status.success() => {
+                    tracing::warn!(
+                        branch = new_base,
+                        stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                        "git fetch origin failed; ancestor check may be stale"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(branch = new_base, error = %e, "failed to spawn git fetch origin");
+                }
+                Ok(_) => {}
+            }
 
             let base_ref = format!("origin/{new_base}");
             if !Self::is_ancestor(wt_path, &base_ref)? {
