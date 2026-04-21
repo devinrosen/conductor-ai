@@ -820,7 +820,6 @@ mod tests {
             duration_ms: None,
             started_at: String::new(),
             ended_at: None,
-            tmux_window: None,
             log_file: None,
             model: None,
             plan: None,

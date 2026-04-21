@@ -15,9 +15,7 @@ fn test_get_active_run_for_worktree_none_when_empty() {
 fn test_get_active_run_for_worktree_returns_active() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -36,9 +34,7 @@ fn test_get_active_run_for_worktree_returns_active() {
 fn test_get_active_run_for_worktree_none_after_completion() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -62,9 +58,7 @@ fn test_get_active_run_for_worktree_ignores_other_worktree() {
     .unwrap();
 
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w2"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w2"), "workflow", None).unwrap();
 
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
@@ -128,9 +122,7 @@ fn test_resume_rejects_completed_run() {
     let conn = setup_db();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -167,9 +159,7 @@ fn test_resume_rejects_cancelled_run() {
     let conn = setup_db();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -215,9 +205,7 @@ fn test_resume_rejects_restart_and_from_step_together() {
     let conn = setup_db();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -255,9 +243,7 @@ fn test_resume_rejects_missing_snapshot() {
     let conn = setup_db();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     // Create run with no definition_snapshot
     let run = wf_mgr
@@ -308,9 +294,7 @@ fn test_resume_rejects_nonexistent_from_step() {
     let conn = setup_db();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -366,9 +350,7 @@ fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
     let conn = setup_db();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
 
     // Serialize a valid empty WorkflowDef as the snapshot so resume can deserialize it.
@@ -415,9 +397,7 @@ fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
 fn test_set_workflow_run_inputs_round_trip() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -456,9 +436,7 @@ fn test_set_workflow_run_inputs_round_trip() {
 fn test_set_workflow_run_default_bot_name_round_trip() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -498,9 +476,7 @@ fn test_default_bot_name_persists_through_suspend_and_resume() {
     // exercises the full store → retrieve invariant for multi-stage bot identity.
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -544,9 +520,7 @@ fn test_default_bot_name_persists_through_suspend_and_resume() {
 fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -628,9 +602,7 @@ fn test_restart_resets_all_steps() {
 fn test_from_step_skip_set_and_step_map() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let mgr = WorkflowManager::new(&conn);
     let run = mgr
         .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
@@ -775,9 +747,7 @@ fn test_resume_allows_restart_on_completed_run() {
     let conn = setup_db();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let run = wf_mgr
         .create_workflow_run(
@@ -890,7 +860,7 @@ fn test_resume_workflow_ephemeral_run_rejected() {
     let conn = setup_db();
     let config = Config::default();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
     let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
     let run = wf_mgr
@@ -1034,9 +1004,7 @@ fn test_resume_deletes_orphaned_pending_steps() {
     let conn = setup_db();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
 
     let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();

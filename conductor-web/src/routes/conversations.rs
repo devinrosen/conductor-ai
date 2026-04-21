@@ -247,7 +247,7 @@ pub async fn send_message(
         // metadata updates to ConversationManager::send_message.
         // The original prompt (without attachment paths) is stored in the DB.
         let (run, resume_session_id) =
-            conv_mgr.send_message(&conversation_id, &prompt, None, model.as_deref())?;
+            conv_mgr.send_message(&conversation_id, &prompt, model.as_deref())?;
 
         (run, resume_session_id, working_dir, permission_mode, model)
     };
@@ -389,7 +389,7 @@ mod tests {
 
         let conv1 = mgr.create(ConversationScope::Repo, "r1").unwrap();
         let run1 = agent_mgr
-            .create_repo_run_for_conversation("r1", "q1", None, None, &conv1.id)
+            .create_repo_run_for_conversation("r1", "q1", None, &conv1.id)
             .unwrap();
         let fb1 = agent_mgr
             .request_feedback(&run1.id, "approve?", None)
@@ -397,7 +397,7 @@ mod tests {
 
         let conv2 = mgr.create(ConversationScope::Repo, "r1").unwrap();
         let run2 = agent_mgr
-            .create_repo_run_for_conversation("r1", "q2", None, None, &conv2.id)
+            .create_repo_run_for_conversation("r1", "q2", None, &conv2.id)
             .unwrap();
         let fb2 = agent_mgr
             .request_feedback(&run2.id, "approve?", None)

@@ -1575,7 +1575,7 @@ fn test_parallel_drain_signal_race_condition_db_guard() {
 
     // Create an agent run (starts in `running` state by default)
     let run = agent_mgr
-        .create_run(None, "test prompt", None, None)
+        .create_run(None, "test prompt", None)
         .expect("create_run should succeed");
     assert_eq!(
         run.status,
@@ -1676,7 +1676,7 @@ fn test_parallel_drain_thread_panic_marks_run_failed() {
 
     // Create an agent run (starts in `running` state by default)
     let run = agent_mgr
-        .create_run(None, "test prompt", None, None)
+        .create_run(None, "test prompt", None)
         .expect("create_run should succeed");
     assert_eq!(
         run.status,

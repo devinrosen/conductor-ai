@@ -699,8 +699,7 @@ async fn setup_repo_agent_run() -> (String, String, String) {
             )
             .unwrap();
         let mgr = AgentManager::new(conn);
-        mgr.create_repo_run(&repo.id, "test prompt", None, None)
-            .unwrap();
+        mgr.create_repo_run(&repo.id, "test prompt", None).unwrap();
     })
     .await;
 
@@ -807,8 +806,7 @@ fn seed_repo_and_worktree(conn: &Connection) {
 fn seed_agent_run(conn: &Connection) {
     seed_repo_and_worktree(conn);
     let mgr = AgentManager::new(conn);
-    mgr.create_run(Some("w1"), "test prompt", None, None)
-        .unwrap();
+    mgr.create_run(Some("w1"), "test prompt", None).unwrap();
 }
 
 /// Seed a worktree agent run with `subprocess_pid` set to a non-existent PID.
@@ -819,9 +817,7 @@ fn seed_agent_run(conn: &Connection) {
 fn seed_agent_run_with_subprocess_pid(conn: &Connection) {
     seed_repo_and_worktree(conn);
     let mgr = AgentManager::new(conn);
-    let run = mgr
-        .create_run(Some("w1"), "test prompt", None, None)
-        .unwrap();
+    let run = mgr.create_run(Some("w1"), "test prompt", None).unwrap();
     // Use a PID that definitely does not exist (far above any realistic pid_max).
     mgr.update_run_subprocess_pid(&run.id, 999_999_999).unwrap();
 }
@@ -842,7 +838,7 @@ fn seed_test_repo(conn: &Connection) -> conductor_core::repo::Repo {
 fn seed_repo_agent_run(conn: &Connection) {
     let repo = seed_test_repo(conn);
     AgentManager::new(conn)
-        .create_repo_run(&repo.id, "repo prompt", None, None)
+        .create_repo_run(&repo.id, "repo prompt", None)
         .unwrap();
 }
 
@@ -851,9 +847,7 @@ fn seed_repo_agent_run(conn: &Connection) {
 fn seed_repo_agent_run_with_subprocess_pid(conn: &Connection) {
     let repo = seed_test_repo(conn);
     let mgr = AgentManager::new(conn);
-    let run = mgr
-        .create_repo_run(&repo.id, "repo prompt", None, None)
-        .unwrap();
+    let run = mgr.create_repo_run(&repo.id, "repo prompt", None).unwrap();
     mgr.update_run_subprocess_pid(&run.id, 999_999_999).unwrap();
 }
 

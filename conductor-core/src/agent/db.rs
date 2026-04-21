@@ -12,7 +12,7 @@ pub(super) const FEEDBACK_SELECT: &str =
 /// Shared SELECT column list for the `agent_runs` table (plain, unaliased form).
 pub(super) const AGENT_RUN_SELECT: &str =
     "SELECT id, worktree_id, repo_id, claude_session_id, prompt, status, result_text, \
-     cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
+     cost_usd, num_turns, duration_ms, started_at, ended_at, log_file, \
      model, plan, parent_run_id, \
      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
      bot_name, conversation_id, subprocess_pid, \
@@ -54,8 +54,6 @@ macro_rules! agent_run_cols {
             "started_at, ",
             $alias,
             "ended_at, ",
-            $alias,
-            "tmux_window, ",
             $alias,
             "log_file, ",
             $alias,
@@ -109,8 +107,6 @@ macro_rules! agent_run_cols {
             "started_at, ",
             $alias,
             "ended_at, ",
-            $alias,
-            "tmux_window, ",
             $alias,
             "log_file, ",
             $alias,
@@ -230,7 +226,6 @@ pub(super) fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun
         duration_ms: row.get("duration_ms")?,
         started_at: row.get("started_at")?,
         ended_at: row.get("ended_at")?,
-        tmux_window: row.get("tmux_window")?,
         log_file: row.get("log_file")?,
         model: row.get("model")?,
         plan: None,
@@ -289,7 +284,6 @@ mod tests {
         "duration_ms",
         "started_at",
         "ended_at",
-        "tmux_window",
         "log_file",
         "model",
         "plan",
@@ -379,12 +373,12 @@ mod tests {
         conn.execute(
             "INSERT INTO agent_runs (id, prompt, status, started_at, worktree_id, repo_id, \
              claude_session_id, result_text, cost_usd, num_turns, duration_ms, ended_at, \
-             tmux_window, log_file, model, plan, parent_run_id, \
+             log_file, model, plan, parent_run_id, \
              input_tokens, output_tokens, cache_read_input_tokens, \
              cache_creation_input_tokens, bot_name) \
              VALUES (:id, :prompt, :status, :started_at, :worktree_id, :repo_id, \
                      :claude_session_id, :result_text, :cost_usd, :num_turns, :duration_ms, :ended_at, \
-                     :tmux_window, :log_file, :model, :plan, :parent_run_id, \
+                     :log_file, :model, :plan, :parent_run_id, \
                      :input_tokens, :output_tokens, :cache_read_input_tokens, \
                      :cache_creation_input_tokens, :bot_name)",
             rusqlite::named_params! {
@@ -400,7 +394,6 @@ mod tests {
                 ":num_turns": 10i64,
                 ":duration_ms": 5000i64,
                 ":ended_at": "2025-01-01T00:05:00Z",
-                ":tmux_window": "tmux-win",
                 ":log_file": "/tmp/log.txt",
                 ":model": "claude-sonnet-4-6",
                 ":plan": "[]",
@@ -434,7 +427,6 @@ mod tests {
         assert_eq!(run.duration_ms, Some(5000));
         assert_eq!(run.started_at, "2025-01-01T00:00:00Z");
         assert_eq!(run.ended_at.as_deref(), Some("2025-01-01T00:05:00Z"));
-        assert_eq!(run.tmux_window.as_deref(), Some("tmux-win"));
         assert_eq!(run.log_file.as_deref(), Some("/tmp/log.txt"));
         assert_eq!(run.model.as_deref(), Some("claude-sonnet-4-6"));
         // plan is always None (populated separately by caller)
@@ -471,7 +463,6 @@ mod tests {
         assert!(run.num_turns.is_none());
         assert!(run.duration_ms.is_none());
         assert!(run.ended_at.is_none());
-        assert!(run.tmux_window.is_none());
         assert!(run.log_file.is_none());
         assert!(run.model.is_none());
         assert!(run.plan.is_none());

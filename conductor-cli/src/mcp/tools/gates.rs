@@ -102,7 +102,7 @@ mod tests {
         // FK: workflow_runs.parent_run_id references agent_runs.id
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr
-            .create_run(None, "workflow", None, None)
+            .create_run(None, "workflow", None)
             .expect("create agent run");
 
         let mgr = WorkflowManager::new(&conn);

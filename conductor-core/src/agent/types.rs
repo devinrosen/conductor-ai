@@ -54,7 +54,6 @@ pub struct AgentRun {
     pub duration_ms: Option<i64>,
     pub started_at: String,
     pub ended_at: Option<String>,
-    pub tmux_window: Option<String>,
     pub log_file: Option<String>,
     /// The model used for this run (e.g. "claude-sonnet-4-6"). None means claude's default.
     pub model: Option<String>,

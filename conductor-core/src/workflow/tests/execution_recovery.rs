@@ -9,7 +9,7 @@ fn test_recover_stuck_steps_syncs_completed() {
     let wf_mgr = WorkflowManager::new(&conn);
 
     // Create a parent agent run and a workflow run
-    let parent = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let wf_run = wf_mgr
         .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
@@ -19,7 +19,7 @@ fn test_recover_stuck_steps_syncs_completed() {
         .insert_step(&wf_run.id, "agent-step", "actor", false, 0, 0)
         .unwrap();
     let child = agent_mgr
-        .create_run(Some("w1"), "child-agent", None, None)
+        .create_run(Some("w1"), "child-agent", None)
         .unwrap();
     wf_mgr
         .update_step_status(
@@ -63,7 +63,7 @@ fn test_recover_stuck_steps_skips_still_running() {
     let agent_mgr = AgentManager::new(&conn);
     let wf_mgr = WorkflowManager::new(&conn);
 
-    let parent = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let wf_run = wf_mgr
         .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
@@ -72,7 +72,7 @@ fn test_recover_stuck_steps_skips_still_running() {
         .insert_step(&wf_run.id, "agent-step", "actor", false, 0, 0)
         .unwrap();
     let child = agent_mgr
-        .create_run(Some("w1"), "child-agent", None, None)
+        .create_run(Some("w1"), "child-agent", None)
         .unwrap();
     wf_mgr
         .update_step_status(
@@ -100,7 +100,7 @@ fn test_recover_stuck_steps_failed_child_marks_step_failed() {
     let agent_mgr = AgentManager::new(&conn);
     let wf_mgr = WorkflowManager::new(&conn);
 
-    let parent = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let wf_run = wf_mgr
         .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
@@ -109,7 +109,7 @@ fn test_recover_stuck_steps_failed_child_marks_step_failed() {
         .insert_step(&wf_run.id, "agent-step", "actor", false, 0, 0)
         .unwrap();
     let child = agent_mgr
-        .create_run(Some("w1"), "child-agent", None, None)
+        .create_run(Some("w1"), "child-agent", None)
         .unwrap();
     wf_mgr
         .update_step_status(
@@ -142,7 +142,7 @@ fn test_recover_stuck_steps_skips_step_with_purged_child_run() {
     let agent_mgr = AgentManager::new(&conn);
     let wf_mgr = WorkflowManager::new(&conn);
 
-    let parent = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+    let parent = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let wf_run = wf_mgr
         .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
@@ -461,7 +461,7 @@ fn test_restore_completed_step_accumulates_costs() {
 
     // Create a child agent run with cost data
     let child_run = agent_mgr
-        .create_run(Some("w1"), "test agent", None, None)
+        .create_run(Some("w1"), "test agent", None)
         .unwrap();
     agent_mgr
         .update_run_completed(
@@ -707,9 +707,7 @@ fn test_reap_finalization_child_run_not_reaped() {
     let (root_run_id, parent_agent_id) = make_running_wf(&conn, "root");
 
     // Create a child workflow run with parent_workflow_run_id set to root_run_id.
-    let child_agent = agent_mgr
-        .create_run(Some("w1"), "child", None, None)
-        .unwrap();
+    let child_agent = agent_mgr.create_run(Some("w1"), "child", None).unwrap();
     let child_run = wf_mgr
         .create_workflow_run_with_targets(
             "child",

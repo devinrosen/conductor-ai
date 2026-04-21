@@ -220,7 +220,7 @@ mod tests {
             ).expect("insert worktree");
             // Create an agent run in running status via AgentManager (default status = running)
             AgentManager::new(&conn)
-                .create_run(Some("wt-test-1"), "test prompt", None, None)
+                .create_run(Some("wt-test-1"), "test prompt", None)
                 .expect("create run");
         }
         let result = tool_list_repos(&db);

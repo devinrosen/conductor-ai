@@ -137,9 +137,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         assert!(run.plan.is_none());
 
         let steps = vec![
@@ -172,9 +170,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![
             PlanStep {
                 description: "Step one".to_string(),
@@ -203,9 +199,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         // Should not error when no plan exists
         mgr.mark_plan_done(&run.id).unwrap();
 
@@ -218,9 +212,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![PlanStep {
             description: "Do the thing".to_string(),
             done: true,
@@ -242,9 +234,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![
             PlanStep {
                 description: "Step one".to_string(),
@@ -287,9 +277,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![PlanStep {
             description: "Step one".to_string(),
             ..Default::default()
@@ -311,9 +299,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![
             PlanStep {
                 description: "First".to_string(),
@@ -345,9 +331,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps1 = vec![PlanStep {
             description: "Old step".to_string(),
             ..Default::default()
@@ -377,9 +361,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![
             PlanStep {
                 description: "Investigate".to_string(),
@@ -411,9 +393,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![
             PlanStep {
                 description: "Step 1".to_string(),
@@ -439,9 +419,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![PlanStep {
             description: "Step 1".to_string(),
             ..Default::default()
@@ -471,9 +449,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![PlanStep {
             description: "Step 1".to_string(),
             ..Default::default()
@@ -491,9 +467,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr
-            .create_run(Some("w1"), "Fix the bug", None, None)
-            .unwrap();
+        let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
         let steps = vec![PlanStep {
             description: "Step 1".to_string(),
             done: true,
@@ -525,7 +499,6 @@ mod tests {
             duration_ms: None,
             started_at: "2024-01-01T00:00:00Z".to_string(),
             ended_at: None,
-            tmux_window: None,
             log_file: None,
             model: None,
             plan: Some(vec![
