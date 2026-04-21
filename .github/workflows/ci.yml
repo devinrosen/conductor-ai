@@ -107,7 +107,7 @@ jobs:
         with:
           tool: nextest
         if: needs.changes.outputs.rust == 'true'
-      - run: cargo nextest run -p conductor-core --features test-helpers
+      - run: cargo nextest run -p conductor-core
         if: needs.changes.outputs.core == 'true'
       - run: cargo nextest run -p conductor-cli
         if: needs.changes.outputs.cli == 'true'
