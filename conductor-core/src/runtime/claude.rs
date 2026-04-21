@@ -9,19 +9,10 @@ use crate::error::Result;
 use super::{AgentRuntime, PollError, RuntimeRequest};
 
 /// Claude-specific configuration captured at construction time.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ClaudeRuntimeOptions {
     pub permission_mode: AgentPermissionMode,
     pub config_dir: Option<String>,
-}
-
-impl Default for ClaudeRuntimeOptions {
-    fn default() -> Self {
-        Self {
-            permission_mode: AgentPermissionMode::default(),
-            config_dir: None,
-        }
-    }
 }
 
 /// Runtime that spawns a `conductor agent run` subprocess (headless mode).
