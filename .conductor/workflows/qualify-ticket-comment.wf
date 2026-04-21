@@ -16,7 +16,7 @@ workflow qualify-ticket-comment {
   script comment-ticket-assessment {
     run = ".conductor/scripts/comment-ticket-assessment.sh"
     env = {
-      PRIOR_OUTPUT     = "{{prior_context}}"
+      PRIOR_OUTPUT     = "{{prior_result}}"
       TICKET_URL       = "{{ticket_url}}"
       TICKET_SOURCE_ID = "{{ticket_source_id}}"
     }
