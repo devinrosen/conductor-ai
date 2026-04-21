@@ -252,7 +252,10 @@ mod tests {
         // With rebase=true and a non-existent ref the ancestry check will error — the
         // important thing is the rebase path is reached (error is NOT the "pass rebase=true" hint).
         let result = mgr.set_base_branch("test-repo", "feat-test", Some("release/v1"), true);
-        assert!(result.is_err(), "expected error for non-existent ref: {result:?}");
+        assert!(
+            result.is_err(),
+            "expected error for non-existent ref: {result:?}"
+        );
         let msg = result.unwrap_err().to_string();
         assert!(
             !msg.contains("Pass rebase=true"),

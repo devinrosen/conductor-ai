@@ -1077,14 +1077,12 @@ impl<'a> WorktreeManager<'a> {
         match status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            Some(code) => Err(ConductorError::Git(
-                crate::error::SubprocessFailure {
-                    command: "git merge-base --is-ancestor".into(),
-                    exit_code: Some(code),
-                    stderr: format!("unexpected exit code {code} for ref '{base_ref}'"),
-                    stdout: String::new(),
-                },
-            )),
+            Some(code) => Err(ConductorError::Git(crate::error::SubprocessFailure {
+                command: "git merge-base --is-ancestor".into(),
+                exit_code: Some(code),
+                stderr: format!("unexpected exit code {code} for ref '{base_ref}'"),
+                stdout: String::new(),
+            })),
             None => Err(ConductorError::Git(
                 crate::error::SubprocessFailure::from_message(
                     "git merge-base --is-ancestor",
@@ -2130,7 +2128,11 @@ mod tests {
             .output()
             .unwrap();
         Command::new("git")
-            .args(["update-ref", &format!("refs/remotes/origin/{branch_name}"), branch_name])
+            .args([
+                "update-ref",
+                &format!("refs/remotes/origin/{branch_name}"),
+                branch_name,
+            ])
             .current_dir(repo_path)
             .output()
             .unwrap();
@@ -2251,7 +2253,8 @@ mod tests {
         insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
 
         let mgr = WorktreeManager::new(&conn, &config);
-        let result = mgr.set_base_branch("test-repo", "feat-test", Some("--upload-pack=cmd"), false);
+        let result =
+            mgr.set_base_branch("test-repo", "feat-test", Some("--upload-pack=cmd"), false);
         assert!(
             matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("must not start with")),
             "expected InvalidInput for dash-prefixed branch name, got: {result:?}"
