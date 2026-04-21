@@ -4,7 +4,7 @@ use std::path::Path;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_bool_arg, open_db_and_config, tool_err, tool_ok};
 use crate::mcp::resources::format_workflow_def;
 
 /// Resolve the working directory path for a tool call.
@@ -171,10 +171,7 @@ pub(super) fn tool_run_workflow(
     let repo_slug = require_arg!(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
     let pr_arg = get_arg(args, "pr");
-    let dry_run = args
-        .get("dry_run")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let dry_run = get_bool_arg(args, "dry_run");
 
     // pr and worktree are mutually exclusive
     if pr_arg.is_some() && worktree_slug.is_some() {
@@ -866,7 +863,7 @@ workflow review {
             "Should not fail on dry_run parsing; got: {content}"
         );
 
-        // dry_run as a non-boolean (string) should be tolerated via unwrap_or(false)
+        // dry_run as a string "true" should be accepted (not fail on arg parsing)
         let mut args2 = serde_json::Map::new();
         args2.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args2.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
@@ -876,7 +873,7 @@ workflow review {
         let content2 = format!("{result2:?}");
         assert!(
             !content2.contains("dry_run"),
-            "Non-boolean dry_run should be ignored (unwrap_or(false)); got: {content2}"
+            "Should not fail on dry_run parsing; got: {content2}"
         );
     }
 
