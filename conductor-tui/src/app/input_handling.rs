@@ -1225,9 +1225,9 @@ mod tests {
         app.state.modal = base_branch_picker_modal(1);
         app.handle_base_branch_pick(Some(1));
         // Give the spawned thread a moment to finish and send.
-        let action = rx.recv_timeout(std::time::Duration::from_secs(5)).expect(
-            "expected SetBaseBranchComplete action from background thread within 5s",
-        );
+        let action = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("expected SetBaseBranchComplete action from background thread within 5s");
         assert!(
             matches!(action, crate::action::Action::SetBaseBranchComplete { .. }),
             "expected SetBaseBranchComplete, got {:?}",
@@ -1244,9 +1244,9 @@ mod tests {
         // index 999 is beyond the items list → new_base = None (repo default)
         app.handle_base_branch_pick(Some(999));
         // The thread sends SetBaseBranchComplete regardless; just verify it sends.
-        let action = rx.recv_timeout(std::time::Duration::from_secs(5)).expect(
-            "expected action from background thread within 5s",
-        );
+        let action = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("expected action from background thread within 5s");
         assert!(
             matches!(action, crate::action::Action::SetBaseBranchComplete { .. }),
             "expected SetBaseBranchComplete, got {:?}",
