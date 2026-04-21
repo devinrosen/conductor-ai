@@ -47,8 +47,12 @@ impl AgentRuntime for ClaudeRuntime {
             };
             let (h, pf) = crate::agent_runtime::try_spawn_headless_run(&params)
                 .map_err(crate::error::ConductorError::Workflow)?;
-            *self.handle.lock().unwrap() = Some(h);
-            *self.prompt_file.lock().unwrap() = Some(pf);
+            if let Ok(mut guard) = self.handle.lock() {
+                *guard = Some(h);
+            }
+            if let Ok(mut guard) = self.prompt_file.lock() {
+                *guard = Some(pf);
+            }
             Ok(())
         }
         #[cfg(not(unix))]
@@ -118,11 +122,15 @@ fn poll_unix(
     let handle = rt
         .handle
         .lock()
-        .unwrap()
+        .map_err(|_| PollError::Failed("ClaudeRuntime handle mutex poisoned".into()))?
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
-    let prompt_file = rt.prompt_file.lock().unwrap().take();
+    let prompt_file = rt
+        .prompt_file
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take());
     let pid = handle.pid();
 
     let tracking_conn =
