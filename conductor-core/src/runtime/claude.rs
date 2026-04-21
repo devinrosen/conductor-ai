@@ -379,7 +379,13 @@ mod tests {
         // present in the test binary's directory, but the error must come from
         // the exec attempt (Workflow), not from run_id validation (InvalidInput).
         match result {
-            Ok(()) => {} // binary happened to be present — success is fine
+            Ok(()) => {
+                // Binary was present — handle must be populated after a successful spawn.
+                assert!(
+                    runtime.handle.lock().unwrap().is_some(),
+                    "handle should be populated after successful spawn"
+                );
+            }
             Err(crate::error::ConductorError::Workflow(_)) => {} // expected in CI
             Err(other) => panic!("expected Ok or Workflow error, got: {other:?}"),
         }
@@ -423,19 +429,15 @@ mod tests {
         );
     }
 
-    // poll() returns Cancelled when the shutdown flag is set.
+    // Spawns a `sleep 1000` child and wraps it in a ClaudeRuntime ready for
+    // poll() tests.  Returns (runtime, tmp) — caller must hold `tmp` alive for
+    // the duration of the test so the temp dir is not cleaned up early.
     #[cfg(unix)]
-    #[test]
-    fn poll_shutdown_flag_returns_cancelled() {
+    fn make_sleeping_runtime() -> (ClaudeRuntime, tempfile::TempDir) {
         use std::process::Stdio;
-
-        let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().expect("tempdir");
         let db_file = tmp.path().join("test.db");
         std::env::set_var("CONDUCTOR_DB_PATH", &db_file);
-
-        // sleep keeps stdout open indefinitely so the drain thread never sends a
-        // result — the shutdown flag must be what terminates poll().
         let child = std::process::Command::new("sleep")
             .arg("1000")
             .stdout(Stdio::piped())
@@ -446,6 +448,15 @@ mod tests {
             .expect("HeadlessHandle::from_child failed");
         let runtime = ClaudeRuntime::new();
         *runtime.handle.lock().unwrap() = Some(handle);
+        (runtime, tmp)
+    }
+
+    // poll() returns Cancelled when the shutdown flag is set.
+    #[cfg(unix)]
+    #[test]
+    fn poll_shutdown_flag_returns_cancelled() {
+        let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
+        let (runtime, _tmp) = make_sleeping_runtime();
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let result = runtime.poll(
@@ -466,25 +477,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_timeout_returns_no_result() {
-        use std::process::Stdio;
-
         let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let db_file = tmp.path().join("test.db");
-        std::env::set_var("CONDUCTOR_DB_PATH", &db_file);
-
-        // sleep keeps stdout open so the drain thread blocks — the step_timeout
-        // must be what terminates poll(), not a spontaneous drain completion.
-        let child = std::process::Command::new("sleep")
-            .arg("1000")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("sleep should be available");
-        let handle = crate::agent_runtime::HeadlessHandle::from_child(child)
-            .expect("HeadlessHandle::from_child failed");
-        let runtime = ClaudeRuntime::new();
-        *runtime.handle.lock().unwrap() = Some(handle);
+        let (runtime, _tmp) = make_sleeping_runtime();
 
         let result = runtime.poll(
             "test-timeout-run",
