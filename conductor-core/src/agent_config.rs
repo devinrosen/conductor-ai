@@ -409,6 +409,7 @@ Implement the plan written in PLAN.md.
         assert_eq!(def.model.as_deref(), Some("claude-opus-4-6"));
         assert!(def.prompt.contains("{{ticket_id}}"));
         assert!(def.prompt.contains("PLAN.md"));
+        assert_eq!(def.runtime, "claude");
     }
 
     #[test]
@@ -423,6 +424,7 @@ Implement the plan written in PLAN.md.
         assert!(!def.can_commit);
         assert!(def.model.is_none());
         assert_eq!(def.prompt, "You are a code reviewer.");
+        assert_eq!(def.runtime, "claude");
     }
 
     #[test]
@@ -435,6 +437,66 @@ Implement the plan written in PLAN.md.
         assert_eq!(def.name, "simple");
         assert_eq!(def.role, AgentRole::Reviewer);
         assert_eq!(def.prompt, "Just a plain prompt with no frontmatter.");
+        assert_eq!(def.runtime, "claude");
+    }
+
+    #[test]
+    fn test_runtime_explicit_claude() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("agent.md");
+        fs::write(
+            &file,
+            "---\nrole: actor\nruntime: claude\n---\nPrompt body.",
+        )
+        .unwrap();
+
+        let def = parse_agent_file(&file).unwrap();
+        assert_eq!(def.runtime, "claude");
+    }
+
+    #[test]
+    fn test_runtime_explicit_cli() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("agent.md");
+        fs::write(&file, "---\nrole: actor\nruntime: cli\n---\nPrompt body.").unwrap();
+
+        let def = parse_agent_file(&file).unwrap();
+        assert_eq!(def.runtime, "cli");
+    }
+
+    #[test]
+    fn test_runtime_default_when_omitted() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("agent.md");
+        fs::write(&file, "---\nrole: reviewer\n---\nPrompt body.").unwrap();
+
+        let def = parse_agent_file(&file).unwrap();
+        assert_eq!(def.runtime, "claude");
+    }
+
+    #[test]
+    fn test_runtime_default_no_frontmatter() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("agent.md");
+        fs::write(&file, "Prompt body with no frontmatter at all.").unwrap();
+
+        let def = parse_agent_file(&file).unwrap();
+        assert_eq!(def.runtime, "claude");
+    }
+
+    #[test]
+    fn test_runtime_unknown_stored_as_is() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("agent.md");
+        fs::write(
+            &file,
+            "---\nrole: reviewer\nruntime: custom-plugin\n---\nPrompt body.",
+        )
+        .unwrap();
+
+        // Unknown runtime names are stored as-is; validation is deferred to resolve_runtime
+        let def = parse_agent_file(&file).unwrap();
+        assert_eq!(def.runtime, "custom-plugin");
     }
 
     #[test]
