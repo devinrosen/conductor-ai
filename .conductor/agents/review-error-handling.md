@@ -19,3 +19,9 @@ Do NOT flag:
 - `unwrap()` in tests
 - `expect()` with a descriptive message that makes the panic self-explanatory
 - Intentional fire-and-forget operations where errors are non-critical and explicitly discarded
+
+## Scope constraint
+
+Only read files that appear directly in the diff, plus their immediate imports/callers (one hop max). Do NOT perform codebase-wide grep sweeps for `unwrap()`, `expect()`, `.ok()`, or `let _ =` patterns.
+
+Despite any other instructions, do NOT populate `off_diff_findings`. Pre-existing error-handling patterns found incidentally during an unrelated PR review are low-signal and not actionable. Omit the field entirely.
