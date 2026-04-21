@@ -281,9 +281,8 @@ impl AgentRuntime for CliRuntime {
 
     fn cancel(&self, run: &AgentRun) -> Result<()> {
         let db_path = self.db_path.lock().unwrap().clone();
-        let conn = crate::db::open_database_compat(&db_path).map_err(|e| {
-            ConductorError::Agent(format!("CliRuntime: failed to open DB: {e}"))
-        })?;
+        let conn = crate::db::open_database_compat(&db_path)
+            .map_err(|e| ConductorError::Agent(format!("CliRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         Self::teardown_window(&agent_mgr, &run.id, run.tmux_window.as_deref())
     }

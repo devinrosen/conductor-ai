@@ -59,9 +59,8 @@ impl AgentRuntime for ScriptRuntime {
             *guard = request.db_path.clone();
         }
 
-        let conn = crate::db::open_database_compat(&request.db_path).map_err(|e| {
-            ConductorError::Agent(format!("ScriptRuntime: failed to open DB: {e}"))
-        })?;
+        let conn = crate::db::open_database_compat(&request.db_path)
+            .map_err(|e| ConductorError::Agent(format!("ScriptRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
         if output.status.success() {

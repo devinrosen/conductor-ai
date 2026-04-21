@@ -87,7 +87,11 @@ fn test_script_runtime_captures_conductor_prompt() {
     let _db_guard = setup_test_db(&run_id);
 
     let runtime = make_runtime(Some("echo $CONDUCTOR_PROMPT"));
-    let req = make_request(&run_id, "my-unique-prompt-string", _db_guard.path().to_path_buf());
+    let req = make_request(
+        &run_id,
+        "my-unique-prompt-string",
+        _db_guard.path().to_path_buf(),
+    );
 
     runtime.spawn(&req).expect("spawn must succeed");
 
