@@ -31,9 +31,7 @@ impl CliRuntime {
 }
 
 impl AgentRuntime for CliRuntime {
-    fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
-        crate::text_util::validate_run_id(&request.run_id)?;
-
+    fn spawn_impl(&self, request: &RuntimeRequest) -> Result<()> {
         let binary = self.config.binary.as_deref().ok_or_else(|| {
             ConductorError::Config("CliRuntime: `binary` is required".to_string())
         })?;

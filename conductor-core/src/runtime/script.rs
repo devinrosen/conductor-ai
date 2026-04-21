@@ -21,8 +21,7 @@ impl ScriptRuntime {
 }
 
 impl AgentRuntime for ScriptRuntime {
-    fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
-        crate::text_util::validate_run_id(&request.run_id)?;
+    fn spawn_impl(&self, request: &RuntimeRequest) -> Result<()> {
         let command = self.config.command.as_deref().ok_or_else(|| {
             ConductorError::Config(
                 "ScriptRuntime: `command` is required in the runtime config".to_string(),

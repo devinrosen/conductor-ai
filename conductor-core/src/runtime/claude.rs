@@ -41,8 +41,7 @@ impl Default for ClaudeRuntime {
 }
 
 impl AgentRuntime for ClaudeRuntime {
-    fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
-        crate::text_util::validate_run_id(&request.run_id)?;
+    fn spawn_impl(&self, request: &RuntimeRequest) -> Result<()> {
         #[cfg(unix)]
         {
             let params = crate::agent_runtime::SpawnHeadlessParams {
@@ -296,7 +295,7 @@ mod tests {
         let runtime = ClaudeRuntime::default();
         let request = make_request("../../etc/cron.d/payload");
         let err = runtime
-            .spawn(&request)
+            .spawn_validated(&request)
             .expect_err("expected Err for path-traversal run_id");
         assert!(
             matches!(err, crate::error::ConductorError::InvalidInput(_)),
@@ -308,7 +307,7 @@ mod tests {
     fn spawn_rejects_slash_in_run_id() {
         let runtime = ClaudeRuntime::default();
         let request = make_request("run/id");
-        assert!(runtime.spawn(&request).is_err());
+        assert!(runtime.spawn_validated(&request).is_err());
     }
 
     #[cfg(unix)]
@@ -387,7 +386,7 @@ mod tests {
         assert!(runtime.cancel(&run).is_ok());
     }
 
-    // spawn() reaches the binary-exec path when run_id is valid — on unix this
+    // spawn_validated() reaches the binary-exec path when run_id is valid — on unix this
     // attempts to exec the conductor binary (not present in test env), so the
     // error is Workflow (exec failure), not InvalidInput (validation failure).
     #[cfg(unix)]
@@ -395,7 +394,7 @@ mod tests {
     fn spawn_valid_run_id_reaches_exec_attempt() {
         let runtime = ClaudeRuntime::default();
         let request = make_request("valid-run-id-01");
-        let result = runtime.spawn(&request);
+        let result = runtime.spawn_validated(&request);
         // The subprocess spawn will fail because the conductor binary is not
         // present in the test binary's directory, but the error must come from
         // the exec attempt (Workflow), not from run_id validation (InvalidInput).
@@ -418,7 +417,7 @@ mod tests {
         let runtime = ClaudeRuntime::default();
         let request = make_request("valid-run-id-01");
         let err = runtime
-            .spawn(&request)
+            .spawn_validated(&request)
             .expect_err("expected Err on non-Unix platform");
         assert!(
             matches!(err, crate::error::ConductorError::Workflow(_)),

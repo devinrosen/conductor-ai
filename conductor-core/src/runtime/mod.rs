@@ -20,7 +20,15 @@ use crate::error::{ConductorError, Result};
 /// Trait implemented by every agent runtime.
 pub trait AgentRuntime {
     /// Launch the agent for `request`. Stores the handle internally.
-    fn spawn(&self, request: &RuntimeRequest) -> Result<()>;
+    /// Implementors must NOT call `validate_run_id` — that is handled by `spawn_validated`.
+    fn spawn_impl(&self, request: &RuntimeRequest) -> Result<()>;
+
+    /// Validates `request.run_id` then delegates to `spawn_impl`.
+    /// This is the method callers should use.
+    fn spawn_validated(&self, request: &RuntimeRequest) -> Result<()> {
+        crate::text_util::validate_run_id(&request.run_id)?;
+        self.spawn_impl(request)
+    }
 
     /// Block until the agent completes or is cancelled.
     fn poll(
