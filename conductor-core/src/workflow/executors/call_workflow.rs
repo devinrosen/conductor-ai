@@ -131,6 +131,9 @@ pub fn execute_call_workflow(
             iteration as i64,
             0,
         )?;
+        state
+            .wf_mgr
+            .update_step_child_run_id(&step_id, &prior_child.id)?;
 
         tracing::info!(
             "Step 'workflow:{}': resuming prior child run '{}'",
