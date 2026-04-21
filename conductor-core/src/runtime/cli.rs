@@ -364,57 +364,40 @@ mod tests {
         assert!(result.is_some());
     }
 
-    #[test]
-    fn parse_output_token_valid_numeric() {
-        let config = RuntimeConfig {
+    fn token_config() -> RuntimeConfig {
+        RuntimeConfig {
             token_fields: Some("tokens".to_string()),
             ..RuntimeConfig::default()
-        };
-        let json = r#"{"tokens": 42}"#;
-        let (_, tokens, _) = parse_output(json, &config);
+        }
+    }
+
+    #[test]
+    fn parse_output_token_valid_numeric() {
+        let (_, tokens, _) = parse_output(r#"{"tokens": 42}"#, &token_config());
         assert_eq!(tokens, Some(42));
     }
 
     #[test]
     fn parse_output_token_path_missing() {
-        let config = RuntimeConfig {
-            token_fields: Some("tokens".to_string()),
-            ..RuntimeConfig::default()
-        };
-        let json = r#"{"other": 100}"#;
-        let (_, tokens, _) = parse_output(json, &config);
+        let (_, tokens, _) = parse_output(r#"{"other": 100}"#, &token_config());
         assert_eq!(tokens, None);
     }
 
     #[test]
     fn parse_output_token_non_numeric() {
-        let config = RuntimeConfig {
-            token_fields: Some("tokens".to_string()),
-            ..RuntimeConfig::default()
-        };
-        let json = r#"{"tokens": "abc"}"#;
-        let (_, tokens, _) = parse_output(json, &config);
+        let (_, tokens, _) = parse_output(r#"{"tokens": "abc"}"#, &token_config());
         assert_eq!(tokens, None);
     }
 
     #[test]
     fn parse_output_token_null_value() {
-        let config = RuntimeConfig {
-            token_fields: Some("tokens".to_string()),
-            ..RuntimeConfig::default()
-        };
-        let json = r#"{"tokens": null}"#;
-        let (_, tokens, _) = parse_output(json, &config);
+        let (_, tokens, _) = parse_output(r#"{"tokens": null}"#, &token_config());
         assert_eq!(tokens, None);
     }
 
     #[test]
     fn parse_output_plain_text_tokens_none() {
-        let config = RuntimeConfig {
-            token_fields: Some("tokens".to_string()),
-            ..RuntimeConfig::default()
-        };
-        let (_, tokens, _) = parse_output("not json at all", &config);
+        let (_, tokens, _) = parse_output("not json at all", &token_config());
         assert_eq!(tokens, None);
     }
 
