@@ -321,7 +321,7 @@ impl<'a> WorkflowManager<'a> {
     /// Returns true if a step row that should block re-insertion already exists
     /// at the given position/iteration/step_name combination: statuses
     /// `pending`, `running`, `waiting`, and `completed` all return true.
-    /// `failed` and `skipped` return false so retries are permitted.
+    /// `failed`, `skipped`, and `timed_out` return false so retries are permitted.
     /// Including step_name ensures parallel steps at the same position
     /// (different names) are not blocked.
     pub fn active_step_exists(

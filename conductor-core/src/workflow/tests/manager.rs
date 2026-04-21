@@ -4582,3 +4582,49 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
         "Guard B still blocks a second insertion while the first row is running"
     );
 }
+
+#[test]
+fn test_active_step_exists_false_for_skipped() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Skipped,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    // Skipped is terminal — retries are allowed, so active_step_exists returns false.
+    assert!(!mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
+
+#[test]
+fn test_active_step_exists_false_for_timed_out() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::TimedOut,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    // TimedOut is terminal — retries are allowed, so active_step_exists returns false.
+    assert!(!mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
