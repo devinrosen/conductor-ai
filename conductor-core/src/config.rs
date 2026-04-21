@@ -1595,4 +1595,109 @@ bot_name = "my-bot"
         // Should fall back to conductor_dir()/conductor.db
         assert_eq!(result, conductor_dir().join("conductor.db"));
     }
+
+    // -----------------------------------------------------------------------
+    // RuntimeConfig tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn runtime_config_all_fields() {
+        let rc: RuntimeConfig = toml::from_str(
+            r#"
+            type = "cli"
+            binary = "gemini"
+            args = ["-m", "{{model}}", "-p", "{{prompt}}"]
+            prompt_via = "stdin"
+            default_model = "gemini-2.5-flash"
+            result_field = "response"
+            token_fields = "stats.models.*.tokens.total"
+            api_key_env = "GEMINI_API_KEY"
+            command = "echo hello"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(rc.runtime_type.as_deref(), Some("cli"));
+        assert_eq!(rc.binary.as_deref(), Some("gemini"));
+        assert_eq!(
+            rc.args.as_deref(),
+            Some(
+                &[
+                    "-m".to_string(),
+                    "{{model}}".to_string(),
+                    "-p".to_string(),
+                    "{{prompt}}".to_string()
+                ][..]
+            )
+        );
+        assert_eq!(rc.prompt_via.as_deref(), Some("stdin"));
+        assert_eq!(rc.default_model.as_deref(), Some("gemini-2.5-flash"));
+        assert_eq!(rc.result_field.as_deref(), Some("response"));
+        assert_eq!(
+            rc.token_fields.as_deref(),
+            Some("stats.models.*.tokens.total")
+        );
+        assert_eq!(rc.api_key_env.as_deref(), Some("GEMINI_API_KEY"));
+        assert_eq!(rc.command.as_deref(), Some("echo hello"));
+    }
+
+    #[test]
+    fn runtime_config_defaults() {
+        let rc: RuntimeConfig = toml::from_str("").unwrap();
+        assert!(rc.runtime_type.is_none());
+        assert!(rc.binary.is_none());
+        assert!(rc.args.is_none());
+        assert!(rc.prompt_via.is_none());
+        assert!(rc.default_model.is_none());
+        assert!(rc.result_field.is_none());
+        assert!(rc.token_fields.is_none());
+        assert!(rc.api_key_env.is_none());
+        assert!(rc.command.is_none());
+    }
+
+    #[test]
+    fn runtime_config_multiple_named() {
+        let config: Config = toml::from_str(
+            r#"
+            [runtimes.gemini]
+            type = "cli"
+            binary = "gemini"
+            default_model = "gemini-2.5-flash"
+
+            [runtimes.gpt]
+            type = "api"
+            api_key_env = "OPENAI_API_KEY"
+            default_model = "gpt-4o"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(config.runtimes.len(), 2);
+        let gemini = config.runtimes.get("gemini").unwrap();
+        assert_eq!(gemini.runtime_type.as_deref(), Some("cli"));
+        assert_eq!(gemini.binary.as_deref(), Some("gemini"));
+        assert_eq!(gemini.default_model.as_deref(), Some("gemini-2.5-flash"));
+        let gpt = config.runtimes.get("gpt").unwrap();
+        assert_eq!(gpt.runtime_type.as_deref(), Some("api"));
+        assert_eq!(gpt.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
+        assert_eq!(gpt.default_model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn runtime_config_in_top_level_config() {
+        let config: Config = toml::from_str(
+            r#"
+            [runtimes.my-runtime]
+            type = "script"
+            command = "run-agent.sh"
+            result_field = "output"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(config.runtimes.len(), 1);
+        let rt = config.runtimes.get("my-runtime").unwrap();
+        assert_eq!(rt.runtime_type.as_deref(), Some("script"));
+        assert_eq!(rt.command.as_deref(), Some("run-agent.sh"));
+        assert_eq!(rt.result_field.as_deref(), Some("output"));
+        assert!(rt.binary.is_none());
+        assert!(rt.api_key_env.is_none());
+    }
 }
