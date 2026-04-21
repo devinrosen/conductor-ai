@@ -2,9 +2,11 @@
 //!
 //! Uses /bin/sh commands only for CI portability (no Python dependency).
 
+#[path = "common.rs"]
+mod common;
+
 use std::time::Duration;
 
-use conductor_core::agent_config::{AgentDef, AgentRole};
 use conductor_core::config::RuntimeConfig;
 use conductor_core::runtime::script::ScriptRuntime;
 use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
@@ -16,35 +18,10 @@ fn make_runtime(command: Option<&str>) -> ScriptRuntime {
     })
 }
 
-fn make_agent_def() -> AgentDef {
-    AgentDef {
-        name: "test".to_string(),
-        role: AgentRole::Actor,
-        can_commit: false,
-        model: None,
-        runtime: "script".to_string(),
-        prompt: "test prompt".to_string(),
-    }
-}
-
-fn setup_test_db(run_id: &str) -> tempfile::NamedTempFile {
-    let tmp = tempfile::NamedTempFile::new().expect("temp db file");
-
-    let conn = conductor_core::db::open_database(tmp.path()).expect("open test db");
-    conn.execute(
-        "INSERT INTO agent_runs (id, prompt, status, started_at, runtime) \
-         VALUES (?1, 'test', 'running', '2024-01-01T00:00:00Z', 'script')",
-        rusqlite::params![run_id],
-    )
-    .expect("insert run");
-
-    tmp
-}
-
 fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf) -> RuntimeRequest {
     RuntimeRequest {
         run_id: run_id.to_string(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("script"),
         prompt: prompt.to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -57,7 +34,7 @@ fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf) -> Runt
 #[test]
 fn test_script_runtime_success() {
     let run_id = format!("test-script-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
+    let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo hello"));
     let req = make_request(&run_id, "test prompt", _db_guard.path().to_path_buf());
@@ -82,7 +59,7 @@ fn test_script_runtime_success() {
 #[test]
 fn test_script_runtime_captures_conductor_prompt() {
     let run_id = format!("test-script-prompt-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
+    let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo $CONDUCTOR_PROMPT"));
     let req = make_request(
@@ -111,7 +88,7 @@ fn test_script_runtime_captures_conductor_prompt() {
 #[test]
 fn test_script_runtime_missing_command_errors() {
     let run_id = format!("test-script-nocmd-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
+    let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(None);
     let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
@@ -128,7 +105,7 @@ fn test_script_runtime_missing_command_errors() {
 #[test]
 fn test_script_runtime_nonzero_exit_is_failed() {
     let run_id = format!("test-script-fail-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
+    let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("exit 1"));
     let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
@@ -147,7 +124,7 @@ fn test_script_runtime_nonzero_exit_is_failed() {
 #[test]
 fn test_script_runtime_nonzero_exit_with_stderr() {
     let run_id = format!("test-script-stderr-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
+    let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo 'something went wrong' >&2; exit 2"));
     let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());

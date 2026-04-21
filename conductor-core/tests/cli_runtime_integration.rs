@@ -2,12 +2,14 @@
 //!
 //! Uses a mock shell script to simulate a CLI agent. No tmux dependency.
 
+#[path = "common.rs"]
+mod common;
+
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
-use conductor_core::agent_config::{AgentDef, AgentRole};
 use conductor_core::config::RuntimeConfig;
 use conductor_core::runtime::cli::CliRuntime;
 use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
@@ -46,17 +48,6 @@ fn make_runtime(script_path: &str, result_field: &str, token_fields: Option<&str
     })
 }
 
-fn make_agent_def() -> AgentDef {
-    AgentDef {
-        name: "test".to_string(),
-        role: AgentRole::Actor,
-        can_commit: false,
-        model: None,
-        runtime: "cli".to_string(),
-        prompt: "test prompt".to_string(),
-    }
-}
-
 /// Open (or create) the integration test DB at a temp file, run migrations,
 /// insert an agent_run row for `run_id`, and return the temp file guard
 /// (must stay alive for the duration of the test).
@@ -84,21 +75,9 @@ fn assert_run_cancelled(db_guard: &tempfile::NamedTempFile, run_id: &str) {
 
 fn setup_test_db(run_id: &str) -> (tempfile::NamedTempFile, std::sync::MutexGuard<'static, ()>) {
     let lock = DB_PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let tmp = tempfile::NamedTempFile::new().expect("temp db file");
+    let tmp = common::setup_test_db(run_id, "claude");
     let path = tmp.path().to_string_lossy().to_string();
-
     std::env::set_var("CONDUCTOR_DB_PATH", &path);
-
-    let conn = conductor_core::db::open_database(tmp.path()).expect("open test db");
-    // Insert a minimal run row so UPDATE in poll() has something to hit
-    // and get_run() can return it.
-    conn.execute(
-        "INSERT INTO agent_runs (id, prompt, status, started_at, runtime) \
-         VALUES (?1, 'test', 'running', '2024-01-01T00:00:00Z', 'claude')",
-        rusqlite::params![run_id],
-    )
-    .expect("insert run");
-
     (tmp, lock)
 }
 
@@ -113,7 +92,7 @@ fn test_cli_runtime_success() {
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "test prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -155,7 +134,7 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "bad prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -224,7 +203,7 @@ exit 0"#
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "hello from stdin".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -278,7 +257,7 @@ fn spawn_slow_script(
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -382,7 +361,7 @@ fn test_cli_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime("/bin/echo", "response", None);
     let req = RuntimeRequest {
         run_id: "../../etc/cron.d/payload".to_string(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "test".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
