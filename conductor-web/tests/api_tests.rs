@@ -1165,7 +1165,7 @@ fn seed_failed_agent_run(conn: &Connection) {
     seed_repo_and_worktree(conn);
     let mgr = AgentManager::new(conn);
     let run = mgr
-        .create_run(Some("w1"), "test prompt", Some("feat-test"), None)
+        .create_run(Some("w1"), "test prompt", Some("feat-test"))
         .unwrap();
     mgr.update_run_failed(&run.id, "crashed").unwrap();
 }

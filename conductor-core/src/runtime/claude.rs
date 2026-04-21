@@ -3,12 +3,21 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use crate::agent::types::AgentRun;
+use crate::config::AgentPermissionMode;
 use crate::error::Result;
 
 use super::{AgentRuntime, PollError, RuntimeRequest};
 
+/// Claude-specific configuration captured at construction time.
+#[derive(Clone, Default)]
+pub struct ClaudeRuntimeOptions {
+    pub permission_mode: AgentPermissionMode,
+    pub config_dir: Option<String>,
+}
+
 /// Runtime that spawns a `conductor agent run` subprocess (headless mode).
 pub struct ClaudeRuntime {
+    options: ClaudeRuntimeOptions,
     #[cfg(unix)]
     handle: Arc<Mutex<Option<crate::agent_runtime::HeadlessHandle>>>,
     prompt_file: Arc<Mutex<Option<std::path::PathBuf>>>,
@@ -16,8 +25,9 @@ pub struct ClaudeRuntime {
 }
 
 impl ClaudeRuntime {
-    pub fn new() -> Self {
+    pub fn new(options: ClaudeRuntimeOptions) -> Self {
         Self {
+            options,
             #[cfg(unix)]
             handle: Arc::new(Mutex::new(None)),
             prompt_file: Arc::new(Mutex::new(None)),
@@ -28,7 +38,7 @@ impl ClaudeRuntime {
 
 impl Default for ClaudeRuntime {
     fn default() -> Self {
-        Self::new()
+        Self::new(ClaudeRuntimeOptions::default())
     }
 }
 
@@ -44,7 +54,7 @@ impl AgentRuntime for ClaudeRuntime {
                 resume_session_id: None,
                 model: request.model.as_deref(),
                 bot_name: request.bot_name.as_deref(),
-                permission_mode: Some(&request.permission_mode),
+                permission_mode: Some(&self.options.permission_mode),
                 plugin_dirs: &request.plugin_dirs,
             };
             let (h, pf) = crate::agent_runtime::try_spawn_headless_run(&params)
@@ -238,7 +248,6 @@ mod tests {
     use super::*;
     use crate::agent::status::AgentRunStatus;
     use crate::agent_config::{AgentDef, AgentRole};
-    use crate::config::AgentPermissionMode;
 
     fn make_request(run_id: &str) -> RuntimeRequest {
         RuntimeRequest {
@@ -253,9 +262,7 @@ mod tests {
             },
             prompt: "p".to_string(),
             working_dir: std::path::PathBuf::from("/tmp"),
-            permission_mode: AgentPermissionMode::SkipPermissions,
             model: None,
-            config_dir: None,
             bot_name: None,
             plugin_dirs: vec![],
             db_path: crate::config::db_path(),
@@ -293,7 +300,7 @@ mod tests {
 
     #[test]
     fn spawn_rejects_path_traversal_run_id() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let request = make_request("../../etc/cron.d/payload");
         let err = runtime
             .spawn(&request)
@@ -306,7 +313,7 @@ mod tests {
 
     #[test]
     fn spawn_rejects_slash_in_run_id() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let request = make_request("run/id");
         assert!(runtime.spawn(&request).is_err());
     }
@@ -314,7 +321,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_before_spawn_returns_failed() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
         assert!(
             matches!(result, Err(PollError::Failed(_))),
@@ -325,7 +332,7 @@ mod tests {
     #[cfg(not(unix))]
     #[test]
     fn poll_fails_on_non_unix() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
         assert!(
             matches!(result, Err(PollError::Failed(_))),
@@ -335,7 +342,7 @@ mod tests {
 
     #[test]
     fn is_alive_returns_false_when_no_pid() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let run = make_test_run(None);
         assert!(!runtime.is_alive(&run));
     }
@@ -343,7 +350,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn is_alive_returns_true_for_self() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let run = make_test_run(Some(std::process::id() as i64));
         assert!(runtime.is_alive(&run));
     }
@@ -354,14 +361,14 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         child.wait().unwrap();
         let dead_pid = child.id() as i64;
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let run = make_test_run(Some(dead_pid));
         assert!(!runtime.is_alive(&run));
     }
 
     #[test]
     fn cancel_with_no_handle_and_no_pid() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let run = make_test_run(None);
         assert!(runtime.cancel(&run).is_ok());
     }
@@ -372,7 +379,7 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         child.wait().unwrap();
         let dead_pid = child.id() as i64;
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let run = make_test_run(Some(dead_pid));
         assert!(runtime.cancel(&run).is_ok());
     }
@@ -383,7 +390,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn spawn_valid_run_id_reaches_exec_attempt() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let request = make_request("valid-run-id-01");
         let result = runtime.spawn(&request);
         // The subprocess spawn will fail because the conductor binary is not
@@ -405,7 +412,7 @@ mod tests {
     #[cfg(not(unix))]
     #[test]
     fn spawn_returns_platform_error_on_non_unix() {
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         let request = make_request("valid-run-id-01");
         let err = runtime
             .spawn(&request)
@@ -429,7 +436,7 @@ mod tests {
             .expect("sleep should be available");
         let handle = crate::agent_runtime::HeadlessHandle::from_child(child)
             .expect("HeadlessHandle::from_child failed");
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         *runtime.handle.lock().unwrap() = Some(handle);
         let run = make_test_run(None);
         assert!(runtime.cancel(&run).is_ok());
@@ -456,7 +463,7 @@ mod tests {
             .expect("sleep should be available");
         let handle = crate::agent_runtime::HeadlessHandle::from_child(child)
             .expect("HeadlessHandle::from_child failed");
-        let runtime = ClaudeRuntime::new();
+        let runtime = ClaudeRuntime::default();
         *runtime.handle.lock().unwrap() = Some(handle);
         *runtime.db_path.lock().unwrap() = Some(db_file);
         (runtime, tmp)

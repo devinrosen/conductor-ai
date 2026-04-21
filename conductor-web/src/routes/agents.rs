@@ -1599,7 +1599,7 @@ mod tests {
         };
 
         // wire_headless_drain returns Ok quickly (persists PID, spawns tasks).
-        super::wire_headless_drain(&state, &run_id, handle, None)
+        super::wire_headless_drain(&state, &run_id, handle, None, None)
             .await
             .expect("wire_headless_drain should return Ok");
 
@@ -1703,7 +1703,7 @@ mod tests {
         };
 
         // wire_headless_drain should return Err quickly (PID-persist fails).
-        let result = super::wire_headless_drain(&state, &run_id, handle, None).await;
+        let result = super::wire_headless_drain(&state, &run_id, handle, None, None).await;
         assert!(
             result.is_err(),
             "wire_headless_drain should return Err when PID persist fails"
@@ -1799,7 +1799,7 @@ mod tests {
         };
 
         // wire_headless_drain returns Ok quickly (persists PID, spawns tasks).
-        super::wire_headless_drain(&state, &run_id, handle, None)
+        super::wire_headless_drain(&state, &run_id, handle, None, None)
             .await
             .expect("wire_headless_drain should return Ok");
 

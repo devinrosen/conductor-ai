@@ -8,7 +8,6 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use conductor_core::agent_config::{AgentDef, AgentRole};
-use conductor_core::config::AgentPermissionMode;
 use conductor_core::config::RuntimeConfig;
 use conductor_core::runtime::cli::CliRuntime;
 use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
@@ -118,8 +117,6 @@ fn test_cli_runtime_success() {
         prompt: "test prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
-        permission_mode: AgentPermissionMode::SkipPermissions,
-        config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
         db_path: _db_guard.path().to_path_buf(),
@@ -162,8 +159,6 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
         prompt: "bad prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
-        permission_mode: AgentPermissionMode::SkipPermissions,
-        config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
         db_path: _db_guard.path().to_path_buf(),
@@ -233,8 +228,6 @@ exit 0"#
         prompt: "hello from stdin".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
-        permission_mode: AgentPermissionMode::SkipPermissions,
-        config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
         db_path: _db_guard.path().to_path_buf(),
@@ -289,8 +282,6 @@ fn spawn_slow_script(
         prompt: "prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
-        permission_mode: conductor_core::config::AgentPermissionMode::SkipPermissions,
-        config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
         db_path: db_guard.path().to_path_buf(),
@@ -390,8 +381,6 @@ fn test_cli_runtime_rejects_invalid_run_id() {
         prompt: "test".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
-        permission_mode: AgentPermissionMode::SkipPermissions,
-        config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
         db_path: conductor_core::config::db_path(),

@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use conductor_core::agent_config::{AgentDef, AgentRole};
-use conductor_core::config::{AgentPermissionMode, RuntimeConfig};
+use conductor_core::config::RuntimeConfig;
 use conductor_core::runtime::script::ScriptRuntime;
 use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
 
@@ -48,8 +48,6 @@ fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf) -> Runt
         prompt: prompt.to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
-        permission_mode: AgentPermissionMode::SkipPermissions,
-        config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
         db_path,
