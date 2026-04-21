@@ -264,9 +264,17 @@ impl AgentRuntime for CliRuntime {
 
     fn cancel(&self, run: &AgentRun) -> Result<()> {
         if let Some(ref window) = run.tmux_window {
-            let _ = std::process::Command::new("tmux")
+            let result = std::process::Command::new("tmux")
                 .args(["kill-window", "-t", window])
                 .output();
+            if let Err(e) = result {
+                tracing::warn!("CliRuntime: tmux kill-window failed: {e}");
+            }
+        }
+        let conn = crate::db::open_agent_db("CliRuntime::cancel")?;
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        if let Err(e) = agent_mgr.update_run_cancelled(&run.id) {
+            tracing::warn!("CliRuntime: failed to mark run {} cancelled: {e}", run.id);
         }
         Ok(())
     }

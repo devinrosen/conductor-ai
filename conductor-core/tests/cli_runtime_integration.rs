@@ -328,6 +328,58 @@ fn test_cli_runtime_shutdown_flag_cancels_poll() {
 }
 
 #[test]
+fn test_cli_runtime_cancel_kills_window_and_marks_cancelled() {
+    if !tmux_available() {
+        eprintln!("skipping cli_runtime cancel test: tmux not available");
+        return;
+    }
+
+    let (_script, db_guard, runtime, run_id) = spawn_slow_script("test-cancel");
+
+    // Fetch the run from DB to get tmux_window name.
+    let conn =
+        conductor_core::db::open_database(db_guard.path()).expect("open test db for cancel test");
+    let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
+    let run = agent_mgr
+        .get_run(&run_id)
+        .expect("get_run must succeed")
+        .expect("run must exist in DB");
+
+    assert!(
+        run.tmux_window.is_some(),
+        "tmux_window must be set after spawn"
+    );
+    assert!(
+        runtime.is_alive(&run),
+        "run must be alive before cancel"
+    );
+
+    runtime.cancel(&run).expect("cancel must succeed");
+
+    // Window should be gone.
+    assert!(
+        !runtime.is_alive(&run),
+        "run must not be alive after cancel"
+    );
+
+    // DB row must be updated to Cancelled with ended_at set.
+    let updated = agent_mgr
+        .get_run(&run_id)
+        .expect("get_run must succeed after cancel")
+        .expect("run must still exist in DB after cancel");
+
+    assert_eq!(
+        updated.status,
+        conductor_core::agent::AgentRunStatus::Cancelled,
+        "status must be Cancelled after cancel()"
+    );
+    assert!(
+        updated.ended_at.is_some(),
+        "ended_at must be set after cancel()"
+    );
+}
+
+#[test]
 fn test_cli_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime("/bin/echo", "response", None);
     let req = RuntimeRequest {
