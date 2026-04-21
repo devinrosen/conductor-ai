@@ -221,6 +221,7 @@ fn poll_unix(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::status::AgentRunStatus;
     use crate::agent_config::{AgentDef, AgentRole};
     use crate::config::AgentPermissionMode;
 
@@ -245,6 +246,36 @@ mod tests {
         }
     }
 
+    fn make_test_run(subprocess_pid: Option<i64>) -> AgentRun {
+        AgentRun {
+            id: "test-run".to_string(),
+            worktree_id: None,
+            repo_id: None,
+            claude_session_id: None,
+            prompt: "p".to_string(),
+            status: AgentRunStatus::Running,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            tmux_window: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid,
+            runtime: "claude".to_string(),
+        }
+    }
+
     #[test]
     fn spawn_rejects_path_traversal_run_id() {
         let runtime = ClaudeRuntime::new();
@@ -263,5 +294,71 @@ mod tests {
         let runtime = ClaudeRuntime::new();
         let request = make_request("run/id");
         assert!(runtime.spawn(&request).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_before_spawn_returns_failed() {
+        let runtime = ClaudeRuntime::new();
+        let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
+        assert!(
+            matches!(result, Err(PollError::Failed(_))),
+            "expected Failed, got: {result:?}"
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn poll_fails_on_non_unix() {
+        let runtime = ClaudeRuntime::new();
+        let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
+        assert!(
+            matches!(result, Err(PollError::Failed(_))),
+            "expected Failed on non-Unix, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn is_alive_returns_false_when_no_pid() {
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(None);
+        assert!(!runtime.is_alive(&run));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_alive_returns_true_for_self() {
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(Some(std::process::id() as i64));
+        assert!(runtime.is_alive(&run));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_alive_returns_false_for_dead_pid() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        let dead_pid = child.id() as i64;
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(Some(dead_pid));
+        assert!(!runtime.is_alive(&run));
+    }
+
+    #[test]
+    fn cancel_with_no_handle_and_no_pid() {
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(None);
+        assert!(runtime.cancel(&run).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancel_with_dead_pid_returns_ok() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        let dead_pid = child.id() as i64;
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(Some(dead_pid));
+        assert!(runtime.cancel(&run).is_ok());
     }
 }
