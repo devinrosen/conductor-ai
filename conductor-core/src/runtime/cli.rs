@@ -103,7 +103,9 @@ impl AgentRuntime for CliRuntime {
 
         let pid = child.id();
 
-        let conn = crate::db::open_agent_db("CliRuntime")?;
+        *self.db_path.lock().unwrap() = request.db_path.clone();
+        let conn = crate::db::open_database_compat(&request.db_path)
+            .map_err(|e| ConductorError::Agent(format!("CliRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         if let Err(e) = agent_mgr.update_run_subprocess_pid(&request.run_id, pid) {
             tracing::warn!(
