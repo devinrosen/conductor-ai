@@ -4308,3 +4308,323 @@ fn test_update_step_child_run_id_nonexistent_step() {
     mgr.update_step_child_run_id("nonexistent-step-id", "any-child-run-id")
         .unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// predecessor_completed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_predecessor_completed_pos_zero_always_true() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // No rows at all — pos 0 should always return true.
+    assert!(mgr.predecessor_completed(&run.id, 0, 0).unwrap());
+}
+
+#[test]
+fn test_predecessor_completed_true_when_prev_completed() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Completed,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    // Predecessor at pos 0 is completed → pos 1 check should return true.
+    assert!(mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+}
+
+#[test]
+fn test_predecessor_completed_false_when_prev_running() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Running,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(!mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+}
+
+#[test]
+fn test_predecessor_completed_false_when_no_prev_row() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // No step at position 0, iteration 0 → pos 1 predecessor check returns false.
+    assert!(!mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// active_step_exists
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_active_step_exists_true_for_running() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Running,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    assert!(mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
+
+#[test]
+fn test_active_step_exists_false_for_failed() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Failed,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    // Failed is terminal — retries are allowed, so active_step_exists returns false.
+    assert!(!mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
+
+#[test]
+fn test_active_step_exists_false_different_step_name() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // An active row exists at pos 2 but for a different step name (parallel step).
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:other-step", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Running,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    assert!(!mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
+
+#[test]
+fn test_active_step_exists_true_for_pending() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // insert_step creates a row in pending status by default.
+    mgr.insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    assert!(mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
+
+#[test]
+fn test_active_step_exists_true_for_waiting() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Waiting,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    assert!(mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
+
+#[test]
+fn test_active_step_exists_true_for_completed() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Completed,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    // completed rows block re-insertion so retries don't re-run a succeeded step.
+    assert!(mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// Regression: #2406 — Guard A + Guard B prevent duplicate call_workflow steps
+// ---------------------------------------------------------------------------
+
+/// Regression test for bug #2406: a recovery poll fired while the predecessor
+/// step (implement, pos 1) was still `running`, which previously caused the
+/// engine to advance and insert a duplicate `workflow:lint-fix` row at pos 2.
+///
+/// Guard A: predecessor_completed(run_id, 2, 0) must return false while pos 1
+///          is still running → the engine should bail out before inserting.
+/// Guard B: if a premature row was somehow inserted, active_step_exists must
+///          return true → the engine bails out before inserting a second row.
+#[test]
+fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Simulate the "implement" step at position 1 still running (not completed).
+    let implement_id = mgr
+        .insert_step(&run.id, "implement", "actor", false, 1, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &implement_id,
+        WorkflowStepStatus::Running,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Guard A: predecessor at pos 1 is running → pos 2 predecessor check is false.
+    assert!(
+        !mgr.predecessor_completed(&run.id, 2, 0).unwrap(),
+        "Guard A: predecessor_completed must be false while implement is running"
+    );
+
+    // Now simulate the premature duplicate row that the bug caused.
+    let premature_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &premature_id,
+        WorkflowStepStatus::Running,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+
+    // Guard B: lint-fix row already exists → active_step_exists must be true,
+    // preventing the legitimate poll from inserting a second row.
+    assert!(
+        mgr.active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+            .unwrap(),
+        "Guard B: active_step_exists must be true for the already-inserted duplicate"
+    );
+
+    // After implement completes, Guard A is satisfied but Guard B still blocks
+    // re-insertion because a row is already present (running).
+    mgr.update_step_status(
+        &implement_id,
+        WorkflowStepStatus::Completed,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    assert!(
+        mgr.predecessor_completed(&run.id, 2, 0).unwrap(),
+        "predecessor_completed must be true once implement is completed"
+    );
+    assert!(
+        mgr.active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+            .unwrap(),
+        "Guard B still blocks a second insertion while the first row is running"
+    );
+}
+
+#[test]
+fn test_active_step_exists_false_for_skipped() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Skipped,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    // Skipped is terminal — retries are allowed, so active_step_exists returns false.
+    assert!(!mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
+
+#[test]
+fn test_active_step_exists_false_for_timed_out() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::TimedOut,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    // TimedOut is terminal — retries are allowed, so active_step_exists returns false.
+    assert!(!mgr
+        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
+        .unwrap());
+}
