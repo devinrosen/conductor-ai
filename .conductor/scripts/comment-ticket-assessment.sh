@@ -60,14 +60,9 @@ fi
 # Post comment using --body-file to safely handle multi-line content
 gh issue comment "$ISSUE_NUMBER" --repo "$OWNER/$REPO" --body-file "$tmp"
 
-# Remove all three qualification labels first (|| true guards against missing-label non-zero exit)
-gh issue edit "$ISSUE_NUMBER" --repo "$OWNER/$REPO" --remove-label "qualified" 2>/dev/null || true
-gh issue edit "$ISSUE_NUMBER" --repo "$OWNER/$REPO" --remove-label "needs-work" 2>/dev/null || true
-gh issue edit "$ISSUE_NUMBER" --repo "$OWNER/$REPO" --remove-label "pending-close" 2>/dev/null || true
-
-# Create label if missing, then apply it
-gh label create "$LABEL" --repo "$OWNER/$REPO" --color "$LABEL_COLOR" --description "$LABEL_DESC" 2>/dev/null || true
-gh issue edit "$ISSUE_NUMBER" --repo "$OWNER/$REPO" --add-label "$LABEL"
+# shellcheck source=lib-labels.sh
+source "$(dirname "$0")/lib-labels.sh"
+apply_exclusive_label "$OWNER" "$REPO" "$ISSUE_NUMBER" "$LABEL" "$LABEL_COLOR" "$LABEL_DESC"
 
 if [ "$VERDICT" = "READY" ]; then
   CONTEXT_MSG="Posted READY comment and applied 'qualified' label to ticket #${ISSUE_NUMBER}"
