@@ -115,7 +115,7 @@ impl AgentRuntime for CliRuntime {
             );
         }
 
-        *self.state.lock().unwrap() = Some(CliState {
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(CliState {
             child,
             pid,
             output_path,
@@ -134,7 +134,7 @@ impl AgentRuntime for CliRuntime {
         let mut state = self
             .state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .take()
             .ok_or_else(|| PollError::Failed("CliRuntime::poll called before spawn".into()))?;
 
