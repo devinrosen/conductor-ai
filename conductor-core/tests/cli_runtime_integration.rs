@@ -212,7 +212,9 @@ exit 0"#
         db_path: _db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn_validated(&req).expect("stdin spawn must succeed");
+    runtime
+        .spawn_validated(&req)
+        .expect("stdin spawn must succeed");
 
     let result = runtime
         .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
