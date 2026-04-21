@@ -125,7 +125,7 @@ fn test_cli_runtime_success() {
     runtime.spawn(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(10))
+        .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
         .expect("poll must succeed");
 
     assert_eq!(result.runtime.as_str(), "cli");
@@ -167,7 +167,7 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
     runtime.spawn(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(10))
+        .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
         .expect("poll must succeed — even failed runs are returned as Ok(AgentRun)");
 
     assert_eq!(
@@ -236,7 +236,7 @@ exit 0"#
     runtime.spawn(&req).expect("stdin spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(10))
+        .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
         .expect("stdin poll must succeed");
 
     assert_eq!(
@@ -295,7 +295,7 @@ fn spawn_slow_script(
 #[test]
 fn test_cli_runtime_timeout_returns_no_result() {
     let (_script, _db, runtime, run_id, _lock) = spawn_slow_script("test-timeout");
-    let result = runtime.poll(&run_id, None, Duration::from_millis(200));
+    let result = runtime.poll(&run_id, None, Duration::from_millis(200), _db.path());
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::NoResult)),
         "poll must return NoResult on timeout, got: {result:?}"
@@ -307,7 +307,12 @@ fn test_cli_runtime_shutdown_flag_cancels_poll() {
     let (_script, _db, runtime, run_id, _lock) = spawn_slow_script("test-shutdown");
     // Pre-set the shutdown flag so poll() exits on the first iteration.
     let shutdown = Arc::new(AtomicBool::new(true));
-    let result = runtime.poll(&run_id, Some(&shutdown), Duration::from_secs(10));
+    let result = runtime.poll(
+        &run_id,
+        Some(&shutdown),
+        Duration::from_secs(10),
+        _db.path(),
+    );
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::Cancelled)),
         "poll with shutdown flag set must return Cancelled, got: {result:?}"
