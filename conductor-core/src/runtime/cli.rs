@@ -37,17 +37,17 @@ impl CliRuntime {
     fn teardown_window(
         agent_mgr: &crate::agent::AgentManager<'_>,
         run_id: &str,
-        window_name: &str,
-    ) {
-        let result = std::process::Command::new("tmux")
-            .args(["kill-window", "-t", window_name])
-            .output();
-        if let Err(e) = result {
-            tracing::warn!("CliRuntime: tmux kill-window failed: {e}");
+        window_name: Option<&str>,
+    ) -> Result<()> {
+        if let Some(window) = window_name {
+            let result = std::process::Command::new("tmux")
+                .args(["kill-window", "-t", window])
+                .output();
+            if let Err(e) = result {
+                tracing::warn!("CliRuntime: tmux kill-window failed: {e}");
+            }
         }
-        if let Err(e) = agent_mgr.update_run_cancelled(run_id) {
-            tracing::warn!("CliRuntime: failed to mark run {run_id} cancelled: {e}");
-        }
+        agent_mgr.update_run_cancelled(run_id)
     }
 }
 
@@ -180,13 +180,20 @@ impl AgentRuntime for CliRuntime {
         loop {
             if let Some(flag) = shutdown {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    Self::teardown_window(&agent_mgr, run_id, &state.window_name);
+                    if let Err(e) =
+                        Self::teardown_window(&agent_mgr, run_id, Some(&state.window_name))
+                    {
+                        tracing::warn!("CliRuntime: teardown_window failed during shutdown: {e}");
+                    }
                     return Err(PollError::Cancelled);
                 }
             }
 
             if poll_start.elapsed() > step_timeout {
-                Self::teardown_window(&agent_mgr, run_id, &state.window_name);
+                if let Err(e) = Self::teardown_window(&agent_mgr, run_id, Some(&state.window_name))
+                {
+                    tracing::warn!("CliRuntime: teardown_window failed on timeout: {e}");
+                }
                 return Err(PollError::NoResult);
             }
 
@@ -263,12 +270,9 @@ impl AgentRuntime for CliRuntime {
     }
 
     fn cancel(&self, run: &AgentRun) -> Result<()> {
-        if let Some(ref window) = run.tmux_window {
-            let _ = std::process::Command::new("tmux")
-                .args(["kill-window", "-t", window])
-                .output();
-        }
-        Ok(())
+        let conn = crate::db::open_agent_db("CliRuntime::cancel")?;
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        Self::teardown_window(&agent_mgr, &run.id, run.tmux_window.as_deref())
     }
 }
 
