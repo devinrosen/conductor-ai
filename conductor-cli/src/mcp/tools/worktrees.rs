@@ -191,12 +191,15 @@ pub(super) fn tool_create_worktree(
         }
     };
 
+    let from_branch = get_arg(args, "from_branch").map(str::to_string);
+
     let wt_mgr = WorktreeManager::new(&conn, &config);
     match wt_mgr.create(
         repo_slug,
         name,
         WorktreeCreateOptions {
             ticket_id: resolved_ticket_id,
+            from_branch,
             ..Default::default()
         },
     ) {
@@ -229,6 +232,33 @@ pub(super) fn tool_delete_worktree(
     let wt_mgr = WorktreeManager::new(&conn, &config);
     match wt_mgr.delete(repo_slug, slug) {
         Ok(wt) => tool_ok(format!("Deleted worktree {}.", wt.slug)),
+        Err(e) => tool_err(e),
+    }
+}
+
+pub(super) fn tool_set_base_branch(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::worktree::WorktreeManager;
+
+    let repo_slug = require_arg!(args, "repo");
+    let name = require_arg!(args, "name");
+    let base_branch = get_arg(args, "base_branch");
+    let rebase = get_arg(args, "rebase")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let wt_mgr = WorktreeManager::new(&conn, &config);
+    match wt_mgr.set_base_branch(repo_slug, name, base_branch, rebase) {
+        Ok(()) => {
+            let label = base_branch.unwrap_or("(repo default)");
+            tool_ok(format!("Base branch for '{name}' set to {label}."))
+        }
         Err(e) => tool_err(e),
     }
 }

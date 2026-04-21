@@ -506,6 +506,18 @@ pub enum WorktreeCommands {
         /// Repo slug (cleans all repos if omitted)
         repo: Option<String>,
     },
+    /// Set (or clear) the recorded base branch for a worktree
+    SetBaseBranch {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        name: String,
+        /// New base branch (omit to reset to repo default branch)
+        base_branch: Option<String>,
+        /// Rebase the worktree branch onto the new base (default: reject if not ancestor)
+        #[arg(long)]
+        rebase: bool,
+    },
     /// Create a stack of worktrees from a ticket dependency graph
     #[command(
         after_help = "Examples:\n  conductor worktree create-stack my-repo --root-branch main --tickets 101,102,103\n  conductor worktree create-stack my-repo --root-branch release/0.6.0 --tickets t1ulid,t2ulid"

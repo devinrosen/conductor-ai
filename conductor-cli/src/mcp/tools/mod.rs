@@ -68,6 +68,31 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                     "Ticket ID to link (optional) — accepts either the internal ULID or an external source ID (e.g. GitHub issue number '680')",
                     false,
                 ),
+                (
+                    "from_branch",
+                    "Branch to fork from at create time (optional). Defaults to the repo default branch.",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
+            "conductor_set_base_branch",
+            "Set the recorded base branch for a worktree. Validates that the new base is an ancestor of the worktree HEAD. \
+             Pass rebase=true to rebase the branch onto the new base (blocked if the worktree has uncommitted changes). \
+             Omit base_branch to reset to the repo default branch (no git validation).",
+            schema(&[
+                ("repo", "Repo slug", true),
+                ("name", "Worktree slug", true),
+                (
+                    "base_branch",
+                    "New base branch to record. Omit to reset to the repo default branch.",
+                    false,
+                ),
+                (
+                    "rebase",
+                    "Set to 'true' to rebase the worktree branch onto the new base (default: false — rejects on mismatch)",
+                    false,
+                ),
             ]),
         ),
         Tool::new(
@@ -473,6 +498,7 @@ pub(super) fn dispatch_tool(
         "conductor_approve_gate" => gates::tool_approve_gate(db_path, args),
         "conductor_reject_gate" => gates::tool_reject_gate(db_path, args),
         "conductor_push_worktree" => worktrees::tool_push_worktree(db_path, args),
+        "conductor_set_base_branch" => worktrees::tool_set_base_branch(db_path, args),
         "conductor_cancel_run" => runs::tool_cancel_run(db_path, args),
         "conductor_list_workflows" => workflows::tool_list_workflows(db_path, args),
         "conductor_list_repos" => repos::tool_list_repos(db_path),

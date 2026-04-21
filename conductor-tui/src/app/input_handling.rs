@@ -821,19 +821,32 @@ impl App {
             let idx = index.unwrap_or(selected);
             let new_base = items.get(idx).and_then(|item| item.branch.clone());
 
-            let wm = WorktreeManager::new(&self.conn, &self.config);
-            match wm.set_base_branch(&repo_slug, &wt_slug, new_base.as_deref()) {
-                Ok(()) => {
-                    let label = new_base.as_deref().unwrap_or("(repo default)");
-                    self.state.status_message = Some(format!("Base branch set to {label}"));
-                    self.refresh_data();
-                }
-                Err(e) => {
-                    self.state.modal = Modal::Error {
-                        message: format!("Failed to set base branch: {e}"),
-                    };
-                }
-            }
+            let Some(bg_tx) = self.bg_tx.clone() else {
+                self.state.modal = Modal::Error {
+                    message: "Cannot set base branch: background sender not ready.".into(),
+                };
+                return;
+            };
+
+            self.state.modal = Modal::Progress {
+                message: "Updating base branch…".to_string(),
+            };
+
+            let config = self.config.clone();
+            let label = new_base.as_deref().unwrap_or("(repo default)").to_string();
+            std::thread::spawn(move || {
+                let result = (|| -> anyhow::Result<String> {
+                    let db = conductor_core::config::db_path();
+                    let conn = conductor_core::db::open_database(&db)?;
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    mgr.set_base_branch(&repo_slug, &wt_slug, new_base.as_deref(), false)
+                        .map_err(anyhow::Error::from)?;
+                    Ok(format!("Base branch set to {label}"))
+                })();
+                let _ = bg_tx.send(crate::action::Action::SetBaseBranchComplete {
+                    result: result.map_err(|e| e.to_string()),
+                });
+            });
         }
     }
 

@@ -180,6 +180,19 @@ pub fn handle_worktree(
                 println!("Cleaned up {count} merged worktree(s).");
             }
         }
+        WorktreeCommands::SetBaseBranch {
+            repo,
+            name,
+            base_branch,
+            rebase,
+        } => {
+            let mgr = WorktreeManager::new(conn, config);
+            mgr.set_base_branch(&repo, &name, base_branch.as_deref(), rebase)?;
+            match base_branch {
+                Some(b) => println!("Base branch for {name} set to: {b}"),
+                None => println!("Base branch for {name} cleared (will use repo default)"),
+            }
+        }
         WorktreeCommands::CreateStack {
             repo,
             root_branch,

@@ -985,16 +985,63 @@ impl<'a> WorktreeManager<'a> {
     }
 
     /// Set (or clear) the worktree's base branch.
-    /// Pass `None` to reset to the repo default branch.
-    /// When setting to a non-default branch, auto-registers a feature for that branch.
+    /// Pass `None` to reset to the repo default branch (skips git validation).
+    /// When `rebase` is false and the new base is not an ancestor of HEAD, returns an error.
+    /// When `rebase` is true, rebases the worktree branch onto the new base (blocked if dirty).
     pub fn set_base_branch(
         &self,
         repo_slug: &str,
         name: &str,
         base_branch: Option<&str>,
+        rebase: bool,
     ) -> Result<()> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
+
+        if let Some(new_base) = base_branch {
+            let worktree = self.get_by_slug(&repo.id, name)?;
+            let wt_path = std::path::Path::new(&worktree.path);
+
+            // Fetch the remote ref so the ancestor check is current.
+            let _ = Command::new("git")
+                .args(["fetch", "origin", new_base])
+                .current_dir(wt_path)
+                .output();
+
+            let base_ref = format!("origin/{new_base}");
+            if !Self::is_ancestor(wt_path, &base_ref)? {
+                if !rebase {
+                    return Err(ConductorError::InvalidInput(format!(
+                        "'{new_base}' is not an ancestor of the worktree HEAD. \
+                         The branch was forked from a different base. \
+                         Use --rebase to rebase the worktree onto the new base first."
+                    )));
+                }
+
+                // Dirty check before rebase.
+                let status_out = check_output(
+                    Command::new("git")
+                        .args(["status", "--porcelain"])
+                        .current_dir(wt_path),
+                )?;
+                if !String::from_utf8_lossy(&status_out.stdout)
+                    .trim()
+                    .is_empty()
+                {
+                    return Err(ConductorError::InvalidInput(
+                        "Worktree has uncommitted changes. Stash or commit them before rebasing."
+                            .into(),
+                    ));
+                }
+
+                check_output(
+                    Command::new("git")
+                        .args(["rebase", &base_ref])
+                        .current_dir(wt_path),
+                )?;
+            }
+        }
+
         let updated = self.conn.execute(
             "UPDATE worktrees SET base_branch = :base_branch WHERE repo_id = :repo_id AND slug = :slug",
             named_params![":base_branch": base_branch, ":repo_id": repo.id, ":slug": name],
@@ -1005,6 +1052,16 @@ impl<'a> WorktreeManager<'a> {
             });
         }
         Ok(())
+    }
+
+    /// Returns true if `base_ref` is an ancestor of HEAD in the given worktree directory.
+    fn is_ancestor(wt_path: &std::path::Path, base_ref: &str) -> Result<bool> {
+        let status = Command::new("git")
+            .args(["merge-base", "--is-ancestor", base_ref, "HEAD"])
+            .current_dir(wt_path)
+            .status()
+            .map_err(|e| ConductorError::InvalidInput(format!("git merge-base failed: {e}")))?;
+        Ok(status.success())
     }
 
     /// Push the worktree branch to origin.
@@ -1946,6 +2003,189 @@ mod tests {
             String::from_utf8_lossy(&merge_val.stdout).trim(),
             "refs/heads/feat/my-branch",
             "branch.feat/my-branch.merge should be 'refs/heads/feat/my-branch'"
+        );
+    }
+
+    // ── set_base_branch unit tests ─────────────────────────────────────────
+
+    fn setup_git_repo_with_worktree() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        String,
+        String,
+        rusqlite::Connection,
+    ) {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let repo_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+        let repo_path = repo_dir.path().to_str().unwrap().to_string();
+        let ws_path = ws_dir.path().to_str().unwrap().to_string();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "t@t.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "T"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Create a feature branch from main (branch only, don't check it out — stay on main so worktree add works)
+        Command::new("git")
+            .args(["branch", "feat/test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        // Add a commit on feat/test via the worktree (created below), but first create the worktree
+        let wt_path = format!("{ws_path}/feat-test");
+        let out = Command::new("git")
+            .args(["worktree", "add", &wt_path, "feat/test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Make a commit in the worktree so feat/test has a commit ahead of main
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "feat"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+
+        let conn = create_test_conn();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r1','test-repo',:local_path,'https://github.com/x/y.git',:ws,'2024-01-01T00:00:00Z')",
+            rusqlite::params![repo_path, ws_path],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt1','r1','feat-test','feat/test',:path,'active','2024-01-01T00:00:00Z')",
+            rusqlite::params![wt_path],
+        )
+        .unwrap();
+
+        (repo_dir, ws_dir, repo_path, wt_path, conn)
+    }
+
+    #[test]
+    fn test_set_base_branch_skips_validation_on_clear() {
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        // Clearing to None should succeed without touching git
+        let result = mgr.set_base_branch("test-repo", "feat-test", None, false);
+        assert!(
+            result.is_ok(),
+            "clearing base_branch should always succeed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_set_base_branch_rejects_non_ancestor() {
+        let (_repo_dir, _ws_dir, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        let config = crate::config::Config::default();
+
+        // Create a divergent branch (not an ancestor of feat/test)
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "other"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "other"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Simulate origin/other by creating a local ref
+        let _ = wt_path; // path is registered in DB
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        // "other" is not an ancestor of feat/test HEAD; fetch will fail (no real remote)
+        // but is_ancestor will return false, so we expect an InvalidInput error
+        let result = mgr.set_base_branch("test-repo", "feat-test", Some("other"), false);
+        // Fetch fails silently; then is_ancestor check: "origin/other" doesn't exist → non-zero exit → false
+        assert!(
+            matches!(result, Err(ConductorError::InvalidInput(_))),
+            "expected InvalidInput for non-ancestor base, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_set_base_branch_accepts_ancestor() {
+        let (_repo_dir, _ws_dir, repo_path, _wt_path, conn) = setup_git_repo_with_worktree();
+        let config = crate::config::Config::default();
+
+        // Make main an "origin/main" local ref by cloning logic:
+        // Since there's no real remote, we simulate it by creating origin/main ref.
+        std::process::Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/main", "main"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        // Also set this in the worktree (which is a linked worktree sharing the git dir)
+        // The worktree shares the same .git directory, so the ref should be visible.
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        // "main" IS an ancestor of feat/test (feat/test was branched off main)
+        let result = mgr.set_base_branch("test-repo", "feat-test", Some("main"), false);
+        assert!(
+            result.is_ok(),
+            "main is an ancestor of feat/test: {result:?}"
+        );
+
+        // Verify DB was updated
+        let base: Option<String> = conn
+            .query_row(
+                "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(base.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn test_set_base_branch_rebase_dirty_rejected() {
+        let (_repo_dir, _ws_dir, _repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        let config = crate::config::Config::default();
+
+        // Create an uncommitted change in the worktree
+        let dirty_file = format!("{wt_path}/dirty.txt");
+        std::fs::write(&dirty_file, "dirty").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "dirty.txt"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        // With rebase=true and dirty worktree, should return an error about uncommitted changes
+        let result = mgr.set_base_branch("test-repo", "feat-test", Some("main"), true);
+        assert!(
+            matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("uncommitted")),
+            "expected uncommitted-changes error for dirty rebase, got: {result:?}"
         );
     }
 }

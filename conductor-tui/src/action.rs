@@ -143,6 +143,10 @@ pub enum Action {
     // Base branch change (worktree detail)
     SetBaseBranch,
     SelectBaseBranch(Option<usize>),
+    /// Background result: set_base_branch() completed.
+    SetBaseBranchComplete {
+        result: Result<String, String>,
+    },
 
     // Theme picker
     ShowThemePicker,
