@@ -10,12 +10,26 @@ if [ ! -d conductor-web/frontend/dist ]; then
   fi
 fi
 
-# Run clippy on full workspace (matches CI)
-if [ -d conductor-web/frontend/dist ]; then
-  cargo clippy --workspace --all-targets -- -D warnings 2>&1 || ERRORS=1
+# Detect which conductor-* crates have changed files
+CHANGED_CRATES=$(git diff --name-only HEAD | grep '^conductor-' | cut -d/ -f1 | sort -u)
+
+if [ -z "$CHANGED_CRATES" ]; then
+  # No crate-level changes detected — fall back to full workspace (matches CI)
+  if [ -d conductor-web/frontend/dist ]; then
+    cargo clippy --workspace --all-targets -- -D warnings 2>&1 || ERRORS=1
+  else
+    echo "Warning: frontend not built, excluding conductor-web from clippy"
+    cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings 2>&1 || ERRORS=1
+  fi
 else
-  echo "Warning: frontend not built, excluding conductor-web from clippy"
-  cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings 2>&1 || ERRORS=1
+  # Scope clippy to changed crates only
+  for crate in $CHANGED_CRATES; do
+    if [ "$crate" = "conductor-web" ] && [ ! -d conductor-web/frontend/dist ]; then
+      echo "Warning: frontend not built, skipping conductor-web clippy"
+      continue
+    fi
+    cargo clippy -p "$crate" --all-targets -- -D warnings 2>&1 || ERRORS=1
+  done
 fi
 cargo fmt --all --check 2>&1 || ERRORS=1
 
