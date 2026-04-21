@@ -715,7 +715,7 @@ pub async fn post_workflow_run(
             } else {
                 // Repo-only path: no worktree context
                 // TODO: add get_active_run_for_repo() guard when WorkflowManager supports it
-                (repo.local_path.clone(), repo.slug.clone(), None, None)
+                (repo.local_path.clone(), repo.slug.clone(), None, None, None)
             };
 
         // Validate workflow exists (def is reused by the spawn below — no double load)
@@ -1134,11 +1134,11 @@ pub async fn list_all_workflow_runs_handler(
                                 None,
                             )
                         }
-                        None => (None, None, None, None, None),
+                        None => (None, None, None, None, None, None),
                     }
                 }
             } else {
-                (None, None, None, None, None)
+                (None, None, None, None, None, None)
             };
             WorkflowRunResponse {
                 run,
