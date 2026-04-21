@@ -135,18 +135,18 @@ fn test_cli_runtime_success() {
     );
 }
 
-#[test]
-fn test_cli_runtime_exit_code_42_is_error() {
+/// Assert that a non-zero exit code causes the run to be marked `Failed`.
+fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
     if !tmux_available() {
         eprintln!("skipping cli_runtime test: tmux not available");
         return;
     }
 
-    let json_body = r#"{"response":"invalid input"}"#;
-    let (_guard, script_path) = make_mock_script(json_body, 42);
+    let json_body = r#"{"response":"error"}"#;
+    let (_guard, script_path) = make_mock_script(json_body, exit_code);
     let runtime = make_runtime(&script_path, "response", None);
 
-    let run_id = format!("test-cli42-{}", ulid::Ulid::new());
+    let run_id = format!("{}-{}", run_id_prefix, ulid::Ulid::new());
     let _db_guard = setup_test_db(&run_id);
 
     let req = RuntimeRequest {
@@ -163,7 +163,6 @@ fn test_cli_runtime_exit_code_42_is_error() {
 
     runtime.spawn(&req).expect("spawn must succeed");
 
-    // Exit code 42 is non-zero — the run should be marked failed.
     let result = runtime
         .poll(&run_id, None, Duration::from_secs(10))
         .expect("poll must succeed — even failed runs are returned as Ok(AgentRun)");
@@ -171,86 +170,23 @@ fn test_cli_runtime_exit_code_42_is_error() {
     assert_eq!(
         result.status,
         conductor_core::agent::AgentRunStatus::Failed,
-        "exit code 42 must map to a failed run"
+        "exit code {exit_code} must map to a failed run"
     );
 }
 
 #[test]
 fn test_cli_runtime_exit_code_1_is_error() {
-    if !tmux_available() {
-        eprintln!("skipping cli_runtime test: tmux not available");
-        return;
-    }
+    assert_nonzero_exit_maps_to_failed(1, "test-cli1");
+}
 
-    let json_body = r#"{"response":"generic error"}"#;
-    let (_guard, script_path) = make_mock_script(json_body, 1);
-    let runtime = make_runtime(&script_path, "response", None);
-
-    let run_id = format!("test-cli1-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
-
-    let req = RuntimeRequest {
-        run_id: run_id.clone(),
-        agent_def: make_agent_def(),
-        prompt: "bad prompt".to_string(),
-        model: None,
-        working_dir: std::path::PathBuf::from("/tmp"),
-        permission_mode: AgentPermissionMode::SkipPermissions,
-        config_dir: None,
-        bot_name: None,
-        plugin_dirs: vec![],
-    };
-
-    runtime.spawn(&req).expect("spawn must succeed");
-
-    let result = runtime
-        .poll(&run_id, None, Duration::from_secs(10))
-        .expect("poll must succeed — even failed runs are returned as Ok(AgentRun)");
-
-    assert_eq!(
-        result.status,
-        conductor_core::agent::AgentRunStatus::Failed,
-        "exit code 1 must map to a failed run"
-    );
+#[test]
+fn test_cli_runtime_exit_code_42_is_error() {
+    assert_nonzero_exit_maps_to_failed(42, "test-cli42");
 }
 
 #[test]
 fn test_cli_runtime_exit_code_53_is_error() {
-    if !tmux_available() {
-        eprintln!("skipping cli_runtime test: tmux not available");
-        return;
-    }
-
-    let json_body = r#"{"response":"turn limit reached"}"#;
-    let (_guard, script_path) = make_mock_script(json_body, 53);
-    let runtime = make_runtime(&script_path, "response", None);
-
-    let run_id = format!("test-cli53-{}", ulid::Ulid::new());
-    let _db_guard = setup_test_db(&run_id);
-
-    let req = RuntimeRequest {
-        run_id: run_id.clone(),
-        agent_def: make_agent_def(),
-        prompt: "bad prompt".to_string(),
-        model: None,
-        working_dir: std::path::PathBuf::from("/tmp"),
-        permission_mode: AgentPermissionMode::SkipPermissions,
-        config_dir: None,
-        bot_name: None,
-        plugin_dirs: vec![],
-    };
-
-    runtime.spawn(&req).expect("spawn must succeed");
-
-    let result = runtime
-        .poll(&run_id, None, Duration::from_secs(10))
-        .expect("poll must succeed — even failed runs are returned as Ok(AgentRun)");
-
-    assert_eq!(
-        result.status,
-        conductor_core::agent::AgentRunStatus::Failed,
-        "exit code 53 (turn limit) must map to a failed run"
-    );
+    assert_nonzero_exit_maps_to_failed(53, "test-cli53");
 }
 
 #[test]
