@@ -63,10 +63,12 @@ pub fn execute_call_workflow(
     }
 
     // Guard B: don't insert a duplicate step row when an active row already exists.
-    if state
-        .wf_mgr
-        .active_step_exists(&state.workflow_run_id, pos, iteration as i64, &wf_step_name)?
-    {
+    if state.wf_mgr.active_step_exists(
+        &state.workflow_run_id,
+        pos,
+        iteration as i64,
+        &wf_step_name,
+    )? {
         tracing::warn!(
             "call_workflow '{}': active step already exists at position {} (iter {}); \
              skipping duplicate insertion (run {})",
