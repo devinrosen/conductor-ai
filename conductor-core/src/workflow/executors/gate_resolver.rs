@@ -408,7 +408,10 @@ mod tests {
         cache.set_cache_for_test(None, stale_instant);
         // Refresh fires; gh unavailable → still None, but the cache timestamp is now fresh.
         let token = cache.get(&config, Some("bot"));
-        assert!(token.is_none(), "refresh after stale failure should return None");
+        assert!(
+            token.is_none(),
+            "refresh after stale failure should return None"
+        );
         // A second immediate call should NOT re-trigger (fresh failure entry now in cache).
         // We can't observe the shell-out count directly, but we verify get() still returns None
         // and does not panic, confirming the cache was updated.
