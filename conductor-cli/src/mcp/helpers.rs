@@ -85,6 +85,17 @@ pub(crate) fn get_arg_usize(args: &serde_json::Map<String, Value>, key: &str) ->
     })
 }
 
+/// Helper: extract a bool arg, accepting both JSON bool and string "true"/"false".
+/// Returns `false` if the key is absent or the value is unrecognised.
+pub(crate) fn get_bool_arg(args: &serde_json::Map<String, Value>, key: &str) -> bool {
+    args.get(key)
+        .map(|v| {
+            v.as_bool()
+                .unwrap_or_else(|| v.as_str().map(|s| s == "true").unwrap_or(false))
+        })
+        .unwrap_or(false)
+}
+
 /// Macro: extract a required string arg; returns `tool_err` early if missing.
 macro_rules! require_arg {
     ($args:expr, $key:literal) => {
@@ -149,5 +160,41 @@ mod tests {
     fn get_arg_usize_returns_none_for_invalid_string() {
         let a = args(json!("not_a_number"));
         assert_eq!(get_arg_usize(&a, "limit"), None);
+    }
+
+    fn bool_args(val: Value) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("flag".into(), val);
+        m
+    }
+
+    #[test]
+    fn get_bool_arg_accepts_json_true() {
+        assert!(get_bool_arg(&bool_args(json!(true)), "flag"));
+    }
+
+    #[test]
+    fn get_bool_arg_accepts_json_false() {
+        assert!(!get_bool_arg(&bool_args(json!(false)), "flag"));
+    }
+
+    #[test]
+    fn get_bool_arg_accepts_string_true() {
+        assert!(get_bool_arg(&bool_args(json!("true")), "flag"));
+    }
+
+    #[test]
+    fn get_bool_arg_accepts_string_false() {
+        assert!(!get_bool_arg(&bool_args(json!("false")), "flag"));
+    }
+
+    #[test]
+    fn get_bool_arg_returns_false_for_missing_key() {
+        assert!(!get_bool_arg(&serde_json::Map::new(), "flag"));
+    }
+
+    #[test]
+    fn get_bool_arg_returns_false_for_unrecognised_string() {
+        assert!(!get_bool_arg(&bool_args(json!("yes")), "flag"));
     }
 }

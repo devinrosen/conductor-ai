@@ -4,7 +4,7 @@ use rmcp::model::CallToolResult;
 use serde_json::Value;
 
 use crate::mcp::helpers::{
-    get_arg, get_arg_usize, open_db_and_config, pagination_hint, tool_err, tool_ok,
+    get_arg, get_arg_usize, get_bool_arg, open_db_and_config, pagination_hint, tool_err, tool_ok,
 };
 
 /// Returns `true` if `s` looks like a ULID: exactly 26 uppercase alphanumeric chars.
@@ -245,13 +245,7 @@ pub(super) fn tool_set_base_branch(
     let repo_slug = require_arg!(args, "repo");
     let name = require_arg!(args, "name");
     let base_branch = get_arg(args, "base_branch");
-    let rebase = args
-        .get("rebase")
-        .map(|v| {
-            v.as_bool()
-                .unwrap_or_else(|| v.as_str().map(|s| s == "true").unwrap_or(false))
-        })
-        .unwrap_or(false);
+    let rebase = get_bool_arg(args, "rebase");
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
