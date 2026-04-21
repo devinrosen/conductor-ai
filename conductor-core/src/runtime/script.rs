@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -12,11 +13,15 @@ use super::{AgentRuntime, PollError, RuntimeRequest};
 /// capturing stdout as `result_text`. No tmux dependency.
 pub struct ScriptRuntime {
     config: RuntimeConfig,
+    db_path: std::sync::Mutex<PathBuf>,
 }
 
 impl ScriptRuntime {
     pub fn new(config: RuntimeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            db_path: std::sync::Mutex::new(crate::config::db_path()),
+        }
     }
 }
 
@@ -50,7 +55,13 @@ impl AgentRuntime for ScriptRuntime {
                 ConductorError::Agent(format!("ScriptRuntime: failed to spawn command: {e}"))
             })?;
 
-        let conn = crate::db::open_agent_db("ScriptRuntime")?;
+        if let Ok(mut guard) = self.db_path.lock() {
+            *guard = request.db_path.clone();
+        }
+
+        let conn = crate::db::open_database_compat(&request.db_path).map_err(|e| {
+            ConductorError::Agent(format!("ScriptRuntime: failed to open DB: {e}"))
+        })?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
         if output.status.success() {
@@ -101,8 +112,9 @@ impl AgentRuntime for ScriptRuntime {
         _shutdown: Option<&Arc<AtomicBool>>,
         _step_timeout: Duration,
     ) -> std::result::Result<AgentRun, PollError> {
-        let conn = crate::db::open_agent_db("ScriptRuntime")
-            .map_err(|e| PollError::Failed(e.to_string()))?;
+        let db_path = self.db_path.lock().unwrap().clone();
+        let conn = crate::db::open_database_compat(&db_path)
+            .map_err(|e| PollError::Failed(format!("ScriptRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
         let run = agent_mgr

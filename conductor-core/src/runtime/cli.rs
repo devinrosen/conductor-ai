@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use super::{AgentRuntime, PollError, RuntimeRequest};
 pub struct CliRuntime {
     config: RuntimeConfig,
     state: std::sync::Mutex<Option<CliState>>,
+    db_path: std::sync::Mutex<PathBuf>,
 }
 
 struct CliState {
@@ -26,6 +28,7 @@ impl CliRuntime {
         Self {
             config,
             state: std::sync::Mutex::new(None),
+            db_path: std::sync::Mutex::new(crate::config::db_path()),
         }
     }
 
@@ -132,9 +135,15 @@ impl AgentRuntime for CliRuntime {
             ));
         }
 
+        // Store the injected DB path for use in poll() and cancel().
+        if let Ok(mut guard) = self.db_path.lock() {
+            *guard = request.db_path.clone();
+        }
+
         // Persist runtime name and tmux window to DB so is_alive(), cancel(), and
         // the orphan reaper can operate correctly on this run.
-        let conn = crate::db::open_agent_db("CliRuntime")?;
+        let conn = crate::db::open_database_compat(&request.db_path)
+            .map_err(|e| ConductorError::Agent(format!("CliRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         if let Err(e) = agent_mgr.update_run_runtime(&request.run_id, &request.agent_def.runtime) {
             tracing::warn!(
@@ -172,8 +181,9 @@ impl AgentRuntime for CliRuntime {
             .take()
             .ok_or_else(|| PollError::Failed("CliRuntime::poll called before spawn".into()))?;
 
-        let conn =
-            crate::db::open_agent_db("CliRuntime").map_err(|e| PollError::Failed(e.to_string()))?;
+        let db_path = self.db_path.lock().unwrap().clone();
+        let conn = crate::db::open_database_compat(&db_path)
+            .map_err(|e| PollError::Failed(format!("CliRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
         let poll_start = std::time::Instant::now();
@@ -270,7 +280,10 @@ impl AgentRuntime for CliRuntime {
     }
 
     fn cancel(&self, run: &AgentRun) -> Result<()> {
-        let conn = crate::db::open_agent_db("CliRuntime::cancel")?;
+        let db_path = self.db_path.lock().unwrap().clone();
+        let conn = crate::db::open_database_compat(&db_path).map_err(|e| {
+            ConductorError::Agent(format!("CliRuntime: failed to open DB: {e}"))
+        })?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         Self::teardown_window(&agent_mgr, &run.id, run.tmux_window.as_deref())
     }

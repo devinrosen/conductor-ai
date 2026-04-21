@@ -135,6 +135,7 @@ fn test_cli_runtime_success() {
         config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
+        db_path: _db_guard.path().to_path_buf(),
     };
 
     runtime.spawn(&req).expect("spawn must succeed");
@@ -183,6 +184,7 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
         config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
+        db_path: _db_guard.path().to_path_buf(),
     };
 
     runtime.spawn(&req).expect("spawn must succeed");
@@ -258,6 +260,7 @@ exit 0"#
         config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
+        db_path: _db_guard.path().to_path_buf(),
     };
 
     runtime.spawn(&req).expect("stdin spawn must succeed");
@@ -312,6 +315,7 @@ fn spawn_slow_script(
         config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
+        db_path: db_guard.path().to_path_buf(),
     };
 
     runtime.spawn(&req).expect("spawn must succeed");
@@ -427,6 +431,7 @@ fn test_cli_runtime_rejects_invalid_run_id() {
         config_dir: None,
         bot_name: None,
         plugin_dirs: vec![],
+        db_path: conductor_core::config::db_path(),
     };
     let err = runtime
         .spawn(&req)
