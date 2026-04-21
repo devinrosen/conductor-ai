@@ -13,6 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      core: ${{ steps.filter.outputs.core }}
+      cli: ${{ steps.filter.outputs.cli }}
+      tui: ${{ steps.filter.outputs.tui }}
+      web: ${{ steps.filter.outputs.web }}
       workflows: ${{ steps.filter.outputs.workflows }}
       desktop: ${{ steps.filter.outputs.desktop }}
     steps:
@@ -27,6 +31,21 @@ jobs:
               - 'Cargo.lock'
               - 'conductor-web/frontend/**'
               - '.github/workflows/ci.yml'
+            core:
+              - 'conductor-core/**'
+              - 'Cargo.lock'
+            cli:
+              - 'conductor-cli/**'
+              - 'conductor-core/**'
+              - 'Cargo.lock'
+            tui:
+              - 'conductor-tui/**'
+              - 'conductor-core/**'
+              - 'Cargo.lock'
+            web:
+              - 'conductor-web/**'
+              - 'conductor-core/**'
+              - 'Cargo.lock'
             desktop:
               - 'conductor-desktop/**'
             workflows:
@@ -84,12 +103,20 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
       - uses: Swatinem/rust-cache@v2.9.1
         if: needs.changes.outputs.rust == 'true'
-      - run: cargo test -p conductor-core --features test-helpers
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
         if: needs.changes.outputs.rust == 'true'
-      - run: cargo test --workspace --exclude conductor-core
-        if: needs.changes.outputs.rust == 'true' && needs.changes.outputs.desktop == 'true'
-      - run: cargo test --workspace --exclude conductor-core --exclude conductor-desktop
-        if: needs.changes.outputs.rust == 'true' && needs.changes.outputs.desktop != 'true'
+      - run: cargo nextest run -p conductor-core --features test-helpers
+        if: needs.changes.outputs.core == 'true'
+      - run: cargo nextest run -p conductor-cli
+        if: needs.changes.outputs.cli == 'true'
+      - run: cargo nextest run -p conductor-tui
+        if: needs.changes.outputs.tui == 'true'
+      - run: cargo nextest run -p conductor-web
+        if: needs.changes.outputs.web == 'true' && needs.changes.outputs.desktop != 'true'
+      - run: cargo nextest run -p conductor-web -p conductor-desktop
+        if: needs.changes.outputs.web == 'true' && needs.changes.outputs.desktop == 'true'
 
   validate-workflows:
     name: Validate Workflows
