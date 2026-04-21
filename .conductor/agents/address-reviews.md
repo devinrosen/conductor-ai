@@ -22,4 +22,6 @@ Steps:
    - Rust: `cargo build && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings`
 5. Commit all changes with a message like: `fix: address PR review feedback`
 
+**Do NOT run `git push`.** Only commit locally — the workflow will push in a subsequent step.
+
 Work through all comments in a single pass before committing.
