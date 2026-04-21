@@ -126,11 +126,7 @@ fn poll_unix(
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
-    let prompt_file = rt
-        .prompt_file
-        .lock()
-        .ok()
-        .and_then(|mut g| g.take());
+    let prompt_file = rt.prompt_file.lock().ok().and_then(|mut g| g.take());
     let pid = handle.pid();
 
     let tracking_conn =
