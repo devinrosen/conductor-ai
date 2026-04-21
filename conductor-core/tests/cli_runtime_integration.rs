@@ -475,7 +475,11 @@ fn test_cli_runtime_poll_handles_unreadable_output_file_on_error_exit() {
         "run must be Failed when process exits 1 even if output file is unreadable"
     );
     assert!(
-        result.result_text.as_deref().unwrap_or("").contains("process exited with code 1"),
+        result
+            .result_text
+            .as_deref()
+            .unwrap_or("")
+            .contains("process exited with code 1"),
         "result_text must contain fallback exit-code message, got: {:?}",
         result.result_text
     );
