@@ -28,8 +28,7 @@ pub struct Repo {
     pub runtime_overrides: Option<String>,
 }
 
-const REPO_SELECT: &str =
-    "SELECT id, slug, local_path, remote_url, workspace_dir, created_at, \
+const REPO_SELECT: &str = "SELECT id, slug, local_path, remote_url, workspace_dir, created_at, \
      COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation, \
      runtime_overrides FROM repos";
 
