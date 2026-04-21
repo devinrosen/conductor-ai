@@ -47,8 +47,12 @@ impl AgentRuntime for ClaudeRuntime {
             };
             let (h, pf) = crate::agent_runtime::try_spawn_headless_run(&params)
                 .map_err(crate::error::ConductorError::Workflow)?;
-            *self.handle.lock().unwrap() = Some(h);
-            *self.prompt_file.lock().unwrap() = Some(pf);
+            if let Ok(mut guard) = self.handle.lock() {
+                *guard = Some(h);
+            }
+            if let Ok(mut guard) = self.prompt_file.lock() {
+                *guard = Some(pf);
+            }
             Ok(())
         }
         #[cfg(not(unix))]
@@ -118,11 +122,11 @@ fn poll_unix(
     let handle = rt
         .handle
         .lock()
-        .unwrap()
+        .map_err(|_| PollError::Failed("ClaudeRuntime handle mutex poisoned".into()))?
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
-    let prompt_file = rt.prompt_file.lock().unwrap().take();
+    let prompt_file = rt.prompt_file.lock().ok().and_then(|mut g| g.take());
     let pid = handle.pid();
 
     let tracking_conn =
@@ -221,8 +225,13 @@ fn poll_unix(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::status::AgentRunStatus;
     use crate::agent_config::{AgentDef, AgentRole};
     use crate::config::AgentPermissionMode;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate CONDUCTOR_DB_PATH to prevent races.
+    static DB_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn make_request(run_id: &str) -> RuntimeRequest {
         RuntimeRequest {
@@ -245,6 +254,36 @@ mod tests {
         }
     }
 
+    fn make_test_run(subprocess_pid: Option<i64>) -> AgentRun {
+        AgentRun {
+            id: "test-run".to_string(),
+            worktree_id: None,
+            repo_id: None,
+            claude_session_id: None,
+            prompt: "p".to_string(),
+            status: AgentRunStatus::Running,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            tmux_window: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid,
+            runtime: "claude".to_string(),
+        }
+    }
+
     #[test]
     fn spawn_rejects_path_traversal_run_id() {
         let runtime = ClaudeRuntime::new();
@@ -263,5 +302,199 @@ mod tests {
         let runtime = ClaudeRuntime::new();
         let request = make_request("run/id");
         assert!(runtime.spawn(&request).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_before_spawn_returns_failed() {
+        let runtime = ClaudeRuntime::new();
+        let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
+        assert!(
+            matches!(result, Err(PollError::Failed(_))),
+            "expected Failed, got: {result:?}"
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn poll_fails_on_non_unix() {
+        let runtime = ClaudeRuntime::new();
+        let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
+        assert!(
+            matches!(result, Err(PollError::Failed(_))),
+            "expected Failed on non-Unix, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn is_alive_returns_false_when_no_pid() {
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(None);
+        assert!(!runtime.is_alive(&run));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_alive_returns_true_for_self() {
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(Some(std::process::id() as i64));
+        assert!(runtime.is_alive(&run));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_alive_returns_false_for_dead_pid() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        let dead_pid = child.id() as i64;
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(Some(dead_pid));
+        assert!(!runtime.is_alive(&run));
+    }
+
+    #[test]
+    fn cancel_with_no_handle_and_no_pid() {
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(None);
+        assert!(runtime.cancel(&run).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancel_with_dead_pid_returns_ok() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        let dead_pid = child.id() as i64;
+        let runtime = ClaudeRuntime::new();
+        let run = make_test_run(Some(dead_pid));
+        assert!(runtime.cancel(&run).is_ok());
+    }
+
+    // spawn() reaches the binary-exec path when run_id is valid — on unix this
+    // attempts to exec the conductor binary (not present in test env), so the
+    // error is Workflow (exec failure), not InvalidInput (validation failure).
+    #[cfg(unix)]
+    #[test]
+    fn spawn_valid_run_id_reaches_exec_attempt() {
+        let runtime = ClaudeRuntime::new();
+        let request = make_request("valid-run-id-01");
+        let result = runtime.spawn(&request);
+        // The subprocess spawn will fail because the conductor binary is not
+        // present in the test binary's directory, but the error must come from
+        // the exec attempt (Workflow), not from run_id validation (InvalidInput).
+        match result {
+            Ok(()) => {
+                // Binary was present — handle must be populated after a successful spawn.
+                assert!(
+                    runtime.handle.lock().unwrap().is_some(),
+                    "handle should be populated after successful spawn"
+                );
+            }
+            Err(crate::error::ConductorError::Workflow(_)) => {} // expected in CI
+            Err(other) => panic!("expected Ok or Workflow error, got: {other:?}"),
+        }
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn spawn_returns_platform_error_on_non_unix() {
+        let runtime = ClaudeRuntime::new();
+        let request = make_request("valid-run-id-01");
+        let err = runtime
+            .spawn(&request)
+            .expect_err("expected Err on non-Unix platform");
+        assert!(
+            matches!(err, crate::error::ConductorError::Workflow(_)),
+            "expected Workflow error, got: {err:?}"
+        );
+    }
+
+    // cancel() takes the handle and calls abort() — the handle field is cleared.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_with_live_handle_aborts_and_clears_handle() {
+        use std::process::Stdio;
+        let child = std::process::Command::new("sleep")
+            .arg("1000")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("sleep should be available");
+        let handle = crate::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child failed");
+        let runtime = ClaudeRuntime::new();
+        *runtime.handle.lock().unwrap() = Some(handle);
+        let run = make_test_run(None);
+        assert!(runtime.cancel(&run).is_ok());
+        // handle must have been taken (aborted)
+        assert!(
+            runtime.handle.lock().unwrap().is_none(),
+            "handle should be None after cancel"
+        );
+    }
+
+    // Spawns a `sleep 1000` child and wraps it in a ClaudeRuntime ready for
+    // poll() tests.  Returns (runtime, tmp) — caller must hold `tmp` alive for
+    // the duration of the test so the temp dir is not cleaned up early.
+    #[cfg(unix)]
+    fn make_sleeping_runtime() -> (ClaudeRuntime, tempfile::TempDir) {
+        use std::process::Stdio;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db_file = tmp.path().join("test.db");
+        std::env::set_var("CONDUCTOR_DB_PATH", &db_file);
+        let child = std::process::Command::new("sleep")
+            .arg("1000")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("sleep should be available");
+        let handle = crate::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child failed");
+        let runtime = ClaudeRuntime::new();
+        *runtime.handle.lock().unwrap() = Some(handle);
+        (runtime, tmp)
+    }
+
+    // poll() returns Cancelled when the shutdown flag is set.
+    #[cfg(unix)]
+    #[test]
+    fn poll_shutdown_flag_returns_cancelled() {
+        let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
+        let (runtime, _tmp) = make_sleeping_runtime();
+
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let result = runtime.poll(
+            "test-shutdown-run",
+            Some(&shutdown),
+            std::time::Duration::from_secs(60),
+        );
+
+        std::env::remove_var("CONDUCTOR_DB_PATH");
+
+        assert!(
+            matches!(result, Err(PollError::Cancelled)),
+            "expected Cancelled, got: {result:?}"
+        );
+    }
+
+    // poll() returns NoResult when step_timeout elapses before the agent finishes.
+    #[cfg(unix)]
+    #[test]
+    fn poll_timeout_returns_no_result() {
+        let _lock = DB_PATH_ENV_LOCK.lock().unwrap();
+        let (runtime, _tmp) = make_sleeping_runtime();
+
+        let result = runtime.poll(
+            "test-timeout-run",
+            None,
+            std::time::Duration::from_millis(10),
+        );
+
+        std::env::remove_var("CONDUCTOR_DB_PATH");
+
+        assert!(
+            matches!(result, Err(PollError::NoResult)),
+            "expected NoResult, got: {result:?}"
+        );
     }
 }
