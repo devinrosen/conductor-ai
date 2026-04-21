@@ -169,18 +169,23 @@ impl AgentRuntime for CliRuntime {
                     let is_error = exit_code != 0;
 
                     let (result_text, input_tokens, output_tokens) =
-                        if let Ok(content) = std::fs::read_to_string(&state.output_path) {
-                            parse_output(&content, &self.config)
-                        } else {
-                            (
-                                if is_error {
-                                    Some(format!("process exited with code {exit_code}"))
-                                } else {
-                                    None
-                                },
-                                None,
-                                None,
-                            )
+                        match std::fs::read_to_string(&state.output_path) {
+                            Ok(content) => parse_output(&content, &self.config),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "CliRuntime: failed to read output file {}: {e}",
+                                    state.output_path.display()
+                                );
+                                (
+                                    if is_error {
+                                        Some(format!("process exited with code {exit_code}"))
+                                    } else {
+                                        None
+                                    },
+                                    None,
+                                    None,
+                                )
+                            }
                         };
 
                     if is_error {
