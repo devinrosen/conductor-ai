@@ -1014,7 +1014,7 @@ impl<'a> WorktreeManager<'a> {
             let _ = Command::new("git")
                 .args(["fetch", "origin", "--", new_base])
                 .current_dir(wt_path)
-                .output();
+                .status();
 
             let base_ref = format!("origin/{new_base}");
             if !Self::is_ancestor(wt_path, &base_ref)? {

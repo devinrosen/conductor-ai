@@ -245,8 +245,12 @@ pub(super) fn tool_set_base_branch(
     let repo_slug = require_arg!(args, "repo");
     let name = require_arg!(args, "name");
     let base_branch = get_arg(args, "base_branch");
-    let rebase = get_arg(args, "rebase")
-        .map(|v| v == "true")
+    let rebase = args
+        .get("rebase")
+        .map(|v| {
+            v.as_bool()
+                .unwrap_or_else(|| v.as_str().map(|s| s == "true").unwrap_or(false))
+        })
         .unwrap_or(false);
 
     let (conn, config) = match open_db_and_config(db_path) {
