@@ -115,7 +115,7 @@ impl AgentRuntime for CliRuntime {
             );
         }
 
-        *self.state.lock().unwrap() = Some(CliState {
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(CliState {
             child,
             pid,
             output_path,
@@ -134,7 +134,7 @@ impl AgentRuntime for CliRuntime {
         let mut state = self
             .state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .take()
             .ok_or_else(|| PollError::Failed("CliRuntime::poll called before spawn".into()))?;
 
@@ -404,5 +404,46 @@ mod tests {
             std::path::Path::new("/tmp/test.db"),
         );
         assert!(matches!(result, Err(PollError::Failed(_))));
+    }
+
+    // Regression test: lock().unwrap_or_else(|e| e.into_inner()) must not panic on a
+    // poisoned mutex. A thread that panics while holding the lock poisons it; the fix
+    // recovers the inner guard rather than panicking on the next access.
+    #[test]
+    fn poisoned_mutex_does_not_panic_on_poll() {
+        let runtime = make_runtime("echo");
+
+        // Poison the mutex: panic while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.state.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // The mutex is now poisoned. poll() must recover and return Failed, not panic.
+        let result = runtime.poll(
+            "no-such-run",
+            None,
+            Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
+        assert!(matches!(result, Err(PollError::Failed(_))));
+    }
+
+    // Regression test: spawn_impl path also uses unwrap_or_else; verify the poisoned
+    // state is overwritten without panicking.
+    #[test]
+    fn poisoned_mutex_does_not_panic_on_state_write() {
+        let runtime = make_runtime("echo");
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.state.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // Writing through a poisoned mutex must not panic.
+        let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            *runtime.state.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }));
+        assert!(recovered.is_ok(), "write through poisoned mutex panicked");
     }
 }
