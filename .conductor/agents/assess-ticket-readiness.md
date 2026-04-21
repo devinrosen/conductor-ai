@@ -34,13 +34,17 @@ Re-assess the ticket in light of these answers.
 
 7. **Already implemented** — Based on the git history and codebase scan, does this appear to already be partially or fully implemented?
 
+8. **Invalid or resolved** — Is the ticket a duplicate, already closed/merged, clearly off-scope for this project, or so vaguely described that it cannot ever be qualified? If yes, flag `should_close` and provide a `close_reason`.
+
 **Output:**
 
 Write a structured assessment with:
-- A clear READY or NOT READY verdict
+- A clear READY, NOT READY, or SHOULD CLOSE verdict
 - For NOT READY: a numbered list of specific questions or issues that must be resolved, written so a human can answer them directly
 - For READY: a one-paragraph summary of what the agent will implement and why you are confident the ticket is unambiguous
+- For SHOULD CLOSE: a brief explanation of why the ticket is invalid, already resolved, or no longer actionable (this becomes the `close_reason`)
 
 Emit `<<<CONDUCTOR_OUTPUT>>>` with:
 - `context`: your full assessment text
-- `markers`: include `ticket_ready` if the ticket is ready, `has_open_questions` if it is not
+- `markers`: include `ticket_ready` if the ticket is ready, `has_open_questions` if it is not, `should_close` if the ticket is invalid or resolved
+- `close_reason`: (only when `should_close`) a one-sentence human-readable explanation
