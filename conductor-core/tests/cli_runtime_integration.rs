@@ -152,6 +152,11 @@ fn test_cli_runtime_success() {
         result.tmux_window.is_some(),
         "tmux_window must be persisted so is_alive() and orphan reaper can track the run"
     );
+    assert_eq!(
+        result.input_tokens,
+        Some(42),
+        "token_fields extraction must persist stats.total_tokens into input_tokens"
+    );
 }
 
 /// Assert that a non-zero exit code causes the run to be marked `Failed`.
