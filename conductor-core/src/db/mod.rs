@@ -151,6 +151,12 @@ mod tests {
     }
 
     #[test]
+    fn open_database_error_on_bad_path() {
+        let bad = std::path::Path::new("/tmp/conductor_no_such_dir_xyz/test.db");
+        assert!(open_database(bad).is_err());
+    }
+
+    #[test]
     fn open_database_compat_error_on_bad_path() {
         let bad = std::path::Path::new("/tmp/conductor_no_such_dir_xyz/test.db");
         assert!(open_database_compat(bad).is_err());
