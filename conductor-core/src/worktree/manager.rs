@@ -1068,15 +1068,28 @@ impl<'a> WorktreeManager<'a> {
             .args(["merge-base", "--is-ancestor", base_ref, "HEAD"])
             .current_dir(wt_path)
             .status()
-            .map_err(|e| ConductorError::InvalidInput(format!("git merge-base failed: {e}")))?;
+            .map_err(|e| {
+                ConductorError::Git(crate::error::SubprocessFailure::from_message(
+                    "git merge-base",
+                    format!("failed to spawn: {e}"),
+                ))
+            })?;
         match status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            Some(code) => Err(ConductorError::InvalidInput(format!(
-                "git merge-base --is-ancestor failed with exit code {code} for ref '{base_ref}'"
-            ))),
-            None => Err(ConductorError::InvalidInput(
-                "git merge-base --is-ancestor was terminated by signal".into(),
+            Some(code) => Err(ConductorError::Git(
+                crate::error::SubprocessFailure {
+                    command: "git merge-base --is-ancestor".into(),
+                    exit_code: Some(code),
+                    stderr: format!("unexpected exit code {code} for ref '{base_ref}'"),
+                    stdout: String::new(),
+                },
+            )),
+            None => Err(ConductorError::Git(
+                crate::error::SubprocessFailure::from_message(
+                    "git merge-base --is-ancestor",
+                    "terminated by signal".into(),
+                ),
             )),
         }
     }
@@ -2102,6 +2115,27 @@ mod tests {
         (repo_dir, ws_dir, repo_path, wt_path, conn)
     }
 
+    /// Creates `branch_name` from current HEAD in `repo_path` and exposes it as
+    /// `refs/remotes/origin/<branch_name>` so ancestry checks work without a real remote.
+    fn setup_remote_branch(repo_path: &str, branch_name: &str) {
+        use std::process::Command;
+        Command::new("git")
+            .args(["checkout", "-b", branch_name])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", branch_name])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["update-ref", &format!("refs/remotes/origin/{branch_name}"), branch_name])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+    }
+
     #[test]
     fn test_set_base_branch_skips_validation_on_clear() {
         let conn = create_test_conn();
@@ -2124,23 +2158,7 @@ mod tests {
         let config = crate::config::Config::default();
 
         // Create a divergent branch (not an ancestor of feat/test) and expose it as origin/other
-        std::process::Command::new("git")
-            .args(["checkout", "-b", "other"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "other"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-
-        // Expose "other" as a remote-tracking ref so is_ancestor sees it without a real fetch.
-        std::process::Command::new("git")
-            .args(["update-ref", "refs/remotes/origin/other", "other"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
+        setup_remote_branch(&repo_path, "other");
 
         let _ = wt_path; // path is registered in DB
 
@@ -2192,23 +2210,8 @@ mod tests {
         let (_repo_dir, _ws_dir, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
         let config = crate::config::Config::default();
 
-        // Create a new branch "newbase" from main with a distinct commit.
-        std::process::Command::new("git")
-            .args(["checkout", "-b", "newbase"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "newbase-commit"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        // Expose as origin/newbase so is_ancestor can find it.
-        std::process::Command::new("git")
-            .args(["update-ref", "refs/remotes/origin/newbase", "newbase"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
+        // Create a new branch "newbase" from main with a distinct commit and expose as origin/newbase.
+        setup_remote_branch(&repo_path, "newbase");
         // Set upstream tracking in worktree so rebase can run.
         std::process::Command::new("git")
             .args(["config", "user.email", "t@t.com"])
@@ -2260,22 +2263,8 @@ mod tests {
         let (_repo_dir, _ws_dir, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
         let config = crate::config::Config::default();
 
-        // Create a divergent branch and expose it as origin/newbase.
-        std::process::Command::new("git")
-            .args(["checkout", "-b", "newbase-dirty"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "newbase-dirty-commit"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["update-ref", "refs/remotes/origin/newbase-dirty", "newbase-dirty"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
+        // Create a divergent branch and expose it as origin/newbase-dirty.
+        setup_remote_branch(&repo_path, "newbase-dirty");
 
         // Create an uncommitted change in the worktree so dirty check fires.
         let dirty_file = format!("{wt_path}/dirty.txt");

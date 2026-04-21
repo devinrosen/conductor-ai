@@ -220,35 +220,11 @@ pub fn handle_worktree(
 
 #[cfg(test)]
 mod tests {
-    use conductor_core::db::open_database;
-    use conductor_core::repo::RepoManager;
     use conductor_core::worktree::WorktreeManager;
-
-    fn make_test_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_database(file.path()).unwrap();
-        (file, conn)
-    }
-
-    fn insert_repo_and_worktree(conn: &rusqlite::Connection) -> String {
-        let config = conductor_core::config::Config::default();
-        let mgr = RepoManager::new(conn, &config);
-        let repo = mgr
-            .register("test-repo", "/tmp/r", "https://github.com/x/y.git", None)
-            .unwrap();
-        conn.execute(
-            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-             VALUES ('wt1', ?1, 'feat-test', 'feat/test', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
-            rusqlite::params![repo.id],
-        )
-        .unwrap();
-        repo.id
-    }
 
     #[test]
     fn test_set_base_branch_clear_succeeds() {
-        let (_f, conn) = make_test_db();
-        insert_repo_and_worktree(&conn);
+        let conn = conductor_core::test_helpers::setup_db();
         let config = conductor_core::config::Config::default();
         let mgr = WorktreeManager::new(&conn, &config);
         // Clearing (None) requires no git ops — always succeeds on a DB-only path.
@@ -258,8 +234,7 @@ mod tests {
 
     #[test]
     fn test_set_base_branch_rejects_dash_branch() {
-        let (_f, conn) = make_test_db();
-        insert_repo_and_worktree(&conn);
+        let conn = conductor_core::test_helpers::setup_db();
         let config = conductor_core::config::Config::default();
         let mgr = WorktreeManager::new(&conn, &config);
         let result = mgr.set_base_branch("test-repo", "feat-test", Some("--bad"), false);
@@ -271,19 +246,17 @@ mod tests {
 
     #[test]
     fn test_set_base_branch_rebase_flag_forwarded() {
-        let (_f, conn) = make_test_db();
-        insert_repo_and_worktree(&conn);
+        let conn = conductor_core::test_helpers::setup_db();
         let config = conductor_core::config::Config::default();
         let mgr = WorktreeManager::new(&conn, &config);
         // With rebase=true and a non-existent ref the ancestry check will error — the
         // important thing is the rebase path is reached (error is NOT the "pass rebase=true" hint).
         let result = mgr.set_base_branch("test-repo", "feat-test", Some("release/v1"), true);
-        if let Err(e) = &result {
-            let msg = e.to_string();
-            assert!(
-                !msg.contains("Pass rebase=true"),
-                "rebase flag should be forwarded, not prompt user to set it: {msg}"
-            );
-        }
+        assert!(result.is_err(), "expected error for non-existent ref: {result:?}");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            !msg.contains("Pass rebase=true"),
+            "rebase flag should be forwarded, not prompt user to set it: {msg}"
+        );
     }
 }
