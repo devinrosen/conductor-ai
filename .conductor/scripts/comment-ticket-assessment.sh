@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PRIOR_OUTPUT="${PRIOR_OUTPUT:-}"
+PRIOR_CONTEXTS="${PRIOR_CONTEXTS:-}"
+PRIOR_CONTENT="${PRIOR_CONTENT:-}"
 TICKET_URL="${TICKET_URL:-}"
 TICKET_SOURCE_ID="${TICKET_SOURCE_ID:-}"
 
@@ -27,33 +28,39 @@ emit_output() {
   printf '<<<CONDUCTOR_OUTPUT>>>\n%s\n<<<END_CONDUCTOR_OUTPUT>>>\n' "$output"
 }
 
-# Detect verdict — check SHOULD CLOSE before NOT READY before READY to avoid substring collisions
+# Detect verdict from markers in {{prior_contexts}} JSON array.
+# prior_contexts is an array of ContextEntry objects, each with a "markers" array.
+# We scan all entries for the verdict marker set by assess-ticket-readiness.
+has_marker() {
+  echo "$PRIOR_CONTEXTS" | jq -e --arg m "$1" '[.[].markers[]] | index($m) != null' > /dev/null 2>&1
+}
+
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
-if echo "$PRIOR_OUTPUT" | grep -q "SHOULD CLOSE"; then
+if has_marker "should_close"; then
   VERDICT="SHOULD_CLOSE"
   LABEL="pending-close"
   LABEL_COLOR="d93f0b"
   LABEL_DESC="Ticket is invalid, resolved, or no longer actionable"
   MARKERS='["should_close"]'
-  printf '## ⚠️ Pending Close\n\n%s\n' "$PRIOR_OUTPUT" > "$tmp"
-elif echo "$PRIOR_OUTPUT" | grep -q "NOT READY"; then
+  printf '## ⚠️ Pending Close\n\n%s\n' "$PRIOR_CONTENT" > "$tmp"
+elif has_marker "has_open_questions"; then
   VERDICT="NOT_READY"
   LABEL="needs-work"
   LABEL_COLOR="e4e669"
   LABEL_DESC="Ticket requires clarification before implementation"
   MARKERS='["has_open_questions"]'
-  printf '## ❓ Open Questions\n\nThe following questions or issues must be resolved before this ticket can be handed off to an autonomous agent:\n\n%s\n' "$PRIOR_OUTPUT" > "$tmp"
-elif echo "$PRIOR_OUTPUT" | grep -q "READY"; then
+  printf '## ❓ Open Questions\n\nThe following questions or issues must be resolved before this ticket can be handed off to an autonomous agent:\n\n%s\n' "$PRIOR_CONTENT" > "$tmp"
+elif has_marker "ticket_ready"; then
   VERDICT="READY"
   LABEL="qualified"
   LABEL_COLOR="0075ca"
   LABEL_DESC="Ticket is ready for autonomous implementation"
   MARKERS='["ticket_ready"]'
-  printf '## ✅ Ready for Implementation\n\n%s\n' "$PRIOR_OUTPUT" > "$tmp"
+  printf '## ✅ Ready for Implementation\n\n%s\n' "$PRIOR_CONTENT" > "$tmp"
 else
-  emit_output '[]' "Could not determine verdict from prior output — no SHOULD CLOSE, NOT READY, or READY found"
+  emit_output '[]' "Could not determine verdict — no should_close, has_open_questions, or ticket_ready marker found in prior_contexts: ${PRIOR_CONTEXTS}"
   exit 0
 fi
 
