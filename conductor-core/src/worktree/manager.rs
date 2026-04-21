@@ -995,6 +995,14 @@ impl<'a> WorktreeManager<'a> {
         base_branch: Option<&str>,
         rebase: bool,
     ) -> Result<()> {
+        if let Some(new_base) = base_branch {
+            if new_base.starts_with('-') {
+                return Err(ConductorError::InvalidInput(format!(
+                    "Invalid branch name '{new_base}': branch names must not start with '-'"
+                )));
+            }
+        }
+
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
@@ -1004,7 +1012,7 @@ impl<'a> WorktreeManager<'a> {
 
             // Fetch the remote ref so the ancestor check is current.
             let _ = Command::new("git")
-                .args(["fetch", "origin", new_base])
+                .args(["fetch", "origin", "--", new_base])
                 .current_dir(wt_path)
                 .output();
 
@@ -1014,7 +1022,7 @@ impl<'a> WorktreeManager<'a> {
                     return Err(ConductorError::InvalidInput(format!(
                         "'{new_base}' is not an ancestor of the worktree HEAD. \
                          The branch was forked from a different base. \
-                         Use --rebase to rebase the worktree onto the new base first."
+                         Rebase the worktree onto the new base before updating the recorded base branch."
                     )));
                 }
 
@@ -1061,7 +1069,16 @@ impl<'a> WorktreeManager<'a> {
             .current_dir(wt_path)
             .status()
             .map_err(|e| ConductorError::InvalidInput(format!("git merge-base failed: {e}")))?;
-        Ok(status.success())
+        match status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            Some(code) => Err(ConductorError::InvalidInput(format!(
+                "git merge-base --is-ancestor failed with exit code {code} for ref '{base_ref}'"
+            ))),
+            None => Err(ConductorError::InvalidInput(
+                "git merge-base --is-ancestor was terminated by signal".into(),
+            )),
+        }
     }
 
     /// Push the worktree branch to origin.
@@ -2106,7 +2123,7 @@ mod tests {
         let (_repo_dir, _ws_dir, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
         let config = crate::config::Config::default();
 
-        // Create a divergent branch (not an ancestor of feat/test)
+        // Create a divergent branch (not an ancestor of feat/test) and expose it as origin/other
         std::process::Command::new("git")
             .args(["checkout", "-b", "other"])
             .current_dir(&repo_path)
@@ -2118,14 +2135,18 @@ mod tests {
             .output()
             .unwrap();
 
-        // Simulate origin/other by creating a local ref
+        // Expose "other" as a remote-tracking ref so is_ancestor sees it without a real fetch.
+        std::process::Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/other", "other"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
         let _ = wt_path; // path is registered in DB
 
         let mgr = WorktreeManager::new(&conn, &config);
-        // "other" is not an ancestor of feat/test HEAD; fetch will fail (no real remote)
-        // but is_ancestor will return false, so we expect an InvalidInput error
+        // origin/other exists but is a divergent commit — not an ancestor of feat/test HEAD.
         let result = mgr.set_base_branch("test-repo", "feat-test", Some("other"), false);
-        // Fetch fails silently; then is_ancestor check: "origin/other" doesn't exist → non-zero exit → false
         assert!(
             matches!(result, Err(ConductorError::InvalidInput(_))),
             "expected InvalidInput for non-ancestor base, got: {result:?}"
@@ -2167,11 +2188,96 @@ mod tests {
     }
 
     #[test]
-    fn test_set_base_branch_rebase_dirty_rejected() {
-        let (_repo_dir, _ws_dir, _repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+    fn test_set_base_branch_rebase_onto_non_ancestor() {
+        let (_repo_dir, _ws_dir, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
         let config = crate::config::Config::default();
 
-        // Create an uncommitted change in the worktree
+        // Create a new branch "newbase" from main with a distinct commit.
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "newbase"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "newbase-commit"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        // Expose as origin/newbase so is_ancestor can find it.
+        std::process::Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/newbase", "newbase"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        // Set upstream tracking in worktree so rebase can run.
+        std::process::Command::new("git")
+            .args(["config", "user.email", "t@t.com"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "T"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        // "newbase" is NOT an ancestor of feat/test; with rebase=true the worktree should be rebased.
+        let result = mgr.set_base_branch("test-repo", "feat-test", Some("newbase"), true);
+        assert!(
+            result.is_ok(),
+            "rebase onto non-ancestor should succeed: {result:?}"
+        );
+
+        // Verify DB was updated.
+        let base: Option<String> = conn
+            .query_row(
+                "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(base.as_deref(), Some("newbase"));
+    }
+
+    #[test]
+    fn test_set_base_branch_rejects_dash_branch_name() {
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let result = mgr.set_base_branch("test-repo", "feat-test", Some("--upload-pack=cmd"), false);
+        assert!(
+            matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("must not start with")),
+            "expected InvalidInput for dash-prefixed branch name, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_set_base_branch_rebase_dirty_rejected() {
+        let (_repo_dir, _ws_dir, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        let config = crate::config::Config::default();
+
+        // Create a divergent branch and expose it as origin/newbase.
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "newbase-dirty"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "newbase-dirty-commit"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/newbase-dirty", "newbase-dirty"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Create an uncommitted change in the worktree so dirty check fires.
         let dirty_file = format!("{wt_path}/dirty.txt");
         std::fs::write(&dirty_file, "dirty").unwrap();
         std::process::Command::new("git")
@@ -2181,8 +2287,8 @@ mod tests {
             .unwrap();
 
         let mgr = WorktreeManager::new(&conn, &config);
-        // With rebase=true and dirty worktree, should return an error about uncommitted changes
-        let result = mgr.set_base_branch("test-repo", "feat-test", Some("main"), true);
+        // origin/newbase-dirty is NOT an ancestor of feat/test; rebase=true → dirty check fires.
+        let result = mgr.set_base_branch("test-repo", "feat-test", Some("newbase-dirty"), true);
         assert!(
             matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("uncommitted")),
             "expected uncommitted-changes error for dirty rebase, got: {result:?}"

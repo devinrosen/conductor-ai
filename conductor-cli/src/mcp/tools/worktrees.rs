@@ -725,4 +725,106 @@ mod tests {
             "expected slug in output, got: {text}"
         );
     }
+
+    #[test]
+    fn test_tool_create_worktree_missing_repo_returns_error() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("name".into(), Value::String("feat-new".into()));
+        let result = tool_create_worktree(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_tool_create_worktree_missing_name_returns_error() {
+        let (_f, db) = make_test_db();
+        let args = args_with("repo", "my-repo");
+        let result = tool_create_worktree(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_tool_create_worktree_unknown_repo_returns_error() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("nonexistent".into()));
+        args.insert("name".into(), Value::String("feat-new".into()));
+        let result = tool_create_worktree(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("nonexistent") || text.contains("not found") || text.contains("No such"),
+            "expected descriptive error for unknown repo, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_tool_create_worktree_with_from_branch_propagates() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("nonexistent-repo".into()));
+        args.insert("name".into(), Value::String("feat-based".into()));
+        args.insert("from_branch".into(), Value::String("release/v1.0".into()));
+        // The call will fail because the repo doesn't exist, but the from_branch arg
+        // must not cause a parse error — it should reach the repo lookup phase.
+        let result = tool_create_worktree(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // Error is about the repo, not about an unknown/invalid parameter.
+        assert!(
+            !text.contains("unknown parameter") && !text.contains("from_branch"),
+            "from_branch should be accepted without error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_tool_set_base_branch_missing_repo_returns_error() {
+        let (_f, db) = make_test_db();
+        let args = args_with("name", "feat-wt");
+        let result = tool_set_base_branch(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_tool_set_base_branch_missing_name_returns_error() {
+        let (_f, db) = make_test_db();
+        let args = args_with("repo", "my-repo");
+        let result = tool_set_base_branch(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_tool_set_base_branch_unknown_worktree_returns_error() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("nonexistent".into()));
+        args.insert("name".into(), Value::String("feat-wt".into()));
+        let result = tool_set_base_branch(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_tool_set_base_branch_dash_name_rejected() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("any-repo".into()));
+        args.insert("name".into(), Value::String("feat-wt".into()));
+        args.insert("base_branch".into(), Value::String("--malicious".into()));
+        let result = tool_set_base_branch(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("must not start with"),
+            "expected branch-name validation error, got: {text}"
+        );
+    }
 }
