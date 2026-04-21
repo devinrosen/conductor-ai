@@ -349,10 +349,7 @@ fn test_cli_runtime_cancel_kills_window_and_marks_cancelled() {
         run.tmux_window.is_some(),
         "tmux_window must be set after spawn"
     );
-    assert!(
-        runtime.is_alive(&run),
-        "run must be alive before cancel"
-    );
+    assert!(runtime.is_alive(&run), "run must be alive before cancel");
 
     runtime.cancel(&run).expect("cancel must succeed");
 
