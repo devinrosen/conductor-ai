@@ -1019,10 +1019,23 @@ impl<'a> WorktreeManager<'a> {
             let wt_path = std::path::Path::new(&worktree.path);
 
             // Fetch the remote ref so the ancestor check is current.
-            let _ = Command::new("git")
-                .args(["fetch", "origin", "--", new_base])
+            let fetch_result = Command::new("git")
+                .args(["fetch", "origin", new_base])
                 .current_dir(wt_path)
-                .status();
+                .output();
+            match fetch_result {
+                Ok(out) if !out.status.success() => {
+                    tracing::warn!(
+                        branch = new_base,
+                        stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                        "git fetch origin failed; ancestor check may be stale"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(branch = new_base, error = %e, "failed to spawn git fetch origin");
+                }
+                Ok(_) => {}
+            }
 
             let base_ref = format!("origin/{new_base}");
             if !Self::is_ancestor(wt_path, &base_ref)? {
@@ -2321,6 +2334,70 @@ mod tests {
         assert!(
             matches!(result, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("uncommitted")),
             "expected uncommitted-changes error for dirty rebase, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_set_base_branch_fetch_non_zero_continues() {
+        use std::process::Command;
+        // git fetch will fail with non-zero (no origin remote configured), but
+        // set_base_branch must continue and succeed when the ref already exists locally.
+        let (_repo_dir, _ws_dir, repo_path, _wt_path, conn) = setup_git_repo_with_worktree();
+        let config = crate::config::Config::default();
+
+        // Expose main as origin/main without a real remote so the ancestor check works.
+        Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/main", "main"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        // "main" IS an ancestor of feat/test; fetch will fail (no remote) but that is non-fatal.
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("main"),
+            SetBaseBranchOptions::default(),
+        );
+        assert!(
+            result.is_ok(),
+            "fetch non-zero exit should be a warning, not a hard error: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_set_base_branch_fetch_spawn_error_continues() {
+        // Use a worktree path that does not exist on disk so that Command::output()
+        // returns Err (spawn failure).  set_base_branch must log the warning and not
+        // panic; it will subsequently fail at is_ancestor (also a spawn error), so we
+        // assert a ConductorError::Git rather than any panic or InvalidInput.
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r1','test-repo','/nonexistent/repo','https://github.com/x/y.git','/nonexistent/ws','2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt1','r1','feat-test','feat/test','/nonexistent/ws/feat-test','active','2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let result = mgr.set_base_branch(
+            "test-repo",
+            "feat-test",
+            Some("main"),
+            SetBaseBranchOptions::default(),
+        );
+        assert!(
+            matches!(result, Err(ConductorError::Git(_))),
+            "expected Git error from is_ancestor after fetch spawn failure, got: {result:?}"
         );
     }
 }
