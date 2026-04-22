@@ -40,10 +40,9 @@ impl GateResolver for HumanApprovalGateResolver {
             .map_err(|e| ConductorError::Workflow(e.to_string()))?;
         match state {
             GateApprovalState::Approved { feedback, .. } => Ok(GatePoll::Approved(feedback)),
-            GateApprovalState::Rejected { .. } => Ok(GatePoll::Rejected(format!(
-                "Gate '{}' rejected",
-                params.gate_name
-            ))),
+            GateApprovalState::Rejected { feedback } => Ok(GatePoll::Rejected(
+                feedback.unwrap_or_else(|| format!("Gate '{}' rejected", params.gate_name)),
+            )),
             GateApprovalState::Pending => Ok(GatePoll::Pending),
         }
     }

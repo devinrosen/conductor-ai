@@ -11,8 +11,8 @@ use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
-    FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
-    WorkflowPersistence,
+    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState,
+    NewRun, NewStep, StepUpdate, WorkflowPersistence,
 };
 
 struct InMemoryStore {
@@ -326,22 +326,16 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         let Some(step) = store.steps.get(step_id) else {
             return Ok(GateApprovalState::Pending);
         };
-        if step.gate_approved_at.is_some() || step.status == WorkflowStepStatus::Completed {
-            let selections = step
-                .gate_selections
-                .as_deref()
-                .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok());
-            return Ok(GateApprovalState::Approved {
-                feedback: step.gate_feedback.clone(),
-                selections,
-            });
-        }
-        if step.status == WorkflowStepStatus::Failed {
-            return Ok(GateApprovalState::Rejected {
-                reason: "gate rejected".into(),
-            });
-        }
-        Ok(GateApprovalState::Pending)
+        let selections = step
+            .gate_selections
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok());
+        Ok(gate_approval_state_from_fields(
+            step.gate_approved_at.as_deref(),
+            step.status.clone(),
+            step.gate_feedback.clone(),
+            selections,
+        ))
     }
 
     fn approve_gate(

@@ -95,8 +95,23 @@ pub enum GateApprovalState {
         selections: Option<Vec<String>>,
     },
     Rejected {
-        reason: String,
+        feedback: Option<String>,
     },
+}
+
+pub(crate) fn gate_approval_state_from_fields(
+    approved_at: Option<&str>,
+    status: WorkflowStepStatus,
+    feedback: Option<String>,
+    selections: Option<Vec<String>>,
+) -> GateApprovalState {
+    if approved_at.is_some() || status == WorkflowStepStatus::Completed {
+        return GateApprovalState::Approved { feedback, selections };
+    }
+    if status == WorkflowStepStatus::Failed {
+        return GateApprovalState::Rejected { feedback };
+    }
+    GateApprovalState::Pending
 }
 
 /// Abstracts all persistence reads and writes needed by the workflow engine.
