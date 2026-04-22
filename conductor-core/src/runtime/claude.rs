@@ -147,7 +147,15 @@ fn poll_unix(
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
-    let prompt_file = rt.prompt_file.lock().ok().and_then(|mut g| g.take());
+    let prompt_file = match rt.prompt_file.lock() {
+        Ok(mut g) => g.take(),
+        Err(_) => {
+            tracing::warn!(
+                "ClaudeRuntime: prompt_file mutex poisoned in poll — prompt file will not be cleaned up"
+            );
+            None
+        }
+    };
     let pid = handle.pid();
 
     let tracking_conn = crate::db::open_database_compat(db_path)
