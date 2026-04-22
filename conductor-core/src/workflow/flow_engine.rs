@@ -74,16 +74,7 @@ mod tests {
         ) -> crate::error::Result<ActionOutput> {
             Ok(ActionOutput {
                 markers: vec!["alpha".to_string()],
-                context: None,
-                result_text: None,
-                structured_output: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                input_tokens: None,
-                output_tokens: None,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
+                ..Default::default()
             })
         }
     }
@@ -100,16 +91,7 @@ mod tests {
         ) -> crate::error::Result<ActionOutput> {
             Ok(ActionOutput {
                 markers: vec!["beta".to_string()],
-                context: None,
-                result_text: None,
-                structured_output: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                input_tokens: None,
-                output_tokens: None,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
+                ..Default::default()
             })
         }
     }
