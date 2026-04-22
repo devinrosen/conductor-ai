@@ -71,13 +71,18 @@ pub(super) struct ResumeContext {
 
 /// Build the default `ActionRegistry` for a workflow run.
 ///
-/// Registers `ClaudeAgentExecutor` as the fallback so every `call <name>` step
-/// routes to the Claude agent runtime unless a more-specific named executor is
-/// registered in the future.
+/// Registers `ApiCallExecutor` as a named executor (for test injection via the
+/// same name) and `ClaudeAgentExecutor` as the catch-all fallback.  In normal
+/// execution `ClaudeAgentExecutor` is the entry point for every `call <name>`
+/// step; it delegates to `ApiCallExecutor` internally when schema + API key are
+/// both present.
 fn build_default_action_registry(
     config: &Config,
 ) -> crate::workflow::action_executor::ActionRegistry {
     crate::workflow::flow_engine::FlowEngineBuilder::new()
+        .action(Box::new(
+            crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
+        ))
         .action_fallback(Box::new(
             crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(config.clone()),
         ))

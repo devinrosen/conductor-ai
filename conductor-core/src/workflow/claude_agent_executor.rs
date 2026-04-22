@@ -28,6 +28,14 @@ impl ActionExecutor for ClaudeAgentExecutor {
     }
 
     fn execute(&self, ectx: &ExecutionContext, params: &ActionParams) -> Result<ActionOutput> {
+        // When a schema and API key are both present, delegate to ApiCallExecutor.
+        // This preserves the architectural invariant: all call steps route through
+        // ActionExecutor; ClaudeAgentExecutor is the subprocess fallback only.
+        if params.schema.is_some() && self.config.anthropic_api_key().is_some() {
+            return crate::workflow::api_call_executor::ApiCallExecutor::new(self.config.clone())
+                .execute(ectx, params);
+        }
+
         // Hot-reload: read the .md file fresh on every call so that new agent
         // definitions take effect without restarting the conductor process.
         let working_dir_str = ectx.working_dir.to_string_lossy();
