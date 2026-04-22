@@ -19,6 +19,10 @@ pub(crate) mod helpers;
 pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
+pub mod persistence;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod persistence_memory;
+pub mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod run_context;
 pub(crate) mod status;
@@ -62,6 +66,11 @@ pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::{FanOutItemRow, InvalidWorkflowEntry, WorkflowManager};
 pub use output::{parse_conductor_output, ConductorOutput};
+pub use persistence::{
+    FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
+    WorkflowPersistence,
+};
+pub use persistence_sqlite::SqliteWorkflowPersistence;
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, GateAnalyticsRow,

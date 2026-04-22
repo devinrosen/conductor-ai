@@ -205,7 +205,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
     };
 
     // Resolve the actual DB file path from the connection so that the
-    // HumanApprovalGateResolver opens the right DB (important in tests that
+    // SqliteWorkflowPersistence opens the right DB (important in tests that
     // use named temp files instead of the default conductor.db location).
     let db_path: std::path::PathBuf = state
         .conn
@@ -217,7 +217,9 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
 
     // Build the token cache and resolver registry.
     let token_cache = Arc::new(GitHubTokenCache::new(None));
-    let resolvers = build_default_gate_resolvers(db_path.clone());
+    let persistence: Arc<dyn crate::workflow::persistence::WorkflowPersistence> =
+        Arc::new(crate::workflow::persistence_sqlite::SqliteWorkflowPersistence::open(&db_path)?);
+    let resolvers = build_default_gate_resolvers(persistence);
 
     let resolver = resolvers.get(gate_type_str).ok_or_else(|| {
         ConductorError::Workflow(format!("no registered GateResolver for '{gate_type_str}'"))
