@@ -19,6 +19,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       workflows: ${{ steps.filter.outputs.workflows }}
       desktop: ${{ steps.filter.outputs.desktop }}
+      migrations: ${{ steps.filter.outputs.migrations }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -50,6 +51,8 @@ jobs:
               - 'conductor-desktop/**'
             workflows:
               - '.conductor/**'
+            migrations:
+              - 'conductor-core/src/db/migrations/**'
 
   fmt:
     name: Format
@@ -132,6 +135,8 @@ jobs:
 
   schema-diagram-count:
     name: Schema Diagram Count
+    needs: [changes]
+    if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -147,6 +152,8 @@ jobs:
 
   schema-diagram-sync:
     name: Schema Diagram Sync
+    needs: [changes]
+    if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
