@@ -56,12 +56,22 @@ impl AgentRuntime for ClaudeRuntime {
             };
             let (h, pf) = crate::agent_runtime::try_spawn_headless_run(&params)
                 .map_err(crate::error::ConductorError::Workflow)?;
-            if let Ok(mut guard) = self.handle.lock() {
-                *guard = Some(h);
-            }
-            if let Ok(mut guard) = self.prompt_file.lock() {
-                *guard = Some(pf);
-            }
+            self.handle
+                .lock()
+                .map_err(|_| {
+                    crate::error::ConductorError::Workflow(
+                        "ClaudeRuntime: handle mutex poisoned during spawn".into(),
+                    )
+                })
+                .map(|mut guard| *guard = Some(h))?;
+            self.prompt_file
+                .lock()
+                .map_err(|_| {
+                    crate::error::ConductorError::Workflow(
+                        "ClaudeRuntime: prompt_file mutex poisoned during spawn".into(),
+                    )
+                })
+                .map(|mut guard| *guard = Some(pf))?;
             Ok(())
         }
         #[cfg(not(unix))]
@@ -137,7 +147,15 @@ fn poll_unix(
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
-    let prompt_file = rt.prompt_file.lock().ok().and_then(|mut g| g.take());
+    let prompt_file = match rt.prompt_file.lock() {
+        Ok(mut g) => g.take(),
+        Err(_) => {
+            tracing::warn!(
+                "ClaudeRuntime: prompt_file mutex poisoned in poll — prompt file will not be cleaned up"
+            );
+            None
+        }
+    };
     let pid = handle.pid();
 
     let tracking_conn = crate::db::open_database_compat(db_path)
@@ -506,6 +524,83 @@ mod tests {
         assert!(
             matches!(result, Err(PollError::NoResult)),
             "expected NoResult, got: {result:?}"
+        );
+    }
+
+    // Regression: a poisoned handle mutex in spawn_impl must return
+    // ConductorError::Workflow instead of silently dropping the handle.
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_handle_mutex_spawn_returns_workflow_error() {
+        let runtime = ClaudeRuntime::default();
+
+        // Poison the mutex by panicking while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.handle.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        let request = make_request("valid-run-id-poison-test");
+        let result = runtime.spawn_validated(&request);
+        assert!(
+            matches!(result, Err(crate::error::ConductorError::Workflow(_))),
+            "expected Workflow error on poisoned handle mutex, got: {result:?}"
+        );
+    }
+
+    // Regression: a poisoned prompt_file mutex in poll_unix must not panic — the fix logs a
+    // warning and proceeds with no prompt-file cleanup rather than calling unwrap().
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_prompt_file_mutex_poll_does_not_panic() {
+        let (runtime, _tmp, db_file) = make_sleeping_runtime();
+
+        // Poison the prompt_file mutex by panicking while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.prompt_file.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // poll() must not panic — the poisoned prompt_file is handled gracefully.
+        // Use the shutdown flag so we get a fast, deterministic termination.
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let result = runtime.poll(
+            "test-poisoned-prompt-file",
+            Some(&shutdown),
+            std::time::Duration::from_secs(60),
+            &db_file,
+        );
+
+        // The poll exits due to shutdown, not due to a panic or spurious Failed from
+        // the poisoned prompt_file mutex.
+        assert!(
+            matches!(result, Err(PollError::Cancelled)),
+            "expected Cancelled (not panic/Failed from poisoned prompt_file), got: {result:?}"
+        );
+    }
+
+    // Regression: a poisoned handle mutex in poll() must surface as PollError::Failed
+    // rather than causing a panic.
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_handle_mutex_poll_returns_failed() {
+        let runtime = ClaudeRuntime::default();
+
+        // Poison the mutex by panicking while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.handle.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        let result = runtime.poll(
+            "some-run-id",
+            None,
+            std::time::Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
+        assert!(
+            matches!(result, Err(PollError::Failed(_))),
+            "expected Failed on poisoned handle mutex, got: {result:?}"
         );
     }
 }
