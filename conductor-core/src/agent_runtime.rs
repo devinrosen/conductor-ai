@@ -195,9 +195,9 @@ pub fn build_agent_args_with_mode(
 #[cfg(unix)]
 pub struct HeadlessHandle {
     pid: u32,
-    stdout: std::process::ChildStdout,
-    stderr: std::process::ChildStderr,
-    child: std::process::Child,
+    stdout: Option<std::process::ChildStdout>,
+    stderr: Option<std::process::ChildStderr>,
+    child: Option<std::process::Child>,
 }
 
 #[cfg(unix)]
@@ -218,9 +218,9 @@ impl HeadlessHandle {
             .ok_or_else(|| "HeadlessHandle: child has no stderr pipe".to_string())?;
         Ok(Self {
             pid,
-            stdout,
-            stderr,
-            child,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            child: Some(child),
         })
     }
 
@@ -253,15 +253,15 @@ impl HeadlessHandle {
     ///
     /// [`into_drain_parts`]: HeadlessHandle::into_drain_parts
     pub fn into_stderr_drain_parts(
-        self,
+        mut self,
     ) -> (
         std::process::ChildStderr,
         std::process::ChildStdout,
         impl FnOnce(),
     ) {
-        let stderr = self.stderr;
-        let stdout = self.stdout;
-        let mut child = self.child;
+        let stderr = self.stderr.take().expect("stderr already taken");
+        let stdout = self.stdout.take().expect("stdout already taken");
+        let mut child = self.child.take().expect("child already taken");
         let finish = move || {
             let _ = child.wait();
         };
@@ -287,10 +287,10 @@ impl HeadlessHandle {
     /// The returned `finish` closure drops `stderr` first so the child receives
     /// EPIPE on any pending stderr writes and can exit; `wait()` then returns
     /// immediately.
-    pub fn into_drain_parts(self) -> (std::process::ChildStdout, impl FnOnce()) {
-        let stdout = self.stdout;
-        let stderr = self.stderr;
-        let mut child = self.child;
+    pub fn into_drain_parts(mut self) -> (std::process::ChildStdout, impl FnOnce()) {
+        let stdout = self.stdout.take().expect("stdout already taken");
+        let stderr = self.stderr.take().expect("stderr already taken");
+        let mut child = self.child.take().expect("child already taken");
         let finish = move || {
             drop(stderr);
             let _ = child.wait();
@@ -305,16 +305,31 @@ impl HeadlessHandle {
     /// `wait()` while the read end is still open would deadlock because the child
     /// can never exit.  Dropping the pipes first causes the child's writes to
     /// fail with EPIPE so it can exit, after which `wait()` reaps it immediately.
-    pub fn abort(self) {
-        drop(self.stdout);
-        drop(self.stderr);
-        let mut child = self.child;
+    pub fn abort(mut self) {
+        drop(self.stdout.take());
+        drop(self.stderr.take());
         // Explicitly kill the process so it terminates immediately rather than
         // relying on EPIPE, which only fires when the child next attempts a write.
         // A compute-heavy child that rarely writes could otherwise run indefinitely.
         // kill() returns an error if the process already exited — safe to ignore.
-        let _ = child.kill();
-        let _ = child.wait();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HeadlessHandle {
+    fn drop(&mut self) {
+        // Close pipe read-ends first so a pipe-filling child receives EPIPE
+        // and can exit; then kill() for any child that isn't writing to pipes.
+        drop(self.stdout.take());
+        drop(self.stderr.take());
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -1298,6 +1313,40 @@ mod tests {
             elapsed.as_secs() < 5,
             "abort() took {:?} on a pipe-filling child — kill() before wait() is required",
             elapsed
+        );
+    }
+
+    /// Verify that dropping a `HeadlessHandle` without calling `abort()` terminates
+    /// the child process promptly and leaves no orphan.
+    #[cfg(unix)]
+    #[test]
+    fn drop_kills_child_without_explicit_abort() {
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn sleep 60");
+        let pid = child.id();
+        let handle = super::HeadlessHandle::from_child(child).expect("from_child failed");
+
+        let start = Instant::now();
+        drop(handle);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_secs() < 5,
+            "Drop took {:?} — kill() must be called before wait()",
+            elapsed
+        );
+        // Process should be dead (ESRCH = no such process).
+        let still_alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        assert!(
+            !still_alive,
+            "child {pid} should be dead after HeadlessHandle drop"
         );
     }
 
