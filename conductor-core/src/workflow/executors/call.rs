@@ -1,14 +1,14 @@
-use crate::agent::{AgentManager, AgentRunStatus};
+use crate::agent::AgentManager;
 use crate::agent_config::AgentSpec;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::CallNode;
 
+use crate::workflow::action_executor::{ActionParams, ExecutionContext, EXECUTOR_SHUTDOWN_MSG};
 use crate::workflow::engine::{
     handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip, ExecutionState,
 };
 use crate::workflow::manager::WorkflowManager;
-use crate::workflow::output::interpret_agent_output;
-use crate::workflow::prompt_builder::build_agent_prompt;
+use crate::workflow::prompt_builder::{build_agent_prompt, build_variable_map};
 use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
 
@@ -332,69 +332,103 @@ fn execute_call_with_schema(
             }
         }
 
-        // Resolve runtime for this agent and spawn via trait dispatch.
-        let runtime = match crate::runtime::resolve_runtime(&agent_def.runtime, state.config) {
-            Ok(rt) => rt,
-            Err(e) => {
-                let err_msg = e.to_string();
-                tracing::warn!("Step '{}': {err_msg}", agent_label);
-                fail_attempt(
-                    &state.agent_mgr,
-                    &state.wf_mgr,
-                    &step_id,
-                    &child_run.id,
-                    &err_msg,
-                    attempt,
-                    agent_label,
-                )?;
-                last_error = err_msg;
-                continue;
-            }
+        // Dispatch through the ActionRegistry.
+        //
+        // Build the variable map once per attempt — gate_feedback and other
+        // state fields may have changed on retry. Convert owned so the borrow
+        // on `state` ends before we use `state` again below.
+        let inputs: std::collections::HashMap<String, String> = {
+            let var_map = build_variable_map(state);
+            var_map
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect()
         };
 
-        let request = crate::runtime::RuntimeRequest {
+        let ectx = ExecutionContext {
             run_id: child_run.id.clone(),
-            agent_def: agent_def.clone(),
-            prompt: prompt.clone(),
             working_dir: std::path::PathBuf::from(&working_dir),
+            repo_path: repo_path.clone(),
+            db_path: crate::config::db_path(),
+            step_timeout: state.exec_config.step_timeout,
+            shutdown: state.exec_config.shutdown.clone(),
             model: step_model.map(String::from),
             bot_name: effective_bot_name.map(String::from),
             plugin_dirs: merged_plugin_dirs.clone(),
-            db_path: crate::config::db_path(),
+            workflow_name: state.workflow_name.clone(),
         };
 
-        tracing::info!(
-            "Step '{}' (attempt {}/{}): spawning via runtime '{}'",
-            agent_label,
-            attempt + 1,
-            max_attempts,
-            agent_def.runtime,
-        );
+        let params = ActionParams {
+            name: node.agent.label().to_string(),
+            inputs,
+            retries_remaining: max_attempts - attempt - 1,
+            retry_error: if attempt == 0 {
+                None
+            } else {
+                Some(last_error.clone())
+            },
+            snippets: if snippet_text.is_empty() {
+                vec![]
+            } else {
+                vec![snippet_text.clone()]
+            },
+            dry_run: state.exec_config.dry_run,
+            gate_feedback: state.last_gate_feedback.clone(),
+            schema: schema.clone(),
+        };
 
-        if let Err(e) = runtime.spawn_validated(&request) {
-            let err_msg = e.to_string();
-            tracing::warn!("Step '{}': spawn failed: {err_msg}", agent_label);
-            fail_attempt(
-                &state.agent_mgr,
-                &state.wf_mgr,
-                &step_id,
-                &child_run.id,
-                &err_msg,
-                attempt,
-                agent_label,
-            )?;
-            last_error = err_msg;
-            continue;
-        }
+        // Clone the Arc before dispatch so we hold no borrow on `state` while
+        // the executor runs (the executor may need the DB independently).
+        let registry = std::sync::Arc::clone(&state.action_registry);
+        match registry.dispatch(&params.name, &ectx, &params) {
+            Ok(output) => {
+                let markers_json = serde_json::to_string(&output.markers).unwrap_or_default();
+                let context = output.context.unwrap_or_default();
 
-        match runtime.poll(
-            &child_run.id,
-            state.exec_config.shutdown.as_ref(),
-            state.exec_config.step_timeout,
-            &request.db_path,
-        ) {
-            Err(crate::runtime::PollError::Cancelled) => {
-                let cancel_msg = "executor shutdown requested".to_string();
+                tracing::info!(
+                    "Step '{}' completed: cost=${:.4}, {} turns, markers={:?}",
+                    agent_label,
+                    output.cost_usd.unwrap_or(0.0),
+                    output.num_turns.unwrap_or(0),
+                    output.markers,
+                );
+
+                state.wf_mgr.update_step_status_full(
+                    &step_id,
+                    WorkflowStepStatus::Completed,
+                    Some(&child_run.id),
+                    output.result_text.as_deref(),
+                    Some(&context),
+                    Some(&markers_json),
+                    Some(attempt as i64),
+                    output.structured_output.as_deref(),
+                    None,
+                )?;
+
+                record_step_success(
+                    state,
+                    step_key.clone(),
+                    agent_label,
+                    output.result_text,
+                    output.cost_usd,
+                    output.num_turns,
+                    output.duration_ms,
+                    output.input_tokens,
+                    output.output_tokens,
+                    output.cache_read_input_tokens,
+                    output.cache_creation_input_tokens,
+                    output.markers,
+                    context,
+                    Some(child_run.id),
+                    iteration,
+                    output.structured_output,
+                    None,
+                );
+
+                return Ok(());
+            }
+            Err(ConductorError::Workflow(ref msg)) if msg == EXECUTOR_SHUTDOWN_MSG => {
+                let cancel_msg = EXECUTOR_SHUTDOWN_MSG.to_string();
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
@@ -425,109 +459,6 @@ fn execute_call_with_schema(
                 )?;
                 last_error = err_msg;
                 continue;
-            }
-            Ok(completed_run) => {
-                let succeeded = completed_run.status == AgentRunStatus::Completed;
-
-                // Parse output: structured (schema) or generic (markers + context)
-                let (markers, context, structured_json) = match interpret_agent_output(
-                    completed_run.result_text.as_deref(),
-                    schema.as_ref(),
-                    succeeded,
-                ) {
-                    Ok(result) => result,
-                    Err(validation_err) => {
-                        tracing::warn!(
-                            "Step '{}' structured output validation failed: {validation_err}",
-                            agent_label,
-                        );
-                        state.wf_mgr.update_step_status_full(
-                            &step_id,
-                            WorkflowStepStatus::Failed,
-                            Some(&completed_run.id),
-                            completed_run.result_text.as_deref(),
-                            None,
-                            None,
-                            Some(attempt as i64),
-                            None,
-                            Some(&validation_err),
-                        )?;
-                        last_error = validation_err;
-                        continue;
-                    }
-                };
-
-                let markers_json = serde_json::to_string(&markers).unwrap_or_default();
-
-                if succeeded {
-                    tracing::info!(
-                        "Step '{}' completed: cost=${:.4}, {} turns, markers={:?}",
-                        agent_label,
-                        completed_run.cost_usd.unwrap_or(0.0),
-                        completed_run.num_turns.unwrap_or(0),
-                        markers,
-                    );
-
-                    state.wf_mgr.update_step_status_full(
-                        &step_id,
-                        WorkflowStepStatus::Completed,
-                        Some(&completed_run.id),
-                        completed_run.result_text.as_deref(),
-                        Some(&context),
-                        Some(&markers_json),
-                        Some(attempt as i64),
-                        structured_json.as_deref(),
-                        None,
-                    )?;
-
-                    record_step_success(
-                        state,
-                        step_key.clone(),
-                        agent_label,
-                        completed_run.result_text,
-                        completed_run.cost_usd,
-                        completed_run.num_turns,
-                        completed_run.duration_ms,
-                        completed_run.input_tokens,
-                        completed_run.output_tokens,
-                        completed_run.cache_read_input_tokens,
-                        completed_run.cache_creation_input_tokens,
-                        markers,
-                        context,
-                        Some(completed_run.id),
-                        iteration,
-                        structured_json,
-                        None,
-                    );
-
-                    return Ok(());
-                } else {
-                    tracing::warn!(
-                        "Step '{}' failed (attempt {}/{}): {}",
-                        agent_label,
-                        attempt + 1,
-                        max_attempts,
-                        completed_run
-                            .result_text
-                            .as_deref()
-                            .unwrap_or("unknown error"),
-                    );
-
-                    state.wf_mgr.update_step_status(
-                        &step_id,
-                        WorkflowStepStatus::Failed,
-                        Some(&completed_run.id),
-                        completed_run.result_text.as_deref(),
-                        Some(&context),
-                        Some(&markers_json),
-                        Some(attempt as i64),
-                    )?;
-
-                    last_error = completed_run
-                        .result_text
-                        .unwrap_or_else(|| "unknown error".to_string());
-                    continue;
-                }
             }
         }
     }

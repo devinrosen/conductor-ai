@@ -178,6 +178,87 @@ pub(super) fn build_agent_prompt(
     prompt
 }
 
+/// Build a fully-substituted agent prompt from pre-resolved `ActionParams`.
+///
+/// Mirrors `build_agent_prompt` but takes a flat inputs map instead of borrowing
+/// `ExecutionState`. Used by `ClaudeAgentExecutor` which has no access to state.
+pub(super) fn build_agent_prompt_from_params(
+    agent_def: &crate::agent_config::AgentDef,
+    params: &super::action_executor::ActionParams,
+) -> String {
+    let vars: HashMap<&str, String> = params
+        .inputs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
+
+    let mut prompt = substitute_variables(&agent_def.prompt, &vars);
+
+    // Task reinforcement directive
+    prompt = format!(
+        "Your task below is your ONLY priority. Complete it fully before considering anything else.\n\n{prompt}"
+    );
+
+    // Retry failure preamble: prepended before the task reinforcement so the
+    // agent sees it first when retrying after a failed attempt.
+    if let Some(msg) = &params.retry_error {
+        prompt = format!(
+            "[Previous attempt failed]\nError: {msg}\nPlease re-read the instructions below and correct your output.\n\n{prompt}"
+        );
+    }
+
+    if agent_def.can_commit && params.dry_run {
+        prompt = format!("DO NOT commit or push any changes. This is a dry run.\n\n{prompt}");
+    }
+
+    // FSM mandatory first action: when an FSM path is provided, tell the
+    // agent to read it before doing anything else.
+    if let Some(fsm_path) = params.inputs.get("fsm_path") {
+        if !fsm_path.is_empty() {
+            prompt = format!(
+                "{prompt}\n\n## Mandatory First Action\n\n\
+                 Before doing ANYTHING else, read the FSM definition file at:\n\
+                 `{fsm_path}`\n\n\
+                 This file defines the state machine that governs your behavior in this workflow. \
+                 You MUST read and understand it before proceeding with any other work."
+            );
+        }
+    }
+
+    // Template variables section — list ALL substituted variables
+    if !vars.is_empty() {
+        prompt.push_str("\n\n## Template Variables\n\n");
+        prompt.push_str(
+            "The following template placeholders are available and have been substituted in this prompt:\n\n",
+        );
+        for (key, value) in &vars {
+            prompt.push_str(&format!("- `{{{{{key}}}}}` = `{value}`\n"));
+        }
+    }
+
+    // Append prompt snippets (pre-loaded by caller)
+    for snippet in &params.snippets {
+        if !snippet.is_empty() {
+            let substituted = substitute_variables(snippet, &vars);
+            prompt.push_str("\n\n");
+            prompt.push_str(&substituted);
+        }
+    }
+
+    // Append output instructions: schema-specific if a schema is provided,
+    // otherwise the generic CONDUCTOR_OUTPUT instruction.
+    match params.schema.as_ref() {
+        Some(s) => {
+            prompt.push('\n');
+            prompt.push_str(&crate::schema_config::generate_prompt_instructions(s));
+        }
+        None => {
+            prompt.push_str(CONDUCTOR_OUTPUT_INSTRUCTION);
+        }
+    }
+    prompt
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
