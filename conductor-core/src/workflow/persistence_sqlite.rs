@@ -214,8 +214,8 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             .unwrap_or(WorkflowStepStatus::Waiting);
 
         if approved_at.is_some() || status == WorkflowStepStatus::Completed {
-            let selections = selections_json
-                .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
+            let selections =
+                selections_json.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
             return Ok(GateApprovalState::Approved {
                 feedback,
                 selections,

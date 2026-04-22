@@ -125,15 +125,14 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             ));
         }
         let mut store = self.store.lock().map_err(|_| lock_err())?;
-        let run = store.runs.get_mut(run_id).ok_or_else(|| {
-            EngineError::Persistence(format!("run {run_id} not found"))
-        })?;
+        let run = store
+            .runs
+            .get_mut(run_id)
+            .ok_or_else(|| EngineError::Persistence(format!("run {run_id} not found")))?;
         let now = Utc::now().to_rfc3339();
         let is_terminal = matches!(
             status,
-            WorkflowRunStatus::Completed
-                | WorkflowRunStatus::Failed
-                | WorkflowRunStatus::Cancelled
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
         );
         run.status = status;
         run.result_summary = result_summary.map(String::from);
@@ -198,13 +197,13 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
 
     fn update_step(&self, step_id: &str, update: StepUpdate) -> Result<(), EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
-        let step = store.steps.get_mut(step_id).ok_or_else(|| {
-            EngineError::Persistence(format!("step {step_id} not found"))
-        })?;
+        let step = store
+            .steps
+            .get_mut(step_id)
+            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
         let now = Utc::now().to_rfc3339();
-        let is_starting =
-            update.status == WorkflowStepStatus::Running
-                || update.status == WorkflowStepStatus::Waiting;
+        let is_starting = update.status == WorkflowStepStatus::Running
+            || update.status == WorkflowStepStatus::Waiting;
         let is_terminal = matches!(
             update.status,
             WorkflowStepStatus::Completed
@@ -282,9 +281,10 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         update: FanOutItemUpdate,
     ) -> Result<(), EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
-        let item = store.fan_out_items.get_mut(item_id).ok_or_else(|| {
-            EngineError::Persistence(format!("fan-out item {item_id} not found"))
-        })?;
+        let item = store
+            .fan_out_items
+            .get_mut(item_id)
+            .ok_or_else(|| EngineError::Persistence(format!("fan-out item {item_id} not found")))?;
         let now = Utc::now().to_rfc3339();
         match update {
             FanOutItemUpdate::Running { child_run_id } => {
@@ -353,14 +353,14 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
     ) -> Result<(), EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
         let now = Utc::now().to_rfc3339();
-        let step = store.steps.get_mut(step_id).ok_or_else(|| {
-            EngineError::Persistence(format!("step {step_id} not found"))
-        })?;
+        let step = store
+            .steps
+            .get_mut(step_id)
+            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
         step.gate_approved_at = Some(now.clone());
         step.gate_approved_by = Some(approved_by.to_string());
         step.gate_feedback = feedback.map(String::from);
-        step.gate_selections =
-            selections.map(|s| serde_json::to_string(s).unwrap_or_default());
+        step.gate_selections = selections.map(|s| serde_json::to_string(s).unwrap_or_default());
         if let Some(items) = selections.filter(|s| !s.is_empty()) {
             let mut out = String::from("User selected the following items:\n");
             for item in items {
@@ -381,9 +381,10 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
     ) -> Result<(), EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
         let now = Utc::now().to_rfc3339();
-        let step = store.steps.get_mut(step_id).ok_or_else(|| {
-            EngineError::Persistence(format!("step {step_id} not found"))
-        })?;
+        let step = store
+            .steps
+            .get_mut(step_id)
+            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
         step.gate_approved_by = Some(rejected_by.to_string());
         step.gate_feedback = feedback.map(String::from);
         step.status = WorkflowStepStatus::Failed;
@@ -657,8 +658,7 @@ mod tests {
         let run = p.create_run(make_new_run("test")).unwrap();
         let step_id = p.insert_step(make_new_step(&run.id, "gate")).unwrap();
 
-        p.reject_gate(&step_id, "carol", Some("not ready"))
-            .unwrap();
+        p.reject_gate(&step_id, "carol", Some("not ready")).unwrap();
 
         let state = p.get_gate_approval(&step_id).unwrap();
         assert!(

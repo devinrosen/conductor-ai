@@ -217,9 +217,8 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
 
     // Build the token cache and resolver registry.
     let token_cache = Arc::new(GitHubTokenCache::new(None));
-    let persistence: Arc<dyn crate::workflow::persistence::WorkflowPersistence> = Arc::new(
-        crate::workflow::persistence_sqlite::SqliteWorkflowPersistence::open(&db_path)?,
-    );
+    let persistence: Arc<dyn crate::workflow::persistence::WorkflowPersistence> =
+        Arc::new(crate::workflow::persistence_sqlite::SqliteWorkflowPersistence::open(&db_path)?);
     let resolvers = build_default_gate_resolvers(persistence);
 
     let resolver = resolvers.get(gate_type_str).ok_or_else(|| {
