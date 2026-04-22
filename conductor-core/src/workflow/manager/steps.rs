@@ -298,21 +298,19 @@ impl<'a> WorkflowManager<'a> {
         &self,
         workflow_run_id: &str,
         position: i64,
-        iteration: i64,
     ) -> Result<bool> {
         if position == 0 {
             return Ok(true);
         }
         let mut stmt = self.conn.prepare(
             "SELECT 1 FROM workflow_run_steps \
-             WHERE workflow_run_id = :wrid AND position = :pos AND iteration = :iter \
+             WHERE workflow_run_id = :wrid AND position = :pos \
              AND status = 'completed' LIMIT 1",
         )?;
         let exists = stmt
             .exists(named_params![
                 ":wrid": workflow_run_id,
                 ":pos": position - 1,
-                ":iter": iteration,
             ])
             .map_err(ConductorError::Database)?;
         Ok(exists)

@@ -4260,7 +4260,7 @@ fn test_predecessor_completed_pos_zero_always_true() {
     let conn = setup_db();
     let (mgr, _parent, run) = make_workflow_run(&conn);
     // No rows at all — pos 0 should always return true.
-    assert!(mgr.predecessor_completed(&run.id, 0, 0).unwrap());
+    assert!(mgr.predecessor_completed(&run.id, 0).unwrap());
 }
 
 #[test]
@@ -4281,7 +4281,7 @@ fn test_predecessor_completed_true_when_prev_completed() {
     )
     .unwrap();
     // Predecessor at pos 0 is completed → pos 1 check should return true.
-    assert!(mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+    assert!(mgr.predecessor_completed(&run.id, 1).unwrap());
 }
 
 #[test]
@@ -4301,7 +4301,7 @@ fn test_predecessor_completed_false_when_prev_running() {
         None,
     )
     .unwrap();
-    assert!(!mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+    assert!(!mgr.predecessor_completed(&run.id, 1).unwrap());
 }
 
 #[test]
@@ -4309,7 +4309,37 @@ fn test_predecessor_completed_false_when_no_prev_row() {
     let conn = setup_db();
     let (mgr, _parent, run) = make_workflow_run(&conn);
     // No step at position 0, iteration 0 → pos 1 predecessor check returns false.
-    assert!(!mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+    assert!(!mgr.predecessor_completed(&run.id, 1).unwrap());
+}
+
+#[test]
+fn test_regression_2448_predecessor_completed_cross_iteration() {
+    // Regression: predecessor_completed must find a step stored in iteration 0
+    // when checking from iteration 1. position is globally unique per run so
+    // the iteration filter was incorrect and caused sub-workflow steps to be
+    // silently skipped in do-while loop iterations > 0.
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // Insert step at position=0, iteration=0 and mark it completed.
+    let step_id = mgr
+        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+        .unwrap();
+    mgr.update_step_status(
+        &step_id,
+        WorkflowStepStatus::Completed,
+        None,
+        None,
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
+    // Cross-iteration check: position 1 predecessor (pos 0) was stored in
+    // iteration 0 — must still return true regardless of current iteration.
+    assert!(
+        mgr.predecessor_completed(&run.id, 1).unwrap(),
+        "predecessor_completed must find a completed step across iteration boundaries"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4449,7 +4479,7 @@ fn test_active_step_exists_true_for_completed() {
 /// step (implement, pos 1) was still `running`, which previously caused the
 /// engine to advance and insert a duplicate `workflow:lint-fix` row at pos 2.
 ///
-/// Guard A: predecessor_completed(run_id, 2, 0) must return false while pos 1
+/// Guard A: predecessor_completed(run_id, 2) must return false while pos 1
 ///          is still running → the engine should bail out before inserting.
 /// Guard B: if a premature row was somehow inserted, active_step_exists must
 ///          return true → the engine bails out before inserting a second row.
@@ -4475,7 +4505,7 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
 
     // Guard A: predecessor at pos 1 is running → pos 2 predecessor check is false.
     assert!(
-        !mgr.predecessor_completed(&run.id, 2, 0).unwrap(),
+        !mgr.predecessor_completed(&run.id, 2).unwrap(),
         "Guard A: predecessor_completed must be false while implement is running"
     );
 
@@ -4515,7 +4545,7 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
     )
     .unwrap();
     assert!(
-        mgr.predecessor_completed(&run.id, 2, 0).unwrap(),
+        mgr.predecessor_completed(&run.id, 2).unwrap(),
         "predecessor_completed must be true once implement is completed"
     );
     assert!(
