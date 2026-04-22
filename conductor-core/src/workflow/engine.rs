@@ -69,6 +69,31 @@ pub(super) struct ResumeContext {
     pub child_runs: HashMap<String, crate::agent::AgentRun>,
 }
 
+/// Build the default `ActionRegistry` for a workflow run.
+///
+/// `ApiCallExecutor` is injected into `ClaudeAgentExecutor` at construction so
+/// that schema-constrained steps delegate through the `ActionExecutor` trait
+/// rather than a concrete peer dependency. No named registration for
+/// `ApiCallExecutor` is needed — `ClaudeAgentExecutor` (the fallback) owns the
+/// delegation decision.
+fn build_default_action_registry(
+    config: &Config,
+) -> crate::workflow::action_executor::ActionRegistry {
+    let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> = Box::new(
+        crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
+    );
+    crate::workflow::flow_engine::FlowEngineBuilder::new()
+        .action_fallback(Box::new(
+            crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(
+                config.clone(),
+                Some(api_executor),
+            ),
+        ))
+        .expect("single fallback — cannot fail on first call")
+        .build()
+        .expect("FlowEngineBuilder::build is infallible when fallback_count <= 1")
+}
+
 /// If the workflow's ticket is a Vantage deliverable, resolve the lifecycle hooks.
 fn resolve_vantage_lifecycle(
     conn: &Connection,
@@ -128,6 +153,9 @@ pub(super) struct ExecutionState<'a> {
     pub last_heartbeat_at: Arc<AtomicI64>,
     /// Provider registry initialized once at engine init, shared across all foreach steps.
     pub registry: std::sync::Arc<crate::workflow::item_provider::ItemProviderRegistry>,
+    /// Action executor registry — routes `call <name>` steps to the right executor.
+    /// Stored as `Arc` so it can be cloned before dispatch without borrowing `state`.
+    pub action_registry: std::sync::Arc<crate::workflow::action_executor::ActionRegistry>,
 }
 
 impl ExecutionState<'_> {
@@ -529,6 +557,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         triggered_by_hook: input.triggered_by_hook,
         last_heartbeat_at: ExecutionState::new_heartbeat(),
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
+        action_registry: std::sync::Arc::new(build_default_action_registry(config)),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -1113,6 +1142,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         triggered_by_hook: wf_run.is_triggered_by_hook(),
         last_heartbeat_at: ExecutionState::new_heartbeat(),
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
+        action_registry: std::sync::Arc::new(build_default_action_registry(config)),
     };
 
     run_workflow_engine(&mut state, &workflow)

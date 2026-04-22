@@ -1,6 +1,6 @@
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CancellationReason {
+pub enum CancellationReason {
     UserRequested(Option<String>),
     Timeout,
     FailFast,

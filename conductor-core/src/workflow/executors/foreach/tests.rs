@@ -52,49 +52,15 @@ fn test_collect_ticket_items_unlabeled_scope() {
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
 
-    let mut state = ExecutionState {
-        conn: &conn,
+    let mut state = make_execution_state_with_worktree(
+        &conn,
         config,
-        workflow_run_id: run.id,
-        workflow_name: "test".to_string(),
-        worktree_ctx: crate::workflow::engine::WorktreeContext {
-            worktree_id: Some("w1".to_string()),
-            working_dir: "/tmp/test".to_string(),
-            worktree_slug: "test".to_string(),
-            repo_path: "/tmp/repo".to_string(),
-            ticket_id: None,
-            repo_id: Some("r1".to_string()),
-            conductor_bin_dir: None,
-            extra_plugin_dirs: vec![],
-        },
-        model: None,
-        exec_config: crate::workflow::types::WorkflowExecConfig::default(),
-        inputs: std::collections::HashMap::new(),
-        agent_mgr: crate::agent::AgentManager::new(&conn),
-        wf_mgr: crate::workflow::manager::WorkflowManager::new(&conn),
-        parent_run_id: parent.id,
-        depth: 0,
-        target_label: None,
-        step_results: std::collections::HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_input_tokens: 0,
-        total_cache_creation_input_tokens: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
-        default_bot_name: None,
-        triggered_by_hook: false,
-        last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
-    };
+        run.id,
+        parent.id,
+        Some("w1".to_string()),
+        Some("r1".to_string()),
+        None,
+    );
 
     let node = make_foreach_node_unlabeled();
     let existing_set = HashSet::new();
@@ -235,10 +201,6 @@ fn make_execution_state_with_worktree<'a>(
     ticket_id: Option<String>,
 ) -> ExecutionState<'a> {
     ExecutionState {
-        conn,
-        config,
-        workflow_run_id,
-        workflow_name: "test".to_string(),
         worktree_ctx: crate::workflow::engine::WorktreeContext {
             worktree_id,
             working_dir: "/tmp/test".to_string(),
@@ -249,33 +211,12 @@ fn make_execution_state_with_worktree<'a>(
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],
         },
-        model: None,
-        exec_config: crate::workflow::types::WorkflowExecConfig::default(),
-        inputs: std::collections::HashMap::new(),
-        agent_mgr: crate::agent::AgentManager::new(conn),
-        wf_mgr: crate::workflow::manager::WorkflowManager::new(conn),
-        parent_run_id,
-        depth: 0,
-        target_label: None,
-        step_results: std::collections::HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_input_tokens: 0,
-        total_cache_creation_input_tokens: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
-        default_bot_name: None,
-        triggered_by_hook: false,
-        last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
+        ..crate::workflow::tests::common::base_execution_state(
+            conn,
+            config,
+            workflow_run_id,
+            parent_run_id,
+        )
     }
 }
 

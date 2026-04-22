@@ -95,46 +95,42 @@ pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&
     vars
 }
 
-/// Build a fully-substituted agent prompt from the execution state and agent definition.
-///
-/// Handles: input variables, prior_context, prior_contexts, prior_output,
-/// gate_feedback, dry-run prefix for committing agents, prompt snippets (via
-/// `with`), and CONDUCTOR_OUTPUT instruction (generic or schema-specific).
+/// Core prompt assembly shared by both prompt-building entry points.
 ///
 /// Prompt composition order:
 /// 1. Agent .md body (with variable substitution)
-/// 2. `with` prompt snippets (with variable substitution)
-/// 3. Schema output instructions / CONDUCTOR_OUTPUT
-pub(super) fn build_agent_prompt(
-    state: &ExecutionState<'_>,
+/// 2. Task reinforcement directive
+/// 3. Retry failure preamble (when `retry_error` is Some)
+/// 4. Dry-run prefix (when `dry_run` is true)
+/// 5. FSM mandatory first action (when `vars["fsm_path"]` is set)
+/// 6. Template variables section
+/// 7. `with` prompt snippets (with variable substitution)
+/// 8. Schema output instructions / CONDUCTOR_OUTPUT
+fn build_prompt_core(
     agent_def: &crate::agent_config::AgentDef,
+    vars: &HashMap<&str, String>,
     schema: Option<&schema_config::OutputSchema>,
-    snippet_text: &str,
-    retry_context: Option<&str>,
+    snippets: &[&str],
+    retry_error: Option<&str>,
+    dry_run: bool,
 ) -> String {
-    let vars = build_variable_map(state);
-    let mut prompt = substitute_variables(&agent_def.prompt, &vars);
+    let mut prompt = substitute_variables(&agent_def.prompt, vars);
 
-    // Task reinforcement directive
     prompt = format!(
         "Your task below is your ONLY priority. Complete it fully before considering anything else.\n\n{prompt}"
     );
 
-    // Retry failure preamble: prepended before the task reinforcement so the
-    // agent sees it first when retrying after a failed attempt.
-    if let Some(msg) = retry_context {
+    if let Some(msg) = retry_error {
         prompt = format!(
             "[Previous attempt failed]\nError: {msg}\nPlease re-read the instructions below and correct your output.\n\n{prompt}"
         );
     }
 
-    if agent_def.can_commit && state.exec_config.dry_run {
+    if dry_run {
         prompt = format!("DO NOT commit or push any changes. This is a dry run.\n\n{prompt}");
     }
 
-    // FSM mandatory first action: when an FSM path is provided, tell the
-    // agent to read it before doing anything else.
-    if let Some(fsm_path) = state.inputs.get("fsm_path") {
+    if let Some(fsm_path) = vars.get("fsm_path") {
         if !fsm_path.is_empty() {
             prompt = format!(
                 "{prompt}\n\n## Mandatory First Action\n\n\
@@ -146,26 +142,24 @@ pub(super) fn build_agent_prompt(
         }
     }
 
-    // Template variables section — list ALL substituted variables, not just inputs
     if !vars.is_empty() {
         prompt.push_str("\n\n## Template Variables\n\n");
         prompt.push_str(
             "The following template placeholders are available and have been substituted in this prompt:\n\n",
         );
-        for (key, value) in &vars {
+        for (key, value) in vars {
             prompt.push_str(&format!("- `{{{{{key}}}}}` = `{value}`\n"));
         }
     }
 
-    // Append prompt snippets (already concatenated by caller)
-    if !snippet_text.is_empty() {
-        let substituted = substitute_variables(snippet_text, &vars);
-        prompt.push_str("\n\n");
-        prompt.push_str(&substituted);
+    for snippet in snippets {
+        if !snippet.is_empty() {
+            let substituted = substitute_variables(snippet, vars);
+            prompt.push_str("\n\n");
+            prompt.push_str(&substituted);
+        }
     }
 
-    // Append output instructions: schema-specific if a schema is provided,
-    // otherwise the generic CONDUCTOR_OUTPUT instruction.
     match schema {
         Some(s) => {
             prompt.push('\n');
@@ -176,6 +170,53 @@ pub(super) fn build_agent_prompt(
         }
     }
     prompt
+}
+
+/// Build a fully-substituted agent prompt from the execution state and agent definition.
+pub(super) fn build_agent_prompt(
+    state: &ExecutionState<'_>,
+    agent_def: &crate::agent_config::AgentDef,
+    schema: Option<&schema_config::OutputSchema>,
+    snippet_text: &str,
+    retry_context: Option<&str>,
+) -> String {
+    let vars = build_variable_map(state);
+    let snippets: &[&str] = if snippet_text.is_empty() {
+        &[]
+    } else {
+        &[snippet_text]
+    };
+    build_prompt_core(
+        agent_def,
+        &vars,
+        schema,
+        snippets,
+        retry_context,
+        agent_def.can_commit && state.exec_config.dry_run,
+    )
+}
+
+/// Build a fully-substituted agent prompt from pre-resolved `ActionParams`.
+///
+/// Used by `ClaudeAgentExecutor` which has no access to `ExecutionState`.
+pub(super) fn build_agent_prompt_from_params(
+    agent_def: &crate::agent_config::AgentDef,
+    params: &super::action_executor::ActionParams,
+) -> String {
+    let vars: HashMap<&str, String> = params
+        .inputs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
+    let snippet_refs: Vec<&str> = params.snippets.iter().map(String::as_str).collect();
+    build_prompt_core(
+        agent_def,
+        &vars,
+        params.schema.as_ref(),
+        &snippet_refs,
+        params.retry_error.as_deref(),
+        agent_def.can_commit && params.dry_run,
+    )
 }
 
 #[cfg(test)]

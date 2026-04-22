@@ -4,18 +4,26 @@
 //! Builds on top of the existing `AgentManager` and orchestrator infrastructure,
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
+pub(crate) mod action_executor;
+pub(crate) mod api_call_executor;
 mod batch_validate;
 pub(crate) mod cancellation;
 pub(crate) mod cancellation_reason;
+pub(crate) mod claude_agent_executor;
 pub(crate) mod constants;
 pub(crate) mod engine;
 pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
+pub(crate) mod flow_engine;
 pub(crate) mod helpers;
 pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
+pub mod persistence;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod persistence_memory;
+pub mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod run_context;
 pub(crate) mod status;
@@ -59,6 +67,11 @@ pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::{FanOutItemRow, InvalidWorkflowEntry, WorkflowManager};
 pub use output::{parse_conductor_output, ConductorOutput};
+pub use persistence::{
+    FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
+    WorkflowPersistence,
+};
+pub use persistence_sqlite::SqliteWorkflowPersistence;
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, GateAnalyticsRow,

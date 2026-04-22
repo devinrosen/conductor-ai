@@ -1,7 +1,9 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use crate::workflow::persistence::WorkflowPersistence;
 
 use crate::config::Config;
 use crate::error::Result;
@@ -16,6 +18,7 @@ use super::resolvers::{
 // ---------------------------------------------------------------------------
 
 /// Outcome of a single poll tick from a `GateResolver`.
+#[derive(Debug)]
 pub(super) enum GatePoll {
     Approved(Option<String>),
     Rejected(String),
@@ -136,7 +139,7 @@ fn register(map: &mut HashMap<String, Box<dyn GateResolver>>, resolver: Box<dyn 
 }
 
 pub(super) fn build_default_gate_resolvers(
-    db_path: PathBuf,
+    persistence: Arc<dyn WorkflowPersistence>,
 ) -> HashMap<String, Box<dyn GateResolver>> {
     let mut map: HashMap<String, Box<dyn GateResolver>> = HashMap::new();
     register(&mut map, Box::new(PrApprovalGateResolver::new()));
@@ -144,14 +147,14 @@ pub(super) fn build_default_gate_resolvers(
     register(
         &mut map,
         Box::new(HumanApprovalGateResolver::new(
-            db_path.clone(),
+            Arc::clone(&persistence),
             HumanGateKind::HumanApproval,
         )),
     );
     register(
         &mut map,
         Box::new(HumanApprovalGateResolver::new(
-            db_path,
+            persistence,
             HumanGateKind::HumanReview,
         )),
     );
@@ -166,6 +169,11 @@ pub(super) fn build_default_gate_resolvers(
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::workflow::persistence_memory::InMemoryWorkflowPersistence;
+
+    fn make_test_persistence() -> Arc<dyn WorkflowPersistence> {
+        Arc::new(InMemoryWorkflowPersistence::new())
+    }
 
     #[test]
     fn test_token_cache_override_short_circuits_shell() {
@@ -188,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_unknown_gate_type_returns_error() {
-        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"));
+        let resolvers = build_default_gate_resolvers(make_test_persistence());
         assert!(
             !resolvers.contains_key("unknown_gate_xyz"),
             "unknown gate type should not be registered"
@@ -197,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_build_default_gate_resolvers_registers_all_four_types() {
-        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"));
+        let resolvers = build_default_gate_resolvers(make_test_persistence());
         assert!(
             resolvers.contains_key("pr_approval"),
             "pr_approval resolver must be registered"
@@ -262,7 +270,7 @@ mod tests {
         mode: crate::workflow_dsl::ApprovalMode,
     ) -> GatePoll {
         let token_cache = Arc::new(GitHubTokenCache::new(None));
-        let resolvers = build_default_gate_resolvers(PathBuf::from("/tmp/test.db"));
+        let resolvers = build_default_gate_resolvers(make_test_persistence());
         let resolver = resolvers
             .get(resolver_key)
             .unwrap_or_else(|| panic!("{resolver_key} not registered"));
