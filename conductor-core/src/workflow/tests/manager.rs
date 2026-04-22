@@ -4260,7 +4260,7 @@ fn test_predecessor_completed_pos_zero_always_true() {
     let conn = setup_db();
     let (mgr, _parent, run) = make_workflow_run(&conn);
     // No rows at all — pos 0 should always return true.
-    assert!(mgr.predecessor_completed(&run.id, 0, 0).unwrap());
+    assert!(mgr.predecessor_completed(&run.id, 0).unwrap());
 }
 
 #[test]
@@ -4281,7 +4281,7 @@ fn test_predecessor_completed_true_when_prev_completed() {
     )
     .unwrap();
     // Predecessor at pos 0 is completed → pos 1 check should return true.
-    assert!(mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+    assert!(mgr.predecessor_completed(&run.id, 1).unwrap());
 }
 
 #[test]
@@ -4301,7 +4301,7 @@ fn test_predecessor_completed_false_when_prev_running() {
         None,
     )
     .unwrap();
-    assert!(!mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+    assert!(!mgr.predecessor_completed(&run.id, 1).unwrap());
 }
 
 #[test]
@@ -4309,7 +4309,41 @@ fn test_predecessor_completed_false_when_no_prev_row() {
     let conn = setup_db();
     let (mgr, _parent, run) = make_workflow_run(&conn);
     // No step at position 0, iteration 0 → pos 1 predecessor check returns false.
-    assert!(!mgr.predecessor_completed(&run.id, 1, 0).unwrap());
+    assert!(!mgr.predecessor_completed(&run.id, 1).unwrap());
+}
+
+#[test]
+fn test_regression_2448_predecessor_completed_cross_iteration() {
+    // Regression: predecessor_completed must find steps stored in iteration 0
+    // when the next step is at a higher position that belongs to iteration 1.
+    // Before the fix, the query included `AND iteration = :iter` which caused
+    // position 5 (iteration=0) to be invisible when checking from position 6
+    // (iteration=1), silently skipping every sub-workflow step in the loop.
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    // Simulate do-while iteration 0: insert and complete steps at positions 0–5
+    // all with iteration=0.
+    for pos in 0..6i64 {
+        let step_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, pos, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+    }
+    // Iteration 1 starts at position 6. Guard A checks whether position 5
+    // (stored with iteration=0) is completed. Must return true.
+    assert!(
+        mgr.predecessor_completed(&run.id, 6).unwrap(),
+        "predecessor_completed must find a step from iteration 0 when checking position 6 in iteration 1"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4449,7 +4483,7 @@ fn test_active_step_exists_true_for_completed() {
 /// step (implement, pos 1) was still `running`, which previously caused the
 /// engine to advance and insert a duplicate `workflow:lint-fix` row at pos 2.
 ///
-/// Guard A: predecessor_completed(run_id, 2, 0) must return false while pos 1
+/// Guard A: predecessor_completed(run_id, 2) must return false while pos 1
 ///          is still running → the engine should bail out before inserting.
 /// Guard B: if a premature row was somehow inserted, active_step_exists must
 ///          return true → the engine bails out before inserting a second row.
@@ -4475,7 +4509,7 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
 
     // Guard A: predecessor at pos 1 is running → pos 2 predecessor check is false.
     assert!(
-        !mgr.predecessor_completed(&run.id, 2, 0).unwrap(),
+        !mgr.predecessor_completed(&run.id, 2).unwrap(),
         "Guard A: predecessor_completed must be false while implement is running"
     );
 
@@ -4515,7 +4549,7 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
     )
     .unwrap();
     assert!(
-        mgr.predecessor_completed(&run.id, 2, 0).unwrap(),
+        mgr.predecessor_completed(&run.id, 2).unwrap(),
         "predecessor_completed must be true once implement is completed"
     );
     assert!(

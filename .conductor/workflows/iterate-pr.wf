@@ -36,5 +36,5 @@ workflow iterate-pr {
       }
       call workflow lint-fix
     }
-  } while review-aggregator.has_blocking_findings
+  } while push.pushed_new_commits
 }

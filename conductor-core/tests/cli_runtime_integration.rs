@@ -2,12 +2,14 @@
 //!
 //! Uses a mock shell script to simulate a CLI agent. No tmux dependency.
 
+#[path = "common.rs"]
+mod common;
+
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
-use conductor_core::agent_config::{AgentDef, AgentRole};
 use conductor_core::config::RuntimeConfig;
 use conductor_core::runtime::cli::CliRuntime;
 use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
@@ -46,17 +48,6 @@ fn make_runtime(script_path: &str, result_field: &str, token_fields: Option<&str
     })
 }
 
-fn make_agent_def() -> AgentDef {
-    AgentDef {
-        name: "test".to_string(),
-        role: AgentRole::Actor,
-        can_commit: false,
-        model: None,
-        runtime: "cli".to_string(),
-        prompt: "test prompt".to_string(),
-    }
-}
-
 /// Open (or create) the integration test DB at a temp file, run migrations,
 /// insert an agent_run row for `run_id`, and return the temp file guard
 /// (must stay alive for the duration of the test).
@@ -84,21 +75,9 @@ fn assert_run_cancelled(db_guard: &tempfile::NamedTempFile, run_id: &str) {
 
 fn setup_test_db(run_id: &str) -> (tempfile::NamedTempFile, std::sync::MutexGuard<'static, ()>) {
     let lock = DB_PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let tmp = tempfile::NamedTempFile::new().expect("temp db file");
+    let tmp = common::setup_test_db(run_id, "claude");
     let path = tmp.path().to_string_lossy().to_string();
-
     std::env::set_var("CONDUCTOR_DB_PATH", &path);
-
-    let conn = conductor_core::db::open_database(tmp.path()).expect("open test db");
-    // Insert a minimal run row so UPDATE in poll() has something to hit
-    // and get_run() can return it.
-    conn.execute(
-        "INSERT INTO agent_runs (id, prompt, status, started_at, runtime) \
-         VALUES (?1, 'test', 'running', '2024-01-01T00:00:00Z', 'claude')",
-        rusqlite::params![run_id],
-    )
-    .expect("insert run");
-
     (tmp, lock)
 }
 
@@ -113,7 +92,7 @@ fn test_cli_runtime_success() {
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "test prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -122,10 +101,10 @@ fn test_cli_runtime_success() {
         db_path: _db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn(&req).expect("spawn must succeed");
+    runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(10))
+        .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
         .expect("poll must succeed");
 
     assert_eq!(result.runtime.as_str(), "cli");
@@ -155,7 +134,7 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "bad prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -164,10 +143,10 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
         db_path: _db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn(&req).expect("spawn must succeed");
+    runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(10))
+        .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
         .expect("poll must succeed — even failed runs are returned as Ok(AgentRun)");
 
     assert_eq!(
@@ -224,7 +203,7 @@ exit 0"#
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "hello from stdin".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -233,10 +212,12 @@ exit 0"#
         db_path: _db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn(&req).expect("stdin spawn must succeed");
+    runtime
+        .spawn_validated(&req)
+        .expect("stdin spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(10))
+        .poll(&run_id, None, Duration::from_secs(10), _db_guard.path())
         .expect("stdin poll must succeed");
 
     assert_eq!(
@@ -278,7 +259,7 @@ fn spawn_slow_script(
 
     let req = RuntimeRequest {
         run_id: run_id.clone(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "prompt".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -287,7 +268,7 @@ fn spawn_slow_script(
         db_path: db_guard.path().to_path_buf(),
     };
 
-    runtime.spawn(&req).expect("spawn must succeed");
+    runtime.spawn_validated(&req).expect("spawn must succeed");
 
     (f, db_guard, runtime, run_id, lock)
 }
@@ -295,7 +276,7 @@ fn spawn_slow_script(
 #[test]
 fn test_cli_runtime_timeout_returns_no_result() {
     let (_script, _db, runtime, run_id, _lock) = spawn_slow_script("test-timeout");
-    let result = runtime.poll(&run_id, None, Duration::from_millis(200));
+    let result = runtime.poll(&run_id, None, Duration::from_millis(200), _db.path());
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::NoResult)),
         "poll must return NoResult on timeout, got: {result:?}"
@@ -307,7 +288,12 @@ fn test_cli_runtime_shutdown_flag_cancels_poll() {
     let (_script, _db, runtime, run_id, _lock) = spawn_slow_script("test-shutdown");
     // Pre-set the shutdown flag so poll() exits on the first iteration.
     let shutdown = Arc::new(AtomicBool::new(true));
-    let result = runtime.poll(&run_id, Some(&shutdown), Duration::from_secs(10));
+    let result = runtime.poll(
+        &run_id,
+        Some(&shutdown),
+        Duration::from_secs(10),
+        _db.path(),
+    );
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::Cancelled)),
         "poll with shutdown flag set must return Cancelled, got: {result:?}"
@@ -333,7 +319,9 @@ fn test_cli_runtime_cancel_kills_process_and_marks_cancelled() {
     );
     assert!(runtime.is_alive(&run), "run must be alive before cancel");
 
-    runtime.cancel(&run).expect("cancel must succeed");
+    runtime
+        .cancel(&run, db_guard.path())
+        .expect("cancel must succeed");
 
     // Process should be gone.
     assert!(
@@ -366,7 +354,7 @@ fn test_cli_runtime_cancel_with_no_pid_marks_cancelled() {
 
     let runtime = make_runtime("/bin/echo", "response", None);
     runtime
-        .cancel(&run)
+        .cancel(&run, db_guard.path())
         .expect("cancel must succeed when subprocess_pid is None");
 
     assert_run_cancelled(&db_guard, &run_id);
@@ -377,7 +365,7 @@ fn test_cli_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime("/bin/echo", "response", None);
     let req = RuntimeRequest {
         run_id: "../../etc/cron.d/payload".to_string(),
-        agent_def: make_agent_def(),
+        agent_def: common::make_agent_def("cli"),
         prompt: "test".to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
@@ -386,10 +374,115 @@ fn test_cli_runtime_rejects_invalid_run_id() {
         db_path: conductor_core::config::db_path(),
     };
     let err = runtime
-        .spawn(&req)
+        .spawn_validated(&req)
         .expect_err("spawn must reject path-traversal run_id");
     assert!(
         err.to_string().contains("invalid run_id"),
         "error must mention invalid run_id, got: {err}"
+    );
+}
+
+// Regression test: poll() must not panic when the output file is unreadable after the
+// process exits. Instead it must log the error and return the fallback result.
+#[cfg(unix)]
+#[test]
+fn test_cli_runtime_poll_handles_unreadable_output_file() {
+    // A script that exits immediately with code 0 so poll() reaches the file-read path.
+    let (_script, script_path) = make_mock_script("{}", 0);
+    let runtime = make_runtime(&script_path, "response", None);
+
+    let run_id = format!("test-unreadable-{}", ulid::Ulid::new());
+    let (_db_guard, _lock) = setup_test_db(&run_id);
+
+    let req = RuntimeRequest {
+        run_id: run_id.clone(),
+        agent_def: common::make_agent_def("cli"),
+        prompt: "test".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        bot_name: None,
+        plugin_dirs: vec![],
+        db_path: _db_guard.path().to_path_buf(),
+    };
+
+    runtime.spawn_validated(&req).expect("spawn must succeed");
+
+    // Give the process time to exit so try_wait() returns Some(status).
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Make the output file unreadable to trigger the error-logging path.
+    let output_path = conductor_core::config::conductor_dir()
+        .join("workspaces")
+        .join(&run_id)
+        .join("output.json");
+    std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod output file to 000");
+
+    // poll() must not panic and must return Ok with the run marked Completed.
+    let result = runtime
+        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
+        .expect("poll must succeed even when output file is unreadable");
+
+    // Restore permissions so the temp directory can be cleaned up.
+    let _ = std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o644));
+
+    assert_eq!(
+        result.status,
+        conductor_core::agent::AgentRunStatus::Completed,
+        "run must be Completed when process exits 0 even if output file is unreadable"
+    );
+}
+
+// Regression: when a non-zero exit process has an unreadable output file, poll() must
+// still return Ok (not panic) and mark the run Failed with the fallback exit-code message.
+#[cfg(unix)]
+#[test]
+fn test_cli_runtime_poll_handles_unreadable_output_file_on_error_exit() {
+    let (_script, script_path) = make_mock_script("{}", 1);
+    let runtime = make_runtime(&script_path, "response", None);
+
+    let run_id = format!("test-unreadable-err-{}", ulid::Ulid::new());
+    let (_db_guard, _lock) = setup_test_db(&run_id);
+
+    let req = RuntimeRequest {
+        run_id: run_id.clone(),
+        agent_def: common::make_agent_def("cli"),
+        prompt: "test".to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        bot_name: None,
+        plugin_dirs: vec![],
+        db_path: _db_guard.path().to_path_buf(),
+    };
+
+    runtime.spawn_validated(&req).expect("spawn must succeed");
+    std::thread::sleep(Duration::from_millis(200));
+
+    let output_path = conductor_core::config::conductor_dir()
+        .join("workspaces")
+        .join(&run_id)
+        .join("output.json");
+    std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod output file to 000");
+
+    let result = runtime
+        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
+        .expect("poll must succeed even when output file is unreadable");
+
+    let _ = std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o644));
+
+    assert_eq!(
+        result.status,
+        conductor_core::agent::AgentRunStatus::Failed,
+        "run must be Failed when process exits 1 even if output file is unreadable"
+    );
+    assert!(
+        result
+            .result_text
+            .as_deref()
+            .unwrap_or("")
+            .contains("process exited with code 1"),
+        "result_text must contain fallback exit-code message, got: {:?}",
+        result.result_text
     );
 }

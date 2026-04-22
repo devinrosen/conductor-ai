@@ -21,7 +21,6 @@ pub struct ClaudeRuntime {
     #[cfg(unix)]
     handle: Arc<Mutex<Option<crate::agent_runtime::HeadlessHandle>>>,
     prompt_file: Arc<Mutex<Option<std::path::PathBuf>>>,
-    db_path: Arc<Mutex<Option<std::path::PathBuf>>>,
 }
 
 impl ClaudeRuntime {
@@ -31,7 +30,6 @@ impl ClaudeRuntime {
             #[cfg(unix)]
             handle: Arc::new(Mutex::new(None)),
             prompt_file: Arc::new(Mutex::new(None)),
-            db_path: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -43,8 +41,7 @@ impl Default for ClaudeRuntime {
 }
 
 impl AgentRuntime for ClaudeRuntime {
-    fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
-        crate::text_util::validate_run_id(&request.run_id)?;
+    fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
         #[cfg(unix)]
         {
             let params = crate::agent_runtime::SpawnHeadlessParams {
@@ -59,15 +56,22 @@ impl AgentRuntime for ClaudeRuntime {
             };
             let (h, pf) = crate::agent_runtime::try_spawn_headless_run(&params)
                 .map_err(crate::error::ConductorError::Workflow)?;
-            if let Ok(mut guard) = self.handle.lock() {
-                *guard = Some(h);
-            }
-            if let Ok(mut guard) = self.prompt_file.lock() {
-                *guard = Some(pf);
-            }
-            if let Ok(mut guard) = self.db_path.lock() {
-                *guard = Some(request.db_path.clone());
-            }
+            self.handle
+                .lock()
+                .map_err(|_| {
+                    crate::error::ConductorError::Workflow(
+                        "ClaudeRuntime: handle mutex poisoned during spawn".into(),
+                    )
+                })
+                .map(|mut guard| *guard = Some(h))?;
+            self.prompt_file
+                .lock()
+                .map_err(|_| {
+                    crate::error::ConductorError::Workflow(
+                        "ClaudeRuntime: prompt_file mutex poisoned during spawn".into(),
+                    )
+                })
+                .map(|mut guard| *guard = Some(pf))?;
             Ok(())
         }
         #[cfg(not(unix))]
@@ -84,14 +88,15 @@ impl AgentRuntime for ClaudeRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: std::time::Duration,
+        db_path: &std::path::Path,
     ) -> std::result::Result<AgentRun, PollError> {
         #[cfg(unix)]
         {
-            poll_unix(self, run_id, shutdown, step_timeout)
+            poll_unix(self, run_id, shutdown, step_timeout, db_path)
         }
         #[cfg(not(unix))]
         {
-            let _ = (run_id, shutdown, step_timeout);
+            let _ = (run_id, shutdown, step_timeout, db_path);
             Err(PollError::Failed(
                 "ClaudeRuntime poll is not supported on non-Unix platforms".into(),
             ))
@@ -107,7 +112,7 @@ impl AgentRuntime for ClaudeRuntime {
         false
     }
 
-    fn cancel(&self, run: &AgentRun) -> Result<()> {
+    fn cancel(&self, run: &AgentRun, _db_path: &std::path::Path) -> Result<()> {
         #[cfg(unix)]
         {
             if let Ok(mut guard) = self.handle.lock() {
@@ -131,6 +136,7 @@ fn poll_unix(
     run_id: &str,
     shutdown: Option<&Arc<AtomicBool>>,
     step_timeout: std::time::Duration,
+    db_path: &std::path::Path,
 ) -> std::result::Result<AgentRun, PollError> {
     use crate::agent_runtime::DrainOutcome;
 
@@ -141,16 +147,18 @@ fn poll_unix(
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
-    let prompt_file = rt.prompt_file.lock().ok().and_then(|mut g| g.take());
-    let db_path = rt
-        .db_path
-        .lock()
-        .map_err(|_| PollError::Failed("ClaudeRuntime db_path mutex poisoned".into()))?
-        .clone()
-        .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
+    let prompt_file = match rt.prompt_file.lock() {
+        Ok(mut g) => g.take(),
+        Err(_) => {
+            tracing::warn!(
+                "ClaudeRuntime: prompt_file mutex poisoned in poll — prompt file will not be cleaned up"
+            );
+            None
+        }
+    };
     let pid = handle.pid();
 
-    let tracking_conn = crate::db::open_database_compat(&db_path)
+    let tracking_conn = crate::db::open_database_compat(db_path)
         .map_err(|e| PollError::Failed(format!("ClaudeRuntime: failed to open DB: {e}")))?;
     let tracking_mgr = crate::agent::AgentManager::new(&tracking_conn);
 
@@ -172,8 +180,10 @@ fn poll_unix(
         }
     });
 
+    // The drain thread must open its own connection: rusqlite::Connection is !Send.
+    let db_path_owned = db_path.to_path_buf();
     std::thread::spawn(move || {
-        let conn = match crate::db::open_database_compat(&db_path) {
+        let conn = match crate::db::open_database_compat(&db_path_owned) {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("ClaudeRuntime drain thread: failed to open DB: {e}");
@@ -303,7 +313,7 @@ mod tests {
         let runtime = ClaudeRuntime::default();
         let request = make_request("../../etc/cron.d/payload");
         let err = runtime
-            .spawn(&request)
+            .spawn_validated(&request)
             .expect_err("expected Err for path-traversal run_id");
         assert!(
             matches!(err, crate::error::ConductorError::InvalidInput(_)),
@@ -315,14 +325,19 @@ mod tests {
     fn spawn_rejects_slash_in_run_id() {
         let runtime = ClaudeRuntime::default();
         let request = make_request("run/id");
-        assert!(runtime.spawn(&request).is_err());
+        assert!(runtime.spawn_validated(&request).is_err());
     }
 
     #[cfg(unix)]
     #[test]
     fn poll_before_spawn_returns_failed() {
         let runtime = ClaudeRuntime::default();
-        let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
+        let result = runtime.poll(
+            "some-run-id",
+            None,
+            std::time::Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
         assert!(
             matches!(result, Err(PollError::Failed(_))),
             "expected Failed, got: {result:?}"
@@ -333,7 +348,12 @@ mod tests {
     #[test]
     fn poll_fails_on_non_unix() {
         let runtime = ClaudeRuntime::default();
-        let result = runtime.poll("some-run-id", None, std::time::Duration::from_millis(10));
+        let result = runtime.poll(
+            "some-run-id",
+            None,
+            std::time::Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
         assert!(
             matches!(result, Err(PollError::Failed(_))),
             "expected Failed on non-Unix, got: {result:?}"
@@ -370,7 +390,9 @@ mod tests {
     fn cancel_with_no_handle_and_no_pid() {
         let runtime = ClaudeRuntime::default();
         let run = make_test_run(None);
-        assert!(runtime.cancel(&run).is_ok());
+        assert!(runtime
+            .cancel(&run, std::path::Path::new("/tmp/test.db"))
+            .is_ok());
     }
 
     #[cfg(unix)]
@@ -381,10 +403,12 @@ mod tests {
         let dead_pid = child.id() as i64;
         let runtime = ClaudeRuntime::default();
         let run = make_test_run(Some(dead_pid));
-        assert!(runtime.cancel(&run).is_ok());
+        assert!(runtime
+            .cancel(&run, std::path::Path::new("/tmp/test.db"))
+            .is_ok());
     }
 
-    // spawn() reaches the binary-exec path when run_id is valid — on unix this
+    // spawn_validated() reaches the binary-exec path when run_id is valid — on unix this
     // attempts to exec the conductor binary (not present in test env), so the
     // error is Workflow (exec failure), not InvalidInput (validation failure).
     #[cfg(unix)]
@@ -392,7 +416,7 @@ mod tests {
     fn spawn_valid_run_id_reaches_exec_attempt() {
         let runtime = ClaudeRuntime::default();
         let request = make_request("valid-run-id-01");
-        let result = runtime.spawn(&request);
+        let result = runtime.spawn_validated(&request);
         // The subprocess spawn will fail because the conductor binary is not
         // present in the test binary's directory, but the error must come from
         // the exec attempt (Workflow), not from run_id validation (InvalidInput).
@@ -415,7 +439,7 @@ mod tests {
         let runtime = ClaudeRuntime::default();
         let request = make_request("valid-run-id-01");
         let err = runtime
-            .spawn(&request)
+            .spawn_validated(&request)
             .expect_err("expected Err on non-Unix platform");
         assert!(
             matches!(err, crate::error::ConductorError::Workflow(_)),
@@ -439,7 +463,9 @@ mod tests {
         let runtime = ClaudeRuntime::default();
         *runtime.handle.lock().unwrap() = Some(handle);
         let run = make_test_run(None);
-        assert!(runtime.cancel(&run).is_ok());
+        assert!(runtime
+            .cancel(&run, std::path::Path::new("/tmp/test.db"))
+            .is_ok());
         // handle must have been taken (aborted)
         assert!(
             runtime.handle.lock().unwrap().is_none(),
@@ -448,10 +474,10 @@ mod tests {
     }
 
     // Spawns a `sleep 1000` child and wraps it in a ClaudeRuntime ready for
-    // poll() tests.  Returns (runtime, tmp) — caller must hold `tmp` alive for
-    // the duration of the test so the temp dir is not cleaned up early.
+    // poll() tests.  Returns (runtime, tmp, db_file) — caller must hold `tmp`
+    // alive for the duration of the test so the temp dir is not cleaned up early.
     #[cfg(unix)]
-    fn make_sleeping_runtime() -> (ClaudeRuntime, tempfile::TempDir) {
+    fn make_sleeping_runtime() -> (ClaudeRuntime, tempfile::TempDir, std::path::PathBuf) {
         use std::process::Stdio;
         let tmp = tempfile::tempdir().expect("tempdir");
         let db_file = tmp.path().join("test.db");
@@ -465,21 +491,21 @@ mod tests {
             .expect("HeadlessHandle::from_child failed");
         let runtime = ClaudeRuntime::default();
         *runtime.handle.lock().unwrap() = Some(handle);
-        *runtime.db_path.lock().unwrap() = Some(db_file);
-        (runtime, tmp)
+        (runtime, tmp, db_file)
     }
 
     // poll() returns Cancelled when the shutdown flag is set.
     #[cfg(unix)]
     #[test]
     fn poll_shutdown_flag_returns_cancelled() {
-        let (runtime, _tmp) = make_sleeping_runtime();
+        let (runtime, _tmp, db_file) = make_sleeping_runtime();
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let result = runtime.poll(
             "test-shutdown-run",
             Some(&shutdown),
             std::time::Duration::from_secs(60),
+            &db_file,
         );
 
         assert!(
@@ -492,17 +518,95 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_timeout_returns_no_result() {
-        let (runtime, _tmp) = make_sleeping_runtime();
+        let (runtime, _tmp, db_file) = make_sleeping_runtime();
 
         let result = runtime.poll(
             "test-timeout-run",
             None,
             std::time::Duration::from_millis(10),
+            &db_file,
         );
 
         assert!(
             matches!(result, Err(PollError::NoResult)),
             "expected NoResult, got: {result:?}"
+        );
+    }
+
+    // Regression: a poisoned handle mutex in spawn_impl must return
+    // ConductorError::Workflow instead of silently dropping the handle.
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_handle_mutex_spawn_returns_workflow_error() {
+        let runtime = ClaudeRuntime::default();
+
+        // Poison the mutex by panicking while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.handle.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        let request = make_request("valid-run-id-poison-test");
+        let result = runtime.spawn_validated(&request);
+        assert!(
+            matches!(result, Err(crate::error::ConductorError::Workflow(_))),
+            "expected Workflow error on poisoned handle mutex, got: {result:?}"
+        );
+    }
+
+    // Regression: a poisoned prompt_file mutex in poll_unix must not panic — the fix logs a
+    // warning and proceeds with no prompt-file cleanup rather than calling unwrap().
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_prompt_file_mutex_poll_does_not_panic() {
+        let (runtime, _tmp, db_file) = make_sleeping_runtime();
+
+        // Poison the prompt_file mutex by panicking while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.prompt_file.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // poll() must not panic — the poisoned prompt_file is handled gracefully.
+        // Use the shutdown flag so we get a fast, deterministic termination.
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let result = runtime.poll(
+            "test-poisoned-prompt-file",
+            Some(&shutdown),
+            std::time::Duration::from_secs(60),
+            &db_file,
+        );
+
+        // The poll exits due to shutdown, not due to a panic or spurious Failed from
+        // the poisoned prompt_file mutex.
+        assert!(
+            matches!(result, Err(PollError::Cancelled)),
+            "expected Cancelled (not panic/Failed from poisoned prompt_file), got: {result:?}"
+        );
+    }
+
+    // Regression: a poisoned handle mutex in poll() must surface as PollError::Failed
+    // rather than causing a panic.
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_handle_mutex_poll_returns_failed() {
+        let runtime = ClaudeRuntime::default();
+
+        // Poison the mutex by panicking while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.handle.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        let result = runtime.poll(
+            "some-run-id",
+            None,
+            std::time::Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
+        assert!(
+            matches!(result, Err(PollError::Failed(_))),
+            "expected Failed on poisoned handle mutex, got: {result:?}"
         );
     }
 }

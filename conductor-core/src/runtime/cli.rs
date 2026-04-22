@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -13,7 +12,6 @@ use super::{AgentRuntime, PollError, RuntimeRequest};
 pub struct CliRuntime {
     config: RuntimeConfig,
     state: std::sync::Mutex<Option<CliState>>,
-    db_path: std::sync::Mutex<PathBuf>,
 }
 
 struct CliState {
@@ -28,15 +26,12 @@ impl CliRuntime {
         Self {
             config,
             state: std::sync::Mutex::new(None),
-            db_path: std::sync::Mutex::new(crate::config::db_path()),
         }
     }
 }
 
 impl AgentRuntime for CliRuntime {
-    fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
-        crate::text_util::validate_run_id(&request.run_id)?;
-
+    fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
         let binary = self.config.binary.as_deref().ok_or_else(|| {
             ConductorError::Config("CliRuntime: `binary` is required".to_string())
         })?;
@@ -103,7 +98,6 @@ impl AgentRuntime for CliRuntime {
 
         let pid = child.id();
 
-        *self.db_path.lock().unwrap() = request.db_path.clone();
         let conn = crate::db::open_database_compat(&request.db_path)
             .map_err(|e| ConductorError::Agent(format!("CliRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
@@ -121,7 +115,7 @@ impl AgentRuntime for CliRuntime {
             );
         }
 
-        *self.state.lock().unwrap() = Some(CliState {
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(CliState {
             child,
             pid,
             output_path,
@@ -135,16 +129,16 @@ impl AgentRuntime for CliRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: Duration,
+        db_path: &std::path::Path,
     ) -> std::result::Result<AgentRun, PollError> {
         let mut state = self
             .state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .take()
             .ok_or_else(|| PollError::Failed("CliRuntime::poll called before spawn".into()))?;
 
-        let db_path = self.db_path.lock().unwrap().clone();
-        let conn = crate::db::open_database_compat(&db_path)
+        let conn = crate::db::open_database_compat(db_path)
             .map_err(|e| PollError::Failed(format!("CliRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
@@ -175,18 +169,23 @@ impl AgentRuntime for CliRuntime {
                     let is_error = exit_code != 0;
 
                     let (result_text, input_tokens, output_tokens) =
-                        if let Ok(content) = std::fs::read_to_string(&state.output_path) {
-                            parse_output(&content, &self.config)
-                        } else {
-                            (
-                                if is_error {
-                                    Some(format!("process exited with code {exit_code}"))
-                                } else {
-                                    None
-                                },
-                                None,
-                                None,
-                            )
+                        match std::fs::read_to_string(&state.output_path) {
+                            Ok(content) => parse_output(&content, &self.config),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "CliRuntime: failed to read output file {}: {e}",
+                                    state.output_path.display()
+                                );
+                                (
+                                    if is_error {
+                                        Some(format!("process exited with code {exit_code}"))
+                                    } else {
+                                        None
+                                    },
+                                    None,
+                                    None,
+                                )
+                            }
                         };
 
                     if is_error {
@@ -242,7 +241,7 @@ impl AgentRuntime for CliRuntime {
         false
     }
 
-    fn cancel(&self, run: &AgentRun) -> Result<()> {
+    fn cancel(&self, run: &AgentRun, db_path: &std::path::Path) -> Result<()> {
         // Take the child from the state so we can kill + reap it.
         let child = self
             .state
@@ -263,7 +262,11 @@ impl AgentRuntime for CliRuntime {
             }
         }
 
-        let conn = crate::db::open_agent_db("CliRuntime::cancel")?;
+        let conn = crate::db::open_database_compat(db_path).map_err(|e| {
+            crate::error::ConductorError::Agent(format!(
+                "CliRuntime::cancel: failed to open DB: {e}"
+            ))
+        })?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         agent_mgr.update_run_cancelled(&run.id)
     }
@@ -361,6 +364,43 @@ mod tests {
         assert!(result.is_some());
     }
 
+    fn token_config() -> RuntimeConfig {
+        RuntimeConfig {
+            token_fields: Some("tokens".to_string()),
+            ..RuntimeConfig::default()
+        }
+    }
+
+    #[test]
+    fn parse_output_token_valid_numeric() {
+        let (_, tokens, _) = parse_output(r#"{"tokens": 42}"#, &token_config());
+        assert_eq!(tokens, Some(42));
+    }
+
+    #[test]
+    fn parse_output_token_path_missing() {
+        let (_, tokens, _) = parse_output(r#"{"other": 100}"#, &token_config());
+        assert_eq!(tokens, None);
+    }
+
+    #[test]
+    fn parse_output_token_non_numeric() {
+        let (_, tokens, _) = parse_output(r#"{"tokens": "abc"}"#, &token_config());
+        assert_eq!(tokens, None);
+    }
+
+    #[test]
+    fn parse_output_token_null_value() {
+        let (_, tokens, _) = parse_output(r#"{"tokens": null}"#, &token_config());
+        assert_eq!(tokens, None);
+    }
+
+    #[test]
+    fn parse_output_plain_text_tokens_none() {
+        let (_, tokens, _) = parse_output("not json at all", &token_config());
+        assert_eq!(tokens, None);
+    }
+
     #[test]
     fn is_alive_returns_false_when_no_pid() {
         let runtime = make_runtime("echo");
@@ -379,7 +419,6 @@ mod tests {
     #[test]
     fn cancel_with_dead_pid_returns_ok() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::env::set_var("CONDUCTOR_DB_PATH", tmp.path().to_str().unwrap());
         let conn = crate::db::open_database(tmp.path()).unwrap();
         conn.execute(
             "INSERT INTO agent_runs (id, prompt, status, started_at, runtime) \
@@ -393,13 +432,59 @@ mod tests {
         let dead_pid = child.id() as i64;
         let runtime = make_runtime("echo");
         let run = make_test_run(Some(dead_pid));
-        assert!(runtime.cancel(&run).is_ok());
+        assert!(runtime.cancel(&run, tmp.path()).is_ok());
     }
 
     #[test]
     fn poll_before_spawn_returns_failed() {
         let runtime = make_runtime("echo");
-        let result = runtime.poll("no-such-run", None, Duration::from_millis(10));
+        let result = runtime.poll(
+            "no-such-run",
+            None,
+            Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
         assert!(matches!(result, Err(PollError::Failed(_))));
+    }
+
+    // Regression test: lock().unwrap_or_else(|e| e.into_inner()) must not panic on a
+    // poisoned mutex. A thread that panics while holding the lock poisons it; the fix
+    // recovers the inner guard rather than panicking on the next access.
+    #[test]
+    fn poisoned_mutex_does_not_panic_on_poll() {
+        let runtime = make_runtime("echo");
+
+        // Poison the mutex: panic while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.state.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // The mutex is now poisoned. poll() must recover and return Failed, not panic.
+        let result = runtime.poll(
+            "no-such-run",
+            None,
+            Duration::from_millis(10),
+            std::path::Path::new("/tmp/test.db"),
+        );
+        assert!(matches!(result, Err(PollError::Failed(_))));
+    }
+
+    // Regression test: spawn_impl path also uses unwrap_or_else; verify the poisoned
+    // state is overwritten without panicking.
+    #[test]
+    fn poisoned_mutex_does_not_panic_on_state_write() {
+        let runtime = make_runtime("echo");
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.state.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // Writing through a poisoned mutex must not panic.
+        let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            *runtime.state.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }));
+        assert!(recovered.is_ok(), "write through poisoned mutex panicked");
     }
 }

@@ -17,10 +17,35 @@ use crate::agent_config::AgentDef;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 
+/// Sealed capability token for `AgentRuntime::spawn_impl`.
+///
+/// `Seal` is publicly nameable (required so the trait method compiles), but
+/// its constructor is `pub(super)` — only this module can mint one. External
+/// callers cannot obtain a `Seal` without going through `spawn_validated`,
+/// which runs `validate_run_id` first.
+pub mod private {
+    pub struct Seal(());
+    impl Seal {
+        pub(super) fn new() -> Self {
+            Self(())
+        }
+    }
+}
+
 /// Trait implemented by every agent runtime.
 pub trait AgentRuntime {
-    /// Launch the agent for `request`. Stores the handle internally.
-    fn spawn(&self, request: &RuntimeRequest) -> Result<()>;
+    /// Launch the agent for `request`.
+    ///
+    /// Callers must use `spawn_validated` — `spawn_impl` requires a `Seal` token
+    /// that is only constructable inside this module, enforcing that
+    /// `validate_run_id` always runs first.
+    fn spawn_impl(&self, request: &RuntimeRequest, _seal: private::Seal) -> Result<()>;
+
+    /// Validates `request.run_id` then delegates to `spawn_impl`.
+    fn spawn_validated(&self, request: &RuntimeRequest) -> Result<()> {
+        crate::text_util::validate_run_id(&request.run_id)?;
+        self.spawn_impl(request, private::Seal::new())
+    }
 
     /// Block until the agent completes or is cancelled.
     fn poll(
@@ -28,13 +53,14 @@ pub trait AgentRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: std::time::Duration,
+        db_path: &std::path::Path,
     ) -> std::result::Result<AgentRun, PollError>;
 
     /// Returns true if the agent process / session represented by `run` is still live.
     fn is_alive(&self, run: &AgentRun) -> bool;
 
     /// Forcibly cancel the agent represented by `run`.
-    fn cancel(&self, run: &AgentRun) -> Result<()>;
+    fn cancel(&self, run: &AgentRun, db_path: &std::path::Path) -> Result<()>;
 }
 
 /// Per-invocation parameters passed to `AgentRuntime::spawn`.

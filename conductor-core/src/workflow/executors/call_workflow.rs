@@ -50,7 +50,7 @@ pub fn execute_call_workflow(
     if pos > 0
         && !state
             .wf_mgr
-            .predecessor_completed(&state.workflow_run_id, pos, iteration as i64)?
+            .predecessor_completed(&state.workflow_run_id, pos)?
     {
         tracing::warn!(
             "call_workflow '{}': predecessor at position {} is not completed; \
@@ -122,24 +122,18 @@ pub fn execute_call_workflow(
         .wf_mgr
         .find_resumable_child_run(&state.workflow_run_id, &node.workflow)?
     {
-        let step_id = state.wf_mgr.insert_step(
+        let step_id = state.wf_mgr.insert_step_running(
             &state.workflow_run_id,
             &wf_step_name,
             "workflow",
             false,
             pos,
             iteration as i64,
+            0,
         )?;
-
-        state.wf_mgr.update_step_status(
-            &step_id,
-            WorkflowStepStatus::Running,
-            Some(&prior_child.id),
-            None,
-            None,
-            None,
-            Some(0),
-        )?;
+        state
+            .wf_mgr
+            .update_step_child_run_id(&step_id, &prior_child.id)?;
 
         tracing::info!(
             "Step 'workflow:{}': resuming prior child run '{}'",
@@ -260,23 +254,14 @@ pub fn execute_call_workflow(
     }
 
     for attempt in 0..max_attempts {
-        let step_id = state.wf_mgr.insert_step(
+        let step_id = state.wf_mgr.insert_step_running(
             &state.workflow_run_id,
             &wf_step_name,
             "workflow",
             false,
             pos,
             iteration as i64,
-        )?;
-
-        state.wf_mgr.update_step_status(
-            &step_id,
-            WorkflowStepStatus::Running,
-            None,
-            None,
-            None,
-            None,
-            Some(attempt as i64),
+            attempt as i64,
         )?;
 
         tracing::info!(

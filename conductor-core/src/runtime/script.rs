@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -13,21 +12,16 @@ use super::{AgentRuntime, PollError, RuntimeRequest};
 /// capturing stdout as `result_text`. No tmux dependency.
 pub struct ScriptRuntime {
     config: RuntimeConfig,
-    db_path: std::sync::Mutex<PathBuf>,
 }
 
 impl ScriptRuntime {
     pub fn new(config: RuntimeConfig) -> Self {
-        Self {
-            config,
-            db_path: std::sync::Mutex::new(crate::config::db_path()),
-        }
+        Self { config }
     }
 }
 
 impl AgentRuntime for ScriptRuntime {
-    fn spawn(&self, request: &RuntimeRequest) -> Result<()> {
-        crate::text_util::validate_run_id(&request.run_id)?;
+    fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
         let command = self.config.command.as_deref().ok_or_else(|| {
             ConductorError::Config(
                 "ScriptRuntime: `command` is required in the runtime config".to_string(),
@@ -54,10 +48,6 @@ impl AgentRuntime for ScriptRuntime {
             .map_err(|e| {
                 ConductorError::Agent(format!("ScriptRuntime: failed to spawn command: {e}"))
             })?;
-
-        if let Ok(mut guard) = self.db_path.lock() {
-            *guard = request.db_path.clone();
-        }
 
         let conn = crate::db::open_database_compat(&request.db_path)
             .map_err(|e| ConductorError::Agent(format!("ScriptRuntime: failed to open DB: {e}")))?;
@@ -110,9 +100,9 @@ impl AgentRuntime for ScriptRuntime {
         run_id: &str,
         _shutdown: Option<&Arc<AtomicBool>>,
         _step_timeout: Duration,
+        db_path: &std::path::Path,
     ) -> std::result::Result<AgentRun, PollError> {
-        let db_path = self.db_path.lock().unwrap().clone();
-        let conn = crate::db::open_database_compat(&db_path)
+        let conn = crate::db::open_database_compat(db_path)
             .map_err(|e| PollError::Failed(format!("ScriptRuntime: failed to open DB: {e}")))?;
         let agent_mgr = crate::agent::AgentManager::new(&conn);
 
@@ -141,7 +131,7 @@ impl AgentRuntime for ScriptRuntime {
         false
     }
 
-    fn cancel(&self, _run: &AgentRun) -> Result<()> {
+    fn cancel(&self, _run: &AgentRun, _db_path: &std::path::Path) -> Result<()> {
         Ok(())
     }
 }
@@ -196,6 +186,8 @@ mod tests {
     #[test]
     fn cancel_is_noop() {
         let runtime = make_runtime(Some("echo hi"));
-        assert!(runtime.cancel(&make_test_run()).is_ok());
+        assert!(runtime
+            .cancel(&make_test_run(), std::path::Path::new("/tmp/test.db"))
+            .is_ok());
     }
 }

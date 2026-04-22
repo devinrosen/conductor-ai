@@ -33,17 +33,6 @@ pub fn open_database_compat(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-/// Open the database in compatibility mode for agent-facing code.
-///
-/// Wraps `open_database_compat(&db_path())` and maps any error to
-/// `ConductorError::Agent` with a message that includes `context` so callers
-/// can identify which runtime or thread failed to open the DB.
-pub fn open_agent_db(context: &str) -> Result<Connection> {
-    open_database_compat(&crate::config::db_path()).map_err(|e| {
-        crate::error::ConductorError::Agent(format!("{context}: failed to open DB: {e}"))
-    })
-}
-
 /// Prepend `prefix` to every column token in a comma-separated column list.
 ///
 /// Splits `cols` on `','`, trims whitespace from each token, prepends `prefix`,
@@ -126,4 +115,50 @@ where
     let mut stmt = conn.prepare_cached(sql)?;
     let rows = stmt.query_map(params, f)?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn open_database_success() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = open_database(tmp.path()).expect("open_database should succeed");
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let fk: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+    }
+
+    #[test]
+    fn open_database_compat_success() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = open_database_compat(tmp.path()).expect("open_database_compat should succeed");
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let fk: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+    }
+
+    #[test]
+    fn open_database_error_on_bad_path() {
+        let bad = std::path::Path::new("/tmp/conductor_no_such_dir_xyz/test.db");
+        assert!(open_database(bad).is_err());
+    }
+
+    #[test]
+    fn open_database_compat_error_on_bad_path() {
+        let bad = std::path::Path::new("/tmp/conductor_no_such_dir_xyz/test.db");
+        assert!(open_database_compat(bad).is_err());
+    }
 }
