@@ -655,10 +655,12 @@ mod tests {
         p.reject_gate(&step_id, "carol", Some("not ready")).unwrap();
 
         let state = p.get_gate_approval(&step_id).unwrap();
-        assert!(
-            matches!(state, GateApprovalState::Rejected { .. }),
-            "expected Rejected"
-        );
+        match state {
+            GateApprovalState::Rejected { feedback } => {
+                assert_eq!(feedback.as_deref(), Some("not ready"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        };
 
         let steps = p.get_steps(&run.id).unwrap();
         assert_eq!(steps[0].status, WorkflowStepStatus::Failed);

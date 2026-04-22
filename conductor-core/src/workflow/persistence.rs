@@ -185,3 +185,79 @@ pub trait WorkflowPersistence: Send + Sync {
         feedback: Option<&str>,
     ) -> Result<(), EngineError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::status::WorkflowStepStatus;
+
+    #[test]
+    fn pending_when_status_is_waiting_and_no_approved_at() {
+        let state = gate_approval_state_from_fields(None, WorkflowStepStatus::Waiting, None, None);
+        assert!(matches!(state, GateApprovalState::Pending));
+    }
+
+    #[test]
+    fn approved_when_approved_at_is_set_regardless_of_status() {
+        let state = gate_approval_state_from_fields(
+            Some("2025-01-01T00:00:00Z"),
+            WorkflowStepStatus::Waiting,
+            Some("lgtm".into()),
+            None,
+        );
+        match state {
+            GateApprovalState::Approved { feedback, .. } => {
+                assert_eq!(feedback.as_deref(), Some("lgtm"));
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn approved_when_status_completed_and_no_approved_at() {
+        let selections = vec!["option-a".to_string()];
+        let state = gate_approval_state_from_fields(
+            None,
+            WorkflowStepStatus::Completed,
+            None,
+            Some(selections.clone()),
+        );
+        match state {
+            GateApprovalState::Approved {
+                feedback,
+                selections: s,
+            } => {
+                assert!(feedback.is_none());
+                assert_eq!(s, Some(selections));
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejected_when_status_failed_surfaces_feedback() {
+        let state = gate_approval_state_from_fields(
+            None,
+            WorkflowStepStatus::Failed,
+            Some("not ready".into()),
+            None,
+        );
+        match state {
+            GateApprovalState::Rejected { feedback } => {
+                assert_eq!(feedback.as_deref(), Some("not ready"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejected_with_no_feedback_when_none_stored() {
+        let state = gate_approval_state_from_fields(None, WorkflowStepStatus::Failed, None, None);
+        match state {
+            GateApprovalState::Rejected { feedback } => {
+                assert!(feedback.is_none());
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+}

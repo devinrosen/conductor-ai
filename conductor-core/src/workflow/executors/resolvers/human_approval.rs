@@ -136,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn test_human_approval_resolver_rejected_when_status_failed() {
+    fn test_human_approval_resolver_rejected_uses_fallback_when_no_feedback() {
         let tmp = NamedTempFile::new().unwrap();
         let db_path = tmp.path().to_path_buf();
 
@@ -156,10 +156,41 @@ mod tests {
         let ctx = make_test_ctx(&config, &db_path);
 
         let result = resolver.poll("run1", &params, &ctx).unwrap();
-        assert!(
-            matches!(result, GatePoll::Rejected(_)),
-            "expected Rejected when status is failed"
+        match result {
+            GatePoll::Rejected(msg) => {
+                assert_eq!(msg, "Gate 'test-gate' rejected");
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_human_approval_resolver_rejected_surfaces_stored_feedback() {
+        let tmp = NamedTempFile::new().unwrap();
+        let db_path = tmp.path().to_path_buf();
+
+        let conn = Connection::open(&db_path).unwrap();
+        setup_test_db(&conn);
+        insert_test_step(
+            &conn,
+            "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, position, status, iteration, gate_type, gate_feedback) \
+             VALUES ('step1', 'run1', 'test-gate', 'gate', 0, 'failed', 0, 'human_approval', 'needs more work')",
         );
+        drop(conn);
+
+        let persistence = make_persistence(&db_path);
+        let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
+        let config = crate::config::Config::default();
+        let params = make_test_params("step1");
+        let ctx = make_test_ctx(&config, &db_path);
+
+        let result = resolver.poll("run1", &params, &ctx).unwrap();
+        match result {
+            GatePoll::Rejected(msg) => {
+                assert_eq!(msg, "needs more work");
+            }
+            other => panic!("expected Rejected with feedback, got {other:?}"),
+        }
     }
 
     #[test]
