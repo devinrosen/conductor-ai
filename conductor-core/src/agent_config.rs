@@ -221,8 +221,7 @@ fn validate_path_within_base(path: &Path, base: &str) -> Result<()> {
 /// Verify that `path` is within at least one of `base1` or `base2`.
 /// Used for the worktree/repo dual-base check in `load_agent_by_name`.
 fn validate_path_within_either_base(path: &Path, base1: &str, base2: &str) -> Result<()> {
-    validate_path_within_base(path, base1)
-        .or_else(|_| validate_path_within_base(path, base2))
+    validate_path_within_base(path, base1).or_else(|_| validate_path_within_base(path, base2))
 }
 
 /// Resolve an agent by short name using the search order.
