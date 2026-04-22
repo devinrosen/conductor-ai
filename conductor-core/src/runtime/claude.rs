@@ -548,6 +548,37 @@ mod tests {
         );
     }
 
+    // Regression: a poisoned prompt_file mutex in poll_unix must not panic — the fix logs a
+    // warning and proceeds with no prompt-file cleanup rather than calling unwrap().
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_prompt_file_mutex_poll_does_not_panic() {
+        let (runtime, _tmp, db_file) = make_sleeping_runtime();
+
+        // Poison the prompt_file mutex by panicking while holding the lock.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.prompt_file.lock().unwrap();
+            panic!("intentional poison");
+        }));
+
+        // poll() must not panic — the poisoned prompt_file is handled gracefully.
+        // Use the shutdown flag so we get a fast, deterministic termination.
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let result = runtime.poll(
+            "test-poisoned-prompt-file",
+            Some(&shutdown),
+            std::time::Duration::from_secs(60),
+            &db_file,
+        );
+
+        // The poll exits due to shutdown, not due to a panic or spurious Failed from
+        // the poisoned prompt_file mutex.
+        assert!(
+            matches!(result, Err(PollError::Cancelled)),
+            "expected Cancelled (not panic/Failed from poisoned prompt_file), got: {result:?}"
+        );
+    }
+
     // Regression: a poisoned handle mutex in poll() must surface as PollError::Failed
     // rather than causing a panic.
     #[cfg(unix)]
