@@ -60,7 +60,7 @@ pub trait AgentRuntime {
     fn is_alive(&self, run: &AgentRun) -> bool;
 
     /// Forcibly cancel the agent represented by `run`.
-    fn cancel(&self, run: &AgentRun) -> Result<()>;
+    fn cancel(&self, run: &AgentRun, db_path: &std::path::Path) -> Result<()>;
 }
 
 /// Per-invocation parameters passed to `AgentRuntime::spawn`.
