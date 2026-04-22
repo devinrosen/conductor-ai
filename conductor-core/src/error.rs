@@ -111,6 +111,9 @@ pub enum ConductorError {
     #[error("workflow error: {0}")]
     Workflow(String),
 
+    #[error("workflow cancelled")]
+    WorkflowCancelled,
+
     #[error("workflow run not found: {id}")]
     WorkflowRunNotFound { id: String },
 
@@ -185,6 +188,7 @@ impl ConductorError {
             Self::FeedbackRunMismatch { .. } => 55,
             Self::NoPendingFeedbackForRun { .. } => 56,
             Self::Workflow(_) => 60,
+            Self::WorkflowCancelled => 65,
             Self::WorkflowRunAlreadyActive { .. } => 61,
             Self::WorkflowRunNotFound { .. } => 62,
             Self::WorkflowStepNotFound { .. } => 63,
@@ -242,6 +246,7 @@ mod tests {
                 status: "done".into(),
             },
             ConductorError::Workflow("wf".into()),
+            ConductorError::WorkflowCancelled,
             ConductorError::WorkflowRunAlreadyActive { name: "wf".into() },
             ConductorError::WorkflowRunNotFound { id: "id".into() },
             ConductorError::UnknownSourceType("jira".into()),

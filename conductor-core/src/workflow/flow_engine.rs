@@ -13,7 +13,6 @@ use super::action_executor::{ActionExecutor, ActionRegistry};
 pub struct FlowEngineBuilder {
     named: HashMap<String, Box<dyn ActionExecutor>>,
     fallback: Option<Box<dyn ActionExecutor>>,
-    fallback_count: usize,
 }
 
 impl FlowEngineBuilder {
@@ -21,7 +20,6 @@ impl FlowEngineBuilder {
         Self {
             named: HashMap::new(),
             fallback: None,
-            fallback_count: 0,
         }
     }
 
@@ -36,8 +34,7 @@ impl FlowEngineBuilder {
     ///
     /// Returns `Err` if called more than once — only one fallback is allowed.
     pub fn action_fallback(mut self, executor: Box<dyn ActionExecutor>) -> Result<Self> {
-        self.fallback_count += 1;
-        if self.fallback_count > 1 {
+        if self.fallback.is_some() {
             return Err(ConductorError::Workflow(
                 "action_fallback already set — only one fallback executor is allowed".to_string(),
             ));

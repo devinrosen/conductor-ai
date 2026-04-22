@@ -3,7 +3,7 @@ use crate::agent_config::AgentSpec;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::CallNode;
 
-use crate::workflow::action_executor::{ActionParams, ExecutionContext, EXECUTOR_SHUTDOWN_MSG};
+use crate::workflow::action_executor::{ActionParams, ExecutionContext};
 use crate::workflow::engine::{
     handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip, ExecutionState,
 };
@@ -204,20 +204,19 @@ fn execute_call_with_schema(
                 // Check shutdown flag before making the API call
                 if let Some(ref flag) = state.exec_config.shutdown {
                     if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        let cancel_msg = "executor shutdown requested".to_string();
                         let _ = state
                             .agent_mgr
-                            .update_run_failed(&child_run.id, &cancel_msg);
+                            .update_run_failed(&child_run.id, "executor shutdown requested");
                         state.wf_mgr.update_step_status(
                             &step_id,
                             WorkflowStepStatus::Failed,
                             Some(&child_run.id),
-                            Some(&cancel_msg),
+                            Some("executor shutdown requested"),
                             None,
                             None,
                             Some(attempt as i64),
                         )?;
-                        return Err(ConductorError::Workflow(cancel_msg));
+                        return Err(ConductorError::WorkflowCancelled);
                     }
                 }
 
@@ -427,18 +426,17 @@ fn execute_call_with_schema(
 
                 return Ok(());
             }
-            Err(ConductorError::Workflow(ref msg)) if msg == EXECUTOR_SHUTDOWN_MSG => {
-                let cancel_msg = EXECUTOR_SHUTDOWN_MSG.to_string();
+            Err(ConductorError::WorkflowCancelled) => {
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
                     Some(&child_run.id),
-                    Some(&cancel_msg),
+                    Some("executor shutdown requested"),
                     None,
                     None,
                     Some(attempt as i64),
                 )?;
-                return Err(ConductorError::Workflow(cancel_msg));
+                return Err(ConductorError::WorkflowCancelled);
             }
             Err(e) => {
                 let err_msg = e.to_string();

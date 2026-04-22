@@ -3,9 +3,7 @@ use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::runtime::PollError;
-use crate::workflow::action_executor::{
-    ActionExecutor, ActionOutput, ActionParams, ExecutionContext, EXECUTOR_SHUTDOWN_MSG,
-};
+use crate::workflow::action_executor::{ActionExecutor, ActionOutput, ActionParams, ExecutionContext};
 
 /// Wraps `AgentRuntime` dispatch behind the `ActionExecutor` trait.
 ///
@@ -65,7 +63,7 @@ impl ActionExecutor for ClaudeAgentExecutor {
         ) {
             Ok(run) => run,
             Err(PollError::Cancelled) => {
-                return Err(ConductorError::Workflow(EXECUTOR_SHUTDOWN_MSG.to_string()));
+                return Err(ConductorError::WorkflowCancelled);
             }
             Err(e) => {
                 return Err(ConductorError::Workflow(e.to_string()));

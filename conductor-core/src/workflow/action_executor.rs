@@ -6,12 +6,6 @@ use std::time::Duration;
 use crate::error::{ConductorError, Result};
 use crate::schema_config::OutputSchema;
 
-/// Sentinel error message for executor shutdown.
-///
-/// Matched by dispatchers in `execute_call_with_schema` to short-circuit the
-/// retry loop and propagate cancellation immediately (instead of retrying).
-pub(crate) const EXECUTOR_SHUTDOWN_MSG: &str = "executor shutdown requested";
-
 /// Trait for pluggable action execution.
 ///
 /// Implementations must be `Send + Sync` to support parallel step execution
