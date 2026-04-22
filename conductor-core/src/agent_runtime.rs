@@ -1344,7 +1344,10 @@ mod tests {
         );
         // Process should be dead (ESRCH = no such process).
         let still_alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
-        assert!(!still_alive, "child {pid} should be dead after HeadlessHandle drop");
+        assert!(
+            !still_alive,
+            "child {pid} should be dead after HeadlessHandle drop"
+        );
     }
 
     /// `from_child()` must return an error when stdout was not piped.
