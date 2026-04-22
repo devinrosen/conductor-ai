@@ -12,13 +12,20 @@ use crate::workflow::action_executor::{
 /// Loads the agent `.md` definition at `execute()` time (not at registration
 /// time) so that dropping a new file under `.conductor/agents/` takes effect
 /// on the next workflow step without restarting the process (hot-reload).
+///
+/// When `api_executor` is supplied and both a schema and an API key are present,
+/// the call is forwarded to `api_executor` rather than spawning a subprocess.
 pub struct ClaudeAgentExecutor {
     config: Config,
+    api_executor: Option<Box<dyn ActionExecutor>>,
 }
 
 impl ClaudeAgentExecutor {
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new(config: Config, api_executor: Option<Box<dyn ActionExecutor>>) -> Self {
+        Self {
+            config,
+            api_executor,
+        }
     }
 }
 
@@ -28,6 +35,15 @@ impl ActionExecutor for ClaudeAgentExecutor {
     }
 
     fn execute(&self, ectx: &ExecutionContext, params: &ActionParams) -> Result<ActionOutput> {
+        // When a schema and API key are both present, delegate to the injected
+        // api_executor.  Routing through a trait reference preserves the
+        // ActionExecutor abstraction — no concrete peer dependency.
+        if let Some(ref api_exec) = self.api_executor {
+            if params.schema.is_some() && self.config.anthropic_api_key().is_some() {
+                return api_exec.execute(ectx, params);
+            }
+        }
+
         // Hot-reload: read the .md file fresh on every call so that new agent
         // definitions take effect without restarting the conductor process.
         let working_dir_str = ectx.working_dir.to_string_lossy();

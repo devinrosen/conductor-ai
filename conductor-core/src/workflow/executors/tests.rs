@@ -1654,6 +1654,132 @@ fn test_parallel_drain_signal_race_condition_db_guard() {
     );
 }
 
+// -----------------------------------------------------------------------
+// Schema step routes through registry when API key is present (#2460)
+// -----------------------------------------------------------------------
+
+/// Proves that a schema-constrained call step always reaches `registry.dispatch()`.
+///
+/// Before the fix, `execute_call_with_schema` had an early-return branch that fired
+/// when `schema.is_some() && api_key.is_some()`, bypassing `ActionRegistry` entirely.
+/// After the fix that branch is gone: every `call` step goes through the registry.
+///
+/// The test registers a spy executor under the agent name, sets `ANTHROPIC_API_KEY`
+/// (so the old early branch would have fired), and asserts the spy is called.
+/// On old code the spy would never fire; on new code it always does.
+#[test]
+fn test_schema_step_routes_through_registry_when_api_key_present() {
+    use crate::workflow::action_executor::{
+        ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
+    };
+    use crate::workflow::flow_engine::FlowEngineBuilder;
+    use crate::workflow_dsl::{AgentRef, CallNode};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let agents_dir = dir.path().join(".conductor").join("agents");
+    let schemas_dir = dir.path().join(".conductor").join("schemas");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::create_dir_all(&schemas_dir).unwrap();
+
+    std::fs::write(
+        agents_dir.join("spy-agent.md"),
+        "---\nrole: reviewer\n---\nSpy agent for registry dispatch test.\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        schemas_dir.join("spy-output.yaml"),
+        "fields:\n  summary: string\n",
+    )
+    .unwrap();
+
+    struct SpyExecutor {
+        called: Arc<AtomicBool>,
+    }
+
+    impl ActionExecutor for SpyExecutor {
+        fn name(&self) -> &str {
+            "spy-agent"
+        }
+        fn execute(
+            &self,
+            _ectx: &ExecutionContext,
+            params: &ActionParams,
+        ) -> crate::error::Result<ActionOutput> {
+            assert!(params.schema.is_some(), "spy: schema must be present");
+            self.called.store(true, Ordering::SeqCst);
+            Ok(ActionOutput::default())
+        }
+    }
+
+    let called = Arc::new(AtomicBool::new(false));
+    let spy = SpyExecutor {
+        called: Arc::clone(&called),
+    };
+
+    let registry = FlowEngineBuilder::new()
+        .action(Box::new(spy))
+        .build()
+        .unwrap();
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Box::leak(Box::new(crate::config::Config::default()));
+    let dir_str = dir.path().to_str().unwrap().to_string();
+    let mut state = make_loop_test_state(&conn, config);
+    state.worktree_ctx.working_dir = dir_str.clone();
+    state.worktree_ctx.repo_path = dir_str;
+    state.action_registry = std::sync::Arc::new(registry);
+    state.exec_config = crate::workflow::types::WorkflowExecConfig {
+        fail_fast: false,
+        ..Default::default()
+    };
+
+    // Set ANTHROPIC_API_KEY so the old early branch would have triggered.
+    // Without this, both old and new code dispatch to the registry (the old
+    // branch's inner `if let Some(api_key)` would not match), so the test
+    // would pass on old code too — making it a false positive.
+    // Safety: no other test in this crate's test binary sets or reads
+    // ANTHROPIC_API_KEY. This invariant must hold across all modules in the
+    // binary — verify before adding tests that touch this variable elsewhere.
+    let prev_key = std::env::var("ANTHROPIC_API_KEY").ok();
+    unsafe {
+        std::env::set_var("ANTHROPIC_API_KEY", "test-api-key-for-spy-test");
+    }
+
+    let node = CallNode {
+        agent: AgentRef::Name("spy-agent".into()),
+        retries: 0,
+        on_fail: None,
+        bot_name: None,
+        output: Some("spy-output".into()),
+        with: vec![],
+        plugin_dirs: vec![],
+    };
+
+    let result = execute_call(&mut state, &node, 0);
+
+    // Restore ANTHROPIC_API_KEY to whatever it was before.
+    unsafe {
+        match prev_key {
+            Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v),
+            None => std::env::remove_var("ANTHROPIC_API_KEY"),
+        }
+    }
+
+    assert!(
+        result.is_ok(),
+        "execute_call should succeed via spy executor: {result:?}"
+    );
+    assert!(
+        called.load(Ordering::SeqCst),
+        "spy executor must be called: registry dispatch was not reached"
+    );
+}
+
 /// Regression test for #2013: drain thread panic in the post-completion join loop
 /// leaves the child agent run stuck in `running` state.
 ///

@@ -5,6 +5,7 @@
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
 pub(crate) mod action_executor;
+pub(crate) mod api_call_executor;
 mod batch_validate;
 pub(crate) mod cancellation;
 pub(crate) mod cancellation_reason;
