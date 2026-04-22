@@ -75,10 +75,10 @@ fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bo
     if let Some(min_multiple) = hook.threshold_multiple {
         match event {
             NotificationEvent::WorkflowRunCostSpike { multiple, .. }
-            | NotificationEvent::WorkflowRunDurationSpike { multiple, .. } => {
-                if *multiple < min_multiple {
-                    return false;
-                }
+            | NotificationEvent::WorkflowRunDurationSpike { multiple, .. }
+                if *multiple < min_multiple =>
+            {
+                return false;
             }
             _ => {}
         }
@@ -98,10 +98,10 @@ fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bo
             NotificationEvent::WorkflowRunCompleted { workflow_name, .. }
             | NotificationEvent::WorkflowRunFailed { workflow_name, .. }
             | NotificationEvent::WorkflowRunCostSpike { workflow_name, .. }
-            | NotificationEvent::WorkflowRunDurationSpike { workflow_name, .. } => {
-                if workflow_name != wf_filter {
-                    return false;
-                }
+            | NotificationEvent::WorkflowRunDurationSpike { workflow_name, .. }
+                if workflow_name != wf_filter =>
+            {
+                return false;
             }
             _ => {} // non-workflow events pass through
         }
