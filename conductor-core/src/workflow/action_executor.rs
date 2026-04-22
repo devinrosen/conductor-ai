@@ -47,7 +47,7 @@ pub struct ActionParams {
 }
 
 /// Output produced by an `ActionExecutor` on success.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ActionOutput {
     pub markers: Vec<String>,
     pub context: Option<String>,
@@ -150,15 +150,7 @@ mod tests {
             Ok(ActionOutput {
                 markers: vec!["done".to_string()],
                 context: Some("noop ran".to_string()),
-                result_text: None,
-                structured_output: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                input_tokens: None,
-                output_tokens: None,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
+                ..Default::default()
             })
         }
     }
