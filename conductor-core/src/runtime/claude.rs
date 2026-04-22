@@ -112,7 +112,7 @@ impl AgentRuntime for ClaudeRuntime {
         false
     }
 
-    fn cancel(&self, run: &AgentRun) -> Result<()> {
+    fn cancel(&self, run: &AgentRun, _db_path: &std::path::Path) -> Result<()> {
         #[cfg(unix)]
         {
             if let Ok(mut guard) = self.handle.lock() {
@@ -390,7 +390,9 @@ mod tests {
     fn cancel_with_no_handle_and_no_pid() {
         let runtime = ClaudeRuntime::default();
         let run = make_test_run(None);
-        assert!(runtime.cancel(&run).is_ok());
+        assert!(runtime
+            .cancel(&run, std::path::Path::new("/tmp/test.db"))
+            .is_ok());
     }
 
     #[cfg(unix)]
@@ -401,7 +403,9 @@ mod tests {
         let dead_pid = child.id() as i64;
         let runtime = ClaudeRuntime::default();
         let run = make_test_run(Some(dead_pid));
-        assert!(runtime.cancel(&run).is_ok());
+        assert!(runtime
+            .cancel(&run, std::path::Path::new("/tmp/test.db"))
+            .is_ok());
     }
 
     // spawn_validated() reaches the binary-exec path when run_id is valid — on unix this
@@ -459,7 +463,9 @@ mod tests {
         let runtime = ClaudeRuntime::default();
         *runtime.handle.lock().unwrap() = Some(handle);
         let run = make_test_run(None);
-        assert!(runtime.cancel(&run).is_ok());
+        assert!(runtime
+            .cancel(&run, std::path::Path::new("/tmp/test.db"))
+            .is_ok());
         // handle must have been taken (aborted)
         assert!(
             runtime.handle.lock().unwrap().is_none(),

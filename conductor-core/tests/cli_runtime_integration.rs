@@ -319,7 +319,9 @@ fn test_cli_runtime_cancel_kills_process_and_marks_cancelled() {
     );
     assert!(runtime.is_alive(&run), "run must be alive before cancel");
 
-    runtime.cancel(&run).expect("cancel must succeed");
+    runtime
+        .cancel(&run, db_guard.path())
+        .expect("cancel must succeed");
 
     // Process should be gone.
     assert!(
@@ -352,7 +354,7 @@ fn test_cli_runtime_cancel_with_no_pid_marks_cancelled() {
 
     let runtime = make_runtime("/bin/echo", "response", None);
     runtime
-        .cancel(&run)
+        .cancel(&run, db_guard.path())
         .expect("cancel must succeed when subprocess_pid is None");
 
     assert_run_cancelled(&db_guard, &run_id);

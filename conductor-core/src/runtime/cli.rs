@@ -241,7 +241,7 @@ impl AgentRuntime for CliRuntime {
         false
     }
 
-    fn cancel(&self, run: &AgentRun) -> Result<()> {
+    fn cancel(&self, run: &AgentRun, db_path: &std::path::Path) -> Result<()> {
         // Take the child from the state so we can kill + reap it.
         let child = self
             .state
@@ -262,7 +262,7 @@ impl AgentRuntime for CliRuntime {
             }
         }
 
-        let conn = crate::db::open_database_compat(&crate::config::db_path()).map_err(|e| {
+        let conn = crate::db::open_database_compat(db_path).map_err(|e| {
             crate::error::ConductorError::Agent(format!(
                 "CliRuntime::cancel: failed to open DB: {e}"
             ))
@@ -419,7 +419,6 @@ mod tests {
     #[test]
     fn cancel_with_dead_pid_returns_ok() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::env::set_var("CONDUCTOR_DB_PATH", tmp.path().to_str().unwrap());
         let conn = crate::db::open_database(tmp.path()).unwrap();
         conn.execute(
             "INSERT INTO agent_runs (id, prompt, status, started_at, runtime) \
@@ -433,7 +432,7 @@ mod tests {
         let dead_pid = child.id() as i64;
         let runtime = make_runtime("echo");
         let run = make_test_run(Some(dead_pid));
-        assert!(runtime.cancel(&run).is_ok());
+        assert!(runtime.cancel(&run, tmp.path()).is_ok());
     }
 
     #[test]
