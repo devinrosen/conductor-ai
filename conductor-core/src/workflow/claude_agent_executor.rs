@@ -3,7 +3,9 @@ use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::runtime::PollError;
-use crate::workflow::action_executor::{ActionExecutor, ActionOutput, ActionParams, ExecutionContext};
+use crate::workflow::action_executor::{
+    ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
+};
 
 /// Wraps `AgentRuntime` dispatch behind the `ActionExecutor` trait.
 ///
