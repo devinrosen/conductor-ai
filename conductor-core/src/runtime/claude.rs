@@ -64,9 +64,14 @@ impl AgentRuntime for ClaudeRuntime {
                     )
                 })
                 .map(|mut guard| *guard = Some(h))?;
-            if let Ok(mut guard) = self.prompt_file.lock() {
-                *guard = Some(pf);
-            }
+            self.prompt_file
+                .lock()
+                .map_err(|_| {
+                    crate::error::ConductorError::Workflow(
+                        "ClaudeRuntime: prompt_file mutex poisoned during spawn".into(),
+                    )
+                })
+                .map(|mut guard| *guard = Some(pf))?;
             Ok(())
         }
         #[cfg(not(unix))]
