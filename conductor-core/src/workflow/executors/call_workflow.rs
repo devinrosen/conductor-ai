@@ -50,7 +50,7 @@ pub fn execute_call_workflow(
     if pos > 0
         && !state
             .wf_mgr
-            .predecessor_completed(&state.workflow_run_id, pos, iteration as i64)?
+            .predecessor_completed(&state.workflow_run_id, pos)?
     {
         tracing::warn!(
             "call_workflow '{}': predecessor at position {} is not completed; \
