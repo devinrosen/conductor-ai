@@ -201,8 +201,8 @@ fn find_agent_path(bases: &[&str], subdir: &Path, filename: &str) -> Option<Path
 }
 
 /// Verify that `path` (canonicalized) is contained within `base` (canonicalized).
-/// Mirrors the guard already present in `load_agent_by_path`.
-fn validate_path_within_base(path: &Path, base: &str) -> Result<()> {
+/// Returns the canonicalized path on success.
+fn validate_path_within_base(path: &Path, base: &str) -> Result<PathBuf> {
     let canonical = path.canonicalize().map_err(|_| {
         ConductorError::AgentConfig(format!("Agent file not found: '{}'", path.display()))
     })?;
@@ -215,13 +215,15 @@ fn validate_path_within_base(path: &Path, base: &str) -> Result<()> {
             path.display()
         )));
     }
-    Ok(())
+    Ok(canonical)
 }
 
 /// Verify that `path` is within at least one of `base1` or `base2`.
 /// Used for the worktree/repo dual-base check in `load_agent_by_name`.
 fn validate_path_within_either_base(path: &Path, base1: &str, base2: &str) -> Result<()> {
-    validate_path_within_base(path, base1).or_else(|_| validate_path_within_base(path, base2))
+    validate_path_within_base(path, base1)
+        .or_else(|_| validate_path_within_base(path, base2))
+        .map(|_| ())
 }
 
 /// Resolve an agent by short name using the search order.
@@ -293,27 +295,8 @@ fn load_agent_by_path(repo_path: &str, rel_path: &str) -> Result<AgentDef> {
         )));
     }
 
-    let repo_root = PathBuf::from(repo_path);
-    let joined = repo_root.join(rel_path);
-
-    // Canonicalize to resolve `..` components and check bounds.
-    let canonical = joined.canonicalize().map_err(|_| {
-        ConductorError::AgentConfig(format!(
-            "Agent file not found: '{rel_path}' (resolved relative to repo root '{repo_path}')"
-        ))
-    })?;
-
-    let canonical_repo = repo_root.canonicalize().map_err(|e| {
-        ConductorError::AgentConfig(format!(
-            "Failed to canonicalize repo root '{repo_path}': {e}"
-        ))
-    })?;
-
-    if !canonical.starts_with(&canonical_repo) {
-        return Err(ConductorError::AgentConfig(format!(
-            "Agent path '{rel_path}' escapes the repository root — path traversal is not allowed"
-        )));
-    }
+    let joined = PathBuf::from(repo_path).join(rel_path);
+    let canonical = validate_path_within_base(&joined, repo_path)?;
 
     if !canonical.is_file() {
         return Err(ConductorError::AgentConfig(format!(
