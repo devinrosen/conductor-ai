@@ -4314,31 +4314,35 @@ fn test_predecessor_completed_false_when_no_prev_row() {
 
 #[test]
 fn test_regression_2448_predecessor_completed_cross_iteration() {
-    // Regression: predecessor_completed must find a step stored in iteration 0
-    // when checking from iteration 1. position is globally unique per run so
-    // the iteration filter was incorrect and caused sub-workflow steps to be
-    // silently skipped in do-while loop iterations > 0.
+    // Regression: predecessor_completed must find steps stored in iteration 0
+    // when the next step is at a higher position that belongs to iteration 1.
+    // Before the fix, the query included `AND iteration = :iter` which caused
+    // position 5 (iteration=0) to be invisible when checking from position 6
+    // (iteration=1), silently skipping every sub-workflow step in the loop.
     let conn = setup_db();
     let (mgr, _parent, run) = make_workflow_run(&conn);
-    // Insert step at position=0, iteration=0 and mark it completed.
-    let step_id = mgr
-        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+    // Simulate do-while iteration 0: insert and complete steps at positions 0–5
+    // all with iteration=0.
+    for pos in 0..6i64 {
+        let step_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, pos, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
         .unwrap();
-    mgr.update_step_status(
-        &step_id,
-        WorkflowStepStatus::Completed,
-        None,
-        None,
-        None,
-        None,
-        Some(0),
-    )
-    .unwrap();
-    // Cross-iteration check: position 1 predecessor (pos 0) was stored in
-    // iteration 0 — must still return true regardless of current iteration.
+    }
+    // Iteration 1 starts at position 6. Guard A checks whether position 5
+    // (stored with iteration=0) is completed. Must return true.
     assert!(
-        mgr.predecessor_completed(&run.id, 1).unwrap(),
-        "predecessor_completed must find a completed step across iteration boundaries"
+        mgr.predecessor_completed(&run.id, 6).unwrap(),
+        "predecessor_completed must find a step from iteration 0 when checking position 6 in iteration 1"
     );
 }
 
