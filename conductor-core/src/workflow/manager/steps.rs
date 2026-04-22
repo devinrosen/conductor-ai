@@ -294,11 +294,7 @@ impl<'a> WorkflowManager<'a> {
 
     /// Returns true if the predecessor step (position - 1) has status 'completed'.
     /// Always returns true when position == 0 (no predecessor).
-    pub fn predecessor_completed(
-        &self,
-        workflow_run_id: &str,
-        position: i64,
-    ) -> Result<bool> {
+    pub fn predecessor_completed(&self, workflow_run_id: &str, position: i64) -> Result<bool> {
         if position == 0 {
             return Ok(true);
         }
