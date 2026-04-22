@@ -11,8 +11,8 @@ use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
-    FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
-    WorkflowPersistence,
+    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
+    NewStep, StepUpdate, WorkflowPersistence,
 };
 
 /// SQLite-backed implementation of `WorkflowPersistence`.
@@ -212,22 +212,15 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         let status = status_str
             .parse::<WorkflowStepStatus>()
             .unwrap_or(WorkflowStepStatus::Waiting);
+        let selections =
+            selections_json.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
 
-        if approved_at.is_some() || status == WorkflowStepStatus::Completed {
-            let selections =
-                selections_json.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
-            return Ok(GateApprovalState::Approved {
-                feedback,
-                selections,
-            });
-        }
-        if status == WorkflowStepStatus::Failed {
-            return Ok(GateApprovalState::Rejected {
-                reason: "gate rejected".into(),
-            });
-        }
-
-        Ok(GateApprovalState::Pending)
+        Ok(gate_approval_state_from_fields(
+            approved_at.as_deref(),
+            status,
+            feedback,
+            selections,
+        ))
     }
 
     fn approve_gate(

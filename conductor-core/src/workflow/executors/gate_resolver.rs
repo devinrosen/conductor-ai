@@ -18,6 +18,7 @@ use super::resolvers::{
 // ---------------------------------------------------------------------------
 
 /// Outcome of a single poll tick from a `GateResolver`.
+#[derive(Debug)]
 pub(super) enum GatePoll {
     Approved(Option<String>),
     Rejected(String),
