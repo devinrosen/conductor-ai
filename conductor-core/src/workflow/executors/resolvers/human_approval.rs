@@ -1,11 +1,8 @@
-use std::path::PathBuf;
-use std::sync::Mutex;
-
-use rusqlite::{Connection, OptionalExtension};
+use std::sync::Arc;
 
 use crate::error::{ConductorError, Result};
 use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GatePoll, GateResolver};
-use crate::workflow::status::WorkflowStepStatus;
+use crate::workflow::persistence::{GateApprovalState, WorkflowPersistence};
 
 /// Distinguishes the two human gate types so a single struct can register
 /// under both `"human_approval"` and `"human_review"`.
@@ -15,18 +12,16 @@ pub(in crate::workflow::executors) enum HumanGateKind {
 }
 
 pub(in crate::workflow::executors) struct HumanApprovalGateResolver {
-    db_path: PathBuf,
-    conn: Mutex<Option<Connection>>,
+    persistence: Arc<dyn WorkflowPersistence>,
     kind: HumanGateKind,
 }
 
 impl HumanApprovalGateResolver {
-    pub(in crate::workflow::executors) fn new(db_path: PathBuf, kind: HumanGateKind) -> Self {
-        Self {
-            db_path,
-            conn: Mutex::new(None),
-            kind,
-        }
+    pub(in crate::workflow::executors) fn new(
+        persistence: Arc<dyn WorkflowPersistence>,
+        kind: HumanGateKind,
+    ) -> Self {
+        Self { persistence, kind }
     }
 }
 
@@ -39,62 +34,18 @@ impl GateResolver for HumanApprovalGateResolver {
     }
 
     fn poll(&self, _run_id: &str, params: &GateParams, _ctx: &GateContext<'_>) -> Result<GatePoll> {
-        let mut guard = self.conn.lock().map_err(|_| {
-            ConductorError::Workflow("HumanApprovalGateResolver: mutex poisoned".into())
-        })?;
-
-        // Lazily open the connection on first use.
-        if guard.is_none() {
-            let conn = Connection::open(&self.db_path).map_err(|e| {
-                ConductorError::Workflow(format!(
-                    "HumanApprovalGateResolver: failed to open DB at {}: {e}",
-                    self.db_path.display()
-                ))
-            })?;
-            conn.pragma_update(None, "journal_mode", "WAL")
-                .map_err(|e| {
-                    ConductorError::Workflow(format!(
-                        "HumanApprovalGateResolver: failed to set journal_mode WAL: {e}"
-                    ))
-                })?;
-            conn.pragma_update(None, "foreign_keys", true)
-                .map_err(|e| {
-                    ConductorError::Workflow(format!(
-                        "HumanApprovalGateResolver: failed to enable foreign_keys: {e}"
-                    ))
-                })?;
-            *guard = Some(conn);
+        let state = self
+            .persistence
+            .get_gate_approval(&params.step_id)
+            .map_err(|e| ConductorError::Workflow(e.to_string()))?;
+        match state {
+            GateApprovalState::Approved { feedback, .. } => Ok(GatePoll::Approved(feedback)),
+            GateApprovalState::Rejected { .. } => Ok(GatePoll::Rejected(format!(
+                "Gate '{}' rejected",
+                params.gate_name
+            ))),
+            GateApprovalState::Pending => Ok(GatePoll::Pending),
         }
-
-        let conn = guard.as_ref().expect("connection was just set");
-
-        // Read the current state of the gate step directly by its ID.
-        let row: Option<(Option<String>, String, Option<String>)> = conn
-            .query_row(
-                "SELECT gate_approved_at, status, gate_feedback \
-                 FROM workflow_run_steps WHERE id = ?1",
-                rusqlite::params![params.step_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(ConductorError::Database)?;
-
-        if let Some((approved_at, status_str, feedback)) = row {
-            let status = status_str
-                .parse::<WorkflowStepStatus>()
-                .unwrap_or(WorkflowStepStatus::Waiting);
-            if approved_at.is_some() || status == WorkflowStepStatus::Completed {
-                return Ok(GatePoll::Approved(feedback));
-            }
-            if status == WorkflowStepStatus::Failed {
-                return Ok(GatePoll::Rejected(format!(
-                    "Gate '{}' rejected",
-                    params.gate_name
-                )));
-            }
-        }
-
-        Ok(GatePoll::Pending)
     }
 }
 
@@ -102,6 +53,8 @@ impl GateResolver for HumanApprovalGateResolver {
 mod tests {
     use super::*;
     use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GitHubTokenCache};
+    use crate::workflow::persistence::WorkflowPersistence;
+    use crate::workflow::persistence_sqlite::SqliteWorkflowPersistence;
     use crate::workflow_dsl::ApprovalMode;
     use rusqlite::Connection;
     use std::sync::Arc;
@@ -147,12 +100,18 @@ mod tests {
         }
     }
 
+    fn make_persistence(db_path: &std::path::Path) -> Arc<dyn WorkflowPersistence> {
+        Arc::new(
+            SqliteWorkflowPersistence::open(db_path)
+                .expect("failed to open test DB for HumanApprovalGateResolver"),
+        )
+    }
+
     #[test]
     fn test_human_approval_resolver_approved_when_gate_approved_at_set() {
         let tmp = NamedTempFile::new().unwrap();
         let db_path = tmp.path().to_path_buf();
 
-        // Set up the DB schema and insert an approved step.
         let conn = Connection::open(&db_path).unwrap();
         setup_test_db(&conn);
         insert_test_step(
@@ -162,8 +121,8 @@ mod tests {
         );
         drop(conn);
 
-        let resolver =
-            HumanApprovalGateResolver::new(db_path.clone(), HumanGateKind::HumanApproval);
+        let persistence = make_persistence(&db_path);
+        let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let config = crate::config::Config::default();
         let params = make_test_params("step1");
         let ctx = make_test_ctx(&config, &db_path);
@@ -189,8 +148,8 @@ mod tests {
         );
         drop(conn);
 
-        let resolver =
-            HumanApprovalGateResolver::new(db_path.clone(), HumanGateKind::HumanApproval);
+        let persistence = make_persistence(&db_path);
+        let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let config = crate::config::Config::default();
         let params = make_test_params("step1");
         let ctx = make_test_ctx(&config, &db_path);
@@ -216,8 +175,8 @@ mod tests {
         );
         drop(conn);
 
-        let resolver =
-            HumanApprovalGateResolver::new(db_path.clone(), HumanGateKind::HumanApproval);
+        let persistence = make_persistence(&db_path);
+        let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let config = crate::config::Config::default();
         let params = make_test_params("step1");
         let ctx = make_test_ctx(&config, &db_path);
@@ -237,7 +196,8 @@ mod tests {
         setup_test_db(&conn);
         drop(conn);
 
-        let resolver = HumanApprovalGateResolver::new(db_path, HumanGateKind::HumanReview);
+        let persistence = make_persistence(&db_path);
+        let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanReview);
         assert_eq!(resolver.gate_type(), "human_review");
     }
 
@@ -250,8 +210,8 @@ mod tests {
         setup_test_db(&conn);
         drop(conn);
 
-        let resolver =
-            HumanApprovalGateResolver::new(db_path.clone(), HumanGateKind::HumanApproval);
+        let persistence = make_persistence(&db_path);
+        let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let config = crate::config::Config::default();
         let params = make_test_params("nonexistent-step-id");
         let ctx = make_test_ctx(&config, &db_path);

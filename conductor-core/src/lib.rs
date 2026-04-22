@@ -57,6 +57,7 @@ pub mod ticket_source;
 pub mod tickets;
 pub mod vantage;
 pub mod workflow;
+pub use workflow::{SqliteWorkflowPersistence, WorkflowPersistence};
 pub mod workflow_config;
 pub(crate) mod workflow_dsl;
 pub mod workflow_ephemeral;
