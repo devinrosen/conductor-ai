@@ -255,9 +255,6 @@ fn make_call_wf_state<'a>(
     parent_run_id: String,
 ) -> ExecutionState<'a> {
     ExecutionState {
-        conn,
-        config,
-        workflow_run_id,
         workflow_name: "parent-wf".into(),
         worktree_ctx: crate::workflow::engine::WorktreeContext {
             worktree_id: None,
@@ -269,42 +266,11 @@ fn make_call_wf_state<'a>(
             conductor_bin_dir: None,
             extra_plugin_dirs: vec![],
         },
-        model: None,
         exec_config: WorkflowExecConfig {
             fail_fast: false,
             ..WorkflowExecConfig::default()
         },
-        inputs: HashMap::new(),
-        agent_mgr: crate::agent::AgentManager::new(conn),
-        wf_mgr: WorkflowManager::new(conn),
-        parent_run_id,
-        depth: 0,
-        target_label: None,
-        step_results: HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_input_tokens: 0,
-        total_cache_creation_input_tokens: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
-        default_bot_name: None,
-        triggered_by_hook: false,
-        last_heartbeat_at: ExecutionState::new_heartbeat(),
-        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
-        action_registry: std::sync::Arc::new(
-            crate::workflow::action_executor::ActionRegistry::new(
-                std::collections::HashMap::new(),
-                None,
-            ),
-        ),
+        ..base_execution_state(conn, config, workflow_run_id, parent_run_id)
     }
 }
 
