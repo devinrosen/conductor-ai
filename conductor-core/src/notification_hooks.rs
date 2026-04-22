@@ -124,10 +124,8 @@ fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bo
             | NotificationEvent::WorkflowRunDurationSpike {
                 parent_workflow_run_id,
                 ..
-            } => {
-                if parent_workflow_run_id.is_some() {
-                    return false;
-                }
+            } if parent_workflow_run_id.is_some() => {
+                return false;
             }
             _ => {} // non-workflow events pass through
         }
@@ -148,10 +146,10 @@ fn hook_event_passes_filters(hook: &HookConfig, event: &NotificationEvent) -> bo
     if let Some(ref step_filter) = hook.step {
         match event {
             NotificationEvent::GateWaiting { step_name, .. }
-            | NotificationEvent::GatePendingTooLong { step_name, .. } => {
-                if step_name != step_filter {
-                    return false;
-                }
+            | NotificationEvent::GatePendingTooLong { step_name, .. }
+                if step_name != step_filter =>
+            {
+                return false;
             }
             _ => {} // non-gate events pass through
         }

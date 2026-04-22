@@ -578,15 +578,11 @@ pub(crate) fn derive_default_markers(value: &serde_json::Value) -> Vec<String> {
             for item in arr {
                 if let Some(severity) = item.get("severity").and_then(|v| v.as_str()) {
                     match severity {
-                        "critical" => {
-                            if !markers.contains(&"has_critical_findings".to_string()) {
-                                markers.push("has_critical_findings".to_string());
-                            }
+                        "critical" if !markers.contains(&"has_critical_findings".to_string()) => {
+                            markers.push("has_critical_findings".to_string());
                         }
-                        "high" => {
-                            if !markers.contains(&"has_high_findings".to_string()) {
-                                markers.push("has_high_findings".to_string());
-                            }
+                        "high" if !markers.contains(&"has_high_findings".to_string()) => {
+                            markers.push("has_high_findings".to_string());
                         }
                         _ => {}
                     }
