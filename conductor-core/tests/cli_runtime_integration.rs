@@ -319,7 +319,9 @@ fn test_cli_runtime_cancel_kills_process_and_marks_cancelled() {
     );
     assert!(runtime.is_alive(&run), "run must be alive before cancel");
 
-    runtime.cancel(&run, db_guard.path()).expect("cancel must succeed");
+    runtime
+        .cancel(&run, db_guard.path())
+        .expect("cancel must succeed");
 
     // Process should be gone.
     assert!(

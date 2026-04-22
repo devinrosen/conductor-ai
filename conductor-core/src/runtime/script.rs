@@ -186,6 +186,8 @@ mod tests {
     #[test]
     fn cancel_is_noop() {
         let runtime = make_runtime(Some("echo hi"));
-        assert!(runtime.cancel(&make_test_run(), std::path::Path::new("/tmp/test.db")).is_ok());
+        assert!(runtime
+            .cancel(&make_test_run(), std::path::Path::new("/tmp/test.db"))
+            .is_ok());
     }
 }
