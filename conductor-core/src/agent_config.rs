@@ -200,6 +200,24 @@ fn find_agent_path(bases: &[&str], subdir: &Path, filename: &str) -> Option<Path
     })
 }
 
+/// Verify that `path` (canonicalized) is contained within `base` (canonicalized).
+/// Mirrors the guard already present in `load_agent_by_path`.
+fn validate_path_within_base(path: &Path, base: &str) -> Result<()> {
+    let canonical = path.canonicalize().map_err(|_| {
+        ConductorError::AgentConfig(format!("Agent file not found: '{}'", path.display()))
+    })?;
+    let canonical_base = PathBuf::from(base).canonicalize().map_err(|e| {
+        ConductorError::AgentConfig(format!("Failed to canonicalize base '{base}': {e}"))
+    })?;
+    if !canonical.starts_with(&canonical_base) {
+        return Err(ConductorError::AgentConfig(format!(
+            "Agent path '{}' escapes the base directory — path traversal is not allowed",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Resolve an agent by short name using the search order.
 fn load_agent_by_name(
     worktree_path: &str,
@@ -218,24 +236,49 @@ fn load_agent_by_name(
             .join(wf_name)
             .join("agents");
         if let Some(path) = find_agent_path(&bases, &subdir, &filename) {
-            return parse_agent_file(&path);
+            if validate_path_within_base(&path, worktree_path).is_ok()
+                || validate_path_within_base(&path, repo_path).is_ok()
+            {
+                return parse_agent_file(&path);
+            }
+            return Err(ConductorError::AgentConfig(format!(
+                "Agent path '{}' escapes the base directory — path traversal is not allowed",
+                path.display()
+            )));
         }
     }
 
     // 2. Shared conductor agents (worktree, then repo)
     if let Some(path) = find_agent_path(&bases, Path::new(".conductor/agents"), &filename) {
-        return parse_agent_file(&path);
+        if validate_path_within_base(&path, worktree_path).is_ok()
+            || validate_path_within_base(&path, repo_path).is_ok()
+        {
+            return parse_agent_file(&path);
+        }
+        return Err(ConductorError::AgentConfig(format!(
+            "Agent path '{}' escapes the base directory — path traversal is not allowed",
+            path.display()
+        )));
     }
 
     // 3. Claude Code agents fallback (worktree, then repo)
     if let Some(path) = find_agent_path(&bases, Path::new(".claude/agents"), &filename) {
-        return parse_agent_file(&path);
+        if validate_path_within_base(&path, worktree_path).is_ok()
+            || validate_path_within_base(&path, repo_path).is_ok()
+        {
+            return parse_agent_file(&path);
+        }
+        return Err(ConductorError::AgentConfig(format!(
+            "Agent path '{}' escapes the base directory — path traversal is not allowed",
+            path.display()
+        )));
     }
 
     // 4. Extra plugin directories (lowest priority)
     for dir in extra_plugin_dirs {
         let path = Path::new(dir).join("agents").join(&filename);
         if path.is_file() {
+            validate_path_within_base(&path, dir)?;
             return parse_agent_file(&path);
         }
     }
@@ -1088,5 +1131,115 @@ Implement the plan written in PLAN.md.
             AgentRole::Reviewer
         );
         assert!("invalid".parse::<AgentRole>().is_err());
+    }
+
+    #[test]
+    fn test_load_agent_name_absolute_rejected() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        // Agent file exists completely outside the search bases.
+        fs::write(
+            outside.path().join("secret.md"),
+            "---\nrole: reviewer\n---\nSecret.",
+        )
+        .unwrap();
+
+        // When name begins with '/', filename becomes absolute and PathBuf::join
+        // discards the base/subdir, making the resolved path escape the search bases.
+        let name = format!("{}/secret", outside.path().display());
+
+        let result = load_agent(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &AgentSpec::Name(name),
+            None,
+            &[],
+        );
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("path traversal") || err.contains("escapes"),
+            "Expected path traversal error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_agent_name_traversal_rejected() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let evil_dir = TempDir::new().unwrap();
+
+        // Agent file exists in a sibling temp dir outside the search bases.
+        fs::write(
+            evil_dir.path().join("evil.md"),
+            "---\nrole: reviewer\n---\nEvil.",
+        )
+        .unwrap();
+
+        // The OS resolves `..` components only when intermediate directories exist.
+        // Create the agents dir so the traversal path resolves to the actual file.
+        let agents_dir = worktree.path().join(".conductor").join("agents");
+        fs::create_dir_all(&agents_dir).unwrap();
+
+        // Both TempDirs should share the same parent (e.g. /tmp or /var/.../T/).
+        // From worktree/.conductor/agents/ (3 levels deep), going up 3 times
+        // reaches the common parent, then we descend into evil_dir.
+        let wt_parent = worktree.path().parent().unwrap();
+        let evil_parent = evil_dir.path().parent().unwrap();
+        if wt_parent != evil_parent {
+            // Platforms where temp dirs have different parents — skip.
+            return;
+        }
+        let evil_dir_name = evil_dir.path().file_name().unwrap().to_str().unwrap();
+        let name = format!("../../../{evil_dir_name}/evil");
+
+        let result = load_agent(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &AgentSpec::Name(name),
+            None,
+            &[],
+        );
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("path traversal") || err.contains("escapes"),
+            "Expected path traversal error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_agent_plugin_dir_traversal_rejected() {
+        let plugin = TempDir::new().unwrap();
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        // Agent file exists completely outside the plugin dir.
+        fs::write(
+            outside.path().join("stolen.md"),
+            "---\nrole: reviewer\n---\nStolen.",
+        )
+        .unwrap();
+
+        // Absolute name causes PathBuf::join to discard the plugin dir prefix.
+        let name = format!("{}/stolen", outside.path().display());
+
+        let plugin_dirs = vec![plugin.path().to_str().unwrap().to_string()];
+        let result = load_agent(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &AgentSpec::Name(name),
+            None,
+            &plugin_dirs,
+        );
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("path traversal") || err.contains("escapes"),
+            "Expected path traversal error, got: {err}"
+        );
     }
 }
