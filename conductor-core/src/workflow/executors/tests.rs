@@ -1742,7 +1742,9 @@ fn test_schema_step_routes_through_registry_when_api_key_present() {
     // Without this, both old and new code dispatch to the registry (the old
     // branch's inner `if let Some(api_key)` would not match), so the test
     // would pass on old code too — making it a false positive.
-    // Safety: no other test in this module reads or writes ANTHROPIC_API_KEY.
+    // Safety: no other test in this crate's test binary sets or reads
+    // ANTHROPIC_API_KEY. This invariant must hold across all modules in the
+    // binary — verify before adding tests that touch this variable elsewhere.
     let prev_key = std::env::var("ANTHROPIC_API_KEY").ok();
     unsafe {
         std::env::set_var("ANTHROPIC_API_KEY", "test-api-key-for-spy-test");

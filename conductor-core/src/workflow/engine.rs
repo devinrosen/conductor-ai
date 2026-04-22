@@ -71,20 +71,23 @@ pub(super) struct ResumeContext {
 
 /// Build the default `ActionRegistry` for a workflow run.
 ///
-/// Registers `ApiCallExecutor` as a named executor (for test injection via the
-/// same name) and `ClaudeAgentExecutor` as the catch-all fallback.  In normal
-/// execution `ClaudeAgentExecutor` is the entry point for every `call <name>`
-/// step; it delegates to `ApiCallExecutor` internally when schema + API key are
-/// both present.
+/// `ApiCallExecutor` is injected into `ClaudeAgentExecutor` at construction so
+/// that schema-constrained steps delegate through the `ActionExecutor` trait
+/// rather than a concrete peer dependency. No named registration for
+/// `ApiCallExecutor` is needed — `ClaudeAgentExecutor` (the fallback) owns the
+/// delegation decision.
 fn build_default_action_registry(
     config: &Config,
 ) -> crate::workflow::action_executor::ActionRegistry {
+    let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> = Box::new(
+        crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
+    );
     crate::workflow::flow_engine::FlowEngineBuilder::new()
-        .action(Box::new(
-            crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
-        ))
         .action_fallback(Box::new(
-            crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(config.clone()),
+            crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(
+                config.clone(),
+                Some(api_executor),
+            ),
         ))
         .expect("single fallback — cannot fail on first call")
         .build()
