@@ -11,8 +11,8 @@ use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
-    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState,
-    NewRun, NewStep, StepUpdate, WorkflowPersistence,
+    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
+    NewStep, StepUpdate, WorkflowPersistence,
 };
 
 struct InMemoryStore {
