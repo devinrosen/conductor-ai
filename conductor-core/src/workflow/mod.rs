@@ -4,14 +4,17 @@
 //! Builds on top of the existing `AgentManager` and orchestrator infrastructure,
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
+pub(crate) mod action_executor;
 mod batch_validate;
 pub(crate) mod cancellation;
 pub(crate) mod cancellation_reason;
+pub(crate) mod claude_agent_executor;
 pub(crate) mod constants;
 pub(crate) mod engine;
 pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
+pub(crate) mod flow_engine;
 pub(crate) mod helpers;
 pub(crate) mod item_provider;
 pub(crate) mod manager;

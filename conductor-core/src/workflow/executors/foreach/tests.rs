@@ -94,6 +94,12 @@ fn test_collect_ticket_items_unlabeled_scope() {
         triggered_by_hook: false,
         last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
+        action_registry: std::sync::Arc::new(
+            crate::workflow::action_executor::ActionRegistry::new(
+                std::collections::HashMap::new(),
+                None,
+            ),
+        ),
     };
 
     let node = make_foreach_node_unlabeled();
@@ -276,6 +282,12 @@ fn make_execution_state_with_worktree<'a>(
         triggered_by_hook: false,
         last_heartbeat_at: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
+        action_registry: std::sync::Arc::new(
+            crate::workflow::action_executor::ActionRegistry::new(
+                std::collections::HashMap::new(),
+                None,
+            ),
+        ),
     }
 }
 
