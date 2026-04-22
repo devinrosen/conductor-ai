@@ -218,6 +218,13 @@ fn validate_path_within_base(path: &Path, base: &str) -> Result<()> {
     Ok(())
 }
 
+/// Verify that `path` is within at least one of `base1` or `base2`.
+/// Used for the worktree/repo dual-base check in `load_agent_by_name`.
+fn validate_path_within_either_base(path: &Path, base1: &str, base2: &str) -> Result<()> {
+    validate_path_within_base(path, base1)
+        .or_else(|_| validate_path_within_base(path, base2))
+}
+
 /// Resolve an agent by short name using the search order.
 fn load_agent_by_name(
     worktree_path: &str,
@@ -236,42 +243,21 @@ fn load_agent_by_name(
             .join(wf_name)
             .join("agents");
         if let Some(path) = find_agent_path(&bases, &subdir, &filename) {
-            if validate_path_within_base(&path, worktree_path).is_ok()
-                || validate_path_within_base(&path, repo_path).is_ok()
-            {
-                return parse_agent_file(&path);
-            }
-            return Err(ConductorError::AgentConfig(format!(
-                "Agent path '{}' escapes the base directory — path traversal is not allowed",
-                path.display()
-            )));
+            validate_path_within_either_base(&path, worktree_path, repo_path)?;
+            return parse_agent_file(&path);
         }
     }
 
     // 2. Shared conductor agents (worktree, then repo)
     if let Some(path) = find_agent_path(&bases, Path::new(".conductor/agents"), &filename) {
-        if validate_path_within_base(&path, worktree_path).is_ok()
-            || validate_path_within_base(&path, repo_path).is_ok()
-        {
-            return parse_agent_file(&path);
-        }
-        return Err(ConductorError::AgentConfig(format!(
-            "Agent path '{}' escapes the base directory — path traversal is not allowed",
-            path.display()
-        )));
+        validate_path_within_either_base(&path, worktree_path, repo_path)?;
+        return parse_agent_file(&path);
     }
 
     // 3. Claude Code agents fallback (worktree, then repo)
     if let Some(path) = find_agent_path(&bases, Path::new(".claude/agents"), &filename) {
-        if validate_path_within_base(&path, worktree_path).is_ok()
-            || validate_path_within_base(&path, repo_path).is_ok()
-        {
-            return parse_agent_file(&path);
-        }
-        return Err(ConductorError::AgentConfig(format!(
-            "Agent path '{}' escapes the base directory — path traversal is not allowed",
-            path.display()
-        )));
+        validate_path_within_either_base(&path, worktree_path, repo_path)?;
+        return parse_agent_file(&path);
     }
 
     // 4. Extra plugin directories (lowest priority)
