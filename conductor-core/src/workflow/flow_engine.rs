@@ -108,6 +108,9 @@ mod tests {
             bot_name: None,
             plugin_dirs: vec![],
             workflow_name: "wf".to_string(),
+            worktree_id: None,
+            parent_run_id: "parent-run-1".to_string(),
+            step_id: "step-1".to_string(),
         }
     }
 

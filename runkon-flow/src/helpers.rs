@@ -122,3 +122,206 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
     // iter is now the first incomplete iteration — start there
     iter
 }
+
+#[cfg(test)]
+mod tests {
+    use super::collect_leaf_step_keys;
+    use crate::dsl::{
+        AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, ForEachNode, GateNode,
+        GateType, IfNode, OnMaxIter, ParallelNode, ScriptNode, UnlessNode, WhileNode, WorkflowNode,
+    };
+
+    fn call_node(name: &str) -> WorkflowNode {
+        WorkflowNode::Call(CallNode {
+            agent: AgentRef::Name(name.to_string()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec![],
+            bot_name: None,
+            plugin_dirs: vec![],
+        })
+    }
+
+    fn script_node(name: &str) -> WorkflowNode {
+        WorkflowNode::Script(ScriptNode {
+            name: name.to_string(),
+            run: "echo hello".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        })
+    }
+
+    // ---- collect_leaf_step_keys ----
+
+    #[test]
+    fn leaf_keys_from_call_node() {
+        let node = call_node("plan");
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["plan".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_script_node() {
+        let node = script_node("lint");
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["lint".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_call_workflow_node() {
+        let node = WorkflowNode::CallWorkflow(CallWorkflowNode {
+            workflow: "child-wf".to_string(),
+            inputs: Default::default(),
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["workflow:child-wf".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_parallel_node() {
+        let node = WorkflowNode::Parallel(ParallelNode {
+            fail_fast: true,
+            min_success: None,
+            calls: vec![
+                AgentRef::Name("agent_a".to_string()),
+                AgentRef::Name("agent_b".to_string()),
+            ],
+            output: None,
+            call_outputs: Default::default(),
+            with: vec![],
+            call_with: Default::default(),
+            call_if: Default::default(),
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["agent_a".to_string(), "agent_b".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_gate_node() {
+        let node = WorkflowNode::Gate(GateNode {
+            name: "human_approval".to_string(),
+            gate_type: GateType::HumanApproval,
+            prompt: None,
+            min_approvals: 1,
+            approval_mode: Default::default(),
+            timeout_secs: 0,
+            on_timeout: crate::dsl::OnTimeout::Fail,
+            bot_name: None,
+            quality_gate: None,
+            options: None,
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["human_approval".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_foreach_node() {
+        let node = WorkflowNode::ForEach(ForEachNode {
+            name: "fan".to_string(),
+            over: "tickets".to_string(),
+            scope: None,
+            filter: Default::default(),
+            ordered: false,
+            on_cycle: crate::dsl::OnCycle::Fail,
+            max_parallel: 4,
+            workflow: "child".to_string(),
+            inputs: Default::default(),
+            on_child_fail: crate::dsl::OnChildFail::Continue,
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["foreach:fan".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_if_node_recurses_into_body() {
+        let node = WorkflowNode::If(IfNode {
+            condition: Condition::BoolInput {
+                input: "flag".to_string(),
+            },
+            body: vec![call_node("inner_agent")],
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["inner_agent".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_unless_node_recurses_into_body() {
+        let node = WorkflowNode::Unless(UnlessNode {
+            condition: Condition::StepMarker {
+                step: "s".to_string(),
+                marker: "m".to_string(),
+            },
+            body: vec![call_node("fallback")],
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["fallback".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_while_node_recurses_into_body() {
+        let node = WorkflowNode::While(WhileNode {
+            step: "s".to_string(),
+            marker: "m".to_string(),
+            max_iterations: 5,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Fail,
+            body: vec![call_node("loop_agent")],
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["loop_agent".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_do_node_recurses_into_body() {
+        let node = WorkflowNode::Do(DoNode {
+            output: None,
+            with: vec![],
+            body: vec![call_node("step_a"), script_node("step_b")],
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["step_a".to_string(), "step_b".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_from_always_node_recurses_into_body() {
+        let node = WorkflowNode::Always(AlwaysNode {
+            body: vec![call_node("cleanup")],
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["cleanup".to_string()]);
+    }
+
+    #[test]
+    fn leaf_keys_empty_body_returns_empty() {
+        let node = WorkflowNode::If(IfNode {
+            condition: Condition::BoolInput {
+                input: "x".to_string(),
+            },
+            body: vec![],
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn leaf_keys_path_agent_uses_file_stem() {
+        let node = WorkflowNode::Call(CallNode {
+            agent: AgentRef::Path(".claude/agents/plan.md".to_string()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec![],
+            bot_name: None,
+            plugin_dirs: vec![],
+        });
+        let keys = collect_leaf_step_keys(&node);
+        assert_eq!(keys, vec!["plan".to_string()]);
+    }
+}

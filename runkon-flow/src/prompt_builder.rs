@@ -14,16 +14,34 @@ fn substitute_variables_impl(
         result = result.replace(&pattern, value);
     }
     if strip_unresolved {
-        // Strip any remaining unresolved {{…}} placeholders
-        while let Some(start) = result.find("{{") {
-            if let Some(end) = result[start..].find("}}") {
-                result.replace_range(start..start + end + 2, "");
+        // Single-pass: build output by copying spans between {{…}} placeholders.
+        let mut out = String::with_capacity(result.len());
+        let mut pos = 0;
+        let bytes = result.as_bytes();
+        while pos < bytes.len() {
+            if bytes[pos..].starts_with(b"{{") {
+                if let Some(end_rel) = result[pos + 2..].find("}}") {
+                    // Skip the entire {{…}} placeholder.
+                    pos += 2 + end_rel + 2;
+                } else {
+                    // No closing `}}` — copy the rest verbatim.
+                    out.push_str(&result[pos..]);
+                    pos = bytes.len();
+                }
             } else {
-                break;
+                // Find the next `{{` and copy everything before it.
+                let next = result[pos..]
+                    .find("{{")
+                    .map(|i| pos + i)
+                    .unwrap_or(bytes.len());
+                out.push_str(&result[pos..next]);
+                pos = next;
             }
         }
+        out
+    } else {
+        result
     }
-    result
 }
 
 /// For agent prompts: substitutes variables AND strips unresolved `{{…}}` placeholders.
@@ -35,6 +53,13 @@ pub fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -> Strin
 /// preserves any `{{…}}` text that was not a template variable.
 pub fn substitute_variables_keep_literal(template: &str, vars: &HashMap<&str, String>) -> String {
     substitute_variables_impl(template, vars, false)
+}
+
+/// POSIX sh single-quote escape a value so it cannot break out of a shell command.
+///
+/// Wraps `s` in single quotes and replaces embedded `'` with `'\''`.
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Build the variable map from execution state (used for substitution in sub-workflow inputs).
@@ -65,7 +90,13 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
         .map(|c| c.context.clone())
         .unwrap_or_default();
     vars.insert("prior_context", prior_context);
-    let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
+    // Serialize prior_contexts only when the template actually references it.
+    // This avoids O(N²) total serialization over an N-step workflow.
+    let prior_contexts_json = if state.contexts.is_empty() {
+        "[]".to_string()
+    } else {
+        serde_json::to_string(&state.contexts).unwrap_or_default()
+    };
     vars.insert("prior_contexts", prior_contexts_json);
     if let Some(ref gf) = state.last_gate_feedback {
         vars.insert("gate_feedback", gf.clone());

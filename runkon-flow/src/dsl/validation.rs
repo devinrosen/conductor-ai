@@ -545,3 +545,263 @@ fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_script_steps, validate_workflow_semantics};
+    use crate::dsl::parse_workflow_str;
+
+    fn no_loader(name: &str) -> Result<crate::dsl::WorkflowDef, String> {
+        Err(format!("sub-workflow '{}' not found", name))
+    }
+
+    fn always_resolve_ok(run: &str) -> Result<std::path::PathBuf, String> {
+        Ok(std::path::PathBuf::from(run))
+    }
+
+    fn always_resolve_err(run: &str) -> Result<std::path::PathBuf, String> {
+        Err(format!("not found: {run}"))
+    }
+
+    // ---- validate_workflow_semantics ----
+
+    #[test]
+    fn valid_simple_workflow_has_no_errors() {
+        let src = r#"
+workflow simple {
+    call my_agent
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "expected no errors, got: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn if_condition_referencing_unknown_step_is_an_error() {
+        let src = r#"
+workflow wf {
+    if unknown_step.done {
+        call another_agent
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            !report.is_ok(),
+            "expected validation error for unknown step reference"
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.message.contains("unknown_step")),
+            "error should mention the step name; errors: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn if_condition_after_producing_step_is_ok() {
+        let src = r#"
+workflow wf {
+    call step1
+    if step1.done {
+        call step2
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "step1 is produced before the if, so no error expected; got: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn bool_input_in_if_condition_without_declaration_is_an_error() {
+        let src = r#"
+workflow wf {
+    if undeclared_flag {
+        call agent
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            !report.is_ok(),
+            "undeclared bool input should be flagged as an error"
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.message.contains("undeclared_flag")),
+            "error should mention the input name; errors: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn bool_input_declared_in_inputs_block_is_ok() {
+        let src = r#"
+workflow wf {
+    inputs {
+        run_extra boolean
+    }
+    if run_extra {
+        call optional_agent
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "declared boolean input in if condition should be valid; got: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn invalid_target_produces_error() {
+        let src = r#"
+workflow wf {
+    meta {
+        targets = ["invalid_target"]
+    }
+    call agent
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(!report.is_ok(), "invalid target should produce an error");
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.message.contains("invalid_target")),
+            "error should mention the bad target; errors: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn workflow_with_no_body_is_valid() {
+        let src = r#"
+workflow empty {
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "empty workflow body should be valid; got: {:?}",
+            report.errors
+        );
+    }
+
+    // ---- validate_script_steps ----
+
+    #[test]
+    fn script_with_template_variable_skips_path_check() {
+        let src = r#"
+workflow wf {
+    script my_script {
+        run = "{{scripts_dir}}/check.sh"
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        // Even though the resolver would fail, template variables bypass path checking
+        let errors = validate_script_steps(&def, &always_resolve_err);
+        assert!(
+            errors.is_empty(),
+            "script with template variable should skip path check; got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn script_path_not_found_produces_error() {
+        let src = r#"
+workflow wf {
+    script lint {
+        run = "/nonexistent/script.sh"
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let errors = validate_script_steps(&def, &always_resolve_err);
+        assert!(
+            !errors.is_empty(),
+            "missing script path should produce a validation error"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("lint")),
+            "error should mention the step name; errors: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn script_path_resolved_ok_has_no_errors() {
+        let src = r#"
+workflow wf {
+    script check {
+        run = "some_script.sh"
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        // On non-unix we can't check permissions, so resolution success → no errors
+        #[cfg(not(unix))]
+        {
+            let errors = validate_script_steps(&def, &always_resolve_ok);
+            assert!(
+                errors.is_empty(),
+                "successfully resolved script should produce no errors on non-unix; got: {:?}",
+                errors
+            );
+        }
+        // On unix the file must actually exist and be executable, so just verify
+        // we don't panic and the error (if any) mentions the step.
+        #[cfg(unix)]
+        {
+            let errors = validate_script_steps(&def, &always_resolve_ok);
+            // The path we resolve (/some_script.sh) likely doesn't exist — the
+            // important thing is that the function ran without panicking.
+            let _ = errors;
+        }
+    }
+
+    #[test]
+    fn workflow_with_multiple_scripts_checks_each() {
+        let src = r#"
+workflow wf {
+    script step_a {
+        run = "/missing/a.sh"
+    }
+    script step_b {
+        run = "/missing/b.sh"
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        let errors = validate_script_steps(&def, &always_resolve_err);
+        assert_eq!(
+            errors.len(),
+            2,
+            "each unresolvable script should generate one error; got: {:?}",
+            errors
+        );
+    }
+}

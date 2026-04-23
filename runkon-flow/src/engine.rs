@@ -624,6 +624,19 @@ pub fn should_skip(state: &ExecutionState, step_name: &str, iteration: u32) -> b
     })
 }
 
+/// Deserialize a `markers_out` JSON string into a `Vec<String>`, logging on error.
+fn parse_markers_out(markers_json: Option<&str>, step_name: &str) -> Vec<String> {
+    markers_json
+        .and_then(|m| {
+            serde_json::from_str(m)
+                .map_err(|e| {
+                    tracing::warn!("Malformed markers_out JSON in step '{step_name}': {e}")
+                })
+                .ok()
+        })
+        .unwrap_or_default()
+}
+
 /// Temporarily take the `ResumeContext` out of `state` so we can borrow `state`
 /// mutably while reading from the context's maps.
 pub fn restore_step(state: &mut ExecutionState, key: &str, iteration: u32) {
@@ -651,21 +664,7 @@ pub fn restore_completed_step(
         return;
     };
 
-    let markers: Vec<String> = step
-        .markers_out
-        .as_deref()
-        .and_then(|m| {
-            serde_json::from_str(m)
-                .map_err(|e| {
-                    tracing::warn!(
-                        "resume: failed to deserialize markers for step '{}': {e}",
-                        step_key
-                    );
-                    e
-                })
-                .ok()
-        })
-        .unwrap_or_default();
+    let markers = parse_markers_out(step.markers_out.as_deref(), step_key);
     let context = step.context_out.clone().unwrap_or_default();
 
     // Restore gate feedback if this was a gate step
@@ -724,19 +723,7 @@ pub fn fetch_child_completion_data(
 
     let final_output = match last_completed {
         Some(step) => {
-            let markers: Vec<String> = step
-                .markers_out
-                .as_deref()
-                .map(|m| {
-                    serde_json::from_str(m).unwrap_or_else(|e| {
-                        tracing::warn!(
-                            "Malformed markers_out JSON in step '{}': {e}",
-                            step.step_name,
-                        );
-                        Vec::new()
-                    })
-                })
-                .unwrap_or_default();
+            let markers = parse_markers_out(step.markers_out.as_deref(), &step.step_name);
             let context = step.context_out.clone().unwrap_or_default();
             (markers, context)
         }
@@ -748,19 +735,7 @@ pub fn fetch_child_completion_data(
         .into_iter()
         .filter(|s| s.status == WorkflowStepStatus::Completed)
         .map(|s| {
-            let markers: Vec<String> = s
-                .markers_out
-                .as_deref()
-                .map(|m| {
-                    serde_json::from_str(m).unwrap_or_else(|e| {
-                        tracing::warn!(
-                            "Malformed markers_out JSON in child step '{}': {e}",
-                            s.step_name,
-                        );
-                        Vec::new()
-                    })
-                })
-                .unwrap_or_default();
+            let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
             let result = StepResult {
                 step_name: s.step_name.clone(),

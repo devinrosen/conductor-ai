@@ -73,11 +73,14 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         return Ok(());
     }
 
-    // Build variable map for substitution
+    // Build variable map for substitution, shell-quoting all values to prevent
+    // injection when they are interpolated into the sh -c command string.
     let vars = build_variable_map(state);
-
-    // Substitute variables in the script command
-    let script_cmd = crate::prompt_builder::substitute_variables(&node.run, &vars);
+    let shell_safe_vars: std::collections::HashMap<&str, String> = vars
+        .iter()
+        .map(|(k, v)| (*k, crate::prompt_builder::shell_quote(v)))
+        .collect();
+    let script_cmd = crate::prompt_builder::substitute_variables(&node.run, &shell_safe_vars);
 
     tracing::info!("script '{}': executing command", node.name);
 
@@ -100,11 +103,28 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
     // Execute the script
     let working_dir = &state.worktree_ctx.working_dir;
-    let output_file = tempfile::NamedTempFile::new().ok().map(|f| {
-        let path = f.path().to_path_buf();
-        let _ = f.keep();
-        path
-    });
+    let output_file = match tempfile::NamedTempFile::new() {
+        Ok(f) => {
+            let path = f.path().to_path_buf();
+            match f.keep() {
+                Ok(_) => Some(path),
+                Err(e) => {
+                    tracing::warn!(
+                        "script '{}': failed to persist temp output file: {e}",
+                        node.name
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "script '{}': failed to create temp output file, stdout will not be captured: {e}",
+                node.name
+            );
+            None
+        }
+    };
 
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(&script_cmd);

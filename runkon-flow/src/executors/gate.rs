@@ -186,23 +186,33 @@ pub fn execute_gate(state: &mut ExecutionState, node: &GateNode, iteration: u32)
                     }
                 }
                 // Update run back to running status
-                let _ = state.persistence.update_run_status(
+                if let Err(e) = state.persistence.update_run_status(
                     &state.workflow_run_id,
                     WorkflowRunStatus::Running,
                     None,
                     None,
-                );
+                ) {
+                    tracing::warn!(
+                        "Gate '{}': failed to update run status to Running: {e}",
+                        node.name
+                    );
+                }
                 return Ok(());
             }
             Ok(GateApprovalState::Rejected { feedback }) => {
                 tracing::warn!("Gate '{}' rejected", node.name);
                 state.all_succeeded = false;
-                let _ = state.persistence.update_run_status(
+                if let Err(e) = state.persistence.update_run_status(
                     &state.workflow_run_id,
                     WorkflowRunStatus::Running,
                     None,
                     None,
-                );
+                ) {
+                    tracing::warn!(
+                        "Gate '{}': failed to update run status after rejection: {e}",
+                        node.name
+                    );
+                }
                 let reason = feedback.unwrap_or_else(|| format!("Gate '{}' rejected", node.name));
                 return Err(EngineError::Workflow(reason));
             }
@@ -387,12 +397,17 @@ pub fn handle_gate_timeout(
                 )
                 .map_err(|e| EngineError::Persistence(e.to_string()))?;
             state.all_succeeded = false;
-            let _ = state.persistence.update_run_status(
+            if let Err(e) = state.persistence.update_run_status(
                 &state.workflow_run_id,
                 WorkflowRunStatus::Running,
                 None,
                 None,
-            );
+            ) {
+                tracing::warn!(
+                    "Gate '{}': failed to update run status after timeout (fail): {e}",
+                    node.name
+                );
+            }
             Err(EngineError::Workflow(format!(
                 "Gate '{}' timed out",
                 node.name
@@ -415,12 +430,17 @@ pub fn handle_gate_timeout(
                     },
                 )
                 .map_err(|e| EngineError::Persistence(e.to_string()))?;
-            let _ = state.persistence.update_run_status(
+            if let Err(e) = state.persistence.update_run_status(
                 &state.workflow_run_id,
                 WorkflowRunStatus::Running,
                 None,
                 None,
-            );
+            ) {
+                tracing::warn!(
+                    "Gate '{}': failed to update run status after timeout (continue): {e}",
+                    node.name
+                );
+            }
             Ok(())
         }
     }

@@ -17,6 +17,8 @@ struct InMemoryStore {
     runs: HashMap<String, WorkflowRun>,
     steps: HashMap<String, WorkflowRunStep>,
     fan_out_items: HashMap<String, FanOutItemRow>,
+    /// Secondary index: (step_run_id, item_id) → fan_out_item id for O(1) idempotency check.
+    fan_out_index: HashMap<(String, String), String>,
 }
 
 /// In-memory implementation of `WorkflowPersistence` for test isolation.
@@ -34,6 +36,7 @@ impl InMemoryWorkflowPersistence {
                 runs: HashMap::new(),
                 steps: HashMap::new(),
                 fan_out_items: HashMap::new(),
+                fan_out_index: HashMap::new(),
             }),
         }
     }
@@ -247,15 +250,13 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         item_ref: &str,
     ) -> Result<String, EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
-        // Idempotent: return existing ID if (step_run_id, item_id) already present.
-        if let Some(existing) = store
-            .fan_out_items
-            .values()
-            .find(|i| i.step_run_id == step_run_id && i.item_id == item_id)
-        {
-            return Ok(existing.id.clone());
+        // Idempotent: O(1) lookup via secondary index.
+        let index_key = (step_run_id.to_string(), item_id.to_string());
+        if let Some(existing_id) = store.fan_out_index.get(&index_key) {
+            return Ok(existing_id.clone());
         }
         let id = ulid::Ulid::new().to_string();
+        store.fan_out_index.insert(index_key, id.clone());
         store.fan_out_items.insert(
             id.clone(),
             FanOutItemRow {
@@ -324,10 +325,16 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         let Some(step) = store.steps.get(step_id) else {
             return Ok(GateApprovalState::Pending);
         };
-        let selections = step
-            .gate_selections
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok());
+        let selections = step.gate_selections.as_deref().and_then(|s| {
+            serde_json::from_str::<Vec<String>>(s)
+                .map_err(|e| {
+                    tracing::warn!(
+                        "get_gate_approval: malformed gate_selections JSON for step '{step_id}': {e}"
+                    );
+                    e
+                })
+                .ok()
+        });
         Ok(gate_approval_state_from_fields(
             step.gate_approved_at.as_deref(),
             step.status.clone(),

@@ -219,6 +219,9 @@ fn execute_call_with_schema(
             bot_name: effective_bot_name.map(String::from),
             plugin_dirs: merged_plugin_dirs.clone(),
             workflow_name: state.workflow_name.clone(),
+            worktree_id: worktree_id.clone(),
+            parent_run_id: state.workflow_run_id.clone(),
+            step_id: step_id.clone(),
         };
 
         let params = ActionParams {

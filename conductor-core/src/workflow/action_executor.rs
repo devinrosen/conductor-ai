@@ -66,8 +66,6 @@ pub struct ActionOutput {
 ///
 /// Carries per-invocation infrastructure (run ID, paths, timeouts) that the
 /// executor needs to spawn and poll a subprocess or API call.
-/// Phase-1 version: conductor-specific fields will be generalized in Phase 2
-/// when the engine is extracted to a standalone crate.
 pub struct ExecutionContext {
     /// Pre-created `agent_runs` row ID for this invocation.
     pub run_id: String,
@@ -75,7 +73,7 @@ pub struct ExecutionContext {
     pub working_dir: PathBuf,
     /// Absolute path to the repository root.
     pub repo_path: String,
-    /// Absolute path to the SQLite database file.
+    /// Absolute path to the SQLite database file (conductor-core specific).
     pub db_path: PathBuf,
     /// Per-step timeout (from `WorkflowExecConfig`).
     pub step_timeout: Duration,
@@ -89,6 +87,15 @@ pub struct ExecutionContext {
     pub plugin_dirs: Vec<String>,
     /// Name of the parent workflow (used for workflow-local agent resolution).
     pub workflow_name: String,
+    /// Worktree ID for this invocation, if any.
+    #[allow(dead_code)]
+    pub worktree_id: Option<String>,
+    /// Parent workflow run ID.
+    #[allow(dead_code)]
+    pub parent_run_id: String,
+    /// Workflow step ID for this invocation.
+    #[allow(dead_code)]
+    pub step_id: String,
 }
 
 /// Holds named and fallback `ActionExecutor` implementations.
@@ -167,6 +174,9 @@ mod tests {
             bot_name: None,
             plugin_dirs: vec![],
             workflow_name: "test-wf".to_string(),
+            worktree_id: None,
+            parent_run_id: "parent-run-1".to_string(),
+            step_id: "step-1".to_string(),
         }
     }
 

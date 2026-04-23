@@ -1076,3 +1076,322 @@ pub fn parse_workflow_str(input: &str, source_path: &str) -> Result<WorkflowDef,
 
     Ok(def)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_workflow_str;
+    use crate::dsl::{AgentRef, Condition, GateType, InputType, WorkflowNode, WorkflowTrigger};
+
+    // ---- basic workflow structure ----
+
+    #[test]
+    fn parse_minimal_workflow() {
+        let src = "workflow my_wf {\n}";
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        assert_eq!(def.name, "my_wf");
+        assert!(def.body.is_empty());
+        assert!(def.always.is_empty());
+        assert_eq!(def.source_path, "test.wf");
+    }
+
+    #[test]
+    fn parse_workflow_with_description_and_trigger() {
+        let src = r#"
+workflow deploy {
+    meta {
+        description = "Deploy the service"
+        trigger = manual
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        assert_eq!(def.name, "deploy");
+        assert_eq!(def.description, "Deploy the service");
+        assert_eq!(def.trigger, WorkflowTrigger::Manual);
+    }
+
+    #[test]
+    fn parse_single_call_node() {
+        let src = r#"
+workflow wf {
+    call plan
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::Call(c) => assert_eq!(c.agent, AgentRef::Name("plan".to_string())),
+            other => panic!("expected Call node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_call_node_with_path_agent() {
+        let src = r#"
+workflow wf {
+    call ".claude/agents/plan.md"
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(
+                    c.agent,
+                    AgentRef::Path(".claude/agents/plan.md".to_string())
+                );
+                assert_eq!(c.agent.step_key(), "plan");
+            }
+            other => panic!("expected Call node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_script_node() {
+        let src = r#"
+workflow wf {
+    script lint {
+        run = "./scripts/lint.sh"
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Script(s) => {
+                assert_eq!(s.name, "lint");
+                assert_eq!(s.run, "./scripts/lint.sh");
+            }
+            other => panic!("expected Script node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_if_with_step_marker_condition() {
+        let src = r#"
+workflow wf {
+    call step1
+    if step1.approved {
+        call step2
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        assert_eq!(def.body.len(), 2);
+        match &def.body[1] {
+            WorkflowNode::If(n) => match &n.condition {
+                Condition::StepMarker { step, marker } => {
+                    assert_eq!(step, "step1");
+                    assert_eq!(marker, "approved");
+                }
+                other => panic!("expected StepMarker condition, got {other:?}"),
+            },
+            other => panic!("expected If node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_unless_with_bool_input_condition() {
+        let src = r#"
+workflow wf {
+    inputs {
+        skip_tests boolean
+    }
+    unless skip_tests {
+        call run_tests
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Unless(n) => match &n.condition {
+                Condition::BoolInput { input } => assert_eq!(input, "skip_tests"),
+                other => panic!("expected BoolInput condition, got {other:?}"),
+            },
+            other => panic!("expected Unless node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_while_node() {
+        let src = r#"
+workflow wf {
+    call review
+    while review.needs_revision {
+        max_iterations = 5
+        call fix
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        match &def.body[1] {
+            WorkflowNode::While(w) => {
+                assert_eq!(w.step, "review");
+                assert_eq!(w.marker, "needs_revision");
+                assert_eq!(w.max_iterations, 5);
+                assert_eq!(w.body.len(), 1);
+            }
+            other => panic!("expected While node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_gate_human_approval() {
+        let src = r#"
+workflow wf {
+    gate human_approval {
+        prompt = "Approve deployment?"
+        timeout = 3600
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Gate(g) => {
+                assert_eq!(g.gate_type, GateType::HumanApproval);
+                assert_eq!(g.prompt.as_deref(), Some("Approve deployment?"));
+                assert_eq!(g.timeout_secs, 3600);
+            }
+            other => panic!("expected Gate node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_inputs_block() {
+        let src = r#"
+workflow wf {
+    inputs {
+        env required
+        debug boolean
+        branch default = "main"
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        assert_eq!(def.inputs.len(), 3);
+
+        let env_input = def.inputs.iter().find(|i| i.name == "env").unwrap();
+        assert!(env_input.required);
+        assert_eq!(env_input.input_type, InputType::String);
+
+        let debug_input = def.inputs.iter().find(|i| i.name == "debug").unwrap();
+        assert_eq!(debug_input.input_type, InputType::Boolean);
+        assert!(!debug_input.required);
+
+        let branch_input = def.inputs.iter().find(|i| i.name == "branch").unwrap();
+        assert_eq!(branch_input.default.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn parse_always_block() {
+        let src = r#"
+workflow wf {
+    call main_step
+    always {
+        call cleanup
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        assert_eq!(def.always.len(), 1);
+        match &def.always[0] {
+            WorkflowNode::Call(c) => assert_eq!(c.agent.step_key(), "cleanup"),
+            other => panic!("expected Call node in always block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_do_block() {
+        let src = r#"
+workflow wf {
+    do {
+        call step_a
+        call step_b
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Do(d) => {
+                assert_eq!(d.body.len(), 2);
+            }
+            other => panic!("expected Do node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_call_workflow_node() {
+        let src = r#"
+workflow wf {
+    call workflow child_wf {
+        inputs {
+            env = "production"
+        }
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::CallWorkflow(cw) => {
+                assert_eq!(cw.workflow, "child_wf");
+                assert_eq!(cw.inputs.get("env").map(|s| s.as_str()), Some("production"));
+            }
+            other => panic!("expected CallWorkflow node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_error_on_invalid_syntax() {
+        let src = "this is not valid DSL";
+        let result = parse_workflow_str(src, "bad.wf");
+        assert!(result.is_err(), "invalid syntax should return an error");
+    }
+
+    #[test]
+    fn parse_error_missing_workflow_keyword() {
+        let src = "my_wf { call plan }";
+        let result = parse_workflow_str(src, "bad.wf");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_parallel_node() {
+        let src = r#"
+workflow wf {
+    parallel {
+        call agent_a
+        call agent_b
+    }
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Parallel(p) => {
+                assert_eq!(p.calls.len(), 2);
+                assert_eq!(p.calls[0], AgentRef::Name("agent_a".to_string()));
+                assert_eq!(p.calls[1], AgentRef::Name("agent_b".to_string()));
+            }
+            other => panic!("expected Parallel node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_meta_targets() {
+        let src = r#"
+workflow wf {
+    meta {
+        targets = ["worktree", "ticket"]
+    }
+    call agent
+}
+"#;
+        let def = parse_workflow_str(src, "t.wf").unwrap();
+        assert_eq!(def.targets, vec!["worktree", "ticket"]);
+    }
+
+    #[test]
+    fn parse_source_path_is_set() {
+        let src = "workflow wf {}";
+        let def = parse_workflow_str(src, "my/path/wf.wf").unwrap();
+        assert_eq!(def.source_path, "my/path/wf.wf");
+    }
+}
