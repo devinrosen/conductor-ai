@@ -24,14 +24,22 @@ pub trait RunContext {
     }
 
     /// Worktree ID, if this run is tied to a registered worktree.
-    fn worktree_id(&self) -> Option<&str>;
+    fn worktree_id(&self) -> Option<&str> {
+        None
+    }
 
     /// Worktree slug (empty string for repo-level runs).
-    fn worktree_slug(&self) -> &str;
+    fn worktree_slug(&self) -> &str {
+        ""
+    }
 
     /// Ticket ID linked to this run, if any.
-    fn ticket_id(&self) -> Option<&str>;
+    fn ticket_id(&self) -> Option<&str> {
+        None
+    }
 
     /// Repo ID for this run, if any.
-    fn repo_id(&self) -> Option<&str>;
+    fn repo_id(&self) -> Option<&str> {
+        None
+    }
 }

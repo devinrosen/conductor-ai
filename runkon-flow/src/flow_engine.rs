@@ -80,6 +80,7 @@ impl Default for FlowEngineBuilder {
 mod tests {
     use super::*;
     use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+    use crate::traits::run_context::RunContext;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -197,5 +198,38 @@ mod tests {
             .unwrap()
             .action_fallback(Box::new(BetaExecutor));
         assert!(result.is_err(), "second action_fallback should return Err");
+    }
+
+    #[test]
+    fn custom_script_env_provider_is_stored_in_bundle() {
+        struct FixedEnvProvider;
+        impl ScriptEnvProvider for FixedEnvProvider {
+            fn env(&self, _ctx: &dyn RunContext) -> HashMap<String, String> {
+                let mut m = HashMap::new();
+                m.insert("CUSTOM_VAR".to_string(), "42".to_string());
+                m
+            }
+        }
+
+        struct NoopCtx;
+        impl RunContext for NoopCtx {
+            fn injected_variables(&self) -> HashMap<&'static str, String> {
+                HashMap::new()
+            }
+            fn working_dir(&self) -> &std::path::Path {
+                std::path::Path::new("/tmp")
+            }
+            fn repo_path(&self) -> &std::path::Path {
+                std::path::Path::new("/tmp")
+            }
+        }
+
+        let bundle = FlowEngineBuilder::new()
+            .script_env_provider(Box::new(FixedEnvProvider))
+            .build()
+            .unwrap();
+
+        let env = bundle.script_env_provider.env(&NoopCtx);
+        assert_eq!(env.get("CUSTOM_VAR").map(String::as_str), Some("42"));
     }
 }

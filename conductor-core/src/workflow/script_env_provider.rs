@@ -45,35 +45,22 @@ impl ScriptEnvProvider for ConductorScriptEnvProvider {
 mod tests {
     use super::*;
 
+    struct NoopCtx;
+    impl RunContext for NoopCtx {
+        fn injected_variables(&self) -> HashMap<&'static str, String> {
+            HashMap::new()
+        }
+        fn working_dir(&self) -> &std::path::Path {
+            std::path::Path::new("/tmp")
+        }
+        fn repo_path(&self) -> &std::path::Path {
+            std::path::Path::new("/tmp")
+        }
+    }
+
     #[test]
     fn test_env_empty_when_no_bin_dir() {
         let provider = ConductorScriptEnvProvider::new(None, vec![]);
-
-        struct NoopCtx;
-        impl RunContext for NoopCtx {
-            fn injected_variables(&self) -> HashMap<&'static str, String> {
-                HashMap::new()
-            }
-            fn working_dir(&self) -> &std::path::Path {
-                std::path::Path::new("/tmp")
-            }
-            fn repo_path(&self) -> &std::path::Path {
-                std::path::Path::new("/tmp")
-            }
-            fn worktree_id(&self) -> Option<&str> {
-                None
-            }
-            fn worktree_slug(&self) -> &str {
-                ""
-            }
-            fn ticket_id(&self) -> Option<&str> {
-                None
-            }
-            fn repo_id(&self) -> Option<&str> {
-                None
-            }
-        }
-
         let env = provider.env(&NoopCtx);
         assert!(env.is_empty(), "expected empty env when no bin_dir is set");
     }
@@ -82,32 +69,6 @@ mod tests {
     fn test_env_path_starts_with_bin_dir() {
         let bin_dir = std::path::PathBuf::from("/usr/local/bin/conductor-dir");
         let provider = ConductorScriptEnvProvider::new(Some(bin_dir), vec![]);
-
-        struct NoopCtx;
-        impl RunContext for NoopCtx {
-            fn injected_variables(&self) -> HashMap<&'static str, String> {
-                HashMap::new()
-            }
-            fn working_dir(&self) -> &std::path::Path {
-                std::path::Path::new("/tmp")
-            }
-            fn repo_path(&self) -> &std::path::Path {
-                std::path::Path::new("/tmp")
-            }
-            fn worktree_id(&self) -> Option<&str> {
-                None
-            }
-            fn worktree_slug(&self) -> &str {
-                ""
-            }
-            fn ticket_id(&self) -> Option<&str> {
-                None
-            }
-            fn repo_id(&self) -> Option<&str> {
-                None
-            }
-        }
-
         let env = provider.env(&NoopCtx);
         let path = env.get("PATH").expect("PATH should be set");
         assert!(
@@ -123,32 +84,6 @@ mod tests {
             Some(bin_dir),
             vec!["/opt/plugins".to_string(), "/home/user/plugins".to_string()],
         );
-
-        struct NoopCtx;
-        impl RunContext for NoopCtx {
-            fn injected_variables(&self) -> HashMap<&'static str, String> {
-                HashMap::new()
-            }
-            fn working_dir(&self) -> &std::path::Path {
-                std::path::Path::new("/tmp")
-            }
-            fn repo_path(&self) -> &std::path::Path {
-                std::path::Path::new("/tmp")
-            }
-            fn worktree_id(&self) -> Option<&str> {
-                None
-            }
-            fn worktree_slug(&self) -> &str {
-                ""
-            }
-            fn ticket_id(&self) -> Option<&str> {
-                None
-            }
-            fn repo_id(&self) -> Option<&str> {
-                None
-            }
-        }
-
         let env = provider.env(&NoopCtx);
         let path = env.get("PATH").expect("PATH should be set");
         let parts: Vec<&str> = path.splitn(4, ':').collect();
