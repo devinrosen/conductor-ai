@@ -14,6 +14,7 @@ pub use api::{
 };
 #[allow(unused_imports)]
 pub(crate) use parser::parse_duration_str;
+pub(crate) use parser::parse_workflow_file;
 pub use parser::parse_workflow_str;
 pub use script_utils::{default_skills_dir, make_script_resolver, resolve_script_path};
 #[allow(unused_imports)]
