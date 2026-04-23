@@ -1,9 +1,17 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::engine_error::EngineError;
 use crate::traits::action_executor::{ActionExecutor, ActionRegistry};
+use crate::traits::script_env_provider::{NoOpScriptEnvProvider, ScriptEnvProvider};
 
-/// Builder for constructing an `ActionRegistry`.
+/// The output of `FlowEngineBuilder::build()`.
+pub struct EngineBundle {
+    pub action_registry: ActionRegistry,
+    pub script_env_provider: Arc<dyn ScriptEnvProvider>,
+}
+
+/// Builder for constructing an `EngineBundle` (action registry + script env provider).
 ///
 /// Call `.action()` to register named executors and `.action_fallback()` to
 /// set the catch-all executor. Calling `.action_fallback()` more than once
@@ -12,6 +20,7 @@ use crate::traits::action_executor::{ActionExecutor, ActionRegistry};
 pub struct FlowEngineBuilder {
     named: HashMap<String, Box<dyn ActionExecutor>>,
     fallback: Option<Box<dyn ActionExecutor>>,
+    script_env_provider: Box<dyn ScriptEnvProvider>,
 }
 
 impl FlowEngineBuilder {
@@ -19,6 +28,7 @@ impl FlowEngineBuilder {
         Self {
             named: HashMap::new(),
             fallback: None,
+            script_env_provider: Box::new(NoOpScriptEnvProvider),
         }
     }
 
@@ -45,9 +55,18 @@ impl FlowEngineBuilder {
         Ok(self)
     }
 
-    /// Consume the builder and produce an `ActionRegistry`.
-    pub fn build(self) -> Result<ActionRegistry, EngineError> {
-        Ok(ActionRegistry::new(self.named, self.fallback))
+    /// Set the script env provider. Defaults to `NoOpScriptEnvProvider`.
+    pub fn script_env_provider(mut self, provider: Box<dyn ScriptEnvProvider>) -> Self {
+        self.script_env_provider = provider;
+        self
+    }
+
+    /// Consume the builder and produce an `EngineBundle`.
+    pub fn build(self) -> Result<EngineBundle, EngineError> {
+        Ok(EngineBundle {
+            action_registry: ActionRegistry::new(self.named, self.fallback),
+            script_env_provider: Arc::from(self.script_env_provider),
+        })
     }
 }
 
@@ -131,11 +150,12 @@ mod tests {
 
     #[test]
     fn build_with_named_executor() {
-        let registry = FlowEngineBuilder::new()
+        let bundle = FlowEngineBuilder::new()
             .action(Box::new(AlphaExecutor))
             .build()
             .unwrap();
-        let output = registry
+        let output = bundle
+            .action_registry
             .dispatch("alpha", &make_ectx(), &make_params("alpha"))
             .unwrap();
         assert_eq!(output.markers, vec!["alpha"]);
@@ -143,12 +163,13 @@ mod tests {
 
     #[test]
     fn build_with_fallback() {
-        let registry = FlowEngineBuilder::new()
+        let bundle = FlowEngineBuilder::new()
             .action_fallback(Box::new(BetaExecutor))
             .unwrap()
             .build()
             .unwrap();
-        let output = registry
+        let output = bundle
+            .action_registry
             .dispatch("anything", &make_ectx(), &make_params("anything"))
             .unwrap();
         assert_eq!(output.markers, vec!["beta"]);
@@ -156,13 +177,14 @@ mod tests {
 
     #[test]
     fn named_takes_precedence_over_fallback() {
-        let registry = FlowEngineBuilder::new()
+        let bundle = FlowEngineBuilder::new()
             .action(Box::new(AlphaExecutor))
             .action_fallback(Box::new(BetaExecutor))
             .unwrap()
             .build()
             .unwrap();
-        let output = registry
+        let output = bundle
+            .action_registry
             .dispatch("alpha", &make_ectx(), &make_params("alpha"))
             .unwrap();
         assert_eq!(output.markers, vec!["alpha"]);
