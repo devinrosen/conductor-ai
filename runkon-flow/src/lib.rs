@@ -1,5 +1,3 @@
-#[cfg(test)]
-pub mod test_helpers;
 pub mod cancellation;
 pub mod cancellation_reason;
 pub mod constants;
@@ -13,6 +11,8 @@ pub mod output_schema;
 pub mod persistence_memory;
 pub mod prompt_builder;
 pub mod status;
+#[cfg(test)]
+pub mod test_helpers;
 pub mod traits;
 pub mod types;
 
