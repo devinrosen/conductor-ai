@@ -254,6 +254,9 @@ pub fn execute_parallel(
             bot_name: state.default_bot_name.clone(),
             plugin_dirs: extra_plugin_dirs.clone(),
             workflow_name: state.workflow_name.clone(),
+            worktree_id: worktree_id.clone(),
+            parent_run_id: state.workflow_run_id.clone(),
+            step_id: step_id.clone(),
         };
 
         let params = ActionParams {
