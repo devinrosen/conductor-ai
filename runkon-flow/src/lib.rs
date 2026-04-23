@@ -13,3 +13,6 @@ pub mod prompt_builder;
 pub mod status;
 pub mod traits;
 pub mod types;
+
+pub use flow_engine::EngineBundle;
+pub use traits::script_env_provider::{NoOpScriptEnvProvider, ScriptEnvProvider};

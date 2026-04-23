@@ -95,13 +95,13 @@ fn execute_call_with_schema(
     let pos = state.position;
     state.position += 1;
 
-    let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
+    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
+    let (working_dir, repo_path, worktree_id) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
         let working_dir = ctx.working_dir_str();
         let repo_path = ctx.repo_path_str();
-        let extra_plugin_dirs = ctx.extra_plugin_dirs().to_vec();
         let worktree_id: Option<String> = ctx.worktree_id().map(|s| s.to_string());
-        (working_dir, repo_path, extra_plugin_dirs, worktree_id)
+        (working_dir, repo_path, worktree_id)
     };
 
     let step_key_check = node.agent.step_key();

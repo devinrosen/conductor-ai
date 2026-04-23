@@ -17,15 +17,9 @@ pub fn execute_call_workflow(
     let pos = state.position;
     state.position += 1;
 
-    let (
-        working_dir,
-        repo_path,
-        worktree_id,
-        ticket_id,
-        repo_id,
-        conductor_bin_dir,
-        extra_plugin_dirs,
-    ) = {
+    let conductor_bin_dir = state.worktree_ctx.conductor_bin_dir.clone();
+    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
+    let (working_dir, repo_path, worktree_id, ticket_id, repo_id) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
         (
             ctx.working_dir().to_path_buf(),
@@ -33,8 +27,6 @@ pub fn execute_call_workflow(
             ctx.worktree_id().map(String::from),
             ctx.ticket_id().map(String::from),
             ctx.repo_id().map(String::from),
-            ctx.conductor_bin_dir().map(|p| p.to_path_buf()),
-            ctx.extra_plugin_dirs().to_vec(),
         )
     };
 
