@@ -1,15 +1,69 @@
+use crate::agent::AgentManager;
 use crate::agent::AgentRunStatus;
 use crate::agent_config::AgentSpec;
 use crate::error::Result;
-use crate::workflow_dsl::ParallelNode;
-use std::collections::HashSet;
-
+use crate::workflow::action_executor::{ActionOutput, ActionParams, ExecutionContext};
 use crate::workflow::engine::{resolve_schema, restore_step, should_skip, ExecutionState};
 use crate::workflow::output::{interpret_agent_output, parse_conductor_output};
-use crate::workflow::prompt_builder::build_agent_prompt;
-use crate::workflow::run_context::RunContext;
+use crate::workflow::prompt_builder::{build_agent_prompt, build_variable_map};
+use crate::workflow::run_context::{RunContext, WorktreeRunContext};
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::ContextEntry;
+use crate::workflow::WorkflowManager;
+use crate::workflow_dsl::ParallelNode;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+fn cancel_child(
+    agent_mgr: &AgentManager<'_>,
+    wf_mgr: &WorkflowManager<'_>,
+    run_id: &str,
+    step_id: &str,
+    agent_name: &str,
+    thread_shutdown: &Arc<AtomicBool>,
+    reason: &str,
+) {
+    thread_shutdown.store(true, Ordering::Relaxed);
+    if let Err(e) = agent_mgr.update_run_cancelled(run_id) {
+        tracing::warn!("parallel: failed to cancel run for '{agent_name}': {e}");
+    }
+    if let Err(e) = wf_mgr.update_step_status(
+        step_id,
+        WorkflowStepStatus::Failed,
+        Some(run_id),
+        Some(reason),
+        None,
+        None,
+        None,
+    ) {
+        tracing::warn!("parallel: failed to update step for '{agent_name}': {e}");
+    }
+}
+
+fn mark_child_failed(
+    agent_mgr: &AgentManager<'_>,
+    wf_mgr: &WorkflowManager<'_>,
+    run_id: &str,
+    step_id: &str,
+    agent_name: &str,
+    reason: &str,
+) {
+    if let Err(e) = agent_mgr.update_run_failed_if_running(run_id, reason) {
+        tracing::warn!("parallel: failed to mark run failed for '{agent_name}': {e}");
+    }
+    if let Err(e) = wf_mgr.update_step_status(
+        step_id,
+        WorkflowStepStatus::Failed,
+        Some(run_id),
+        Some(reason),
+        None,
+        None,
+        None,
+    ) {
+        tracing::warn!("parallel: failed to update step for '{agent_name}': {e}");
+    }
+}
 
 pub fn execute_parallel(
     state: &mut ExecutionState<'_>,
@@ -17,7 +71,7 @@ pub fn execute_parallel(
     iteration: u32,
 ) -> Result<()> {
     let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
-        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
+        let ctx = WorktreeRunContext::new(state);
         (
             ctx.working_dir().to_path_buf(),
             ctx.repo_path().to_path_buf(),
@@ -42,26 +96,34 @@ pub fn execute_parallel(
         .map(|name| resolve_schema(state, name))
         .transpose()?;
 
-    // Spawn all agents
+    // Build the variable map once — all parallel agents share the same substitution context.
+    let inputs: std::collections::HashMap<String, String> = {
+        let var_map = build_variable_map(state);
+        var_map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    };
+
+    // Clone the registry so we can dispatch from worker threads.
+    let registry = Arc::clone(&state.action_registry);
+
     struct ParallelChild {
         agent_name: String,
         child_run_id: String,
         step_id: String,
-        pid: u32,
-        drain_handle: std::thread::JoinHandle<crate::agent_runtime::DrainOutcome>,
-        prompt_file: std::path::PathBuf,
+        dispatch_handle: std::thread::JoinHandle<()>,
+        thread_shutdown: Arc<AtomicBool>,
         /// Resolved schema for this child (computed at spawn time).
         schema: Option<crate::schema_config::OutputSchema>,
     }
 
-    // Completion channel: drain threads signal (child_index, DrainOutcome) when done.
+    // Completion channel: dispatch threads signal (child_index, Result) when done.
     let (completion_tx, completion_rx) =
-        std::sync::mpsc::channel::<(usize, crate::agent_runtime::DrainOutcome)>();
+        std::sync::mpsc::channel::<(usize, std::result::Result<ActionOutput, String>)>();
 
     let mut children: Vec<ParallelChild> = Vec::new();
     let mut skipped_count = 0u32;
-
-    let permission_mode = state.config.general.agent_permission_mode;
 
     for (i, agent_ref) in node.calls.iter().enumerate() {
         let pos = pos_base + i as i64;
@@ -175,125 +237,67 @@ pub fn execute_parallel(
             None,
         )?;
 
-        // Build headless args and spawn
-        let params = crate::agent_runtime::SpawnHeadlessParams {
-            run_id: &child_run.id,
-            working_dir: working_dir.to_str().unwrap_or(""),
-            prompt: &prompt,
-            resume_session_id: None,
-            model: step_model,
-            bot_name: state.default_bot_name.as_deref(),
-            permission_mode: Some(&permission_mode),
-            plugin_dirs: &extra_plugin_dirs,
-        };
-        let (handle, prompt_file) = match crate::agent_runtime::try_spawn_headless_run(&params) {
-            Ok(pair) => pair,
-            Err(err_msg) => {
-                tracing::warn!("parallel: agent '{agent_label}': {err_msg}");
-                if let Err(e) = state.agent_mgr.update_run_failed(&child_run.id, &err_msg) {
-                    tracing::warn!(
-                        "parallel: failed to mark run failed for '{agent_label}' in DB: {e}"
-                    );
-                }
-                state.wf_mgr.update_step_status(
-                    &step_id,
-                    WorkflowStepStatus::Failed,
-                    Some(&child_run.id),
-                    Some(&err_msg),
-                    None,
-                    None,
-                    None,
-                )?;
-                continue;
-            }
+        // Per-thread cancellation flag: set by the main polling loop on timeout,
+        // fail_fast, or global shutdown. The executor's `poll` checks this flag
+        // and returns `PollError::Cancelled`, which the executor converts to an
+        // error that we receive through the completion channel.
+        let thread_shutdown = Arc::new(AtomicBool::new(false));
+
+        let ectx = ExecutionContext {
+            run_id: child_run.id.clone(),
+            working_dir: working_dir.clone(),
+            repo_path: repo_path.to_string_lossy().to_string(),
+            db_path: crate::config::db_path(),
+            step_timeout: state.exec_config.step_timeout,
+            shutdown: Some(Arc::clone(&thread_shutdown)),
+            model: step_model.map(String::from),
+            bot_name: state.default_bot_name.clone(),
+            plugin_dirs: extra_plugin_dirs.clone(),
+            workflow_name: state.workflow_name.clone(),
         };
 
-        let pid = handle.pid();
-        if let Err(e) = state
-            .agent_mgr
-            .update_run_subprocess_pid(&child_run.id, pid)
-        {
-            tracing::warn!("parallel: failed to persist subprocess pid for '{agent_label}': {e}");
-        }
+        let params = ActionParams {
+            name: agent_label.to_string(),
+            inputs: inputs.clone(),
+            retries_remaining: 0,
+            retry_error: None,
+            snippets: if snippet_text.is_empty() {
+                vec![]
+            } else {
+                vec![snippet_text.clone()]
+            },
+            dry_run: state.exec_config.dry_run,
+            gate_feedback: state.last_gate_feedback.clone(),
+            schema: call_schema.clone().or_else(|| block_schema.clone()),
+        };
 
-        // Decompose the handle so stderr and stdout can be handed to separate threads.
-        let (stderr_pipe, stdout_pipe, finish) = handle.into_stderr_drain_parts();
-
-        // Drain subprocess stderr to prevent the pipe buffer from filling.
-        // See call.rs for a detailed explanation.  Output is discarded rather
-        // than forwarded to stderr to avoid corrupting the TUI terminal.
-        std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader};
-            let reader = BufReader::new(stderr_pipe);
-            for line in reader.lines().map_while(|l| l.ok()) {
-                tracing::trace!(target: "conductor::agent::stderr", "{line}");
-            }
-        });
-
-        // Spawn one drain thread per agent (each opens its own DB connection,
-        // since rusqlite::Connection is not Send)
-        let run_id_clone = child_run.id.clone();
-        let log_path = crate::config::agent_log_path(&child_run.id);
-        let prompt_file_for_thread = prompt_file.clone();
+        let registry_clone = Arc::clone(&registry);
         let outcome_tx = completion_tx.clone();
-        let child_index = children.len(); // index this child will have in children vec
-        let drain_handle = std::thread::spawn(move || {
-            let conn = match crate::db::open_database_compat(&crate::config::db_path()) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(
-                        "parallel drain thread: failed to open DB for '{}': {e}",
-                        run_id_clone
-                    );
-                    let _ = std::fs::remove_file(&prompt_file_for_thread);
-                    let _ = outcome_tx
-                        .send((child_index, crate::agent_runtime::DrainOutcome::NoResult));
-                    return crate::agent_runtime::DrainOutcome::NoResult;
-                }
-            };
-            let mgr = crate::agent::AgentManager::new(&conn);
-            let outcome = crate::agent_runtime::drain_stream_json(
-                stdout_pipe,
-                &run_id_clone,
-                &log_path,
-                &mgr,
-                |_| {},
-            );
-            // Architecture fix: mark run as failed on NoResult so polling loop detects it
-            if matches!(outcome, crate::agent_runtime::DrainOutcome::NoResult) {
-                if let Err(e) =
-                    mgr.update_run_failed_if_running(&run_id_clone, "agent exited without result")
-                {
-                    tracing::warn!(
-                        "parallel drain: failed to mark run '{}' failed: {e}",
-                        run_id_clone
-                    );
-                }
-            }
-            let _ = std::fs::remove_file(&prompt_file_for_thread);
-            finish();
-            let _ = outcome_tx.send((child_index, outcome));
-            outcome
+        let child_index = children.len();
+        let dispatch_handle = std::thread::spawn(move || {
+            let result = registry_clone
+                .dispatch(&params.name, &ectx, &params)
+                .map_err(|e| e.to_string());
+            let _ = outcome_tx.send((child_index, result));
         });
 
         children.push(ParallelChild {
             agent_name: agent_label.to_string(),
             child_run_id: child_run.id,
             step_id,
-            pid,
-            drain_handle,
-            prompt_file,
+            dispatch_handle,
+            thread_shutdown,
             schema: call_schema.or_else(|| block_schema.clone()),
         });
     }
 
-    // Drop our own sender so the channel disconnects once all drain threads finish.
+    // Drop our own sender so the channel disconnects once all dispatch threads finish.
     drop(completion_tx);
 
     // Capture count before polling loop (needed for min_success after join)
     let children_count = children.len() as u32;
 
-    // Poll all children until completion, using channel signals from drain threads.
+    // Poll all children until completion, using channel signals from dispatch threads.
     let start = std::time::Instant::now();
     let mut completed: HashSet<usize> = HashSet::new();
     let mut successes = 0u32;
@@ -305,29 +309,21 @@ pub fn execute_parallel(
             break;
         }
 
-        // Check shutdown flag
+        // Check global shutdown flag
         if let Some(ref flag) = state.exec_config.shutdown {
-            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+            if flag.load(Ordering::Relaxed) {
                 tracing::warn!("parallel: shutdown requested, cancelling remaining agents");
                 for (i, child) in children.iter().enumerate() {
                     if !completed.contains(&i) {
-                        // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
-                        let _ = state.agent_mgr.update_run_cancelled(&child.child_run_id);
-                        crate::process_utils::cancel_subprocess(child.pid);
-                        if let Err(e) = state.wf_mgr.update_step_status(
+                        cancel_child(
+                            &state.agent_mgr,
+                            &state.wf_mgr,
+                            &child.child_run_id,
                             &child.step_id,
-                            WorkflowStepStatus::Failed,
-                            Some(&child.child_run_id),
-                            Some("cancelled: executor shutdown"),
-                            None,
-                            None,
-                            None,
-                        ) {
-                            tracing::warn!(
-                                "parallel: failed to update step for '{}' on shutdown: {e}",
-                                child.agent_name
-                            );
-                        }
+                            &child.agent_name,
+                            &child.thread_shutdown,
+                            "cancelled: executor shutdown",
+                        );
                         completed.insert(i);
                         failures += 1;
                     }
@@ -338,31 +334,17 @@ pub fn execute_parallel(
 
         if start.elapsed() > state.exec_config.step_timeout {
             tracing::warn!("parallel: timeout reached");
-            // Cancel remaining
             for (i, child) in children.iter().enumerate() {
                 if !completed.contains(&i) {
-                    if let Err(e) = state.agent_mgr.update_run_cancelled(&child.child_run_id) {
-                        tracing::warn!(
-                            "parallel: failed to cancel run for '{}': {e}",
-                            child.agent_name
-                        );
-                    }
-                    // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
-                    crate::process_utils::cancel_subprocess(child.pid);
-                    if let Err(e) = state.wf_mgr.update_step_status(
+                    cancel_child(
+                        &state.agent_mgr,
+                        &state.wf_mgr,
+                        &child.child_run_id,
                         &child.step_id,
-                        WorkflowStepStatus::Failed,
-                        Some(&child.child_run_id),
-                        Some("timed out"),
-                        None,
-                        None,
-                        None,
-                    ) {
-                        tracing::warn!(
-                            "parallel: failed to update timed-out step for '{}': {e}",
-                            child.agent_name
-                        );
-                    }
+                        &child.agent_name,
+                        &child.thread_shutdown,
+                        "timed out",
+                    );
                     failures += 1;
                     completed.insert(i);
                 }
@@ -370,20 +352,21 @@ pub fn execute_parallel(
             break;
         }
 
-        // Wait for the next drain-thread completion signal (up to poll_interval)
+        // Wait for the next dispatch-thread completion signal (up to poll_interval)
         match completion_rx.recv_timeout(state.exec_config.poll_interval) {
-            Ok((child_idx, _drain_outcome)) => {
+            Ok((child_idx, dispatch_result)) => {
                 if completed.contains(&child_idx) {
                     // Already processed (e.g., cancelled by fail_fast or timeout)
                     continue;
                 }
                 let child = &children[child_idx];
-                // Targeted DB lookup for just this run
+
+                // Targeted DB lookup for just this run (metrics, status confirmation)
                 let run = match state.agent_mgr.get_run(&child.child_run_id) {
                     Ok(Some(r)) => r,
                     Ok(None) => {
                         tracing::warn!(
-                            "parallel: run '{}' not found in DB after drain",
+                            "parallel: run '{}' not found in DB after dispatch",
                             child.child_run_id
                         );
                         completed.insert(child_idx);
@@ -398,20 +381,60 @@ pub fn execute_parallel(
                     }
                 };
 
-                match run.status {
-                    AgentRunStatus::Completed
-                    | AgentRunStatus::Failed
-                    | AgentRunStatus::Cancelled => {
-                        completed.insert(child_idx);
-                        let succeeded = run.status == AgentRunStatus::Completed;
+                // Guard: dispatch signalled completion but the DB row is still in a
+                // transient state (race between channel send and DB commit).  Force the run
+                // to failed so it can never remain permanently stuck in Running.
+                if matches!(
+                    run.status,
+                    AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
+                ) {
+                    let fail_msg = "drain completed without result";
+                    tracing::warn!(
+                        "parallel: '{}' still in {:?} after dispatch — applying race guard",
+                        child.agent_name,
+                        run.status,
+                    );
+                    mark_child_failed(
+                        &state.agent_mgr,
+                        &state.wf_mgr,
+                        &child.child_run_id,
+                        &child.step_id,
+                        &child.agent_name,
+                        fail_msg,
+                    );
+                    completed.insert(child_idx);
+                    failures += 1;
+                    continue;
+                }
 
-                        // In parallel blocks, schema validation failures fall back
-                        // to generic parsing (no retry mechanism for individual calls).
-                        let (markers, context, structured_json) = interpret_agent_output(
-                            run.result_text.as_deref(),
-                            child.schema.as_ref(),
-                            succeeded,
-                        )
+                let succeeded = matches!(
+                    (&dispatch_result, &run.status),
+                    (Ok(_), AgentRunStatus::Completed)
+                );
+
+                // In parallel blocks, schema validation failures fall back
+                // to generic parsing (no retry mechanism for individual calls).
+                let (markers, context, structured_json) = if succeeded {
+                    // Use the ActionOutput from the dispatch thread when available.
+                    match dispatch_result {
+                        Ok(ref output) => {
+                            let ctx = output.context.clone().unwrap_or_default();
+                            let structured = output.structured_output.clone();
+                            (output.markers.clone(), ctx, structured)
+                        }
+                        Err(_) => {
+                            // Shouldn't happen because we only enter this branch on Ok,
+                            // but handle defensively.
+                            interpret_agent_output(
+                                run.result_text.as_deref(),
+                                child.schema.as_ref(),
+                                true,
+                            )
+                            .unwrap_or_default()
+                        }
+                    }
+                } else {
+                    interpret_agent_output(run.result_text.as_deref(), child.schema.as_ref(), false)
                         .unwrap_or_else(|e| {
                             tracing::warn!(
                                 "parallel: '{}' schema validation failed, falling back: {e}",
@@ -423,114 +446,79 @@ pub fn execute_parallel(
                                 .and_then(parse_conductor_output)
                                 .unwrap_or_default();
                             (fb.markers, fb.context, None)
-                        });
+                        })
+                };
 
-                        let markers_json = serde_json::to_string(&markers).unwrap_or_default();
+                let markers_json = serde_json::to_string(&markers).unwrap_or_default();
 
-                        let step_status = if succeeded {
-                            successes += 1;
-                            merged_markers.extend(markers.iter().cloned());
-                            // Push parallel agent context so downstream {{prior_contexts}} can see it
-                            state.contexts.push(ContextEntry {
-                                step: child.agent_name.clone(),
-                                iteration,
-                                context: context.clone(),
-                                markers: markers.clone(),
-                                structured_output: structured_json.clone(),
-                                output_file: None,
-                            });
-                            WorkflowStepStatus::Completed
-                        } else {
+                let step_status = if succeeded {
+                    successes += 1;
+                    merged_markers.extend(markers.iter().cloned());
+                    // Push parallel agent context so downstream {{prior_contexts}} can see it
+                    state.contexts.push(ContextEntry {
+                        step: child.agent_name.clone(),
+                        iteration,
+                        context: context.clone(),
+                        markers: markers.clone(),
+                        structured_output: structured_json.clone(),
+                        output_file: None,
+                    });
+                    WorkflowStepStatus::Completed
+                } else {
+                    failures += 1;
+                    WorkflowStepStatus::Failed
+                };
+
+                if let Err(e) = state.wf_mgr.update_step_status_full(
+                    &child.step_id,
+                    step_status,
+                    Some(&child.child_run_id),
+                    run.result_text.as_deref(),
+                    Some(&context),
+                    Some(&markers_json),
+                    None,
+                    structured_json.as_deref(),
+                    None,
+                ) {
+                    tracing::warn!(
+                        "parallel: failed to update step status for '{}': {e}",
+                        child.agent_name
+                    );
+                }
+
+                state.accumulate_agent_run(&run);
+
+                // Best-effort mid-run metrics flush after each parallel agent
+                if let Err(e) = state.flush_metrics() {
+                    tracing::warn!("Failed to flush mid-run metrics after parallel agent: {e}");
+                }
+
+                tracing::info!(
+                    "parallel: '{}' {} (cost=${:.4})",
+                    child.agent_name,
+                    if succeeded { "completed" } else { "failed" },
+                    run.cost_usd.unwrap_or(0.0),
+                );
+
+                completed.insert(child_idx);
+
+                // fail_fast: cancel remaining on first failure
+                if !succeeded && node.fail_fast {
+                    tracing::warn!("parallel: fail_fast — cancelling remaining");
+                    for (j, other) in children.iter().enumerate() {
+                        if !completed.contains(&j) {
+                            cancel_child(
+                                &state.agent_mgr,
+                                &state.wf_mgr,
+                                &other.child_run_id,
+                                &other.step_id,
+                                &other.agent_name,
+                                &other.thread_shutdown,
+                                "cancelled by fail_fast",
+                            );
+                            completed.insert(j);
                             failures += 1;
-                            WorkflowStepStatus::Failed
-                        };
-
-                        if let Err(e) = state.wf_mgr.update_step_status_full(
-                            &child.step_id,
-                            step_status,
-                            Some(&child.child_run_id),
-                            run.result_text.as_deref(),
-                            Some(&context),
-                            Some(&markers_json),
-                            None,
-                            structured_json.as_deref(),
-                            None,
-                        ) {
-                            tracing::warn!(
-                                "parallel: failed to update step status for '{}': {e}",
-                                child.agent_name
-                            );
                         }
-
-                        state.accumulate_agent_run(&run);
-
-                        // Best-effort mid-run metrics flush after each parallel agent
-                        if let Err(e) = state.flush_metrics() {
-                            tracing::warn!(
-                                "Failed to flush mid-run metrics after parallel agent: {e}"
-                            );
-                        }
-
-                        tracing::info!(
-                            "parallel: '{}' {} (cost=${:.4})",
-                            child.agent_name,
-                            if succeeded { "completed" } else { "failed" },
-                            run.cost_usd.unwrap_or(0.0),
-                        );
-
-                        // fail_fast: cancel remaining on first failure
-                        if !succeeded && node.fail_fast {
-                            tracing::warn!("parallel: fail_fast — cancelling remaining");
-                            for (j, other) in children.iter().enumerate() {
-                                if !completed.contains(&j) {
-                                    if let Err(e) =
-                                        state.agent_mgr.update_run_cancelled(&other.child_run_id)
-                                    {
-                                        tracing::warn!(
-                                            "parallel: failed to cancel run for '{}': {e}",
-                                            other.agent_name
-                                        );
-                                    }
-                                    // Mark cancelled BEFORE SIGTERM (RFC 016 Q2)
-                                    crate::process_utils::cancel_subprocess(other.pid);
-                                    if let Err(e) = state.wf_mgr.update_step_status(
-                                        &other.step_id,
-                                        WorkflowStepStatus::Failed,
-                                        Some(&other.child_run_id),
-                                        Some("cancelled by fail_fast"),
-                                        None,
-                                        None,
-                                        None,
-                                    ) {
-                                        tracing::warn!(
-                                            "parallel: failed to update step for '{}': {e}",
-                                            other.agent_name
-                                        );
-                                    }
-                                    completed.insert(j);
-                                    failures += 1;
-                                }
-                            }
-                        }
-                    }
-                    AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {
-                        // Drain thread signalled completion but the DB status wasn't updated
-                        // (race between drain thread DB write and polling loop DB read).
-                        // Mark the run and step failed so the workflow doesn't hang.
-                        tracing::warn!(
-                            "parallel: '{}' drain signalled but run still in-progress state, treating as failure",
-                            child.agent_name
-                        );
-                        let fail_msg = "drain completed without result";
-                        mark_parallel_child_failed(
-                            state,
-                            &child.agent_name,
-                            &child.child_run_id,
-                            &child.step_id,
-                            fail_msg,
-                        );
-                        completed.insert(child_idx);
-                        failures += 1;
                     }
                 }
             }
@@ -538,35 +526,34 @@ pub fn execute_parallel(
                 // No completion within poll_interval — loop back and check shutdown/timeout
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                // All drain threads finished and dropped their senders
+                // All dispatch threads finished and dropped their senders
                 break;
             }
         }
     }
 
-    // Join all drain thread handles (best-effort; prevents zombie threads).
-    // Drain threads handle prompt_file cleanup internally; the remove_file here
-    // is a belt-and-suspenders cleanup in case the thread never ran.
+    // Join all dispatch thread handles (best-effort; prevents zombie threads).
     for child in children {
-        if let Err(e) = child.drain_handle.join() {
+        if let Err(e) = child.dispatch_handle.join() {
             tracing::warn!(
-                "parallel: drain thread for '{}' panicked: {e:?}",
+                "parallel: dispatch thread for '{}' panicked: {e:?}",
                 child.agent_name
             );
-            // The drain thread panicked before it could update the DB.
+            // The dispatch thread panicked before it could update the DB.
             // Mark the run and step failed so the workflow doesn't hang and
-            // min_success accounting is correct.
-            let fail_msg = "drain thread panicked";
-            mark_parallel_child_failed(
-                state,
-                &child.agent_name,
+            // min_success accounting is correct.  `update_run_failed_if_running`
+            // guards against overwriting a run that was already finalized.
+            let fail_msg = "dispatch thread panicked";
+            mark_child_failed(
+                &state.agent_mgr,
+                &state.wf_mgr,
                 &child.child_run_id,
                 &child.step_id,
+                &child.agent_name,
                 fail_msg,
             );
             failures += 1;
         }
-        let _ = std::fs::remove_file(&child.prompt_file);
     }
 
     // Apply min_success policy (skipped-on-resume agents count as successes)
@@ -610,41 +597,4 @@ pub fn execute_parallel(
         .insert(format!("parallel:{}", group_id), synthetic_result);
 
     Ok(())
-}
-
-/// Mark a parallel child run and its workflow step as failed.
-///
-/// Used by both the race-condition recovery arm (drain signalled but DB not yet
-/// updated) and the panic-recovery arm (drain thread panicked before DB write),
-/// which share the same two-step update pattern.
-fn mark_parallel_child_failed(
-    state: &mut ExecutionState<'_>,
-    agent_name: &str,
-    child_run_id: &str,
-    step_id: &str,
-    fail_msg: &str,
-) {
-    if let Err(e) = state
-        .agent_mgr
-        .update_run_failed_if_running(child_run_id, fail_msg)
-    {
-        tracing::warn!(
-            "parallel: failed to mark run failed for '{}': {e}",
-            agent_name
-        );
-    }
-    if let Err(e) = state.wf_mgr.update_step_status(
-        step_id,
-        WorkflowStepStatus::Failed,
-        Some(child_run_id),
-        Some(fail_msg),
-        None,
-        None,
-        None,
-    ) {
-        tracing::warn!(
-            "parallel: failed to update step status for '{}': {e}",
-            agent_name
-        );
-    }
 }

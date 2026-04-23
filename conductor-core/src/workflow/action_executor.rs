@@ -47,7 +47,7 @@ pub struct ActionParams {
 }
 
 /// Output produced by an `ActionExecutor` on success.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ActionOutput {
     pub markers: Vec<String>,
     pub context: Option<String>,
