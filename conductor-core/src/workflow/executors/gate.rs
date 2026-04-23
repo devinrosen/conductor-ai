@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{GateNode, GateOptions, GateType, OnFailAction, OnTimeout};
 
-use crate::workflow::engine::{restore_step, should_skip, ExecutionState};
+use crate::workflow::engine::{emit_event, restore_step, should_skip, ExecutionState};
 use crate::workflow::run_context::RunContext;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 
@@ -165,6 +165,12 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
     state
         .wf_mgr
         .set_waiting_blocked_on(&state.workflow_run_id, &blocked_on)?;
+    emit_event(
+        state,
+        runkon_flow::events::EngineEvent::GateWaiting {
+            gate_name: node.name.clone(),
+        },
+    );
 
     // Log human gate instructions before entering the poll loop.
     if matches!(
@@ -264,6 +270,13 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                     None,
                     None,
                 )?;
+                emit_event(
+                    state,
+                    runkon_flow::events::EngineEvent::GateResolved {
+                        gate_name: node.name.clone(),
+                        approved: true,
+                    },
+                );
                 return Ok(());
             }
             GatePoll::Rejected(reason) => {
@@ -275,6 +288,13 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
                     None,
                     None,
                 )?;
+                emit_event(
+                    state,
+                    runkon_flow::events::EngineEvent::GateResolved {
+                        gate_name: node.name.clone(),
+                        approved: false,
+                    },
+                );
                 return Err(ConductorError::Workflow(reason));
             }
             GatePoll::Pending => {

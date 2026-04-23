@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use crate::dsl::CallNode;
 use crate::engine::{
-    handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip, ExecutionState,
+    emit_event, handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip,
+    ExecutionState,
 };
 use crate::engine_error::{EngineError, Result};
+use crate::events::EngineEvent;
 use crate::prompt_builder::build_variable_map;
 use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionParams, ExecutionContext};
@@ -73,6 +75,16 @@ fn execute_call_inner(
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
+        if attempt > 0 {
+            emit_event(
+                state,
+                EngineEvent::StepRetrying {
+                    step_name: agent_label.to_string(),
+                    attempt,
+                },
+            );
+        }
+
         // Insert step record as running
         let step_id = state
             .persistence
@@ -86,6 +98,13 @@ fn execute_call_inner(
                 retry_count: Some(attempt as i64),
             })
             .map_err(|e| EngineError::Persistence(e.to_string()))?;
+
+        emit_event(
+            state,
+            EngineEvent::StepStarted {
+                step_name: agent_label.to_string(),
+            },
+        );
 
         // Build variable map and inputs for this attempt
         let inputs: HashMap<String, String> = {
@@ -172,6 +191,14 @@ fn execute_call_inner(
                         },
                     )
                     .map_err(|e| EngineError::Persistence(e.to_string()))?;
+
+                emit_event(
+                    state,
+                    EngineEvent::StepCompleted {
+                        step_name: agent_label.to_string(),
+                        succeeded: true,
+                    },
+                );
 
                 record_step_success(
                     state,

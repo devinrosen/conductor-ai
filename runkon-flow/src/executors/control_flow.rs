@@ -303,6 +303,7 @@ mod tests {
             child_runner: None,
             last_heartbeat_at: Arc::new(AtomicI64::new(0)),
             registry: Arc::new(ItemProviderRegistry::default()),
+            event_sinks: Arc::from(vec![]),
         }
     }
 

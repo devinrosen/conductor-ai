@@ -5,7 +5,8 @@ use crate::workflow_dsl::CallNode;
 
 use crate::workflow::action_executor::{ActionParams, ExecutionContext};
 use crate::workflow::engine::{
-    handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip, ExecutionState,
+    emit_event, handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip,
+    ExecutionState,
 };
 use crate::workflow::manager::WorkflowManager;
 use crate::workflow::prompt_builder::{build_agent_prompt, build_variable_map};
@@ -154,6 +155,16 @@ fn execute_call_with_schema(
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
+        if attempt > 0 {
+            emit_event(
+                state,
+                runkon_flow::events::EngineEvent::StepRetrying {
+                    step_name: step_key.clone(),
+                    attempt,
+                },
+            );
+        }
+
         // Rebuild prompt each attempt so we can inject the previous failure reason
         // on retries. On attempt 0 there is no prior error, so pass None.
         let retry_ctx = if attempt == 0 {
@@ -172,6 +183,12 @@ fn execute_call_with_schema(
             pos,
             iteration as i64,
         )?;
+        emit_event(
+            state,
+            runkon_flow::events::EngineEvent::StepStarted {
+                step_name: step_key.clone(),
+            },
+        );
 
         let effective_bot_name = node
             .bot_name
@@ -273,6 +290,13 @@ fn execute_call_with_schema(
                     output.structured_output.as_deref(),
                     None,
                 )?;
+                emit_event(
+                    state,
+                    runkon_flow::events::EngineEvent::StepCompleted {
+                        step_name: step_key.clone(),
+                        succeeded: true,
+                    },
+                );
 
                 record_step_success(
                     state,

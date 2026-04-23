@@ -2,8 +2,9 @@ use std::thread;
 use std::time::Duration;
 
 use crate::dsl::{GateNode, GateOptions, GateType, OnFailAction, OnTimeout};
-use crate::engine::{restore_step, should_skip, ExecutionState};
+use crate::engine::{emit_event, restore_step, should_skip, ExecutionState};
 use crate::engine_error::{EngineError, Result};
+use crate::events::EngineEvent;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::persistence::{GateApprovalState, NewStep, StepUpdate};
 
@@ -98,6 +99,13 @@ pub fn execute_gate(state: &mut ExecutionState, node: &GateNode, iteration: u32)
             },
         )
         .map_err(|e| EngineError::Persistence(e.to_string()))?;
+
+    emit_event(
+        state,
+        EngineEvent::GateWaiting {
+            gate_name: node.name.clone(),
+        },
+    );
 
     // Resolve gate options (if any) — stored for future use by gate resolvers
     let _resolved_options: Vec<String> = if let Some(ref gate_opts) = node.options {
@@ -197,12 +205,26 @@ pub fn execute_gate(state: &mut ExecutionState, node: &GateNode, iteration: u32)
                     }
                 }
                 resume_run_status(state, &node.name, "after approval");
+                emit_event(
+                    state,
+                    EngineEvent::GateResolved {
+                        gate_name: node.name.clone(),
+                        approved: true,
+                    },
+                );
                 return Ok(());
             }
             Ok(GateApprovalState::Rejected { feedback }) => {
                 tracing::warn!("Gate '{}' rejected", node.name);
                 state.all_succeeded = false;
                 resume_run_status(state, &node.name, "after rejection");
+                emit_event(
+                    state,
+                    EngineEvent::GateResolved {
+                        gate_name: node.name.clone(),
+                        approved: false,
+                    },
+                );
                 let reason = feedback.unwrap_or_else(|| format!("Gate '{}' rejected", node.name));
                 return Err(EngineError::Workflow(reason));
             }
