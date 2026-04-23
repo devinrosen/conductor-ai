@@ -41,6 +41,30 @@ fn cancel_child(
     }
 }
 
+fn mark_child_failed(
+    agent_mgr: &AgentManager<'_>,
+    wf_mgr: &WorkflowManager<'_>,
+    run_id: &str,
+    step_id: &str,
+    agent_name: &str,
+    reason: &str,
+) {
+    if let Err(e) = agent_mgr.update_run_failed_if_running(run_id, reason) {
+        tracing::warn!("parallel: failed to mark run failed for '{agent_name}': {e}");
+    }
+    if let Err(e) = wf_mgr.update_step_status(
+        step_id,
+        WorkflowStepStatus::Failed,
+        Some(run_id),
+        Some(reason),
+        None,
+        None,
+        None,
+    ) {
+        tracing::warn!("parallel: failed to update step for '{agent_name}': {e}");
+    }
+}
+
 pub fn execute_parallel(
     state: &mut ExecutionState<'_>,
     node: &ParallelNode,
@@ -370,17 +394,13 @@ pub fn execute_parallel(
                         child.agent_name,
                         run.status,
                     );
-                    let _ = state
-                        .agent_mgr
-                        .update_run_failed_if_running(&child.child_run_id, fail_msg);
-                    let _ = state.wf_mgr.update_step_status(
+                    mark_child_failed(
+                        &state.agent_mgr,
+                        &state.wf_mgr,
+                        &child.child_run_id,
                         &child.step_id,
-                        WorkflowStepStatus::Failed,
-                        Some(&child.child_run_id),
-                        Some(fail_msg),
-                        None,
-                        None,
-                        None,
+                        &child.agent_name,
+                        fail_msg,
                     );
                     completed.insert(child_idx);
                     failures += 1;
@@ -524,17 +544,13 @@ pub fn execute_parallel(
             // min_success accounting is correct.  `update_run_failed_if_running`
             // guards against overwriting a run that was already finalized.
             let fail_msg = "dispatch thread panicked";
-            let _ = state
-                .agent_mgr
-                .update_run_failed_if_running(&child.child_run_id, fail_msg);
-            let _ = state.wf_mgr.update_step_status(
+            mark_child_failed(
+                &state.agent_mgr,
+                &state.wf_mgr,
+                &child.child_run_id,
                 &child.step_id,
-                WorkflowStepStatus::Failed,
-                Some(&child.child_run_id),
-                Some(fail_msg),
-                None,
-                None,
-                None,
+                &child.agent_name,
+                fail_msg,
             );
             failures += 1;
         }
