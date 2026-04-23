@@ -60,7 +60,9 @@ impl ActionExecutor for ApiCallExecutor {
             ectx.step_timeout,
             &api_key,
         )
-        .map_err(|e| ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name)))?;
+        .map_err(|e| {
+            ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
+        })?;
 
         let structured = crate::schema_config::derive_output_from_value(result.json, schema);
 
@@ -97,11 +99,8 @@ mod tests {
         let prev = std::env::var("ANTHROPIC_API_KEY").ok();
         unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
 
-        let schema = crate::schema_config::parse_schema_content(
-            "fields:\n  ok: boolean\n",
-            "test",
-        )
-        .unwrap();
+        let schema =
+            crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap();
         let executor = ApiCallExecutor::new(Config::default());
         let result = executor.execute(&make_ectx(), &make_action_params(Some(schema)));
 

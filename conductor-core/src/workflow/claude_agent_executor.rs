@@ -114,7 +114,10 @@ impl ActionExecutor for ClaudeAgentExecutor {
             })
         } else {
             let detail = completed.result_text.unwrap_or_else(|| {
-                format!("agent '{}' completed with status {:?} but no result text", params.name, completed.status)
+                format!(
+                    "agent '{}' completed with status {:?} but no result text",
+                    params.name, completed.status
+                )
             });
             Err(ConductorError::Workflow(detail))
         }
@@ -150,9 +153,12 @@ mod tests {
             "__mock__"
         }
 
-        fn execute(&self, _ectx: &ExecutionContext, _params: &ActionParams) -> Result<ActionOutput> {
-            self.called
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+        fn execute(
+            &self,
+            _ectx: &ExecutionContext,
+            _params: &ActionParams,
+        ) -> Result<ActionOutput> {
+            self.called.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(ActionOutput {
                 markers: vec!["mock_marker".to_string()],
                 context: Some("mock context".to_string()),
@@ -186,7 +192,10 @@ mod tests {
 
         assert!(result.is_ok(), "expected Ok, got {:?}", result.unwrap_err());
         // SAFETY: mock is still alive — it was moved into executor which is still in scope.
-        assert!(unsafe { &*mock_ptr }.was_called(), "api_executor was not called");
+        assert!(
+            unsafe { &*mock_ptr }.was_called(),
+            "api_executor was not called"
+        );
     }
 
     #[test]
@@ -209,7 +218,10 @@ mod tests {
         }
 
         // SAFETY: mock is still alive — moved into executor.
-        assert!(!unsafe { &*mock_ptr }.was_called(), "api_executor must not be called without a schema");
+        assert!(
+            !unsafe { &*mock_ptr }.was_called(),
+            "api_executor must not be called without a schema"
+        );
         // load_agent fails on /tmp — that's expected, confirms no delegation happened.
         assert!(result.is_err());
     }
@@ -231,7 +243,10 @@ mod tests {
         }
 
         // SAFETY: mock is still alive.
-        assert!(!unsafe { &*mock_ptr }.was_called(), "api_executor must not be called without API key");
+        assert!(
+            !unsafe { &*mock_ptr }.was_called(),
+            "api_executor must not be called without API key"
+        );
         assert!(result.is_err());
     }
 }

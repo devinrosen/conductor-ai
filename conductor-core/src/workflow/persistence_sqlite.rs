@@ -362,9 +362,7 @@ mod tests {
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         p.update_run_status(&run.id, WorkflowRunStatus::Running, None, None)
             .unwrap();
-        let active = p
-            .list_active_runs(&[WorkflowRunStatus::Running])
-            .unwrap();
+        let active = p.list_active_runs(&[WorkflowRunStatus::Running]).unwrap();
         assert!(active.iter().any(|r| r.id == run.id));
     }
 }
