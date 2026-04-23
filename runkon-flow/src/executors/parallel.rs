@@ -494,7 +494,11 @@ mod tests {
             .as_deref()
             .and_then(|m| serde_json::from_str(m).ok())
             .unwrap_or_default();
-        assert_eq!(markers, vec!["m1", "m2"], "markers should match executor output");
+        assert_eq!(
+            markers,
+            vec!["m1", "m2"],
+            "markers should match executor output"
+        );
         assert_eq!(
             step.context_out.as_deref(),
             Some("step context"),

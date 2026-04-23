@@ -1523,10 +1523,7 @@ mod tests {
 
         // Register a dummy active run entry so cancel_run finds it.
         {
-            let mut runs = engine
-                .active_runs
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut runs = engine.active_runs.lock().unwrap_or_else(|e| e.into_inner());
             runs.insert(
                 run.id.clone(),
                 ActiveRunEntry {

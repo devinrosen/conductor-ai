@@ -1270,8 +1270,7 @@ pub(super) fn execute_nodes(
                     "Workflow run {} cancelled externally, stopping execution",
                     state.workflow_run_id
                 );
-                state.cancel_reason =
-                    Some(runkon_flow::CancellationReason::UserRequested(None));
+                state.cancel_reason = Some(runkon_flow::CancellationReason::UserRequested(None));
                 return Err(ConductorError::WorkflowCancelled);
             }
             Ok(false) => {}

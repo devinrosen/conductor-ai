@@ -223,7 +223,10 @@ fn execute_call_inner(
 
         // Record the active executor so cancel_run() can fire-and-forget executor.cancel().
         {
-            let mut cur = state.current_execution_id.lock().unwrap_or_else(|e| e.into_inner());
+            let mut cur = state
+                .current_execution_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             *cur = Some((agent_label.to_string(), step_id.clone()));
         }
         // Clone the Arc before dispatch so we hold no borrow on `state` while
@@ -232,7 +235,10 @@ fn execute_call_inner(
         let dispatch_result = registry.dispatch(&params.name, &ectx, &params);
         // Clear the active executor record and signal the timer thread to exit.
         {
-            let mut cur = state.current_execution_id.lock().unwrap_or_else(|e| e.into_inner());
+            let mut cur = state
+                .current_execution_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             *cur = None;
         }
         timer_done.store(true, Ordering::Relaxed);
