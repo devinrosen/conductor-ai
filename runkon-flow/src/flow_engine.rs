@@ -812,9 +812,9 @@ mod tests {
     fn validate_sub_workflow_errors_have_path_prefix() {
         let sub_def = make_def("sub_wf", vec![call_node("missing_in_sub")]);
         let engine = FlowEngineBuilder::new()
-            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([
-                ("sub_wf", sub_def),
-            ])))
+            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([(
+                "sub_wf", sub_def,
+            )])))
             .build()
             .unwrap();
 
@@ -859,9 +859,10 @@ mod tests {
             })],
         );
         let engine = FlowEngineBuilder::new()
-            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([
-                ("cycle_wf", cycle_def.clone()),
-            ])))
+            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([(
+                "cycle_wf",
+                cycle_def.clone(),
+            )])))
             .build()
             .unwrap();
 
@@ -880,7 +881,7 @@ mod tests {
     fn resolver_returns_not_found_error_for_missing_sub_workflow() {
         let engine = FlowEngineBuilder::new()
             .workflow_resolver(Box::new(InMemoryWorkflowResolver::new(
-                [] as [(String, WorkflowDef); 0],
+                [] as [(String, WorkflowDef); 0]
             )))
             .build()
             .unwrap();
@@ -910,9 +911,9 @@ mod tests {
         let sub_def = make_def("sub_wf", vec![call_node("alpha")]);
         let engine = FlowEngineBuilder::new()
             .action(Box::new(AlphaExecutor))
-            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([
-                ("sub_wf", sub_def),
-            ])))
+            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([(
+                "sub_wf", sub_def,
+            )])))
             .build()
             .unwrap();
 
