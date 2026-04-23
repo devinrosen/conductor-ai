@@ -26,6 +26,7 @@ pub(crate) mod persistence_memory;
 pub mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod run_context;
+pub(crate) mod script_env_provider;
 pub(crate) mod status;
 pub(crate) mod types;
 

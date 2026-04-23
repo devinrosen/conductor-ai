@@ -24,33 +24,22 @@ pub trait RunContext {
     }
 
     /// Worktree ID, if this run is tied to a registered worktree.
-    fn worktree_id(&self) -> Option<&str>;
+    fn worktree_id(&self) -> Option<&str> {
+        None
+    }
 
     /// Worktree slug (empty string for repo-level runs).
-    fn worktree_slug(&self) -> &str;
+    fn worktree_slug(&self) -> &str {
+        ""
+    }
 
     /// Ticket ID linked to this run, if any.
-    fn ticket_id(&self) -> Option<&str>;
+    fn ticket_id(&self) -> Option<&str> {
+        None
+    }
 
     /// Repo ID for this run, if any.
-    fn repo_id(&self) -> Option<&str>;
-
-    /// Directory containing the conductor binary (for PATH injection in script steps).
-    fn conductor_bin_dir(&self) -> Option<&Path>;
-
-    /// Additional plugin directories passed via `--plugin-dir`.
-    fn extra_plugin_dirs(&self) -> &[String];
-
-    /// Environment variables to pass to script steps.
-    fn script_env(&self) -> HashMap<String, String> {
-        let mut env = HashMap::new();
-        if let Some(bin_dir) = self.conductor_bin_dir() {
-            let existing_path = std::env::var("PATH").unwrap_or_default();
-            env.insert(
-                "PATH".to_string(),
-                format!("{}:{}", bin_dir.display(), existing_path),
-            );
-        }
-        env
+    fn repo_id(&self) -> Option<&str> {
+        None
     }
 }

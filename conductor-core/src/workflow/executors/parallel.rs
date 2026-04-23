@@ -70,12 +70,12 @@ pub fn execute_parallel(
     node: &ParallelNode,
     iteration: u32,
 ) -> Result<()> {
-    let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
+    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
+    let (working_dir, repo_path, worktree_id) = {
         let ctx = WorktreeRunContext::new(state);
         (
             ctx.working_dir().to_path_buf(),
             ctx.repo_path().to_path_buf(),
-            ctx.extra_plugin_dirs().to_vec(),
             ctx.worktree_id().map(String::from),
         )
     };

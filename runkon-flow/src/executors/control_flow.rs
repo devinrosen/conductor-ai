@@ -240,6 +240,7 @@ mod tests {
     use crate::traits::action_executor::ActionRegistry;
     use crate::traits::item_provider::ItemProviderRegistry;
     use crate::traits::persistence::{NewRun, WorkflowPersistence};
+    use crate::traits::script_env_provider::NoOpScriptEnvProvider;
     use crate::types::{StepResult, WorkflowExecConfig};
 
     use super::{eval_condition, execute_if, execute_unless};
@@ -262,6 +263,7 @@ mod tests {
         ExecutionState {
             persistence,
             action_registry: Arc::new(ActionRegistry::new(Default::default(), None)),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
             workflow_run_id: run.id,
             workflow_name: "test-wf".to_string(),
             worktree_ctx: WorktreeContext {

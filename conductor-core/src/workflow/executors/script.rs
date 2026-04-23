@@ -14,6 +14,7 @@ use crate::workflow::prompt_builder::{
 };
 use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
+use runkon_flow::ScriptEnvProvider as _;
 
 // ---------------------------------------------------------------------------
 // Script step executor
@@ -128,13 +129,46 @@ pub fn execute_script(
     let pos = state.position;
     state.position += 1;
 
-    let (working_dir, repo_path, script_env) = {
+    let conductor_bin_dir = state.worktree_ctx.conductor_bin_dir.clone();
+    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
+    let (working_dir, repo_path) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
         (
             ctx.working_dir().to_path_buf(),
             ctx.repo_path().to_path_buf(),
-            ctx.script_env(),
         )
+    };
+    let script_env = {
+        // ConductorScriptEnvProvider::env() ignores the ctx parameter; pass a stub.
+        struct NoopCtx;
+        impl runkon_flow::traits::run_context::RunContext for NoopCtx {
+            fn injected_variables(&self) -> std::collections::HashMap<&'static str, String> {
+                std::collections::HashMap::new()
+            }
+            fn working_dir(&self) -> &std::path::Path {
+                std::path::Path::new("")
+            }
+            fn repo_path(&self) -> &std::path::Path {
+                std::path::Path::new("")
+            }
+            fn worktree_id(&self) -> Option<&str> {
+                None
+            }
+            fn worktree_slug(&self) -> &str {
+                ""
+            }
+            fn ticket_id(&self) -> Option<&str> {
+                None
+            }
+            fn repo_id(&self) -> Option<&str> {
+                None
+            }
+        }
+        crate::workflow::script_env_provider::ConductorScriptEnvProvider::new(
+            conductor_bin_dir,
+            extra_plugin_dirs,
+        )
+        .env(&NoopCtx)
     };
 
     // Check skip on resume

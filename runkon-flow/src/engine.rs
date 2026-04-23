@@ -11,6 +11,7 @@ use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::action_executor::ActionRegistry;
 use crate::traits::item_provider::ItemProviderRegistry;
 use crate::traits::persistence::WorkflowPersistence;
+use crate::traits::script_env_provider::ScriptEnvProvider;
 use crate::types::{
     ContextEntry, StepKey, StepResult, WorkflowExecConfig, WorkflowResult, WorkflowRunStep,
 };
@@ -54,6 +55,7 @@ pub struct ResumeContext {
 pub struct ExecutionState {
     pub persistence: Arc<dyn WorkflowPersistence>,
     pub action_registry: Arc<ActionRegistry>,
+    pub script_env_provider: Arc<dyn ScriptEnvProvider>,
     pub workflow_run_id: String,
     pub workflow_name: String,
     pub worktree_ctx: WorktreeContext,

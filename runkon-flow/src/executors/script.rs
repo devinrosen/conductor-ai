@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::dsl::ScriptNode;
 use crate::engine::{
     record_step_failure, record_step_skipped, record_step_success, restore_step, should_skip,
@@ -7,6 +9,7 @@ use crate::engine_error::{EngineError, Result};
 use crate::prompt_builder::build_variable_map;
 use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::{NewStep, StepUpdate};
+use crate::traits::run_context::RunContext;
 
 pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: u32) -> Result<()> {
     let pos = state.position;
@@ -87,13 +90,41 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     // Build environment variables
     let mut env_vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
-    // Inject conductor bin dir into PATH if available
-    if let Some(ref bin_dir) = state.worktree_ctx.conductor_bin_dir {
-        let existing_path = std::env::var("PATH").unwrap_or_default();
-        env_vars.insert(
-            "PATH".to_string(),
-            format!("{}:{}", bin_dir.display(), existing_path),
-        );
+    // Inject PATH and other env from the script env provider
+    {
+        struct ScriptRunCtx<'a> {
+            working_dir: &'a str,
+            repo_path: &'a str,
+        }
+        impl RunContext for ScriptRunCtx<'_> {
+            fn injected_variables(&self) -> std::collections::HashMap<&'static str, String> {
+                std::collections::HashMap::new()
+            }
+            fn working_dir(&self) -> &Path {
+                Path::new(self.working_dir)
+            }
+            fn repo_path(&self) -> &Path {
+                Path::new(self.repo_path)
+            }
+            fn worktree_id(&self) -> Option<&str> {
+                None
+            }
+            fn worktree_slug(&self) -> &str {
+                ""
+            }
+            fn ticket_id(&self) -> Option<&str> {
+                None
+            }
+            fn repo_id(&self) -> Option<&str> {
+                None
+            }
+        }
+        let run_ctx = ScriptRunCtx {
+            working_dir: &state.worktree_ctx.working_dir,
+            repo_path: &state.worktree_ctx.repo_path,
+        };
+        let provider_env = state.script_env_provider.env(&run_ctx);
+        env_vars.extend(provider_env);
     }
 
     // Inject all current workflow inputs as env vars (prefixed with CONDUCTOR_)
