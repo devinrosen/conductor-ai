@@ -622,6 +622,10 @@ pub fn handle_workflow(
                 config.github.apps.keys().cloned().collect();
             let wt_ref = wt_path.clone();
             let repo_ref = repo_path.clone();
+            // TODO(#2349-followup): replace with DirectoryWorkflowResolver from runkon-flow once
+            // conductor-core re-exports runkon_flow::dsl::WorkflowDef (currently the two types are
+            // structurally identical but distinct Rust types — a From impl or re-export is required
+            // before validate_workflows_batch can accept the runkon-flow resolver directly).
             let loader = |name: &str| {
                 conductor_core::workflow::load_workflow_by_name(&wt_ref, &repo_ref, name)
                     .map_err(|e| e.to_string())
@@ -679,6 +683,7 @@ pub fn handle_workflow(
                 from_step: from_step.as_deref(),
                 restart,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                event_sinks: vec![],
             };
 
             if restart {
@@ -712,30 +717,11 @@ pub fn handle_workflow(
         }
         WorkflowCommands::Cancel { id } => {
             let wf_mgr = WorkflowManager::new(conn);
-            match wf_mgr.get_workflow_run(&id)? {
-                Some(run) => {
-                    if matches!(
-                        run.status,
-                        conductor_core::workflow::WorkflowRunStatus::Completed
-                            | conductor_core::workflow::WorkflowRunStatus::Failed
-                            | conductor_core::workflow::WorkflowRunStatus::Cancelled
-                    ) {
-                        println!(
-                            "Workflow run {} is already in terminal state: {}",
-                            id, run.status
-                        );
-                    } else {
-                        wf_mgr.update_workflow_status(
-                            &id,
-                            conductor_core::workflow::WorkflowRunStatus::Cancelled,
-                            Some("Cancelled by user"),
-                            None,
-                        )?;
-                        println!("Workflow run {} cancelled.", id);
-                    }
-                }
-                None => {
-                    println!("Workflow run not found: {id}");
+            match wf_mgr.cancel_run(&id, "Cancelled by user") {
+                Ok(()) => println!("Workflow run {id} cancelled."),
+                Err(e) => {
+                    eprintln!("Failed to cancel workflow run {id}: {e}");
+                    std::process::exit(1);
                 }
             }
         }

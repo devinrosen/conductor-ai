@@ -5,7 +5,8 @@ use crate::workflow_dsl::CallNode;
 
 use crate::workflow::action_executor::{ActionParams, ExecutionContext};
 use crate::workflow::engine::{
-    handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip, ExecutionState,
+    emit_event, handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip,
+    ExecutionState,
 };
 use crate::workflow::manager::WorkflowManager;
 use crate::workflow::prompt_builder::{build_agent_prompt, build_variable_map};
@@ -95,13 +96,13 @@ fn execute_call_with_schema(
     let pos = state.position;
     state.position += 1;
 
-    let (working_dir, repo_path, extra_plugin_dirs, worktree_id) = {
+    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
+    let (working_dir, repo_path, worktree_id) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
         let working_dir = ctx.working_dir_str();
         let repo_path = ctx.repo_path_str();
-        let extra_plugin_dirs = ctx.extra_plugin_dirs().to_vec();
         let worktree_id: Option<String> = ctx.worktree_id().map(|s| s.to_string());
-        (working_dir, repo_path, extra_plugin_dirs, worktree_id)
+        (working_dir, repo_path, worktree_id)
     };
 
     let step_key_check = node.agent.step_key();
@@ -154,6 +155,16 @@ fn execute_call_with_schema(
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
+        if attempt > 0 {
+            emit_event(
+                state,
+                runkon_flow::events::EngineEvent::StepRetrying {
+                    step_name: step_key.clone(),
+                    attempt,
+                },
+            );
+        }
+
         // Rebuild prompt each attempt so we can inject the previous failure reason
         // on retries. On attempt 0 there is no prior error, so pass None.
         let retry_ctx = if attempt == 0 {
@@ -172,6 +183,12 @@ fn execute_call_with_schema(
             pos,
             iteration as i64,
         )?;
+        emit_event(
+            state,
+            runkon_flow::events::EngineEvent::StepStarted {
+                step_name: step_key.clone(),
+            },
+        );
 
         let effective_bot_name = node
             .bot_name
@@ -219,6 +236,9 @@ fn execute_call_with_schema(
             bot_name: effective_bot_name.map(String::from),
             plugin_dirs: merged_plugin_dirs.clone(),
             workflow_name: state.workflow_name.clone(),
+            worktree_id: worktree_id.clone(),
+            parent_run_id: state.workflow_run_id.clone(),
+            step_id: step_id.clone(),
         };
 
         let params = ActionParams {
@@ -245,7 +265,10 @@ fn execute_call_with_schema(
         let registry = std::sync::Arc::clone(&state.action_registry);
         match registry.dispatch(&params.name, &ectx, &params) {
             Ok(output) => {
-                let markers_json = serde_json::to_string(&output.markers).unwrap_or_default();
+                let markers_json = serde_json::to_string(&output.markers).unwrap_or_else(|e| {
+                    tracing::warn!("Step '{}': failed to serialize markers: {e}", agent_label);
+                    String::new()
+                });
                 let context = output.context.unwrap_or_default();
 
                 tracing::info!(
@@ -267,6 +290,13 @@ fn execute_call_with_schema(
                     output.structured_output.as_deref(),
                     None,
                 )?;
+                emit_event(
+                    state,
+                    runkon_flow::events::EngineEvent::StepCompleted {
+                        step_name: step_key.clone(),
+                        succeeded: true,
+                    },
+                );
 
                 record_step_success(
                     state,

@@ -381,6 +381,7 @@ mod tests {
             from_step: None,
             model: None,
             conductor_bin_dir: None,
+            event_sinks: vec![],
         };
 
         let err = resume_workflow(&input).unwrap_err();

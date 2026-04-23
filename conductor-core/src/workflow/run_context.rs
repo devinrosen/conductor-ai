@@ -43,27 +43,6 @@ pub(crate) trait RunContext {
 
     /// Repo ID for this run, if any.
     fn repo_id(&self) -> Option<&str>;
-
-    /// Directory containing the conductor binary (for PATH injection in script steps).
-    fn conductor_bin_dir(&self) -> Option<&Path>;
-
-    /// Additional plugin directories passed via `--plugin-dir`.
-    fn extra_plugin_dirs(&self) -> &[String];
-
-    /// Environment variables to pass to script steps.
-    ///
-    /// Default implementation prepends `conductor_bin_dir` to PATH if set.
-    fn script_env(&self) -> HashMap<String, String> {
-        let mut env = HashMap::new();
-        if let Some(bin_dir) = self.conductor_bin_dir() {
-            let existing_path = std::env::var("PATH").unwrap_or_default();
-            env.insert(
-                "PATH".to_string(),
-                format!("{}:{}", bin_dir.display(), existing_path),
-            );
-        }
-        env
-    }
 }
 
 /// `RunContext` implementation backed by an `ExecutionState`.
@@ -117,14 +96,6 @@ impl RunContext for WorktreeRunContext<'_, '_> {
 
     fn repo_id(&self) -> Option<&str> {
         self.state.worktree_ctx.repo_id.as_deref()
-    }
-
-    fn conductor_bin_dir(&self) -> Option<&Path> {
-        self.state.worktree_ctx.conductor_bin_dir.as_deref()
-    }
-
-    fn extra_plugin_dirs(&self) -> &[String] {
-        &self.state.worktree_ctx.extra_plugin_dirs
     }
 }
 
@@ -293,29 +264,6 @@ mod tests {
         assert_eq!(
             ctx.working_dir(),
             std::path::Path::new("/home/user/repo/worktree")
-        );
-    }
-
-    #[test]
-    fn test_script_env_empty_when_no_bin_dir() {
-        let conn = crate::test_helpers::create_test_conn();
-        let state = make_state_with_all_injected(&conn);
-        let ctx = WorktreeRunContext::new(&state);
-        assert!(ctx.script_env().is_empty());
-    }
-
-    #[test]
-    fn test_script_env_injects_path_when_bin_dir_set() {
-        let conn = crate::test_helpers::create_test_conn();
-        let mut state = make_state_with_all_injected(&conn);
-        state.worktree_ctx.conductor_bin_dir =
-            Some(std::path::PathBuf::from("/usr/local/bin/conductor-dir"));
-        let ctx = WorktreeRunContext::new(&state);
-        let env = ctx.script_env();
-        let path = env.get("PATH").expect("PATH should be set");
-        assert!(
-            path.starts_with("/usr/local/bin/conductor-dir:"),
-            "PATH should start with conductor_bin_dir, got: {path}"
         );
     }
 }

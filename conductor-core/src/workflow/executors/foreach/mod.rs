@@ -31,7 +31,7 @@ fn call_between_cycle_hook() {}
 
 use crate::error::{ConductorError, Result};
 use crate::workflow::engine::{
-    record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
+    emit_event, record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
 };
 use crate::workflow::item_provider::ProviderContext;
 use crate::workflow::prompt_builder::build_variable_map;
@@ -199,6 +199,12 @@ pub fn execute_foreach(
         total_items,
         node.over,
         node.max_parallel,
+    );
+    emit_event(
+        state,
+        runkon_flow::events::EngineEvent::FanOutItemsCollected {
+            count: total_items as usize,
+        },
     );
 
     if total_items == 0 {
@@ -433,7 +439,13 @@ fn run_dispatch_loop(
                             .update_fan_out_item_terminal(&item.id, "completed")?;
                         state.wf_mgr.refresh_fan_out_counters(step_id)?;
                         pending_terminal_failed.remove(&item.id);
-
+                        emit_event(
+                            state,
+                            runkon_flow::events::EngineEvent::FanOutItemCompleted {
+                                item_id: item.item_id.clone(),
+                                succeeded: true,
+                            },
+                        );
                         tracing::info!(
                             "foreach '{}': item '{}' → completed",
                             node.name,
@@ -449,7 +461,13 @@ fn run_dispatch_loop(
                                 .wf_mgr
                                 .update_fan_out_item_terminal(&item.id, "failed")?;
                             state.wf_mgr.refresh_fan_out_counters(step_id)?;
-
+                            emit_event(
+                                state,
+                                runkon_flow::events::EngineEvent::FanOutItemCompleted {
+                                    item_id: item.item_id.clone(),
+                                    succeeded: false,
+                                },
+                            );
                             tracing::info!(
                                 "foreach '{}': item '{}' → failed (confirmed on second observation)",
                                 node.name,
@@ -600,33 +618,16 @@ fn build_child_dispatch_params(
     item: &crate::workflow::manager::FanOutItemRow,
     child_def: &crate::workflow_dsl::WorkflowDef,
 ) -> Result<WorkflowExecStandalone> {
-    let (
-        working_dir,
-        repo_path,
-        ticket_id,
-        repo_id,
-        worktree_id,
-        conductor_bin_dir,
-        extra_plugin_dirs,
-    ) = {
+    let conductor_bin_dir = state.worktree_ctx.conductor_bin_dir.clone();
+    let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
+    let (working_dir, repo_path, ticket_id, repo_id, worktree_id) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
         let working_dir = ctx.working_dir_str();
         let repo_path = ctx.repo_path_str();
         let ticket_id: Option<String> = ctx.ticket_id().map(|s| s.to_string());
         let repo_id: Option<String> = ctx.repo_id().map(|s| s.to_string());
         let worktree_id: Option<String> = ctx.worktree_id().map(|s| s.to_string());
-        let conductor_bin_dir: Option<std::path::PathBuf> =
-            ctx.conductor_bin_dir().map(|p| p.to_path_buf());
-        let extra_plugin_dirs = ctx.extra_plugin_dirs().to_vec();
-        (
-            working_dir,
-            repo_path,
-            ticket_id,
-            repo_id,
-            worktree_id,
-            conductor_bin_dir,
-            extra_plugin_dirs,
-        )
+        (working_dir, repo_path, ticket_id, repo_id, worktree_id)
     };
 
     // Build item-specific variable map for {{item.*}} substitution.
@@ -712,6 +713,7 @@ fn build_child_dispatch_params(
             fail_fast: state.exec_config.fail_fast,
             dry_run: state.exec_config.dry_run,
             shutdown: state.exec_config.shutdown.clone(),
+            event_sinks: state.exec_config.event_sinks.clone(),
         },
         inputs: child_inputs,
         target_label,
@@ -803,6 +805,12 @@ fn dispatch_child_workflow(
         rusqlite::named_params![":now": now, ":id": item.id],
     )?;
 
+    emit_event(
+        state,
+        runkon_flow::events::EngineEvent::FanOutItemStarted {
+            item_id: item.item_id.clone(),
+        },
+    );
     tracing::info!(
         "foreach '{}': dispatched item '{}' ({})",
         node.workflow,
