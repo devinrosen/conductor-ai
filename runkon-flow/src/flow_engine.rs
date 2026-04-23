@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::dsl::{detect_workflow_cycles, GateType, ValidationError, WorkflowDef, WorkflowNode};
 use crate::engine::{run_workflow_engine, ExecutionState};
 use crate::engine_error::EngineError;
+use crate::events::EventSink;
 use crate::traits::action_executor::{ActionExecutor, ActionRegistry};
 use crate::traits::gate_resolver::{GateResolver, GateResolverRegistry};
 use crate::traits::item_provider::{ItemProvider, ItemProviderRegistry};
@@ -40,6 +41,7 @@ pub struct FlowEngine {
     #[allow(dead_code)]
     pub(crate) script_env_provider: Arc<dyn ScriptEnvProvider>,
     pub(crate) workflow_resolver: Option<Arc<dyn WorkflowResolver>>,
+    pub(crate) event_sinks: Vec<Arc<dyn EventSink>>,
 }
 
 impl FlowEngine {
@@ -77,6 +79,9 @@ impl FlowEngine {
     /// as dispatch-time lookup.  Gate resolvers are validated against the
     /// FlowEngine's registry because `ExecutionState` carries none — gates
     /// are resolved via persistence callbacks, not the executor pipeline.
+    ///
+    /// Event sinks registered on the engine are injected into the state for
+    /// this run; any sinks already set on `state.event_sinks` are replaced.
     pub fn run(
         &self,
         def: &WorkflowDef,
@@ -98,6 +103,7 @@ impl FlowEngine {
                 def.name, joined
             )));
         }
+        state.event_sinks = Arc::from(self.event_sinks.clone());
         run_workflow_engine(state, def)
     }
 
@@ -379,6 +385,7 @@ pub struct FlowEngineBuilder {
     item_providers: ItemProviderRegistry,
     gate_resolvers: GateResolverRegistry,
     workflow_resolver: Option<Box<dyn WorkflowResolver>>,
+    event_sinks: Vec<Arc<dyn EventSink>>,
 }
 
 impl FlowEngineBuilder {
@@ -390,6 +397,7 @@ impl FlowEngineBuilder {
             item_providers: ItemProviderRegistry::new(),
             gate_resolvers: GateResolverRegistry::new(),
             workflow_resolver: None,
+            event_sinks: Vec::new(),
         }
     }
 
@@ -451,6 +459,13 @@ impl FlowEngineBuilder {
         self
     }
 
+    /// Register an event sink. Multiple calls register multiple sinks; events are
+    /// emitted to all sinks in registration order.
+    pub fn event_sink(mut self, sink: Box<dyn EventSink>) -> Self {
+        self.event_sinks.push(Arc::from(sink));
+        self
+    }
+
     /// Consume the builder and produce a [`FlowEngine`].
     pub fn build(self) -> Result<FlowEngine, EngineError> {
         Ok(FlowEngine {
@@ -459,6 +474,7 @@ impl FlowEngineBuilder {
             gate_resolver_registry: self.gate_resolvers,
             script_env_provider: Arc::from(self.script_env_provider),
             workflow_resolver: self.workflow_resolver.map(Arc::from),
+            event_sinks: self.event_sinks,
         })
     }
 }
@@ -983,6 +999,7 @@ mod tests {
             child_runner: None,
             last_heartbeat_at: ExecutionState::new_heartbeat(),
             registry: Arc::new(ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
         }
     }
 
@@ -1061,5 +1078,263 @@ mod tests {
             state.step_results.is_empty(),
             "no side effects: step_results must be empty when validation fails"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // EventSink tests
+    // ---------------------------------------------------------------------------
+
+    use crate::events::{EngineEvent, EngineEventData, EventSink};
+    use crate::persistence_memory::InMemoryWorkflowPersistence;
+    use std::sync::Mutex;
+
+    /// A VecSink that collects all received events for inspection.
+    struct VecSink {
+        events: Mutex<Vec<EngineEventData>>,
+    }
+
+    impl VecSink {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                events: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn collected(&self) -> Vec<EngineEventData> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    impl EventSink for VecSink {
+        fn emit(&self, event: &EngineEventData) {
+            self.events.lock().unwrap().push(event.clone());
+        }
+    }
+
+    /// A sink that always panics — used to test panic isolation.
+    struct PanicSink;
+
+    impl EventSink for PanicSink {
+        fn emit(&self, _event: &EngineEventData) {
+            panic!("intentional sink panic");
+        }
+    }
+
+    /// Build a simple 1-step workflow that uses the NoopAlpha executor.
+    fn make_single_step_def() -> WorkflowDef {
+        make_def("wf", vec![call_node("alpha")])
+    }
+
+    /// Build an ExecutionState with a fresh InMemoryWorkflowPersistence.
+    fn make_state_with_persistence(wf_name: &str) -> crate::engine::ExecutionState {
+        use crate::engine::{ExecutionState, WorktreeContext};
+        use crate::traits::persistence::{NewRun, WorkflowPersistence};
+        use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+        use crate::types::WorkflowExecConfig;
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        // Create a run record so update_run_status doesn't fail; use the returned ID.
+        let run = persistence
+            .create_run(NewRun {
+                workflow_name: wf_name.to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+
+        ExecutionState {
+            persistence,
+            action_registry: Arc::new(ActionRegistry::new(
+                {
+                    let mut m = HashMap::new();
+                    m.insert(
+                        "alpha".to_string(),
+                        Box::new(AlphaExecutor)
+                            as Box<dyn crate::traits::action_executor::ActionExecutor>,
+                    );
+                    m
+                },
+                None,
+            )),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: run.id,
+            workflow_name: wf_name.to_string(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                worktree_slug: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                conductor_bin_dir: None,
+                extra_plugin_dirs: vec![],
+            },
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: false,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: crate::engine::ExecutionState::new_heartbeat(),
+            registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+        }
+    }
+
+    // Test: two sinks both receive all events in registration order
+    #[test]
+    fn event_sinks_multi_sink_ordering() {
+        let sink_a = VecSink::new();
+        let sink_b = VecSink::new();
+
+        let sink_a_clone = Arc::clone(&sink_a);
+        let sink_b_clone = Arc::clone(&sink_b);
+
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .event_sink(Box::new(ForwardSink(sink_a_clone)))
+            .event_sink(Box::new(ForwardSink(sink_b_clone)))
+            .build()
+            .unwrap();
+
+        let def = make_single_step_def();
+        let mut state = make_state_with_persistence("wf");
+        let result = engine.run(&def, &mut state);
+        assert!(result.is_ok(), "run should succeed: {:?}", result);
+
+        let events_a = sink_a.collected();
+        let events_b = sink_b.collected();
+        assert!(!events_a.is_empty(), "sink_a should have received events");
+        assert_eq!(
+            events_a.len(),
+            events_b.len(),
+            "both sinks should receive the same number of events"
+        );
+        // Verify at least RunStarted and RunCompleted were received
+        let has_run_started = events_a
+            .iter()
+            .any(|e| matches!(e.event, EngineEvent::RunStarted { .. }));
+        let has_run_completed = events_a
+            .iter()
+            .any(|e| matches!(e.event, EngineEvent::RunCompleted { .. }));
+        assert!(has_run_started, "should have RunStarted event");
+        assert!(has_run_completed, "should have RunCompleted event");
+    }
+
+    // Test: panicking sink doesn't abort the run; the non-panicking sink still receives events
+    #[test]
+    fn event_sinks_panic_safety() {
+        let good_sink = VecSink::new();
+        let good_sink_clone = Arc::clone(&good_sink);
+
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .event_sink(Box::new(PanicSink))
+            .event_sink(Box::new(ForwardSink(good_sink_clone)))
+            .build()
+            .unwrap();
+
+        let def = make_single_step_def();
+        let mut state = make_state_with_persistence("wf");
+        let result = engine.run(&def, &mut state);
+        assert!(result.is_ok(), "run should succeed despite panicking sink");
+
+        let events = good_sink.collected();
+        assert!(
+            !events.is_empty(),
+            "good sink should still receive events after panicking sink"
+        );
+    }
+
+    // Test: integration sequence — RunStarted → StepStarted → StepCompleted → MetricsUpdated → RunCompleted
+    #[test]
+    fn event_sink_integration_sequence() {
+        let sink = VecSink::new();
+        let sink_clone = Arc::clone(&sink);
+
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .event_sink(Box::new(ForwardSink(sink_clone)))
+            .build()
+            .unwrap();
+
+        let def = make_single_step_def();
+        let mut state = make_state_with_persistence("wf");
+        let result = engine.run(&def, &mut state);
+        assert!(result.is_ok(), "run should succeed: {:?}", result);
+
+        let events = sink.collected();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|e| match &e.event {
+                EngineEvent::RunStarted { .. } => "RunStarted",
+                EngineEvent::RunCompleted { .. } => "RunCompleted",
+                EngineEvent::RunResumed { .. } => "RunResumed",
+                EngineEvent::RunCancelled => "RunCancelled",
+                EngineEvent::StepStarted { .. } => "StepStarted",
+                EngineEvent::StepCompleted { .. } => "StepCompleted",
+                EngineEvent::StepRetrying { .. } => "StepRetrying",
+                EngineEvent::GateWaiting { .. } => "GateWaiting",
+                EngineEvent::GateResolved { .. } => "GateResolved",
+                EngineEvent::FanOutItemsCollected { .. } => "FanOutItemsCollected",
+                EngineEvent::FanOutItemStarted { .. } => "FanOutItemStarted",
+                EngineEvent::FanOutItemCompleted { .. } => "FanOutItemCompleted",
+                EngineEvent::MetricsUpdated { .. } => "MetricsUpdated",
+            })
+            .collect();
+
+        assert_eq!(kinds[0], "RunStarted", "first event should be RunStarted");
+        assert!(
+            kinds.contains(&"StepStarted"),
+            "should have StepStarted; got: {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&"StepCompleted"),
+            "should have StepCompleted; got: {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&"MetricsUpdated"),
+            "should have MetricsUpdated; got: {:?}",
+            kinds
+        );
+        let last = kinds.last().unwrap();
+        assert_eq!(*last, "RunCompleted", "last event should be RunCompleted");
+    }
+
+    /// A sink that forwards events to a VecSink behind an Arc.
+    struct ForwardSink(Arc<VecSink>);
+
+    impl EventSink for ForwardSink {
+        fn emit(&self, event: &EngineEventData) {
+            self.0.emit(event);
+        }
     }
 }

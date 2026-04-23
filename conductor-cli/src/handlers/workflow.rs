@@ -683,6 +683,7 @@ pub fn handle_workflow(
                 from_step: from_step.as_deref(),
                 restart,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                event_sinks: vec![],
             };
 
             if restart {
