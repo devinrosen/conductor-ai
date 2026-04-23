@@ -88,7 +88,7 @@ pub fn execute_parallel(
         agent_name: String,
         child_run_id: String,
         step_id: String,
-        dispatch_handle: std::thread::JoinHandle<std::result::Result<ActionOutput, String>>,
+        dispatch_handle: std::thread::JoinHandle<()>,
         thread_shutdown: Arc<AtomicBool>,
         /// Resolved schema for this child (computed at spawn time).
         schema: Option<crate::schema_config::OutputSchema>,
@@ -254,8 +254,7 @@ pub fn execute_parallel(
             let result = registry_clone
                 .dispatch(&params.name, &ectx, &params)
                 .map_err(|e| e.to_string());
-            let _ = outcome_tx.send((child_index, result.clone()));
-            result
+            let _ = outcome_tx.send((child_index, result));
         });
 
         children.push(ParallelChild {
@@ -357,6 +356,36 @@ pub fn execute_parallel(
                         continue;
                     }
                 };
+
+                // Guard: dispatch signalled completion but the DB row is still in a
+                // transient state (race between channel send and DB commit).  Force the run
+                // to failed so it can never remain permanently stuck in Running.
+                if matches!(
+                    run.status,
+                    AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
+                ) {
+                    let fail_msg = "drain completed without result";
+                    tracing::warn!(
+                        "parallel: '{}' still in {:?} after dispatch — applying race guard",
+                        child.agent_name,
+                        run.status,
+                    );
+                    let _ = state
+                        .agent_mgr
+                        .update_run_failed_if_running(&child.child_run_id, fail_msg);
+                    let _ = state.wf_mgr.update_step_status(
+                        &child.step_id,
+                        WorkflowStepStatus::Failed,
+                        Some(&child.child_run_id),
+                        Some(fail_msg),
+                        None,
+                        None,
+                        None,
+                    );
+                    completed.insert(child_idx);
+                    failures += 1;
+                    continue;
+                }
 
                 let succeeded = matches!(
                     (&dispatch_result, &run.status),
@@ -507,6 +536,7 @@ pub fn execute_parallel(
                 None,
                 None,
             );
+            failures += 1;
         }
     }
 
