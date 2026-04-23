@@ -15,6 +15,8 @@ pub mod status;
 pub mod test_helpers;
 pub mod traits;
 pub mod types;
+pub mod workflow_resolver_directory;
+pub mod workflow_resolver_memory;
 
 pub use dsl::ValidationError;
 pub use flow_engine::{EngineBundle, FlowEngine, FlowEngineBuilder};
@@ -22,3 +24,6 @@ pub use traits::action_executor::ActionRegistry;
 pub use traits::gate_resolver::GateResolverRegistry;
 pub use traits::item_provider::ItemProviderRegistry;
 pub use traits::script_env_provider::{NoOpScriptEnvProvider, ScriptEnvProvider};
+pub use traits::workflow_resolver::WorkflowResolver;
+pub use workflow_resolver_directory::DirectoryWorkflowResolver;
+pub use workflow_resolver_memory::InMemoryWorkflowResolver;

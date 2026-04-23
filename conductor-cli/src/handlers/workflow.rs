@@ -622,6 +622,10 @@ pub fn handle_workflow(
                 config.github.apps.keys().cloned().collect();
             let wt_ref = wt_path.clone();
             let repo_ref = repo_path.clone();
+            // TODO(#2349-followup): replace with DirectoryWorkflowResolver from runkon-flow once
+            // conductor-core re-exports runkon_flow::dsl::WorkflowDef (currently the two types are
+            // structurally identical but distinct Rust types — a From impl or re-export is required
+            // before validate_workflows_batch can accept the runkon-flow resolver directly).
             let loader = |name: &str| {
                 conductor_core::workflow::load_workflow_by_name(&wt_ref, &repo_ref, name)
                     .map_err(|e| e.to_string())
