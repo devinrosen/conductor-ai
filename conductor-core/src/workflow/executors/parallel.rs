@@ -1,3 +1,4 @@
+use crate::agent::AgentManager;
 use crate::agent::AgentRunStatus;
 use crate::agent_config::AgentSpec;
 use crate::error::Result;
@@ -8,10 +9,37 @@ use crate::workflow::prompt_builder::{build_agent_prompt, build_variable_map};
 use crate::workflow::run_context::{RunContext, WorktreeRunContext};
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::ContextEntry;
+use crate::workflow::WorkflowManager;
 use crate::workflow_dsl::ParallelNode;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+fn cancel_child(
+    agent_mgr: &AgentManager<'_>,
+    wf_mgr: &WorkflowManager<'_>,
+    run_id: &str,
+    step_id: &str,
+    agent_name: &str,
+    thread_shutdown: &Arc<AtomicBool>,
+    reason: &str,
+) {
+    thread_shutdown.store(true, Ordering::Relaxed);
+    if let Err(e) = agent_mgr.update_run_cancelled(run_id) {
+        tracing::warn!("parallel: failed to cancel run for '{agent_name}': {e}");
+    }
+    if let Err(e) = wf_mgr.update_step_status(
+        step_id,
+        WorkflowStepStatus::Failed,
+        Some(run_id),
+        Some(reason),
+        None,
+        None,
+        None,
+    ) {
+        tracing::warn!("parallel: failed to update step for '{agent_name}': {e}");
+    }
+}
 
 pub fn execute_parallel(
     state: &mut ExecutionState<'_>,
@@ -226,23 +254,7 @@ pub fn execute_parallel(
             let result = registry_clone
                 .dispatch(&params.name, &ectx, &params)
                 .map_err(|e| e.to_string());
-            let result_clone = result
-                .as_ref()
-                .map(|o| ActionOutput {
-                    markers: o.markers.clone(),
-                    context: o.context.clone(),
-                    result_text: o.result_text.clone(),
-                    structured_output: o.structured_output.clone(),
-                    cost_usd: o.cost_usd,
-                    num_turns: o.num_turns,
-                    duration_ms: o.duration_ms,
-                    input_tokens: o.input_tokens,
-                    output_tokens: o.output_tokens,
-                    cache_read_input_tokens: o.cache_read_input_tokens,
-                    cache_creation_input_tokens: o.cache_creation_input_tokens,
-                })
-                .map_err(|e| e.clone());
-            let _ = outcome_tx.send((child_index, result_clone));
+            let _ = outcome_tx.send((child_index, result.clone()));
             result
         });
 
@@ -280,22 +292,15 @@ pub fn execute_parallel(
                 tracing::warn!("parallel: shutdown requested, cancelling remaining agents");
                 for (i, child) in children.iter().enumerate() {
                     if !completed.contains(&i) {
-                        child.thread_shutdown.store(true, Ordering::Relaxed);
-                        let _ = state.agent_mgr.update_run_cancelled(&child.child_run_id);
-                        if let Err(e) = state.wf_mgr.update_step_status(
+                        cancel_child(
+                            &state.agent_mgr,
+                            &state.wf_mgr,
+                            &child.child_run_id,
                             &child.step_id,
-                            WorkflowStepStatus::Failed,
-                            Some(&child.child_run_id),
-                            Some("cancelled: executor shutdown"),
-                            None,
-                            None,
-                            None,
-                        ) {
-                            tracing::warn!(
-                                "parallel: failed to update step for '{}' on shutdown: {e}",
-                                child.agent_name
-                            );
-                        }
+                            &child.agent_name,
+                            &child.thread_shutdown,
+                            "cancelled: executor shutdown",
+                        );
                         completed.insert(i);
                         failures += 1;
                     }
@@ -308,27 +313,15 @@ pub fn execute_parallel(
             tracing::warn!("parallel: timeout reached");
             for (i, child) in children.iter().enumerate() {
                 if !completed.contains(&i) {
-                    child.thread_shutdown.store(true, Ordering::Relaxed);
-                    if let Err(e) = state.agent_mgr.update_run_cancelled(&child.child_run_id) {
-                        tracing::warn!(
-                            "parallel: failed to cancel run for '{}': {e}",
-                            child.agent_name
-                        );
-                    }
-                    if let Err(e) = state.wf_mgr.update_step_status(
+                    cancel_child(
+                        &state.agent_mgr,
+                        &state.wf_mgr,
+                        &child.child_run_id,
                         &child.step_id,
-                        WorkflowStepStatus::Failed,
-                        Some(&child.child_run_id),
-                        Some("timed out"),
-                        None,
-                        None,
-                        None,
-                    ) {
-                        tracing::warn!(
-                            "parallel: failed to update timed-out step for '{}': {e}",
-                            child.agent_name
-                        );
-                    }
+                        &child.agent_name,
+                        &child.thread_shutdown,
+                        "timed out",
+                    );
                     failures += 1;
                     completed.insert(i);
                 }
@@ -471,29 +464,15 @@ pub fn execute_parallel(
                     tracing::warn!("parallel: fail_fast — cancelling remaining");
                     for (j, other) in children.iter().enumerate() {
                         if !completed.contains(&j) {
-                            other.thread_shutdown.store(true, Ordering::Relaxed);
-                            if let Err(e) =
-                                state.agent_mgr.update_run_cancelled(&other.child_run_id)
-                            {
-                                tracing::warn!(
-                                    "parallel: failed to cancel run for '{}': {e}",
-                                    other.agent_name
-                                );
-                            }
-                            if let Err(e) = state.wf_mgr.update_step_status(
+                            cancel_child(
+                                &state.agent_mgr,
+                                &state.wf_mgr,
+                                &other.child_run_id,
                                 &other.step_id,
-                                WorkflowStepStatus::Failed,
-                                Some(&other.child_run_id),
-                                Some("cancelled by fail_fast"),
-                                None,
-                                None,
-                                None,
-                            ) {
-                                tracing::warn!(
-                                    "parallel: failed to update step for '{}': {e}",
-                                    other.agent_name
-                                );
-                            }
+                                &other.agent_name,
+                                &other.thread_shutdown,
+                                "cancelled by fail_fast",
+                            );
                             completed.insert(j);
                             failures += 1;
                         }
