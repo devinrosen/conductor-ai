@@ -88,8 +88,18 @@ pub struct ActionRegistry {
 }
 
 impl ActionRegistry {
-    /// Construct a registry from pre-built maps.
-    pub fn new(
+    /// Construct a registry from pre-built maps (called only by `FlowEngineBuilder`).
+    pub(crate) fn new(
+        named: HashMap<String, Box<dyn ActionExecutor>>,
+        fallback: Option<Box<dyn ActionExecutor>>,
+    ) -> Self {
+        Self { named, fallback }
+    }
+
+    /// Construct a registry for external consumers such as integration-test harnesses.
+    ///
+    /// Production code should use [`FlowEngineBuilder::action`] to register executors.
+    pub fn from_executors(
         named: HashMap<String, Box<dyn ActionExecutor>>,
         fallback: Option<Box<dyn ActionExecutor>>,
     ) -> Self {

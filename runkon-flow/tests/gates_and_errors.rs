@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use runkon_flow::dsl::{ApprovalMode, GateNode, GateType, OnTimeout, WorkflowNode};
+use runkon_flow::dsl::OnTimeout;
 use runkon_flow::status::WorkflowStepStatus;
 use runkon_flow::traits::gate_resolver::{GateContext, GateParams, GatePoll, GateResolver};
 use runkon_flow::traits::persistence::WorkflowPersistence;
@@ -14,7 +14,8 @@ use runkon_flow::FlowEngineBuilder;
 
 use common::{
     call_node, gate_node, make_def, make_def_with_always, make_persistence, make_state,
-    FailingExecutor, ForwardSink, MockExecutor, VecSink,
+    named_executors, timeout_gate, ActionExecutor, FailingExecutor, ForwardSink, MockExecutor,
+    VecSink,
 };
 
 // ---------------------------------------------------------------------------
@@ -86,20 +87,7 @@ fn gate_timeout_fail() {
 
     // timeout_secs = 0 with a very short poll_interval causes the gate to time
     // out after a single poll cycle. on_timeout = Fail so the run fails.
-    let gate = WorkflowNode::Gate(GateNode {
-        name: "approval".to_string(),
-        gate_type: GateType::HumanApproval,
-        prompt: None,
-        min_approvals: 1,
-        approval_mode: ApprovalMode::default(),
-        timeout_secs: 0,
-        on_timeout: OnTimeout::Fail,
-        bot_name: None,
-        quality_gate: None,
-        options: None,
-    });
-
-    let def = make_def("gate-timeout", vec![gate]);
+    let def = make_def("gate-timeout", vec![timeout_gate(OnTimeout::Fail)]);
 
     let persistence = make_persistence();
     let mut state = make_state("gate-timeout", Arc::clone(&persistence), HashMap::new());
@@ -148,20 +136,7 @@ fn gate_timeout_continue_succeeds() {
         .build()
         .expect("engine build failed");
 
-    let gate = WorkflowNode::Gate(GateNode {
-        name: "approval".to_string(),
-        gate_type: GateType::HumanApproval,
-        prompt: None,
-        min_approvals: 1,
-        approval_mode: ApprovalMode::default(),
-        timeout_secs: 0,
-        on_timeout: OnTimeout::Continue,
-        bot_name: None,
-        quality_gate: None,
-        options: None,
-    });
-
-    let def = make_def("gate-timeout-continue", vec![gate]);
+    let def = make_def("gate-timeout-continue", vec![timeout_gate(OnTimeout::Continue)]);
 
     let persistence = make_persistence();
     let mut state = make_state(
@@ -198,12 +173,11 @@ fn step_failure_marks_run_failed() {
     let def = make_def("step-fail", vec![call_node("failing")]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "failing".to_string(),
-        Box::new(FailingExecutor) as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "step-fail",
+        Arc::clone(&persistence),
+        named_executors([Box::new(FailingExecutor) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("step-fail", Arc::clone(&persistence), named);
 
     let result = engine
         .run(&def, &mut state)
@@ -245,17 +219,14 @@ fn always_block_runs_on_failure() {
     );
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "failing".to_string(),
-        Box::new(FailingExecutor) as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "always-fail",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(FailingExecutor) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::new("cleanup")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    named.insert(
-        "cleanup".to_string(),
-        Box::new(MockExecutor::new("cleanup"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-    );
-    let mut state = make_state("always-fail", Arc::clone(&persistence), named);
 
     let result = engine.run(&def, &mut state).expect("run returns Ok");
 
@@ -288,13 +259,13 @@ fn pre_cancelled_token_stops_run() {
     let def = make_def("cancel-test", vec![call_node("should-not-run")]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "should-not-run".to_string(),
-        Box::new(MockExecutor::new("should-not-run"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "cancel-test",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(MockExecutor::new("should-not-run")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    let mut state = make_state("cancel-test", Arc::clone(&persistence), named);
 
     // Cancel before run starts
     state
@@ -332,13 +303,11 @@ fn channel_event_sink_records_events_in_order() {
     let def = make_def("channel-sink", vec![call_node("worker")]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "worker".to_string(),
-        Box::new(MockExecutor::new("worker"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "channel-sink",
+        Arc::clone(&persistence),
+        named_executors([Box::new(MockExecutor::new("worker")) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("channel-sink", Arc::clone(&persistence), named);
 
     engine.run(&def, &mut state).expect("run should succeed");
 
@@ -380,17 +349,14 @@ fn fail_fast_stops_after_first_failure() {
     );
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "failing".to_string(),
-        Box::new(FailingExecutor) as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "fail-fast",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(FailingExecutor) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::new("subsequent")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    named.insert(
-        "subsequent".to_string(),
-        Box::new(MockExecutor::new("subsequent"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-    );
-    let mut state = make_state("fail-fast", Arc::clone(&persistence), named);
     // fail_fast = true is the default
     state.exec_config = WorkflowExecConfig {
         fail_fast: true,
@@ -431,13 +397,11 @@ fn event_sink_captures_step_events() {
     let def = make_def("step-events", vec![call_node("step-a")]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "step-a".to_string(),
-        Box::new(MockExecutor::new("step-a"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "step-events",
+        Arc::clone(&persistence),
+        named_executors([Box::new(MockExecutor::new("step-a")) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("step-events", Arc::clone(&persistence), named);
 
     engine.run(&def, &mut state).expect("run should succeed");
 

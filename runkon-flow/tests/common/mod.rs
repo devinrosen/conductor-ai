@@ -12,8 +12,9 @@ use runkon_flow::engine::{ExecutionState, WorktreeContext};
 use runkon_flow::engine_error::EngineError;
 use runkon_flow::events::{EngineEventData, EventSink};
 use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
+pub use runkon_flow::traits::action_executor::ActionExecutor;
 use runkon_flow::traits::action_executor::{
-    ActionExecutor, ActionOutput, ActionParams, ActionRegistry, ExecutionContext,
+    ActionOutput, ActionParams, ActionRegistry, ExecutionContext,
 };
 use runkon_flow::traits::persistence::{NewRun, WorkflowPersistence};
 use runkon_flow::traits::script_env_provider::NoOpScriptEnvProvider;
@@ -156,7 +157,7 @@ pub fn make_state(
 
     ExecutionState {
         persistence: Arc::clone(&persistence) as Arc<dyn WorkflowPersistence>,
-        action_registry: Arc::new(ActionRegistry::new(named_executors, None)),
+        action_registry: Arc::new(ActionRegistry::from_executors(named_executors, None)),
         script_env_provider: Arc::new(NoOpScriptEnvProvider),
         workflow_run_id: run.id,
         workflow_name: wf_name.to_string(),
@@ -267,4 +268,33 @@ pub fn gate_node(name: &str) -> WorkflowNode {
         quality_gate: None,
         options: None,
     })
+}
+
+/// Build a `HumanApproval` gate named `"approval"` with `timeout_secs = 0`.
+/// Used by the two gate-timeout tests whose only difference is `on_timeout`.
+pub fn timeout_gate(on_timeout: OnTimeout) -> WorkflowNode {
+    WorkflowNode::Gate(GateNode {
+        name: "approval".to_string(),
+        gate_type: GateType::HumanApproval,
+        prompt: None,
+        min_approvals: 1,
+        approval_mode: ApprovalMode::default(),
+        timeout_secs: 0,
+        on_timeout,
+        bot_name: None,
+        quality_gate: None,
+        options: None,
+    })
+}
+
+/// Build a named-executor map keyed by each executor's `name()`.
+///
+/// Eliminates the repeated `HashMap::new()` + multiple `insert()` pattern in tests.
+pub fn named_executors(
+    executors: impl IntoIterator<Item = Box<dyn ActionExecutor>>,
+) -> HashMap<String, Box<dyn ActionExecutor>> {
+    executors
+        .into_iter()
+        .map(|e| (e.name().to_string(), e))
+        .collect()
 }

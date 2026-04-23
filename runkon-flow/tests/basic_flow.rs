@@ -8,8 +8,8 @@ use runkon_flow::traits::persistence::WorkflowPersistence;
 use runkon_flow::FlowEngineBuilder;
 
 use common::{
-    call_node, make_def, make_def_with_always, make_persistence, make_state, ForwardSink,
-    MockExecutor, VecSink,
+    call_node, make_def, make_def_with_always, make_persistence, make_state, named_executors,
+    ActionExecutor, ForwardSink, MockExecutor, VecSink,
 };
 
 // ---------------------------------------------------------------------------
@@ -37,13 +37,11 @@ fn parse_validate_run_single_step() {
     engine.validate(&def).expect("workflow should be valid");
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "my-agent".to_string(),
-        Box::new(MockExecutor::new("my-agent"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "single-step",
+        Arc::clone(&persistence),
+        named_executors([Box::new(MockExecutor::new("my-agent")) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("single-step", Arc::clone(&persistence), named);
 
     let result = engine.run(&def, &mut state).expect("run should succeed");
 
@@ -78,23 +76,15 @@ fn multi_step_sequential_all_succeed() {
     );
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "alpha".to_string(),
-        Box::new(MockExecutor::new("alpha"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "multi-step",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(MockExecutor::new("alpha")) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::new("beta")) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::new("gamma")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    named.insert(
-        "beta".to_string(),
-        Box::new(MockExecutor::new("beta"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-    );
-    named.insert(
-        "gamma".to_string(),
-        Box::new(MockExecutor::new("gamma"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-    );
-    let mut state = make_state("multi-step", Arc::clone(&persistence), named);
 
     let result = engine.run(&def, &mut state).expect("run should succeed");
 
@@ -155,18 +145,14 @@ fn persistence_step_statuses_after_run() {
     let def = make_def("two-step", vec![call_node("step-a"), call_node("step-b")]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "step-a".to_string(),
-        Box::new(MockExecutor::new("step-a"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "two-step",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(MockExecutor::new("step-a")) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::new("step-b")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    named.insert(
-        "step-b".to_string(),
-        Box::new(MockExecutor::new("step-b"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-    );
-    let mut state = make_state("two-step", Arc::clone(&persistence), named);
 
     let result = engine.run(&def, &mut state).expect("run should succeed");
 
@@ -208,18 +194,14 @@ fn always_block_runs_on_success() {
     );
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "work".to_string(),
-        Box::new(MockExecutor::new("work"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "always-success",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(MockExecutor::new("work")) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::new("cleanup")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    named.insert(
-        "cleanup".to_string(),
-        Box::new(MockExecutor::new("cleanup"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-    );
-    let mut state = make_state("always-success", Arc::clone(&persistence), named);
 
     let result = engine.run(&def, &mut state).expect("run should succeed");
 
@@ -254,13 +236,11 @@ fn event_sink_captures_run_lifecycle() {
     let def = make_def("event-test", vec![call_node("worker")]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "worker".to_string(),
-        Box::new(MockExecutor::new("worker"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "event-test",
+        Arc::clone(&persistence),
+        named_executors([Box::new(MockExecutor::new("worker")) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("event-test", Arc::clone(&persistence), named);
 
     engine.run(&def, &mut state).expect("run should succeed");
 

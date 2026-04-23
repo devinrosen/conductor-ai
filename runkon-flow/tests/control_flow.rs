@@ -1,13 +1,12 @@
 mod common;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use runkon_flow::dsl::{Condition, IfNode, UnlessNode, WorkflowNode};
 use runkon_flow::traits::persistence::WorkflowPersistence;
 use runkon_flow::FlowEngineBuilder;
 
-use common::{call_node, make_def, make_persistence, make_state, MockExecutor};
+use common::{call_node, make_def, make_persistence, make_state, named_executors, ActionExecutor, MockExecutor};
 
 // ---------------------------------------------------------------------------
 // if — condition taken (BoolInput = "true")
@@ -30,13 +29,11 @@ fn if_condition_taken_runs_body() {
     let def = make_def("if-taken", vec![if_node]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "inner-step".to_string(),
-        Box::new(MockExecutor::new("inner-step"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "if-taken",
+        Arc::clone(&persistence),
+        named_executors([Box::new(MockExecutor::new("inner-step")) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("if-taken", Arc::clone(&persistence), named);
     state
         .inputs
         .insert("run_it".to_string(), "true".to_string());
@@ -73,13 +70,11 @@ fn if_condition_not_taken_skips_body() {
     let def = make_def("if-not-taken", vec![if_node]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "inner-step".to_string(),
-        Box::new(MockExecutor::new("inner-step"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "if-not-taken",
+        Arc::clone(&persistence),
+        named_executors([Box::new(MockExecutor::new("inner-step")) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("if-not-taken", Arc::clone(&persistence), named);
     state
         .inputs
         .insert("run_it".to_string(), "false".to_string());
@@ -119,13 +114,13 @@ fn unless_condition_false_runs_body() {
     let def = make_def("unless-false", vec![unless_node]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "fallback-step".to_string(),
-        Box::new(MockExecutor::new("fallback-step"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "unless-false",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(MockExecutor::new("fallback-step")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    let mut state = make_state("unless-false", Arc::clone(&persistence), named);
     state
         .inputs
         .insert("skip_me".to_string(), "false".to_string());
@@ -165,13 +160,13 @@ fn unless_condition_true_skips_body() {
     let def = make_def("unless-true", vec![unless_node]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "fallback-step".to_string(),
-        Box::new(MockExecutor::new("fallback-step"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "unless-true",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(MockExecutor::new("fallback-step")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    let mut state = make_state("unless-true", Arc::clone(&persistence), named);
     state
         .inputs
         .insert("skip_me".to_string(), "true".to_string());
@@ -216,18 +211,14 @@ fn if_step_marker_condition_taken() {
     let def = make_def("if-marker", vec![call_node("detector"), if_node]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "detector".to_string(),
-        Box::new(MockExecutor::with_markers("detector", &["has_issues"]))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "if-marker",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(MockExecutor::with_markers("detector", &["has_issues"])) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::new("reporter")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    named.insert(
-        "reporter".to_string(),
-        Box::new(MockExecutor::new("reporter"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-    );
-    let mut state = make_state("if-marker", Arc::clone(&persistence), named);
 
     let result = engine.run(&def, &mut state).expect("run should succeed");
 
@@ -267,18 +258,14 @@ fn if_step_marker_condition_not_met_skips_body() {
     let def = make_def("if-marker-false", vec![call_node("detector"), if_node]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "detector".to_string(),
-        Box::new(MockExecutor::new("detector"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "if-marker-false",
+        Arc::clone(&persistence),
+        named_executors([
+            Box::new(MockExecutor::new("detector")) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::new("reporter")) as Box<dyn ActionExecutor>,
+        ]),
     );
-    named.insert(
-        "reporter".to_string(),
-        Box::new(MockExecutor::new("reporter"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-    );
-    let mut state = make_state("if-marker-false", Arc::clone(&persistence), named);
 
     let result = engine.run(&def, &mut state).expect("run should succeed");
 
@@ -324,13 +311,11 @@ fn nested_if_both_conditions_true() {
     let def = make_def("nested-if", vec![outer_if]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "deep-step".to_string(),
-        Box::new(MockExecutor::new("deep-step"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "nested-if",
+        Arc::clone(&persistence),
+        named_executors([Box::new(MockExecutor::new("deep-step")) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("nested-if", Arc::clone(&persistence), named);
     state.inputs.insert("outer".to_string(), "true".to_string());
     state.inputs.insert("inner".to_string(), "true".to_string());
 
@@ -372,13 +357,11 @@ fn nested_if_outer_false_skips_inner() {
     let def = make_def("nested-if-outer-false", vec![outer_if]);
 
     let persistence = make_persistence();
-    let mut named = HashMap::new();
-    named.insert(
-        "deep-step".to_string(),
-        Box::new(MockExecutor::new("deep-step"))
-            as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+    let mut state = make_state(
+        "nested-if-outer-false",
+        Arc::clone(&persistence),
+        named_executors([Box::new(MockExecutor::new("deep-step")) as Box<dyn ActionExecutor>]),
     );
-    let mut state = make_state("nested-if-outer-false", Arc::clone(&persistence), named);
     state
         .inputs
         .insert("outer".to_string(), "false".to_string());
