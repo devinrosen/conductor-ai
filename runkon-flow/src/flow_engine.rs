@@ -8,10 +8,9 @@ use crate::traits::action_executor::{ActionExecutor, ActionRegistry};
 use crate::traits::gate_resolver::{GateResolver, GateResolverRegistry};
 use crate::traits::item_provider::{ItemProvider, ItemProviderRegistry};
 use crate::traits::script_env_provider::{NoOpScriptEnvProvider, ScriptEnvProvider};
+use crate::traits::workflow_resolver::WorkflowResolver;
 use crate::types::WorkflowResult;
-
-/// Closure type for loading a sub-workflow by name — placeholder until #2349.
-type WorkflowLoaderFn = dyn Fn(&str) -> std::result::Result<WorkflowDef, String> + Send + Sync;
+use crate::workflow_resolver_directory::DirectoryWorkflowResolver;
 
 // ---------------------------------------------------------------------------
 // EngineBundle (kept for source compatibility)
@@ -40,8 +39,7 @@ pub struct FlowEngine {
     /// Held for future use when FlowEngine constructs ExecutionState directly.
     #[allow(dead_code)]
     pub(crate) script_env_provider: Arc<dyn ScriptEnvProvider>,
-    // TODO(#2349): replace with WorkflowResolver trait
-    pub(crate) workflow_loader: Option<Arc<WorkflowLoaderFn>>,
+    pub(crate) workflow_resolver: Option<Arc<dyn WorkflowResolver>>,
 }
 
 impl FlowEngine {
@@ -115,10 +113,10 @@ impl FlowEngine {
     ) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
 
-        // Cycle / depth detection — only when a workflow loader is configured.
-        // Without a loader we cannot traverse sub-workflows, so we degrade gracefully.
-        if let Some(loader) = &self.workflow_loader {
-            let loader_arc = Arc::clone(loader);
+        // Cycle / depth detection — only when a workflow resolver is configured.
+        // Without a resolver we cannot traverse sub-workflows, so we degrade gracefully.
+        if let Some(resolver) = &self.workflow_resolver {
+            let r = Arc::clone(resolver);
             let root_name = def.name.clone();
             let root_def_clone = def.clone();
             // Inject the root def so detect_workflow_cycles can resolve it by name.
@@ -126,7 +124,9 @@ impl FlowEngine {
                 if name == root_name.as_str() {
                     Ok(root_def_clone.clone())
                 } else {
-                    loader_arc(name)
+                    r.resolve(name)
+                        .map(|arc_def| (*arc_def).clone())
+                        .map_err(|e| e.to_string())
                 }
             };
             if let Err(cycle_msg) = detect_workflow_cycles(&def.name, &cycle_loader) {
@@ -142,7 +142,7 @@ impl FlowEngine {
             action_registry,
             item_provider_registry,
             gate_resolver_registry,
-            &self.workflow_loader,
+            &self.workflow_resolver,
             &def.body,
             &mut errors,
             &mut visited,
@@ -151,7 +151,7 @@ impl FlowEngine {
             action_registry,
             item_provider_registry,
             gate_resolver_registry,
-            &self.workflow_loader,
+            &self.workflow_resolver,
             &def.always,
             &mut errors,
             &mut visited,
@@ -169,7 +169,7 @@ fn validate_nodes_impl(
     action_registry: &ActionRegistry,
     item_provider_registry: &ItemProviderRegistry,
     gate_resolver_registry: &GateResolverRegistry,
-    workflow_loader: &Option<Arc<WorkflowLoaderFn>>,
+    workflow_resolver: &Option<Arc<dyn WorkflowResolver>>,
     nodes: &[WorkflowNode],
     errors: &mut Vec<ValidationError>,
     visited: &mut HashSet<String>,
@@ -245,15 +245,15 @@ fn validate_nodes_impl(
             WorkflowNode::CallWorkflow(n) => {
                 if !visited.contains(&n.workflow) {
                     visited.insert(n.workflow.clone());
-                    if let Some(loader) = workflow_loader {
-                        match loader(&n.workflow) {
+                    if let Some(resolver) = workflow_resolver {
+                        match resolver.resolve(&n.workflow).map(|d| (*d).clone()) {
                             Ok(sub_def) => {
                                 let mut sub_errors = Vec::new();
                                 validate_nodes_impl(
                                     action_registry,
                                     item_provider_registry,
                                     gate_resolver_registry,
-                                    workflow_loader,
+                                    workflow_resolver,
                                     &sub_def.body,
                                     &mut sub_errors,
                                     visited,
@@ -262,7 +262,7 @@ fn validate_nodes_impl(
                                     action_registry,
                                     item_provider_registry,
                                     gate_resolver_registry,
-                                    workflow_loader,
+                                    workflow_resolver,
                                     &sub_def.always,
                                     &mut sub_errors,
                                     visited,
@@ -297,7 +297,7 @@ fn validate_nodes_impl(
                     action_registry,
                     item_provider_registry,
                     gate_resolver_registry,
-                    workflow_loader,
+                    workflow_resolver,
                     &n.body,
                     errors,
                     visited,
@@ -308,7 +308,7 @@ fn validate_nodes_impl(
                     action_registry,
                     item_provider_registry,
                     gate_resolver_registry,
-                    workflow_loader,
+                    workflow_resolver,
                     &n.body,
                     errors,
                     visited,
@@ -319,7 +319,7 @@ fn validate_nodes_impl(
                     action_registry,
                     item_provider_registry,
                     gate_resolver_registry,
-                    workflow_loader,
+                    workflow_resolver,
                     &n.body,
                     errors,
                     visited,
@@ -330,7 +330,7 @@ fn validate_nodes_impl(
                     action_registry,
                     item_provider_registry,
                     gate_resolver_registry,
-                    workflow_loader,
+                    workflow_resolver,
                     &n.body,
                     errors,
                     visited,
@@ -341,7 +341,7 @@ fn validate_nodes_impl(
                     action_registry,
                     item_provider_registry,
                     gate_resolver_registry,
-                    workflow_loader,
+                    workflow_resolver,
                     &n.body,
                     errors,
                     visited,
@@ -352,7 +352,7 @@ fn validate_nodes_impl(
                     action_registry,
                     item_provider_registry,
                     gate_resolver_registry,
-                    workflow_loader,
+                    workflow_resolver,
                     &n.body,
                     errors,
                     visited,
@@ -378,7 +378,7 @@ pub struct FlowEngineBuilder {
     script_env_provider: Box<dyn ScriptEnvProvider>,
     item_providers: ItemProviderRegistry,
     gate_resolvers: GateResolverRegistry,
-    workflow_loader: Option<Arc<WorkflowLoaderFn>>,
+    workflow_resolver: Option<Box<dyn WorkflowResolver>>,
 }
 
 impl FlowEngineBuilder {
@@ -389,7 +389,7 @@ impl FlowEngineBuilder {
             script_env_provider: Box::new(NoOpScriptEnvProvider),
             item_providers: ItemProviderRegistry::new(),
             gate_resolvers: GateResolverRegistry::new(),
-            workflow_loader: None,
+            workflow_resolver: None,
         }
     }
 
@@ -434,15 +434,20 @@ impl FlowEngineBuilder {
         self
     }
 
-    /// Set the workflow loader for sub-workflow validation and cycle detection.
+    /// Convenience: register a `DirectoryWorkflowResolver` rooted at `path`.
     ///
-    /// When present, `FlowEngine::validate()` uses it to load and recursively validate
-    /// `call workflow` nodes. TODO(#2349): replace with `WorkflowResolver` trait.
-    pub fn workflow_loader<F>(mut self, f: F) -> Self
-    where
-        F: Fn(&str) -> std::result::Result<WorkflowDef, String> + Send + Sync + 'static,
-    {
-        self.workflow_loader = Some(Arc::new(f));
+    /// `FlowEngine::validate()` will read `<path>/<name>.wf` on each `call workflow`
+    /// node it encounters. Re-reads on every call so hot-reload is preserved.
+    pub fn workflow_dir(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.workflow_resolver = Some(Box::new(DirectoryWorkflowResolver::new(path)));
+        self
+    }
+
+    /// Set a custom `WorkflowResolver` for sub-workflow validation and cycle detection.
+    ///
+    /// Overrides any previous `.workflow_dir()` call.
+    pub fn workflow_resolver(mut self, resolver: Box<dyn WorkflowResolver>) -> Self {
+        self.workflow_resolver = Some(resolver);
         self
     }
 
@@ -453,7 +458,7 @@ impl FlowEngineBuilder {
             item_provider_registry: self.item_providers,
             gate_resolver_registry: self.gate_resolvers,
             script_env_provider: Arc::from(self.script_env_provider),
-            workflow_loader: self.workflow_loader,
+            workflow_resolver: self.workflow_resolver.map(Arc::from),
         })
     }
 }
@@ -477,6 +482,7 @@ mod tests {
     use crate::traits::gate_resolver::{GateContext, GateParams, GatePoll};
     use crate::traits::item_provider::{FanOutItem, ProviderContext};
     use crate::traits::run_context::RunContext;
+    use crate::workflow_resolver_memory::InMemoryWorkflowResolver;
     use std::collections::HashMap;
 
     // --- test executors / providers / resolvers ---
@@ -806,13 +812,9 @@ mod tests {
     fn validate_sub_workflow_errors_have_path_prefix() {
         let sub_def = make_def("sub_wf", vec![call_node("missing_in_sub")]);
         let engine = FlowEngineBuilder::new()
-            .workflow_loader(move |name| {
-                if name == "sub_wf" {
-                    Ok(sub_def.clone())
-                } else {
-                    Err(format!("not found: {name}"))
-                }
-            })
+            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([
+                ("sub_wf", sub_def),
+            ])))
             .build()
             .unwrap();
 
@@ -856,15 +858,10 @@ mod tests {
                 bot_name: None,
             })],
         );
-        let cycle_def_clone = cycle_def.clone();
         let engine = FlowEngineBuilder::new()
-            .workflow_loader(move |name| {
-                if name == "cycle_wf" {
-                    Ok(cycle_def_clone.clone())
-                } else {
-                    Err(format!("not found: {name}"))
-                }
-            })
+            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([
+                ("cycle_wf", cycle_def.clone()),
+            ])))
             .build()
             .unwrap();
 
@@ -875,6 +872,64 @@ mod tests {
                 .any(|e| e.message.contains("Circular") || e.message.contains("cycle")),
             "cycle detection should produce an error; got: {:?}",
             errors
+        );
+    }
+
+    // AC-new-1: WorkflowNotFound error when resolver misses a sub-workflow
+    #[test]
+    fn resolver_returns_not_found_error_for_missing_sub_workflow() {
+        let engine = FlowEngineBuilder::new()
+            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new(
+                [] as [(String, WorkflowDef); 0],
+            )))
+            .build()
+            .unwrap();
+
+        let root_def = make_def(
+            "root",
+            vec![WorkflowNode::CallWorkflow(CallWorkflowNode {
+                workflow: "missing_sub".to_string(),
+                inputs: HashMap::new(),
+                retries: 0,
+                on_fail: None,
+                bot_name: None,
+            })],
+        );
+
+        let errors = engine.validate(&root_def).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.message.contains("missing_sub")),
+            "error should mention the missing sub-workflow name; got: {:?}",
+            errors
+        );
+    }
+
+    // AC-new-2: InMemoryWorkflowResolver alone (no filesystem) is sufficient
+    #[test]
+    fn inmemory_resolver_sufficient_for_full_validation() {
+        let sub_def = make_def("sub_wf", vec![call_node("alpha")]);
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .workflow_resolver(Box::new(InMemoryWorkflowResolver::new([
+                ("sub_wf", sub_def),
+            ])))
+            .build()
+            .unwrap();
+
+        let root_def = make_def(
+            "root",
+            vec![WorkflowNode::CallWorkflow(CallWorkflowNode {
+                workflow: "sub_wf".to_string(),
+                inputs: HashMap::new(),
+                retries: 0,
+                on_fail: None,
+                bot_name: None,
+            })],
+        );
+
+        assert!(
+            engine.validate(&root_def).is_ok(),
+            "InMemoryWorkflowResolver alone should be sufficient for full validation"
         );
     }
 

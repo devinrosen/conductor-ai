@@ -12,4 +12,6 @@ pub enum EngineError {
     Persistence(String),
     #[error("workflow error: {0}")]
     Workflow(String),
+    #[error("workflow not found: {0}")]
+    WorkflowNotFound(String),
 }
