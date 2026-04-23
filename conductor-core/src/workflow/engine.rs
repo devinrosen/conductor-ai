@@ -158,6 +158,9 @@ pub(super) struct ExecutionState<'a> {
     pub action_registry: std::sync::Arc<crate::workflow::action_executor::ActionRegistry>,
     /// Event sinks — slice shared cheaply across sub-workflow states.
     pub event_sinks: std::sync::Arc<[std::sync::Arc<dyn runkon_flow::events::EventSink>]>,
+    /// Reason the run was cancelled — set when cancellation is detected and
+    /// consumed in run_workflow_engine to emit a precise RunCancelled event.
+    pub cancel_reason: Option<runkon_flow::CancellationReason>,
 }
 
 impl ExecutionState<'_> {
@@ -561,6 +564,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
         action_registry: std::sync::Arc::new(build_default_action_registry(config)),
         event_sinks: std::sync::Arc::from(input.exec_config.event_sinks.clone()),
+        cancel_reason: None,
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -704,10 +708,14 @@ pub(super) fn run_workflow_engine(
             body_error.as_deref(),
         )?;
         tracing::warn!("Workflow '{}' was cancelled", workflow.name);
+        let cancel_reason = state
+            .cancel_reason
+            .take()
+            .unwrap_or(runkon_flow::CancellationReason::UserRequested(None));
         emit_event(
             state,
             runkon_flow::events::EngineEvent::RunCancelled {
-                reason: runkon_flow::CancellationReason::UserRequested(None),
+                reason: cancel_reason,
             },
         );
 
@@ -1212,6 +1220,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
         action_registry: std::sync::Arc::new(build_default_action_registry(config)),
         event_sinks: std::sync::Arc::from(input.event_sinks.clone()),
+        cancel_reason: None,
     };
 
     run_workflow_engine(&mut state, &workflow)
@@ -1261,9 +1270,9 @@ pub(super) fn execute_nodes(
                     "Workflow run {} cancelled externally, stopping execution",
                     state.workflow_run_id
                 );
-                return Err(ConductorError::Workflow(
-                    "Workflow run cancelled".to_string(),
-                ));
+                state.cancel_reason =
+                    Some(runkon_flow::CancellationReason::UserRequested(None));
+                return Err(ConductorError::WorkflowCancelled);
             }
             Ok(false) => {}
             Err(e) => {

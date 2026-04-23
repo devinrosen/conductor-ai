@@ -719,7 +719,10 @@ pub fn handle_workflow(
             let wf_mgr = WorkflowManager::new(conn);
             match wf_mgr.cancel_run(&id, "Cancelled by user") {
                 Ok(()) => println!("Workflow run {id} cancelled."),
-                Err(e) => eprintln!("Failed to cancel workflow run {id}: {e}"),
+                Err(e) => {
+                    eprintln!("Failed to cancel workflow run {id}: {e}");
+                    std::process::exit(1);
+                }
             }
         }
         WorkflowCommands::GateApprove { run_id } => {

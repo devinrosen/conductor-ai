@@ -35,6 +35,17 @@ pub struct EngineBundle {
 // FlowEngine
 // ---------------------------------------------------------------------------
 
+/// All per-run state needed by `cancel_run()` and `Drop`. Stored atomically in
+/// a single `Mutex<HashMap>` so register/deregister/drain are each one lock.
+struct ActiveRunEntry {
+    token: CancellationToken,
+    shutdown: Arc<AtomicBool>,
+    persistence: Arc<dyn WorkflowPersistence>,
+    registry: Arc<ActionRegistry>,
+    /// (executor_label, step_id) of the step currently in flight, if any.
+    exec_info: Arc<Mutex<Option<(String, String)>>>,
+}
+
 /// The primary harness for running and validating workflows.
 ///
 /// Produced by [`FlowEngineBuilder::build()`].
@@ -47,12 +58,9 @@ pub struct FlowEngine {
     pub(crate) script_env_provider: Arc<dyn ScriptEnvProvider>,
     pub(crate) workflow_resolver: Option<Arc<dyn WorkflowResolver>>,
     pub(crate) event_sinks: Vec<Arc<dyn EventSink>>,
-    /// Active run tokens indexed by run_id. Protected by Mutex so cancel_run()
-    /// can be called from any thread while run() is blocking on another.
-    active_tokens: Mutex<HashMap<String, CancellationToken>>,
-    /// Per-run shutdown flags (same Arc as ExecutionState.exec_config.shutdown).
-    /// Set to `true` by cancel_run() so in-flight executors stop promptly.
-    active_shutdowns: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// All per-run cancellation state in a single map so register/deregister
+    /// are atomic (one lock covers token + shutdown + persistence + registry).
+    active_runs: Mutex<HashMap<String, ActiveRunEntry>>,
 }
 
 impl FlowEngine {
@@ -123,33 +131,29 @@ impl FlowEngine {
             .get_or_insert_with(|| Arc::new(AtomicBool::new(false)))
             .clone();
 
-        // Register the run's cancellation token and shutdown arc so cancel_run() can signal both.
+        // Register all per-run cancellation state in a single lock so cancel_run()
+        // and Drop each see a consistent snapshot.
         let run_id = state.workflow_run_id.clone();
         {
-            let mut tokens = self.active_tokens.lock().unwrap_or_else(|e| e.into_inner());
-            tokens.insert(run_id.clone(), state.cancellation.clone());
-        }
-        {
-            let mut shutdowns = self
-                .active_shutdowns
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            shutdowns.insert(run_id.clone(), shutdown_arc);
+            let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.insert(
+                run_id.clone(),
+                ActiveRunEntry {
+                    token: state.cancellation.clone(),
+                    shutdown: shutdown_arc,
+                    persistence: Arc::clone(&state.persistence),
+                    registry: Arc::clone(&state.action_registry),
+                    exec_info: Arc::clone(&state.current_execution_id),
+                },
+            );
         }
 
         let result = run_workflow_engine(state, def);
 
         // Deregister on completion regardless of outcome.
         {
-            let mut tokens = self.active_tokens.lock().unwrap_or_else(|e| e.into_inner());
-            tokens.remove(&run_id);
-        }
-        {
-            let mut shutdowns = self
-                .active_shutdowns
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            shutdowns.remove(&run_id);
+            let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.remove(&run_id);
         }
 
         result
@@ -166,19 +170,28 @@ impl FlowEngine {
         &self,
         run_id: &str,
         reason: CancellationReason,
-        persistence: &dyn WorkflowPersistence,
     ) -> crate::engine_error::Result<()> {
-        // Signal the in-memory token and the executor shutdown flag.
-        let token = {
-            let tokens = self.active_tokens.lock().unwrap_or_else(|e| e.into_inner());
-            tokens.get(run_id).cloned()
+        // Pull all per-run state out in a single lock.
+        let entry = {
+            let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.get(run_id).map(|e| {
+                (
+                    e.token.clone(),
+                    Arc::clone(&e.shutdown),
+                    Arc::clone(&e.persistence),
+                    Arc::clone(&e.registry),
+                    Arc::clone(&e.exec_info),
+                )
+            })
         };
-        let shutdown = {
-            let shutdowns = self
-                .active_shutdowns
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            shutdowns.get(run_id).cloned()
+
+        let (token, shutdown, persistence, registry, exec_info) = match entry {
+            Some(e) => e,
+            None => {
+                return Err(EngineError::Workflow(format!(
+                    "cancel_run: run '{run_id}' is not active in this engine instance"
+                )))
+            }
         };
 
         // Mark DB as Cancelling so cross-process engines also observe the signal.
@@ -189,19 +202,24 @@ impl FlowEngine {
         }
 
         // Set the executor shutdown flag so the in-flight step stops promptly.
-        if let Some(ref arc) = shutdown {
-            arc.store(true, Ordering::SeqCst);
+        shutdown.store(true, Ordering::SeqCst);
+
+        // Signal the cancellation token so the engine halts at the next step boundary.
+        token.cancel(reason);
+
+        // Fire-and-forget: call executor.cancel() on the currently running step, if any.
+        let exec_snap = exec_info.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some((exec_label, step_id)) = exec_snap {
+            std::thread::spawn(move || {
+                if let Err(e) = registry.cancel(&exec_label, &step_id) {
+                    tracing::warn!(
+                        "cancel_run: executor.cancel() for '{exec_label}' step '{step_id}' failed: {e}"
+                    );
+                }
+            });
         }
 
-        match token {
-            Some(t) => {
-                t.cancel(reason);
-                Ok(())
-            }
-            None => Err(EngineError::Workflow(format!(
-                "cancel_run: run '{run_id}' is not active in this engine instance"
-            ))),
-        }
+        Ok(())
     }
 
     /// Inner validation implementation. Accepts explicit registry references so
@@ -572,8 +590,7 @@ impl FlowEngineBuilder {
             script_env_provider: Arc::from(self.script_env_provider),
             workflow_resolver: self.workflow_resolver.map(Arc::from),
             event_sinks: self.event_sinks,
-            active_tokens: Mutex::new(HashMap::new()),
-            active_shutdowns: Mutex::new(HashMap::new()),
+            active_runs: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -586,22 +603,13 @@ impl Default for FlowEngineBuilder {
 
 impl Drop for FlowEngine {
     fn drop(&mut self) {
-        let tokens: Vec<CancellationToken> = {
-            let mut guard = self.active_tokens.lock().unwrap_or_else(|e| e.into_inner());
-            guard.drain().map(|(_, t)| t).collect()
+        let entries: Vec<ActiveRunEntry> = {
+            let mut guard = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            guard.drain().map(|(_, e)| e).collect()
         };
-        for token in tokens {
-            token.cancel(CancellationReason::EngineShutdown);
-        }
-        let shutdowns: Vec<Arc<AtomicBool>> = {
-            let mut guard = self
-                .active_shutdowns
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            guard.drain().map(|(_, a)| a).collect()
-        };
-        for arc in shutdowns {
-            arc.store(true, Ordering::SeqCst);
+        for entry in entries {
+            entry.shutdown.store(true, Ordering::SeqCst);
+            entry.token.cancel(CancellationReason::EngineShutdown);
         }
     }
 }
@@ -1513,24 +1521,26 @@ mod tests {
 
         let engine = FlowEngineBuilder::new().build().unwrap();
 
-        // Register a dummy token so cancel_run finds it.
+        // Register a dummy active run entry so cancel_run finds it.
         {
-            let mut tokens = engine
-                .active_tokens
+            let mut runs = engine
+                .active_runs
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            tokens.insert(
+            runs.insert(
                 run.id.clone(),
-                crate::cancellation::CancellationToken::new(),
+                ActiveRunEntry {
+                    token: crate::cancellation::CancellationToken::new(),
+                    shutdown: Arc::new(AtomicBool::new(false)),
+                    persistence: Arc::clone(&persistence) as Arc<dyn WorkflowPersistence>,
+                    registry: Arc::new(ActionRegistry::new(HashMap::new(), None)),
+                    exec_info: Arc::new(Mutex::new(None)),
+                },
             );
         }
 
         engine
-            .cancel_run(
-                &run.id,
-                CancellationReason::UserRequested(None),
-                &*persistence,
-            )
+            .cancel_run(&run.id, CancellationReason::UserRequested(None))
             .unwrap();
 
         let updated = persistence.get_run(&run.id).unwrap().unwrap();
@@ -1544,14 +1554,8 @@ mod tests {
     // AC: cancel_run returns Err when run is not active in this engine instance.
     #[test]
     fn cancel_run_returns_err_for_unknown_run() {
-        use crate::persistence_memory::InMemoryWorkflowPersistence;
-        let persistence = InMemoryWorkflowPersistence::new();
         let engine = FlowEngineBuilder::new().build().unwrap();
-        let result = engine.cancel_run(
-            "nonexistent-run",
-            CancellationReason::UserRequested(None),
-            &persistence,
-        );
+        let result = engine.cancel_run("nonexistent-run", CancellationReason::UserRequested(None));
         assert!(result.is_err(), "cancel_run on unknown run must return Err");
     }
 

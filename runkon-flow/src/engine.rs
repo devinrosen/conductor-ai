@@ -97,9 +97,10 @@ pub struct ExecutionState {
     pub event_sinks: Arc<[Arc<dyn EventSink>]>,
     /// Cancellation token for this run. Checked at each step boundary.
     pub cancellation: CancellationToken,
-    /// The step_id of the currently executing action, if any.
-    /// Updated by execute_call_inner before dispatch; read by cancel_run().
-    pub current_execution_id: Arc<Mutex<Option<String>>>,
+    /// The executor label and step_id of the currently executing action, if any.
+    /// Written by execute_call before dispatch; read by FlowEngine::cancel_run()
+    /// to fire-and-forget executor.cancel().
+    pub current_execution_id: Arc<Mutex<Option<(String, String)>>>,
 }
 
 /// Input parameters for child workflow execution.

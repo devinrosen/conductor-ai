@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::cancellation_reason::CancellationReason;
@@ -192,6 +193,9 @@ fn execute_call_inner(
 
         // Per-step timeout: spawn a timer thread that cancels a child token after
         // the configured duration. Checked after dispatch to override the result.
+        // The `timer_done` flag lets the timer exit early when the step completes
+        // before the timeout fires, preventing thread leaks.
+        let timer_done = Arc::new(AtomicBool::new(false));
         let step_token = node
             .timeout
             .as_deref()
@@ -199,18 +203,39 @@ fn execute_call_inner(
                 let duration = parse_duration(t).map_err(EngineError::Workflow)?;
                 let tok = state.cancellation.child();
                 let tok2 = tok.clone();
+                let done = Arc::clone(&timer_done);
                 std::thread::spawn(move || {
-                    std::thread::sleep(duration);
-                    tok2.cancel(CancellationReason::Timeout);
+                    let start = std::time::Instant::now();
+                    let poll_ms = std::time::Duration::from_millis(10);
+                    while start.elapsed() < duration {
+                        if done.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        std::thread::sleep(poll_ms.min(duration - start.elapsed()));
+                    }
+                    if !done.load(Ordering::Relaxed) {
+                        tok2.cancel(CancellationReason::Timeout);
+                    }
                 });
                 Ok(tok)
             })
             .transpose()?;
 
+        // Record the active executor so cancel_run() can fire-and-forget executor.cancel().
+        {
+            let mut cur = state.current_execution_id.lock().unwrap_or_else(|e| e.into_inner());
+            *cur = Some((agent_label.to_string(), step_id.clone()));
+        }
         // Clone the Arc before dispatch so we hold no borrow on `state` while
         // the executor runs.
         let registry = Arc::clone(&state.action_registry);
         let dispatch_result = registry.dispatch(&params.name, &ectx, &params);
+        // Clear the active executor record and signal the timer thread to exit.
+        {
+            let mut cur = state.current_execution_id.lock().unwrap_or_else(|e| e.into_inner());
+            *cur = None;
+        }
+        timer_done.store(true, Ordering::Relaxed);
 
         // Timeout check: if the step token was cancelled while dispatch ran,
         // the step exceeded its DSL-level time limit.
