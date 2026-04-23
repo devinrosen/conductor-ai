@@ -380,6 +380,7 @@ impl Parser {
         let mut with = Vec::new();
         let mut bot_name = None;
         let mut plugin_dirs = Vec::new();
+        let mut timeout = None;
 
         if self.peek() == &Token::LBrace {
             self.advance();
@@ -396,6 +397,9 @@ impl Parser {
             if let Some(pd) = kvs.remove("plugin_dirs") {
                 plugin_dirs = pd.into_string_array();
             }
+            if let Some(t) = kvs.remove("timeout") {
+                timeout = Some(t.into_string());
+            }
         }
 
         Ok(CallNode {
@@ -406,6 +410,7 @@ impl Parser {
             with,
             bot_name,
             plugin_dirs,
+            timeout,
         })
     }
 

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::cancellation_reason::CancellationReason;
 use crate::dsl::ParallelNode;
 use crate::engine::{resolve_schema, restore_step, should_skip, ExecutionState};
 use crate::engine_error::{EngineError, Result};
@@ -84,7 +85,19 @@ pub fn execute_parallel(
     let mut successes = 0u32;
     let mut failures = 0u32;
 
+    // Parallel-scope token: child of the run root. Cancelling it prevents later branches
+    // from executing when fail_fast fires.
+    let scope_token = state.cancellation.child();
+
     for (i, _agent_step_key, call_schema, effective_with) in call_inputs {
+        // Check scope token before dispatching each branch (fail_fast from a prior branch).
+        if scope_token.is_cancelled() {
+            tracing::info!(
+                "parallel: scope token cancelled (fail_fast), skipping remaining branches"
+            );
+            break;
+        }
+
         let pos = pos_base + i as i64;
         let agent_ref = &node.calls[i];
         let agent_label = agent_ref.label();
@@ -188,12 +201,17 @@ pub fn execute_parallel(
         let registry = Arc::clone(&state.action_registry);
         let result = registry.dispatch(&params.name, &ectx, &params);
 
+        // If fail_fast and this branch failed, cancel the scope token to stop remaining branches.
+        let failed = result.is_err();
         results.push(ParallelCallResult {
             agent_name: agent_label.to_string(),
             step_id,
             result,
             attempt: 0,
         });
+        if failed && node.fail_fast {
+            scope_token.cancel(CancellationReason::FailFast);
+        }
     }
 
     // Process results
@@ -251,11 +269,6 @@ pub fn execute_parallel(
 
                 if let Err(e) = state.flush_metrics() {
                     tracing::warn!("Failed to flush mid-run metrics after parallel agent: {e}");
-                }
-
-                // fail_fast: stop on first failure
-                if node.fail_fast {
-                    // No more results to cancel at this point since we're sequential
                 }
             }
             Err(e) => {

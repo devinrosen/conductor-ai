@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::cancellation::CancellationToken;
 use crate::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
 use crate::dsl::{InputType, OnFail, WorkflowDef, WorkflowNode};
 use crate::engine_error::{EngineError, Result};
@@ -94,6 +95,11 @@ pub struct ExecutionState {
     pub registry: Arc<ItemProviderRegistry>,
     /// Event sinks — slice shared cheaply across sub-workflow states.
     pub event_sinks: Arc<[Arc<dyn EventSink>]>,
+    /// Cancellation token for this run. Checked at each step boundary.
+    pub cancellation: CancellationToken,
+    /// The step_id of the currently executing action, if any.
+    /// Updated by execute_call_inner before dispatch; read by cancel_run().
+    pub current_execution_id: Arc<Mutex<Option<String>>>,
 }
 
 /// Input parameters for child workflow execution.
@@ -103,6 +109,10 @@ pub struct ChildWorkflowInput {
     pub bot_name: Option<String>,
     pub depth: u32,
     pub parent_step_id: Option<String>,
+    /// Child token derived from the parent run's cancellation token.
+    /// The child runner sets this as the child `ExecutionState.cancellation`
+    /// so that cancelling the parent automatically cancels in-progress child runs.
+    pub cancellation: CancellationToken,
 }
 
 /// Trait for executing child workflows — allows conductor-core to inject its adapter.
@@ -319,14 +329,23 @@ pub fn run_workflow_engine(
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
         emit_event(state, EngineEvent::RunCompleted { succeeded: true });
     } else if is_cancelled {
+        let cancel_reason = state
+            .cancellation
+            .reason()
+            .unwrap_or(crate::cancellation_reason::CancellationReason::UserRequested(None));
         state.persistence.update_run_status(
             &wf_run_id,
-            WorkflowRunStatus::Failed,
+            WorkflowRunStatus::Cancelled,
             Some(&summary),
             body_error.as_deref(),
         )?;
         tracing::warn!("Workflow '{}' was cancelled", workflow.name);
-        emit_event(state, EngineEvent::RunCancelled);
+        emit_event(
+            state,
+            EngineEvent::RunCancelled {
+                reason: cancel_reason,
+            },
+        );
     } else {
         state.persistence.update_run_status(
             &wf_run_id,
@@ -397,18 +416,28 @@ pub fn execute_nodes(
     nodes: &[WorkflowNode],
     respect_fail_fast: bool,
 ) -> Result<()> {
+    use crate::cancellation_reason::CancellationReason;
     for node in nodes {
         if respect_fail_fast && !state.all_succeeded && state.exec_config.fail_fast {
             break;
         }
-        // Lightweight cancellation check
+        // Cheap in-memory token check first (no I/O).
+        if state.cancellation.is_cancelled() {
+            return state.cancellation.error_if_cancelled();
+        }
+        // Cross-process: DB polling for Cancelling status written by another process.
         match state.persistence.is_run_cancelled(&state.workflow_run_id) {
             Ok(true) => {
                 tracing::info!(
                     "Workflow run {} cancelled externally, stopping execution",
                     state.workflow_run_id
                 );
-                return Err(EngineError::Workflow("Workflow run cancelled".to_string()));
+                state
+                    .cancellation
+                    .cancel(CancellationReason::UserRequested(None));
+                return Err(EngineError::Cancelled(CancellationReason::UserRequested(
+                    None,
+                )));
             }
             Ok(false) => {}
             Err(e) => {
@@ -625,6 +654,7 @@ pub fn run_on_fail_agent(
         with: Vec::new(),
         bot_name: None,
         plugin_dirs: Vec::new(),
+        timeout: None,
     };
     if let Err(e) = crate::executors::call::execute_call(state, &on_fail_node, iteration) {
         tracing::warn!("on_fail agent '{}' also failed: {e}", on_fail_agent.label(),);

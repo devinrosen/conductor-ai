@@ -391,8 +391,18 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         Ok(())
     }
 
-    fn is_run_cancelled(&self, _run_id: &str) -> Result<bool, EngineError> {
-        Ok(false)
+    fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
+        let store = self.store.lock().map_err(|_| lock_err())?;
+        Ok(store
+            .runs
+            .get(run_id)
+            .map(|r| {
+                matches!(
+                    r.status,
+                    WorkflowRunStatus::Cancelling | WorkflowRunStatus::Cancelled
+                )
+            })
+            .unwrap_or(false))
     }
 
     fn tick_heartbeat(&self, _run_id: &str) -> Result<(), EngineError> {
@@ -695,11 +705,28 @@ mod tests {
     }
 
     #[test]
-    fn test_is_run_cancelled_always_false() {
+    fn test_is_run_cancelled_reflects_status() {
         let p = InMemoryWorkflowPersistence::new();
         let run = p.create_run(make_new_run("test")).unwrap();
-        let cancelled = p.is_run_cancelled(&run.id).unwrap();
-        assert!(!cancelled, "in-memory impl always returns false");
+
+        // Pending → not cancelled
+        assert!(!p.is_run_cancelled(&run.id).unwrap());
+
+        // Cancelling → cancelled
+        p.update_run_status(&run.id, WorkflowRunStatus::Cancelling, None, None)
+            .unwrap();
+        assert!(p.is_run_cancelled(&run.id).unwrap());
+
+        // Cancelled → cancelled
+        p.update_run_status(&run.id, WorkflowRunStatus::Cancelled, None, None)
+            .unwrap();
+        assert!(p.is_run_cancelled(&run.id).unwrap());
+    }
+
+    #[test]
+    fn test_is_run_cancelled_unknown_run_returns_false() {
+        let p = InMemoryWorkflowPersistence::new();
+        assert!(!p.is_run_cancelled("nonexistent").unwrap());
     }
 
     #[test]

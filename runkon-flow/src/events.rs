@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::cancellation_reason::CancellationReason;
+
 /// A single workflow engine event with timestamp and run identity.
 #[derive(Debug, Clone)]
 pub struct EngineEventData {
@@ -43,7 +45,9 @@ pub enum EngineEvent {
     RunResumed {
         workflow_name: String,
     },
-    RunCancelled,
+    RunCancelled {
+        reason: CancellationReason,
+    },
     // Step lifecycle
     StepStarted {
         step_name: String,

@@ -227,6 +227,7 @@ pub fn execute_foreach(
                 bot_name: None,
                 depth: state.depth + 1,
                 parent_step_id: None,
+                cancellation: state.cancellation.child(),
             },
         ) {
             Ok(result) => {

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::cancellation_reason::CancellationReason;
 use crate::dsl::CallNode;
 use crate::engine::{
     emit_event, handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip,
@@ -12,6 +13,37 @@ use crate::prompt_builder::build_variable_map;
 use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionParams, ExecutionContext};
 use crate::traits::persistence::{NewStep, StepUpdate};
+
+fn parse_duration(s: &str) -> std::result::Result<std::time::Duration, String> {
+    if let Some(n) = s.strip_suffix("ms") {
+        let ms = n
+            .parse::<u64>()
+            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+        return Ok(std::time::Duration::from_millis(ms));
+    }
+    if let Some(n) = s.strip_suffix('h') {
+        let h = n
+            .parse::<u64>()
+            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+        return Ok(std::time::Duration::from_secs(h * 3600));
+    }
+    if let Some(n) = s.strip_suffix('m') {
+        let m = n
+            .parse::<u64>()
+            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+        return Ok(std::time::Duration::from_secs(m * 60));
+    }
+    if let Some(n) = s.strip_suffix('s') {
+        let sec = n
+            .parse::<u64>()
+            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+        return Ok(std::time::Duration::from_secs(sec));
+    }
+    let sec = s
+        .parse::<u64>()
+        .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+    Ok(std::time::Duration::from_secs(sec))
+}
 
 pub fn execute_call(state: &mut ExecutionState, node: &CallNode, iteration: u32) -> Result<()> {
     // Call-level output overrides block-level; if neither is set, use None.
@@ -158,10 +190,61 @@ fn execute_call_inner(
             schema: schema.clone(),
         };
 
+        // Per-step timeout: spawn a timer thread that cancels a child token after
+        // the configured duration. Checked after dispatch to override the result.
+        let step_token = node
+            .timeout
+            .as_deref()
+            .map(|t| -> Result<_> {
+                let duration = parse_duration(t).map_err(EngineError::Workflow)?;
+                let tok = state.cancellation.child();
+                let tok2 = tok.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(duration);
+                    tok2.cancel(CancellationReason::Timeout);
+                });
+                Ok(tok)
+            })
+            .transpose()?;
+
         // Clone the Arc before dispatch so we hold no borrow on `state` while
         // the executor runs.
         let registry = Arc::clone(&state.action_registry);
-        match registry.dispatch(&params.name, &ectx, &params) {
+        let dispatch_result = registry.dispatch(&params.name, &ectx, &params);
+
+        // Timeout check: if the step token was cancelled while dispatch ran,
+        // the step exceeded its DSL-level time limit.
+        if let Some(ref tok) = step_token {
+            if tok.is_cancelled() {
+                tracing::warn!(
+                    "Step '{}' timed out (timeout={:?})",
+                    agent_label,
+                    node.timeout,
+                );
+                state
+                    .persistence
+                    .update_step(
+                        &step_id,
+                        StepUpdate {
+                            status: WorkflowStepStatus::TimedOut,
+                            child_run_id: None,
+                            result_text: Some(format!(
+                                "timed out after {}",
+                                node.timeout.as_deref().unwrap_or("?")
+                            )),
+                            context_out: None,
+                            markers_out: None,
+                            retry_count: Some(attempt as i64),
+                            structured_output: None,
+                            step_error: Some("step timed out".to_string()),
+                        },
+                    )
+                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                return Err(EngineError::Cancelled(CancellationReason::Timeout));
+            }
+        }
+
+        match dispatch_result {
             Ok(output) => {
                 let markers_json = serde_json::to_string(&output.markers).unwrap_or_default();
                 let context = output.context.clone().unwrap_or_default();

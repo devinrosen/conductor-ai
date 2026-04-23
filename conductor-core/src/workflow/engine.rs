@@ -704,7 +704,12 @@ pub(super) fn run_workflow_engine(
             body_error.as_deref(),
         )?;
         tracing::warn!("Workflow '{}' was cancelled", workflow.name);
-        emit_event(state, runkon_flow::events::EngineEvent::RunCancelled);
+        emit_event(
+            state,
+            runkon_flow::events::EngineEvent::RunCancelled {
+                reason: runkon_flow::CancellationReason::UserRequested(None),
+            },
+        );
 
         // Notify Vantage of failure (best-effort)
         if let Some(ref lc) = vantage_lc {

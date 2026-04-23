@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 78;
+pub const LATEST_SCHEMA_VERSION: u32 = 79;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1130,6 +1130,38 @@ pub fn run(conn: &Connection) -> Result<()> {
             }
         }
         bump_version(conn, 78)?;
+    }
+
+    // Migration 079: add 'cancelling' to the workflow_runs.status CHECK constraint.
+    // Uses the table-swap pattern (same as 071). Guard skips when the table is absent
+    // or already has 'cancelling' in the DDL (idempotent).
+    if version < 79 {
+        let workflow_runs_has_full_schema: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_runs' \
+                 AND sql LIKE '%parent_run_id%REFERENCES agent_runs%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        let already_migrated: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_runs' AND sql LIKE '%cancelling%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if workflow_runs_has_full_schema && !already_migrated {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!("migrations/079_workflow_run_cancelling.sql"))?;
+                Ok(())
+            })?;
+        }
+        bump_version(conn, 79)?;
     }
 
     Ok(())
