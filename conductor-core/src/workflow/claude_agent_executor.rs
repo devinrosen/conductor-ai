@@ -126,9 +126,8 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::error::Result;
+    use crate::test_helpers::{make_action_params, make_ectx, ENV_MUTEX};
     use crate::workflow::action_executor::{ActionOutput, ActionParams, ExecutionContext};
-    use std::collections::HashMap;
-    use std::time::Duration;
 
     struct MockApiExecutor {
         called: std::sync::atomic::AtomicBool,
@@ -162,43 +161,13 @@ mod tests {
         }
     }
 
-    fn make_ectx() -> ExecutionContext {
-        ExecutionContext {
-            run_id: "run-1".to_string(),
-            working_dir: std::path::PathBuf::from("/tmp"),
-            repo_path: "/tmp".to_string(),
-            db_path: std::path::PathBuf::from("/tmp/test.db"),
-            step_timeout: Duration::from_secs(30),
-            shutdown: None,
-            model: None,
-            bot_name: None,
-            plugin_dirs: vec![],
-            workflow_name: "test".to_string(),
-            worktree_id: None,
-            parent_run_id: "parent".to_string(),
-            step_id: "step-1".to_string(),
-        }
-    }
-
-    fn make_params(schema: Option<crate::schema_config::OutputSchema>) -> ActionParams {
-        ActionParams {
-            name: "test-agent".to_string(),
-            inputs: HashMap::new(),
-            retries_remaining: 0,
-            retry_error: None,
-            snippets: vec![],
-            dry_run: false,
-            gate_feedback: None,
-            schema,
-        }
-    }
-
     fn make_schema() -> crate::schema_config::OutputSchema {
         crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap()
     }
 
     #[test]
     fn delegates_to_api_executor_when_schema_and_key_present() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let prev = std::env::var("ANTHROPIC_API_KEY").ok();
         unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key") };
 
@@ -207,7 +176,7 @@ mod tests {
         let mock_ptr = mock.as_ref() as *const MockApiExecutor;
         let executor = ClaudeAgentExecutor::new(Config::default(), Some(mock));
 
-        let result = executor.execute(&make_ectx(), &make_params(Some(make_schema())));
+        let result = executor.execute(&make_ectx(), &make_action_params(Some(make_schema())));
 
         // Restore env before any assertion that might panic.
         match prev {
@@ -222,6 +191,7 @@ mod tests {
 
     #[test]
     fn skips_api_executor_when_schema_absent() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let prev = std::env::var("ANTHROPIC_API_KEY").ok();
         unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key") };
 
@@ -231,7 +201,7 @@ mod tests {
 
         // No schema → should NOT delegate; falls through to load_agent, which fails
         // because /tmp has no .conductor/agents directory.
-        let result = executor.execute(&make_ectx(), &make_params(None));
+        let result = executor.execute(&make_ectx(), &make_action_params(None));
 
         match prev {
             Some(k) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", k) },
@@ -246,6 +216,7 @@ mod tests {
 
     #[test]
     fn skips_api_executor_when_api_key_absent() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let prev = std::env::var("ANTHROPIC_API_KEY").ok();
         unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
 
@@ -253,7 +224,7 @@ mod tests {
         let mock_ptr = mock.as_ref() as *const MockApiExecutor;
         let executor = ClaudeAgentExecutor::new(Config::default(), Some(mock));
 
-        let result = executor.execute(&make_ectx(), &make_params(Some(make_schema())));
+        let result = executor.execute(&make_ectx(), &make_action_params(Some(make_schema())));
 
         if let Some(k) = prev {
             unsafe { std::env::set_var("ANTHROPIC_API_KEY", k) };

@@ -2,6 +2,47 @@ use rusqlite::Connection;
 
 use crate::db;
 use crate::tickets::TicketInput;
+use crate::workflow::action_executor::{ActionParams, ExecutionContext};
+
+/// Global mutex to serialize tests that mutate `ANTHROPIC_API_KEY`.
+///
+/// `cargo test` runs tests across modules in parallel by default; any test
+/// that calls `std::env::set_var`/`remove_var` on a shared env-var must hold
+/// this lock for the duration of the mutation + assertion to prevent races.
+pub static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Build a minimal `ExecutionContext` for unit tests.
+pub fn make_ectx() -> ExecutionContext {
+    ExecutionContext {
+        run_id: "run-1".to_string(),
+        working_dir: std::path::PathBuf::from("/tmp"),
+        repo_path: "/tmp".to_string(),
+        db_path: std::path::PathBuf::from("/tmp/test.db"),
+        step_timeout: std::time::Duration::from_secs(30),
+        shutdown: None,
+        model: None,
+        bot_name: None,
+        plugin_dirs: vec![],
+        workflow_name: "test".to_string(),
+        worktree_id: None,
+        parent_run_id: "parent".to_string(),
+        step_id: "step-1".to_string(),
+    }
+}
+
+/// Build a minimal `ActionParams` for unit tests.
+pub fn make_action_params(schema: Option<crate::schema_config::OutputSchema>) -> ActionParams {
+    ActionParams {
+        name: "test-agent".to_string(),
+        inputs: std::collections::HashMap::new(),
+        retries_remaining: 0,
+        retry_error: None,
+        snippets: vec![],
+        dry_run: false,
+        gate_feedback: None,
+        schema,
+    }
+}
 
 /// Opens an in-memory SQLite database with migrations applied. No seed data is inserted.
 pub fn create_test_conn() -> Connection {

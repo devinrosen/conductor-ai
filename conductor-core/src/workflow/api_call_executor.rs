@@ -81,53 +81,19 @@ impl ActionExecutor for ApiCallExecutor {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::workflow::action_executor::{ActionParams, ExecutionContext};
-    use std::collections::HashMap;
-    use std::time::Duration;
-
-    fn make_ectx() -> ExecutionContext {
-        ExecutionContext {
-            run_id: "run-1".to_string(),
-            working_dir: std::path::PathBuf::from("/tmp"),
-            repo_path: "/tmp".to_string(),
-            db_path: std::path::PathBuf::from("/tmp/test.db"),
-            step_timeout: Duration::from_secs(30),
-            shutdown: None,
-            model: None,
-            bot_name: None,
-            plugin_dirs: vec![],
-            workflow_name: "test".to_string(),
-            worktree_id: None,
-            parent_run_id: "parent".to_string(),
-            step_id: "step-1".to_string(),
-        }
-    }
-
-    fn make_params(schema: Option<crate::schema_config::OutputSchema>) -> ActionParams {
-        ActionParams {
-            name: "test-agent".to_string(),
-            inputs: HashMap::new(),
-            retries_remaining: 0,
-            retry_error: None,
-            snippets: vec![],
-            dry_run: false,
-            gate_feedback: None,
-            schema,
-        }
-    }
+    use crate::test_helpers::{make_action_params, make_ectx, ENV_MUTEX};
 
     #[test]
     fn missing_schema_returns_error() {
         let executor = ApiCallExecutor::new(Config::default());
-        let result = executor.execute(&make_ectx(), &make_params(None));
+        let result = executor.execute(&make_ectx(), &make_action_params(None));
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("requires a schema"), "got: {msg}");
     }
 
     #[test]
     fn missing_api_key_returns_error() {
-        // Safety: single-threaded test manipulating env var; no other test
-        // reads ANTHROPIC_API_KEY concurrently in the same process.
+        let _guard = ENV_MUTEX.lock().unwrap();
         let prev = std::env::var("ANTHROPIC_API_KEY").ok();
         unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
 
@@ -137,7 +103,7 @@ mod tests {
         )
         .unwrap();
         let executor = ApiCallExecutor::new(Config::default());
-        let result = executor.execute(&make_ectx(), &make_params(Some(schema)));
+        let result = executor.execute(&make_ectx(), &make_action_params(Some(schema)));
 
         if let Some(key) = prev {
             unsafe { std::env::set_var("ANTHROPIC_API_KEY", key) };
