@@ -354,7 +354,12 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step.gate_approved_at = Some(now.clone());
         step.gate_approved_by = Some(approved_by.to_string());
         step.gate_feedback = feedback.map(String::from);
-        step.gate_selections = selections.map(|s| serde_json::to_string(s).unwrap_or_default());
+        step.gate_selections = selections.map(|s| {
+            serde_json::to_string(s).unwrap_or_else(|e| {
+                tracing::warn!("approve_gate: failed to serialize selections: {e}");
+                String::new()
+            })
+        });
         if let Some(items) = selections.filter(|s| !s.is_empty()) {
             let mut out = String::from("User selected the following items:\n");
             for item in items {

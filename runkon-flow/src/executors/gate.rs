@@ -7,6 +7,17 @@ use crate::engine_error::{EngineError, Result};
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::persistence::{GateApprovalState, NewStep, StepUpdate};
 
+fn resume_run_status(state: &ExecutionState, gate_name: &str, context: &str) {
+    if let Err(e) = state.persistence.update_run_status(
+        &state.workflow_run_id,
+        WorkflowRunStatus::Running,
+        None,
+        None,
+    ) {
+        tracing::warn!("Gate '{gate_name}': failed to update run status {context}: {e}");
+    }
+}
+
 pub fn execute_gate(state: &mut ExecutionState, node: &GateNode, iteration: u32) -> Result<()> {
     let pos = state.position;
     state.position += 1;
@@ -185,34 +196,13 @@ pub fn execute_gate(state: &mut ExecutionState, node: &GateNode, iteration: u32)
                         state.last_gate_feedback = Some(sel.join(", "));
                     }
                 }
-                // Update run back to running status
-                if let Err(e) = state.persistence.update_run_status(
-                    &state.workflow_run_id,
-                    WorkflowRunStatus::Running,
-                    None,
-                    None,
-                ) {
-                    tracing::warn!(
-                        "Gate '{}': failed to update run status to Running: {e}",
-                        node.name
-                    );
-                }
+                resume_run_status(state, &node.name, "after approval");
                 return Ok(());
             }
             Ok(GateApprovalState::Rejected { feedback }) => {
                 tracing::warn!("Gate '{}' rejected", node.name);
                 state.all_succeeded = false;
-                if let Err(e) = state.persistence.update_run_status(
-                    &state.workflow_run_id,
-                    WorkflowRunStatus::Running,
-                    None,
-                    None,
-                ) {
-                    tracing::warn!(
-                        "Gate '{}': failed to update run status after rejection: {e}",
-                        node.name
-                    );
-                }
+                resume_run_status(state, &node.name, "after rejection");
                 let reason = feedback.unwrap_or_else(|| format!("Gate '{}' rejected", node.name));
                 return Err(EngineError::Workflow(reason));
             }
@@ -397,17 +387,7 @@ pub fn handle_gate_timeout(
                 )
                 .map_err(|e| EngineError::Persistence(e.to_string()))?;
             state.all_succeeded = false;
-            if let Err(e) = state.persistence.update_run_status(
-                &state.workflow_run_id,
-                WorkflowRunStatus::Running,
-                None,
-                None,
-            ) {
-                tracing::warn!(
-                    "Gate '{}': failed to update run status after timeout (fail): {e}",
-                    node.name
-                );
-            }
+            resume_run_status(state, &node.name, "after timeout (fail)");
             Err(EngineError::Workflow(format!(
                 "Gate '{}' timed out",
                 node.name
@@ -430,17 +410,7 @@ pub fn handle_gate_timeout(
                     },
                 )
                 .map_err(|e| EngineError::Persistence(e.to_string()))?;
-            if let Err(e) = state.persistence.update_run_status(
-                &state.workflow_run_id,
-                WorkflowRunStatus::Running,
-                None,
-                None,
-            ) {
-                tracing::warn!(
-                    "Gate '{}': failed to update run status after timeout (continue): {e}",
-                    node.name
-                );
-            }
+            resume_run_status(state, &node.name, "after timeout (continue)");
             Ok(())
         }
     }

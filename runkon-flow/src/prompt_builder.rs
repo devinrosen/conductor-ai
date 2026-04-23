@@ -8,40 +8,40 @@ fn substitute_variables_impl(
     vars: &HashMap<&str, String>,
     strip_unresolved: bool,
 ) -> String {
-    let mut result = template.to_string();
-    for (key, value) in vars {
-        let pattern = format!("{{{{{key}}}}}");
-        result = result.replace(&pattern, value);
-    }
-    if strip_unresolved {
-        // Single-pass: build output by copying spans between {{…}} placeholders.
-        let mut out = String::with_capacity(result.len());
-        let mut pos = 0;
-        let bytes = result.as_bytes();
-        while pos < bytes.len() {
-            if bytes[pos..].starts_with(b"{{") {
-                if let Some(end_rel) = result[pos + 2..].find("}}") {
-                    // Skip the entire {{…}} placeholder.
-                    pos += 2 + end_rel + 2;
-                } else {
-                    // No closing `}}` — copy the rest verbatim.
-                    out.push_str(&result[pos..]);
-                    pos = bytes.len();
+    // Single-pass tokeniser: scan the original template once, emitting each
+    // {{key}} replacement exactly once.  This prevents double-substitution —
+    // a replaced value containing {{other}} is written verbatim and never
+    // re-scanned, so injected placeholder text cannot escape shell quoting.
+    let mut out = String::with_capacity(template.len());
+    let mut pos = 0;
+    let bytes = template.as_bytes();
+    while pos < bytes.len() {
+        if bytes[pos..].starts_with(b"{{") {
+            if let Some(end_rel) = template[pos + 2..].find("}}") {
+                let key = &template[pos + 2..pos + 2 + end_rel];
+                if let Some(value) = vars.get(key) {
+                    out.push_str(value);
+                } else if !strip_unresolved {
+                    // Preserve unresolved placeholders literally.
+                    out.push_str(&template[pos..pos + 2 + end_rel + 2]);
                 }
+                pos += 2 + end_rel + 2;
             } else {
-                // Find the next `{{` and copy everything before it.
-                let next = result[pos..]
-                    .find("{{")
-                    .map(|i| pos + i)
-                    .unwrap_or(bytes.len());
-                out.push_str(&result[pos..next]);
-                pos = next;
+                // No closing `}}` — copy the rest verbatim.
+                out.push_str(&template[pos..]);
+                pos = bytes.len();
             }
+        } else {
+            // Find the next `{{` and copy everything before it.
+            let next = template[pos..]
+                .find("{{")
+                .map(|i| pos + i)
+                .unwrap_or(bytes.len());
+            out.push_str(&template[pos..next]);
+            pos = next;
         }
-        out
-    } else {
-        result
     }
+    out
 }
 
 /// For agent prompts: substitutes variables AND strips unresolved `{{…}}` placeholders.
@@ -90,8 +90,6 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
         .map(|c| c.context.clone())
         .unwrap_or_default();
     vars.insert("prior_context", prior_context);
-    // Serialize prior_contexts only when the template actually references it.
-    // This avoids O(N²) total serialization over an N-step workflow.
     let prior_contexts_json = if state.contexts.is_empty() {
         "[]".to_string()
     } else {
@@ -161,5 +159,28 @@ mod tests {
             result,
             r#"{"risks":["{{deterministic-review.score}}","other"]}"#
         );
+    }
+
+    #[test]
+    fn substitute_no_double_substitution() {
+        // If variable A's value contains {{B}}, B must not be expanded in the output.
+        let mut vars = HashMap::new();
+        vars.insert("a", "{{b}}".to_string());
+        vars.insert("b", "injected".to_string());
+        let result = substitute_variables_keep_literal("{{a}}", &vars);
+        // Should emit the literal value of a, not expand {{b}} inside it.
+        assert_eq!(result, "{{b}}");
+    }
+
+    #[test]
+    fn shell_quote_no_double_substitution() {
+        // Simulates the shell-quoting path used in script execution:
+        // a shell-safe var map is built then substituted into the run template.
+        let mut vars = HashMap::new();
+        vars.insert("cmd", "'{{evil}}'".to_string()); // already shell-quoted value
+        vars.insert("evil", ";rm -rf /".to_string());
+        // The run template only references {{cmd}}; {{evil}} should not be expanded.
+        let result = substitute_variables("run {{cmd}}", &vars);
+        assert_eq!(result, "run '{{evil}}'");
     }
 }

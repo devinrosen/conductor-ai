@@ -248,7 +248,10 @@ fn execute_call_with_schema(
         let registry = std::sync::Arc::clone(&state.action_registry);
         match registry.dispatch(&params.name, &ectx, &params) {
             Ok(output) => {
-                let markers_json = serde_json::to_string(&output.markers).unwrap_or_default();
+                let markers_json = serde_json::to_string(&output.markers).unwrap_or_else(|e| {
+                    tracing::warn!("Step '{}': failed to serialize markers: {e}", agent_label);
+                    String::new()
+                });
                 let context = output.context.unwrap_or_default();
 
                 tracing::info!(
