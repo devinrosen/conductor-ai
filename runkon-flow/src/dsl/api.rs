@@ -212,7 +212,16 @@ where
 
     stack.push(name.to_string());
 
-    let def = loader(name)?;
+    // Skip unloadable sub-workflows rather than failing — load errors are
+    // reported by FlowEngine::validate_with_registries, which collects all
+    // of them. Failing here would only surface the first one.
+    let def = match loader(name) {
+        Ok(d) => d,
+        Err(_) => {
+            stack.pop();
+            return Ok(());
+        }
+    };
     let mut child_refs = collect_workflow_refs(&def.body);
     child_refs.extend(collect_workflow_refs(&def.always));
     child_refs.sort();

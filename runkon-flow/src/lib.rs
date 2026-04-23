@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub mod test_helpers;
 pub mod cancellation;
 pub mod cancellation_reason;
 pub mod constants;
@@ -16,5 +18,7 @@ pub mod types;
 
 pub use dsl::ValidationError;
 pub use flow_engine::{EngineBundle, FlowEngine, FlowEngineBuilder};
+pub use traits::action_executor::ActionRegistry;
 pub use traits::gate_resolver::GateResolverRegistry;
+pub use traits::item_provider::ItemProviderRegistry;
 pub use traits::script_env_provider::{NoOpScriptEnvProvider, ScriptEnvProvider};

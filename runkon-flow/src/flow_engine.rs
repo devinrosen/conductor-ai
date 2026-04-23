@@ -52,6 +52,53 @@ impl FlowEngine {
     /// `Err(errors)` with one entry per problem found. Public so CI lint tools
     /// can call it without actually running the workflow.
     pub fn validate(&self, def: &WorkflowDef) -> Result<(), Vec<ValidationError>> {
+        self.validate_with_registries(
+            &self.action_registry,
+            &self.item_provider_registry,
+            &self.gate_resolver_registry,
+            def,
+        )
+    }
+
+    /// Run a workflow definition with a pre-built execution state.
+    ///
+    /// Calls validation first using the execution state's own registries so the
+    /// validator and executor always see the same set of executors and providers.
+    /// Returns an error immediately if validation fails so no side effects occur.
+    pub fn run(
+        &self,
+        def: &WorkflowDef,
+        state: &mut ExecutionState,
+    ) -> crate::engine_error::Result<WorkflowResult> {
+        if let Err(validation_errors) = self.validate_with_registries(
+            &state.action_registry,
+            &state.registry,
+            &self.gate_resolver_registry,
+            def,
+        ) {
+            let joined = validation_errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(EngineError::Workflow(format!(
+                "workflow '{}' failed validation:\n{}",
+                def.name, joined
+            )));
+        }
+        run_workflow_engine(state, def)
+    }
+
+    /// Inner validation implementation. Accepts explicit registry references so
+    /// both `validate()` (uses builder registries) and `run()` (uses execution
+    /// state registries) can call the same logic without risk of divergence.
+    fn validate_with_registries(
+        &self,
+        action_registry: &ActionRegistry,
+        item_provider_registry: &ItemProviderRegistry,
+        gate_resolver_registry: &GateResolverRegistry,
+        def: &WorkflowDef,
+    ) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
 
         // Cycle / depth detection — only when a workflow loader is configured.
@@ -77,8 +124,24 @@ impl FlowEngine {
         }
 
         let mut visited: HashSet<String> = HashSet::new();
-        self.validate_nodes_for_harness(&def.body, &mut errors, &mut visited);
-        self.validate_nodes_for_harness(&def.always, &mut errors, &mut visited);
+        validate_nodes_impl(
+            action_registry,
+            item_provider_registry,
+            gate_resolver_registry,
+            &self.workflow_loader,
+            &def.body,
+            &mut errors,
+            &mut visited,
+        );
+        validate_nodes_impl(
+            action_registry,
+            item_provider_registry,
+            gate_resolver_registry,
+            &self.workflow_loader,
+            &def.always,
+            &mut errors,
+            &mut visited,
+        );
 
         if errors.is_empty() {
             Ok(())
@@ -86,46 +149,43 @@ impl FlowEngine {
             Err(errors)
         }
     }
+}
 
-    /// Run a workflow definition with a pre-built execution state.
-    ///
-    /// Calls [`validate()`][FlowEngine::validate] first; returns an error
-    /// immediately if validation fails so no side effects occur for invalid
-    /// workflows.
-    pub fn run(
-        &self,
-        def: &WorkflowDef,
-        state: &mut ExecutionState,
-    ) -> crate::engine_error::Result<WorkflowResult> {
-        if let Err(validation_errors) = self.validate(def) {
-            let joined = validation_errors
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            return Err(EngineError::Workflow(format!(
-                "workflow '{}' failed validation:\n{}",
-                def.name, joined
-            )));
-        }
-        run_workflow_engine(state, def)
-    }
-
-    fn validate_nodes_for_harness(
-        &self,
-        nodes: &[WorkflowNode],
-        errors: &mut Vec<ValidationError>,
-        visited: &mut HashSet<String>,
-    ) {
-        for node in nodes {
-            match node {
-                WorkflowNode::Call(n) => {
-                    let name = n.agent.label();
-                    if !self.action_registry.has_action(name) {
+fn validate_nodes_impl(
+    action_registry: &ActionRegistry,
+    item_provider_registry: &ItemProviderRegistry,
+    gate_resolver_registry: &GateResolverRegistry,
+    workflow_loader: &Option<Arc<WorkflowLoaderFn>>,
+    nodes: &[WorkflowNode],
+    errors: &mut Vec<ValidationError>,
+    visited: &mut HashSet<String>,
+) {
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => {
+                let name = n.agent.label();
+                if !action_registry.has_action(name) {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "call '{}': no registered ActionExecutor for '{}'",
+                            n.agent.step_key(),
+                            name
+                        ),
+                        hint: Some(format!(
+                            "register an executor named '{}' or add a fallback executor",
+                            name
+                        )),
+                    });
+                }
+            }
+            WorkflowNode::Parallel(n) => {
+                for agent_ref in &n.calls {
+                    let name = agent_ref.label();
+                    if !action_registry.has_action(name) {
                         errors.push(ValidationError {
                             message: format!(
-                                "call '{}': no registered ActionExecutor for '{}'",
-                                n.agent.step_key(),
+                                "parallel call '{}': no registered ActionExecutor for '{}'",
+                                agent_ref.step_key(),
                                 name
                             ),
                             hint: Some(format!(
@@ -135,111 +195,156 @@ impl FlowEngine {
                         });
                     }
                 }
-                WorkflowNode::Parallel(n) => {
-                    for agent_ref in &n.calls {
-                        let name = agent_ref.label();
-                        if !self.action_registry.has_action(name) {
-                            errors.push(ValidationError {
-                                message: format!(
-                                    "parallel call '{}': no registered ActionExecutor for '{}'",
-                                    agent_ref.step_key(),
-                                    name
-                                ),
-                                hint: Some(format!(
-                                    "register an executor named '{}' or add a fallback executor",
-                                    name
-                                )),
-                            });
-                        }
-                    }
+            }
+            WorkflowNode::ForEach(n) => {
+                if item_provider_registry.get(&n.over).is_none() {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "foreach '{}': no registered ItemProvider for '{}'",
+                            n.name, n.over
+                        ),
+                        hint: Some(format!(
+                            "register a provider with name '{}' via FlowEngineBuilder::item_provider()",
+                            n.over
+                        )),
+                    });
                 }
-                WorkflowNode::ForEach(n) => {
-                    if self.item_provider_registry.get(&n.over).is_none() {
+            }
+            WorkflowNode::Gate(n) => {
+                // QualityGate is evaluated inline and never goes through a GateResolver.
+                if n.gate_type != GateType::QualityGate {
+                    let type_str = n.gate_type.to_string();
+                    if !gate_resolver_registry.has_type(&type_str) {
                         errors.push(ValidationError {
                             message: format!(
-                                "foreach '{}': no registered ItemProvider for '{}'",
-                                n.name, n.over
+                                "gate '{}': no registered GateResolver for type '{}'",
+                                n.name, type_str
                             ),
                             hint: Some(format!(
-                                "register a provider with name '{}' via FlowEngineBuilder::item_provider()",
-                                n.over
+                                "register a resolver with gate_type() == '{}' via FlowEngineBuilder::gate_resolver()",
+                                type_str
                             )),
                         });
                     }
                 }
-                WorkflowNode::Gate(n) => {
-                    // QualityGate is evaluated inline and never goes through a GateResolver.
-                    if n.gate_type != GateType::QualityGate {
-                        let type_str = n.gate_type.to_string();
-                        if !self.gate_resolver_registry.has_type(&type_str) {
-                            errors.push(ValidationError {
-                                message: format!(
-                                    "gate '{}': no registered GateResolver for type '{}'",
-                                    n.name, type_str
-                                ),
-                                hint: Some(format!(
-                                    "register a resolver with gate_type() == '{}' via FlowEngineBuilder::gate_resolver()",
-                                    type_str
-                                )),
-                            });
-                        }
-                    }
-                }
-                WorkflowNode::CallWorkflow(n) => {
-                    if !visited.contains(&n.workflow) {
-                        visited.insert(n.workflow.clone());
-                        if let Some(loader) = &self.workflow_loader {
-                            match loader(&n.workflow) {
-                                Ok(sub_def) => {
-                                    let mut sub_errors = Vec::new();
-                                    self.validate_nodes_for_harness(
-                                        &sub_def.body,
-                                        &mut sub_errors,
-                                        visited,
-                                    );
-                                    self.validate_nodes_for_harness(
-                                        &sub_def.always,
-                                        &mut sub_errors,
-                                        visited,
-                                    );
-                                    for sub_err in sub_errors {
-                                        errors.push(ValidationError {
-                                            message: format!(
-                                                "in sub-workflow '{}': {}",
-                                                n.workflow, sub_err.message
-                                            ),
-                                            hint: sub_err.hint,
-                                        });
-                                    }
+            }
+            WorkflowNode::CallWorkflow(n) => {
+                if !visited.contains(&n.workflow) {
+                    visited.insert(n.workflow.clone());
+                    if let Some(loader) = workflow_loader {
+                        match loader(&n.workflow) {
+                            Ok(sub_def) => {
+                                let mut sub_errors = Vec::new();
+                                validate_nodes_impl(
+                                    action_registry,
+                                    item_provider_registry,
+                                    gate_resolver_registry,
+                                    workflow_loader,
+                                    &sub_def.body,
+                                    &mut sub_errors,
+                                    visited,
+                                );
+                                validate_nodes_impl(
+                                    action_registry,
+                                    item_provider_registry,
+                                    gate_resolver_registry,
+                                    workflow_loader,
+                                    &sub_def.always,
+                                    &mut sub_errors,
+                                    visited,
+                                );
+                                for sub_err in sub_errors {
+                                    errors.push(ValidationError {
+                                        message: format!(
+                                            "in sub-workflow '{}': {}",
+                                            n.workflow, sub_err.message
+                                        ),
+                                        hint: sub_err.hint,
+                                    });
                                 }
-                                Err(_) => {
-                                    // Load failures are reported by detect_workflow_cycles;
-                                    // skip here to avoid duplicate errors.
-                                }
+                            }
+                            Err(e) => {
+                                // Report every load failure so all missing sub-workflows
+                                // surface in one pass, not just the first one.
+                                errors.push(ValidationError {
+                                    message: format!(
+                                        "call workflow '{}': sub-workflow could not be loaded: {}",
+                                        n.workflow, e
+                                    ),
+                                    hint: None,
+                                });
                             }
                         }
                     }
                 }
-                WorkflowNode::If(n) => {
-                    self.validate_nodes_for_harness(&n.body, errors, visited);
-                }
-                WorkflowNode::Unless(n) => {
-                    self.validate_nodes_for_harness(&n.body, errors, visited);
-                }
-                WorkflowNode::While(n) => {
-                    self.validate_nodes_for_harness(&n.body, errors, visited);
-                }
-                WorkflowNode::DoWhile(n) => {
-                    self.validate_nodes_for_harness(&n.body, errors, visited);
-                }
-                WorkflowNode::Do(n) => {
-                    self.validate_nodes_for_harness(&n.body, errors, visited);
-                }
-                WorkflowNode::Always(n) => {
-                    self.validate_nodes_for_harness(&n.body, errors, visited);
-                }
-                WorkflowNode::Script(_) => {}
             }
+            WorkflowNode::If(n) => {
+                validate_nodes_impl(
+                    action_registry,
+                    item_provider_registry,
+                    gate_resolver_registry,
+                    workflow_loader,
+                    &n.body,
+                    errors,
+                    visited,
+                );
+            }
+            WorkflowNode::Unless(n) => {
+                validate_nodes_impl(
+                    action_registry,
+                    item_provider_registry,
+                    gate_resolver_registry,
+                    workflow_loader,
+                    &n.body,
+                    errors,
+                    visited,
+                );
+            }
+            WorkflowNode::While(n) => {
+                validate_nodes_impl(
+                    action_registry,
+                    item_provider_registry,
+                    gate_resolver_registry,
+                    workflow_loader,
+                    &n.body,
+                    errors,
+                    visited,
+                );
+            }
+            WorkflowNode::DoWhile(n) => {
+                validate_nodes_impl(
+                    action_registry,
+                    item_provider_registry,
+                    gate_resolver_registry,
+                    workflow_loader,
+                    &n.body,
+                    errors,
+                    visited,
+                );
+            }
+            WorkflowNode::Do(n) => {
+                validate_nodes_impl(
+                    action_registry,
+                    item_provider_registry,
+                    gate_resolver_registry,
+                    workflow_loader,
+                    &n.body,
+                    errors,
+                    visited,
+                );
+            }
+            WorkflowNode::Always(n) => {
+                validate_nodes_impl(
+                    action_registry,
+                    item_provider_registry,
+                    gate_resolver_registry,
+                    workflow_loader,
+                    &n.body,
+                    errors,
+                    visited,
+                );
+            }
+            WorkflowNode::Script(_) => {}
         }
     }
 }
@@ -353,13 +458,12 @@ mod tests {
         OnChildFail, OnCycle, OnTimeout, WorkflowTrigger,
     };
     use crate::engine_error::EngineError;
+    use crate::test_helpers::{make_ectx, make_params};
     use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
     use crate::traits::gate_resolver::{GateContext, GateParams, GatePoll};
     use crate::traits::item_provider::{FanOutItem, ProviderContext};
     use crate::traits::run_context::RunContext;
     use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::time::Duration;
 
     // --- test executors / providers / resolvers ---
 
@@ -430,6 +534,7 @@ mod tests {
 
     // --- helpers ---
 
+    #[allow(dead_code)]
     fn make_def(name: &str, body: Vec<WorkflowNode>) -> WorkflowDef {
         WorkflowDef {
             name: name.to_string(),
@@ -485,36 +590,6 @@ mod tests {
             quality_gate: None,
             options: None,
         })
-    }
-
-    fn make_ectx() -> ExecutionContext {
-        ExecutionContext {
-            run_id: "r1".to_string(),
-            working_dir: PathBuf::from("/tmp"),
-            repo_path: "/tmp/repo".to_string(),
-            step_timeout: Duration::from_secs(60),
-            shutdown: None,
-            model: None,
-            bot_name: None,
-            plugin_dirs: vec![],
-            workflow_name: "wf".to_string(),
-            worktree_id: None,
-            parent_run_id: "parent-run-1".to_string(),
-            step_id: "step-1".to_string(),
-        }
-    }
-
-    fn make_params(name: &str) -> ActionParams {
-        ActionParams {
-            name: name.to_string(),
-            inputs: HashMap::new(),
-            retries_remaining: 0,
-            retry_error: None,
-            snippets: vec![],
-            dry_run: false,
-            gate_feedback: None,
-            schema: None,
-        }
     }
 
     // --- existing FlowEngineBuilder tests (now produce FlowEngine) ---
