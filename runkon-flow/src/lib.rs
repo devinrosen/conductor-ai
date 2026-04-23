@@ -14,5 +14,7 @@ pub mod status;
 pub mod traits;
 pub mod types;
 
-pub use flow_engine::EngineBundle;
+pub use dsl::ValidationError;
+pub use flow_engine::{EngineBundle, FlowEngine, FlowEngineBuilder};
+pub use traits::gate_resolver::GateResolverRegistry;
 pub use traits::script_env_provider::{NoOpScriptEnvProvider, ScriptEnvProvider};

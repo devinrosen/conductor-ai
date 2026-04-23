@@ -96,6 +96,14 @@ impl ActionRegistry {
         Self { named, fallback }
     }
 
+    /// Returns `true` if the named executor is registered OR a fallback is configured.
+    ///
+    /// Mirrors the fallback semantics of `dispatch()`: a harness that registers only
+    /// a fallback executor passes all action name checks.
+    pub fn has_action(&self, name: &str) -> bool {
+        self.named.contains_key(name) || self.fallback.is_some()
+    }
+
     /// Find the executor for `name` and run it.
     pub fn dispatch(
         &self,
@@ -217,5 +225,36 @@ mod tests {
     fn cancel_default_impl_is_noop() {
         let executor = NoopExecutor;
         assert!(executor.cancel("any-id").is_ok());
+    }
+
+    #[test]
+    fn has_action_named_executor_found() {
+        let registry = ActionRegistry::new(
+            [(
+                "noop".to_string(),
+                Box::new(NoopExecutor) as Box<dyn ActionExecutor>,
+            )]
+            .into_iter()
+            .collect(),
+            None,
+        );
+        assert!(registry.has_action("noop"));
+        assert!(!registry.has_action("missing"));
+    }
+
+    #[test]
+    fn has_action_true_with_fallback_regardless_of_name() {
+        let registry = ActionRegistry::new(
+            std::collections::HashMap::new(),
+            Some(Box::new(NoopExecutor)),
+        );
+        assert!(registry.has_action("anything"));
+        assert!(registry.has_action("also_this"));
+    }
+
+    #[test]
+    fn has_action_false_when_empty() {
+        let registry = ActionRegistry::new(std::collections::HashMap::new(), None);
+        assert!(!registry.has_action("noop"));
     }
 }
