@@ -368,6 +368,14 @@ pub struct GeneralConfig {
     /// after orphan detection. Set to 0 to disable automatic resume. Defaults to 3.
     #[serde(default = "default_auto_resume_limit")]
     pub auto_resume_limit: u32,
+    /// When true, conductor launches agent runs with `claude --bare`, skipping
+    /// Claude Code's auto-discovered context (CLAUDE.md, agents, skills catalog,
+    /// auto-memory, hooks, plugin sync). Conductor already injects its own
+    /// session context, so this removes redundant startup tokens (~25-40k per
+    /// session). Requires `ANTHROPIC_API_KEY` or `apiKeyHelper` auth — keychain
+    /// OAuth is not read in bare mode. Defaults to false.
+    #[serde(default)]
+    pub claude_bare_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -426,6 +434,7 @@ impl Default for GeneralConfig {
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
             auto_resume_limit: default_auto_resume_limit(),
+            claude_bare_mode: false,
         }
     }
 }
@@ -837,6 +846,24 @@ mod tests {
             config.general.agent_permission_mode,
             AgentPermissionMode::SkipPermissions
         );
+    }
+
+    #[test]
+    fn test_claude_bare_mode_default_false() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.general.claude_bare_mode);
+    }
+
+    #[test]
+    fn test_claude_bare_mode_opt_in() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            claude_bare_mode = true
+        "#,
+        )
+        .unwrap();
+        assert!(config.general.claude_bare_mode);
     }
 
     #[test]

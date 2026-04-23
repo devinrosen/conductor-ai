@@ -315,6 +315,13 @@ pub(crate) fn run_agent(
             .arg("stream-json")
             .arg("--verbose")
             .arg(effective_perm_mode.claude_permission_flag());
+        // Opt-in bare mode: skip Claude Code's auto-discovered context so conductor's
+        // explicit session-context injection isn't duplicated by the startup catalog.
+        // Saves ~25-40k tokens per run. Requires ANTHROPIC_API_KEY auth — see
+        // GeneralConfig::claude_bare_mode docs.
+        if config.general.claude_bare_mode {
+            cmd.arg("--bare");
+        }
         if let Some(val) = effective_perm_mode.claude_permission_flag_value() {
             cmd.arg(val);
         }

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Claude CLI `--bare` mode support for agent runs. Conductor now launches the
+  plan-generation call with `--bare` unconditionally (it's a one-shot JSON
+  prompt with no tool use or project-context needs). For the main agent runner,
+  bare mode is opt-in via a new `general.claude_bare_mode` config flag:
+
+  ```toml
+  [general]
+  claude_bare_mode = true
+  ```
+
+  When enabled, agent runs skip Claude Code's auto-discovered startup
+  (CLAUDE.md, agents, skills catalog, plugin sync, auto-memory, hooks),
+  saving roughly 25-40k tokens per run. Conductor's own session-context
+  injection is unaffected. Requires `ANTHROPIC_API_KEY` or `apiKeyHelper`
+  auth — keychain OAuth is not read in bare mode. Defaults to `false`.
+
 ### Deprecated
 
 - `[notifications.workflows]` — Use `[[notify.hooks]]` with `on` patterns instead.
