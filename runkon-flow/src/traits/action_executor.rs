@@ -88,8 +88,8 @@ pub struct ActionRegistry {
 }
 
 impl ActionRegistry {
-    /// Construct a registry from pre-built maps (called only by `FlowEngineBuilder`).
-    pub(crate) fn new(
+    /// Construct a registry from pre-built maps.
+    pub fn new(
         named: HashMap<String, Box<dyn ActionExecutor>>,
         fallback: Option<Box<dyn ActionExecutor>>,
     ) -> Self {
