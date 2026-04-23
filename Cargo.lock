@@ -658,6 +658,7 @@ dependencies = [
  "libc",
  "notify",
  "regex-lite",
+ "runkon-flow",
  "rusqlite",
  "rust-embed",
  "serde",
@@ -4512,6 +4513,20 @@ dependencies = [
  "smallvec",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "runkon-flow"
+version = "0.8.0"
+dependencies = [
+ "chrono",
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

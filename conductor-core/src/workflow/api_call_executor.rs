@@ -60,7 +60,9 @@ impl ActionExecutor for ApiCallExecutor {
             ectx.step_timeout,
             &api_key,
         )
-        .map_err(ConductorError::Workflow)?;
+        .map_err(|e| {
+            ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
+        })?;
 
         let structured = crate::schema_config::derive_output_from_value(result.json, schema);
 
@@ -74,5 +76,39 @@ impl ActionExecutor for ApiCallExecutor {
             output_tokens: Some(result.output_tokens),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::test_helpers::{make_action_params, make_ectx, ENV_MUTEX};
+
+    #[test]
+    fn missing_schema_returns_error() {
+        let executor = ApiCallExecutor::new(Config::default());
+        let result = executor.execute(&make_ectx(), &make_action_params(None));
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("requires a schema"), "got: {msg}");
+    }
+
+    #[test]
+    fn missing_api_key_returns_error() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev = std::env::var("ANTHROPIC_API_KEY").ok();
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+
+        let schema =
+            crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap();
+        let executor = ApiCallExecutor::new(Config::default());
+        let result = executor.execute(&make_ectx(), &make_action_params(Some(schema)));
+
+        if let Some(key) = prev {
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", key) };
+        }
+
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("ANTHROPIC_API_KEY"), "got: {msg}");
     }
 }

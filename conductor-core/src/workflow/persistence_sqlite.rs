@@ -211,9 +211,21 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         use crate::workflow::status::WorkflowStepStatus;
         let status = status_str
             .parse::<WorkflowStepStatus>()
-            .unwrap_or(WorkflowStepStatus::Waiting);
-        let selections =
-            selections_json.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    "get_gate_approval: unrecognised step status '{status_str}' for step {step_id}, treating as Waiting"
+                );
+                WorkflowStepStatus::Waiting
+            });
+        let selections = selections_json.and_then(|json| {
+            serde_json::from_str::<Vec<String>>(&json)
+                .map_err(|e| {
+                    tracing::warn!(
+                        "get_gate_approval: failed to deserialize gate_selections for step {step_id}: {e}"
+                    );
+                })
+                .ok()
+        });
 
         Ok(gate_approval_state_from_fields(
             approved_at.as_deref(),
@@ -246,5 +258,111 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         WorkflowManager::new(&guard)
             .reject_gate(step_id, rejected_by, feedback)
             .map_err(to_engine_err)
+    }
+}
+
+#[cfg(test)]
+impl SqliteWorkflowPersistence {
+    fn from_connection(conn: Connection) -> Self {
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::AgentManager;
+    use crate::workflow::persistence::{GateApprovalState, NewRun, NewStep};
+
+    fn make_persistence() -> (SqliteWorkflowPersistence, String) {
+        let conn = crate::test_helpers::setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+        (SqliteWorkflowPersistence::from_connection(conn), parent.id)
+    }
+
+    fn make_new_run(parent_run_id: String) -> NewRun {
+        NewRun {
+            workflow_name: "test-wf".to_string(),
+            worktree_id: Some("w1".to_string()),
+            ticket_id: None,
+            repo_id: None,
+            parent_run_id,
+            dry_run: false,
+            trigger: "manual".to_string(),
+            definition_snapshot: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+        }
+    }
+
+    #[test]
+    fn get_gate_approval_returns_pending_for_unknown_step() {
+        let (p, _) = make_persistence();
+        let result = p.get_gate_approval("nonexistent-step");
+        assert!(matches!(result, Ok(GateApprovalState::Pending)));
+    }
+
+    #[test]
+    fn create_run_and_get_run_roundtrip() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        assert_eq!(run.workflow_name, "test-wf");
+        let fetched = p.get_run(&run.id).unwrap();
+        assert_eq!(fetched.map(|r| r.id), Some(run.id));
+    }
+
+    #[test]
+    fn approve_gate_then_get_approval_returns_approved() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        let step_id = p
+            .insert_step(NewStep {
+                workflow_run_id: run.id,
+                step_name: "approval-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+        p.approve_gate(&step_id, "human", Some("looks good"), None)
+            .unwrap();
+        let state = p.get_gate_approval(&step_id).unwrap();
+        assert!(matches!(state, GateApprovalState::Approved { .. }));
+    }
+
+    #[test]
+    fn reject_gate_then_get_approval_returns_rejected() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        let step_id = p
+            .insert_step(NewStep {
+                workflow_run_id: run.id,
+                step_name: "review-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+        p.reject_gate(&step_id, "human", Some("needs work"))
+            .unwrap();
+        let state = p.get_gate_approval(&step_id).unwrap();
+        assert!(matches!(state, GateApprovalState::Rejected { .. }));
+    }
+
+    #[test]
+    fn update_run_status_roundtrip() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        p.update_run_status(&run.id, WorkflowRunStatus::Running, None, None)
+            .unwrap();
+        let active = p.list_active_runs(&[WorkflowRunStatus::Running]).unwrap();
+        assert!(active.iter().any(|r| r.id == run.id));
     }
 }
