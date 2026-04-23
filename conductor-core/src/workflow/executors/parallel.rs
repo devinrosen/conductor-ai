@@ -383,7 +383,7 @@ pub fn execute_parallel(
                     Ok(Some(r)) => r,
                     Ok(None) => {
                         tracing::warn!(
-                            "parallel: run '{}' not found in DB after drain",
+                            "parallel: run '{}' not found in DB after dispatch",
                             child.child_run_id
                         );
                         completed.insert(child_idx);

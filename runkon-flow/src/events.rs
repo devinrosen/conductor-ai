@@ -106,10 +106,8 @@ pub fn emit_to_sinks(run_id: &str, event: EngineEvent, sinks: &[Arc<dyn EventSin
     }
     let data = EngineEventData::new(run_id.to_string(), event);
     for sink in sinks.iter() {
-        let sink = Arc::clone(sink);
-        let data_clone = data.clone();
-        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            sink.emit(&data_clone);
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink.emit(&data);
         }))
         .is_err()
         {
