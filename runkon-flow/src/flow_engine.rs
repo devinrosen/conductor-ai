@@ -62,15 +62,22 @@ impl FlowEngine {
 
     /// Run a workflow definition with a pre-built execution state.
     ///
-    /// Validates against the FlowEngine's own registries before execution so
-    /// that no side effects occur when the workflow is invalid. Uses the same
-    /// registries as `validate()` to avoid asymmetry between the two paths.
+    /// Validates against the execution state's own registries (action,
+    /// item-provider) so the validation check uses the same source of truth
+    /// as dispatch-time lookup.  Gate resolvers are validated against the
+    /// FlowEngine's registry because `ExecutionState` carries none — gates
+    /// are resolved via persistence callbacks, not the executor pipeline.
     pub fn run(
         &self,
         def: &WorkflowDef,
         state: &mut ExecutionState,
     ) -> crate::engine_error::Result<WorkflowResult> {
-        if let Err(validation_errors) = self.validate(def) {
+        if let Err(validation_errors) = self.validate_with_registries(
+            &state.action_registry,
+            &state.registry,
+            &self.gate_resolver_registry,
+            def,
+        ) {
             let joined = validation_errors
                 .iter()
                 .map(|e| e.to_string())
@@ -857,6 +864,80 @@ mod tests {
             "cycle detection should produce an error; got: {:?}",
             errors
         );
+    }
+
+    // AC7a: run() validates against state registries, not engine registries
+    // If FlowEngine has "alpha" but ExecutionState doesn't, run() must reject.
+    #[test]
+    fn run_validates_against_state_registries_not_engine() {
+        use crate::engine::{ExecutionState, WorktreeContext};
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+        use crate::types::WorkflowExecConfig;
+
+        let def = make_def("wf", vec![call_node("alpha")]);
+        // Engine has "alpha" registered — validate() on the engine itself would pass.
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .build()
+            .unwrap();
+        assert!(
+            engine.validate(&def).is_ok(),
+            "engine validate() should pass"
+        );
+
+        // But ExecutionState has no actions — run() must catch the divergence.
+        let mut state = ExecutionState {
+            persistence: Arc::new(InMemoryWorkflowPersistence::new()),
+            action_registry: Arc::new(ActionRegistry::new(HashMap::new(), None)),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: "test-run".to_string(),
+            workflow_name: "wf".to_string(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                worktree_slug: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                conductor_bin_dir: None,
+                extra_plugin_dirs: vec![],
+            },
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: false,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(ItemProviderRegistry::new()),
+        };
+
+        let result = engine.run(&def, &mut state);
+        assert!(
+            result.is_err(),
+            "run() must reject when state registry lacks 'alpha'"
+        );
+        assert_eq!(state.position, 0, "no side effects on rejection");
     }
 
     // AC7: run() rejects invalid workflows before any side effects
