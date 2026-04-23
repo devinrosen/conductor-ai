@@ -3,20 +3,20 @@ use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
-use crate::error::{ConductorError, Result};
-use crate::schema_config::OutputSchema;
+use crate::engine_error::EngineError;
+use crate::output_schema::OutputSchema;
 
 /// Trait for pluggable action execution.
-///
-/// Implementations must be `Send + Sync` to support parallel step execution
-/// (`parallel.rs` spawns call steps across threads). The default `cancel`
-/// implementation is a no-op; stateful executors should override it.
 pub trait ActionExecutor: Send + Sync {
     #[allow(dead_code)]
     fn name(&self) -> &str;
-    fn execute(&self, ectx: &ExecutionContext, params: &ActionParams) -> Result<ActionOutput>;
+    fn execute(
+        &self,
+        ectx: &ExecutionContext,
+        params: &ActionParams,
+    ) -> Result<ActionOutput, EngineError>;
     #[allow(dead_code)]
-    fn cancel(&self, execution_id: &str) -> Result<()> {
+    fn cancel(&self, execution_id: &str) -> Result<(), EngineError> {
         let _ = execution_id;
         Ok(())
     }
@@ -24,30 +24,20 @@ pub trait ActionExecutor: Send + Sync {
 
 /// Per-invocation inputs passed to an `ActionExecutor`.
 pub struct ActionParams {
-    /// Short name of the agent/action being dispatched (e.g. `"plan"`).
     pub name: String,
-    /// Fully-resolved template variable map — all `{{var}}` substitutions ready.
-    /// Built from `prompt_builder::build_variable_map` at the dispatch site.
     pub inputs: HashMap<String, String>,
-    /// Retries still available after this attempt (0 = last attempt).
     #[allow(dead_code)]
     pub retries_remaining: u32,
-    /// Error message from the previous failed attempt, if any.
     pub retry_error: Option<String>,
-    /// Pre-concatenated prompt snippet file contents (from `.conductor/prompts/`).
-    /// Each element is the full text of one snippet file; the prompt builder joins them.
     pub snippets: Vec<String>,
-    /// Whether this is a dry-run — commit-capable agents must not commit.
     pub dry_run: bool,
-    /// Gate feedback string from the most recent gate step, if any.
     #[allow(dead_code)]
     pub gate_feedback: Option<String>,
-    /// Output schema for structured output validation, if any.
     pub schema: Option<OutputSchema>,
 }
 
 /// Output produced by an `ActionExecutor` on success.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct ActionOutput {
     pub markers: Vec<String>,
     pub context: Option<String>,
@@ -60,12 +50,10 @@ pub struct ActionOutput {
     pub output_tokens: Option<i64>,
     pub cache_read_input_tokens: Option<i64>,
     pub cache_creation_input_tokens: Option<i64>,
+    pub child_run_id: Option<String>,
 }
 
 /// Conductor-specific execution context passed to every `ActionExecutor::execute` call.
-///
-/// Carries per-invocation infrastructure (run ID, paths, timeouts) that the
-/// executor needs to spawn and poll a subprocess or API call.
 pub struct ExecutionContext {
     /// Pre-created `agent_runs` row ID for this invocation.
     pub run_id: String,
@@ -73,13 +61,11 @@ pub struct ExecutionContext {
     pub working_dir: PathBuf,
     /// Absolute path to the repository root.
     pub repo_path: String,
-    /// Absolute path to the SQLite database file (conductor-core specific).
-    pub db_path: PathBuf,
     /// Per-step timeout (from `WorkflowExecConfig`).
     pub step_timeout: Duration,
     /// Shutdown signal shared with the workflow engine.
     pub shutdown: Option<Arc<AtomicBool>>,
-    /// Resolved model override for this step (agent frontmatter model OR state model).
+    /// Resolved model override for this step.
     pub model: Option<String>,
     /// Bot identity name for this step, if any.
     pub bot_name: Option<String>,
@@ -88,19 +74,14 @@ pub struct ExecutionContext {
     /// Name of the parent workflow (used for workflow-local agent resolution).
     pub workflow_name: String,
     /// Worktree ID for this invocation, if any.
-    #[allow(dead_code)]
     pub worktree_id: Option<String>,
     /// Parent workflow run ID.
-    #[allow(dead_code)]
     pub parent_run_id: String,
-    /// Workflow step ID for this invocation.
-    #[allow(dead_code)]
+    /// Step ID for this invocation.
     pub step_id: String,
 }
 
 /// Holds named and fallback `ActionExecutor` implementations.
-///
-/// Use `FlowEngineBuilder` to construct; call `dispatch` at step execution time.
 pub struct ActionRegistry {
     named: HashMap<String, Box<dyn ActionExecutor>>,
     fallback: Option<Box<dyn ActionExecutor>>,
@@ -108,7 +89,7 @@ pub struct ActionRegistry {
 
 impl ActionRegistry {
     /// Construct a registry from pre-built maps (called only by `FlowEngineBuilder`).
-    pub(super) fn new(
+    pub(crate) fn new(
         named: HashMap<String, Box<dyn ActionExecutor>>,
         fallback: Option<Box<dyn ActionExecutor>>,
     ) -> Self {
@@ -116,14 +97,12 @@ impl ActionRegistry {
     }
 
     /// Find the executor for `name` and run it.
-    ///
-    /// Resolution order: exact-name match → fallback → error.
     pub fn dispatch(
         &self,
         name: &str,
         ectx: &ExecutionContext,
         params: &ActionParams,
-    ) -> Result<ActionOutput> {
+    ) -> Result<ActionOutput, EngineError> {
         let executor = self
             .named
             .get(name)
@@ -131,7 +110,7 @@ impl ActionRegistry {
             .or(self.fallback.as_deref());
         match executor {
             Some(e) => e.execute(ectx, params),
-            None => Err(ConductorError::Workflow(format!(
+            None => Err(EngineError::Workflow(format!(
                 "no registered ActionExecutor for '{}' and no fallback configured",
                 name
             ))),
@@ -153,7 +132,7 @@ mod tests {
             &self,
             _ectx: &ExecutionContext,
             _params: &ActionParams,
-        ) -> Result<ActionOutput> {
+        ) -> Result<ActionOutput, EngineError> {
             Ok(ActionOutput {
                 markers: vec!["done".to_string()],
                 context: Some("noop ran".to_string()),
@@ -167,7 +146,6 @@ mod tests {
             run_id: "run1".to_string(),
             working_dir: PathBuf::from("/tmp"),
             repo_path: "/tmp/repo".to_string(),
-            db_path: PathBuf::from("/tmp/conductor.db"),
             step_timeout: Duration::from_secs(60),
             shutdown: None,
             model: None,

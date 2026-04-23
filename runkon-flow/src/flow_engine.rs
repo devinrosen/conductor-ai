@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
-use crate::error::{ConductorError, Result};
-
-use super::action_executor::{ActionExecutor, ActionRegistry};
+use crate::engine_error::EngineError;
+use crate::traits::action_executor::{ActionExecutor, ActionRegistry};
 
 /// Builder for constructing an `ActionRegistry`.
 ///
@@ -33,9 +32,12 @@ impl FlowEngineBuilder {
     /// Register the fallback (catch-all) executor.
     ///
     /// Returns `Err` if called more than once — only one fallback is allowed.
-    pub fn action_fallback(mut self, executor: Box<dyn ActionExecutor>) -> Result<Self> {
+    pub fn action_fallback(
+        mut self,
+        executor: Box<dyn ActionExecutor>,
+    ) -> Result<Self, EngineError> {
         if self.fallback.is_some() {
-            return Err(ConductorError::Workflow(
+            return Err(EngineError::Workflow(
                 "action_fallback already set — only one fallback executor is allowed".to_string(),
             ));
         }
@@ -44,7 +46,7 @@ impl FlowEngineBuilder {
     }
 
     /// Consume the builder and produce an `ActionRegistry`.
-    pub fn build(self) -> Result<ActionRegistry> {
+    pub fn build(self) -> Result<ActionRegistry, EngineError> {
         Ok(ActionRegistry::new(self.named, self.fallback))
     }
 }
@@ -58,7 +60,8 @@ impl Default for FlowEngineBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+    use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -71,7 +74,7 @@ mod tests {
             &self,
             _ectx: &ExecutionContext,
             _params: &ActionParams,
-        ) -> crate::error::Result<ActionOutput> {
+        ) -> Result<ActionOutput, EngineError> {
             Ok(ActionOutput {
                 markers: vec!["alpha".to_string()],
                 ..Default::default()
@@ -88,7 +91,7 @@ mod tests {
             &self,
             _ectx: &ExecutionContext,
             _params: &ActionParams,
-        ) -> crate::error::Result<ActionOutput> {
+        ) -> Result<ActionOutput, EngineError> {
             Ok(ActionOutput {
                 markers: vec!["beta".to_string()],
                 ..Default::default()
@@ -101,7 +104,6 @@ mod tests {
             run_id: "r1".to_string(),
             working_dir: PathBuf::from("/tmp"),
             repo_path: "/tmp/repo".to_string(),
-            db_path: PathBuf::from("/tmp/db"),
             step_timeout: Duration::from_secs(60),
             shutdown: None,
             model: None,
@@ -117,7 +119,7 @@ mod tests {
     fn make_params(name: &str) -> ActionParams {
         ActionParams {
             name: name.to_string(),
-            inputs: std::collections::HashMap::new(),
+            inputs: HashMap::new(),
             retries_remaining: 0,
             retry_error: None,
             snippets: vec![],

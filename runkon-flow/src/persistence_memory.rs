@@ -5,20 +5,20 @@ use std::sync::Mutex;
 
 use chrono::Utc;
 
-use crate::workflow::engine_error::EngineError;
-use crate::workflow::manager::FanOutItemRow;
-use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
-
-use super::persistence::{
+use crate::engine_error::EngineError;
+use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
+use crate::traits::persistence::{
     gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
     NewStep, StepUpdate, WorkflowPersistence,
 };
+use crate::types::{FanOutItemRow, WorkflowRun, WorkflowRunStep};
 
 struct InMemoryStore {
     runs: HashMap<String, WorkflowRun>,
     steps: HashMap<String, WorkflowRunStep>,
     fan_out_items: HashMap<String, FanOutItemRow>,
+    /// Secondary index: (step_run_id, item_id) → fan_out_item id for O(1) idempotency check.
+    fan_out_index: HashMap<(String, String), String>,
 }
 
 /// In-memory implementation of `WorkflowPersistence` for test isolation.
@@ -36,6 +36,7 @@ impl InMemoryWorkflowPersistence {
                 runs: HashMap::new(),
                 steps: HashMap::new(),
                 fan_out_items: HashMap::new(),
+                fan_out_index: HashMap::new(),
             }),
         }
     }
@@ -53,7 +54,7 @@ fn lock_err() -> EngineError {
 
 impl WorkflowPersistence for InMemoryWorkflowPersistence {
     fn create_run(&self, new_run: NewRun) -> Result<WorkflowRun, EngineError> {
-        let id = crate::new_id();
+        let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
         let run = WorkflowRun {
             id: id.clone(),
@@ -144,7 +145,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
     }
 
     fn insert_step(&self, new_step: NewStep) -> Result<String, EngineError> {
-        let id = crate::new_id();
+        let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
         let (status, started_at, retry_count) = if let Some(rc) = new_step.retry_count {
             (WorkflowStepStatus::Running, Some(now), rc)
@@ -249,15 +250,13 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         item_ref: &str,
     ) -> Result<String, EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
-        // Idempotent: return existing ID if (step_run_id, item_id) already present.
-        if let Some(existing) = store
-            .fan_out_items
-            .values()
-            .find(|i| i.step_run_id == step_run_id && i.item_id == item_id)
-        {
-            return Ok(existing.id.clone());
+        // Idempotent: O(1) lookup via secondary index.
+        let index_key = (step_run_id.to_string(), item_id.to_string());
+        if let Some(existing_id) = store.fan_out_index.get(&index_key) {
+            return Ok(existing_id.clone());
         }
-        let id = crate::new_id();
+        let id = ulid::Ulid::new().to_string();
+        store.fan_out_index.insert(index_key, id.clone());
         store.fan_out_items.insert(
             id.clone(),
             FanOutItemRow {
@@ -326,10 +325,16 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         let Some(step) = store.steps.get(step_id) else {
             return Ok(GateApprovalState::Pending);
         };
-        let selections = step
-            .gate_selections
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok());
+        let selections = step.gate_selections.as_deref().and_then(|s| {
+            serde_json::from_str::<Vec<String>>(s)
+                .map_err(|e| {
+                    tracing::warn!(
+                        "get_gate_approval: malformed gate_selections JSON for step '{step_id}': {e}"
+                    );
+                    e
+                })
+                .ok()
+        });
         Ok(gate_approval_state_from_fields(
             step.gate_approved_at.as_deref(),
             step.status.clone(),
@@ -354,12 +359,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step.gate_approved_at = Some(now.clone());
         step.gate_approved_by = Some(approved_by.to_string());
         step.gate_feedback = feedback.map(String::from);
-        step.gate_selections = selections.map(|s| {
-            serde_json::to_string(s).unwrap_or_else(|e| {
-                tracing::warn!("approve_gate: failed to serialize selections: {e}");
-                String::new()
-            })
-        });
+        step.gate_selections = selections.map(|s| serde_json::to_string(s).unwrap_or_default());
         if let Some(items) = selections.filter(|s| !s.is_empty()) {
             let mut out = String::from("User selected the following items:\n");
             for item in items {
@@ -390,16 +390,38 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step.ended_at = Some(now);
         Ok(())
     }
+
+    fn is_run_cancelled(&self, _run_id: &str) -> Result<bool, EngineError> {
+        Ok(false)
+    }
+
+    fn tick_heartbeat(&self, _run_id: &str) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    fn persist_metrics(
+        &self,
+        _run_id: &str,
+        _input_tokens: i64,
+        _output_tokens: i64,
+        _cache_read_input_tokens: i64,
+        _cache_creation_input_tokens: i64,
+        _cost_usd: f64,
+        _num_turns: i64,
+        _duration_ms: i64,
+    ) -> Result<(), EngineError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::persistence::{
+    use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
+    use crate::traits::persistence::{
         FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
         WorkflowPersistence,
     };
-    use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 
     fn make_new_run(name: &str) -> NewRun {
         NewRun {
@@ -670,5 +692,29 @@ mod tests {
         let steps = p.get_steps(&run.id).unwrap();
         assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("not ready"));
+    }
+
+    #[test]
+    fn test_is_run_cancelled_always_false() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let cancelled = p.is_run_cancelled(&run.id).unwrap();
+        assert!(!cancelled, "in-memory impl always returns false");
+    }
+
+    #[test]
+    fn test_tick_heartbeat_is_noop() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        assert!(p.tick_heartbeat(&run.id).is_ok());
+    }
+
+    #[test]
+    fn test_persist_metrics_is_noop() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        assert!(p
+            .persist_metrics(&run.id, 100, 200, 50, 25, 0.01, 3, 5000)
+            .is_ok());
     }
 }
