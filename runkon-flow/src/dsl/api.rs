@@ -213,8 +213,8 @@ where
     stack.push(name.to_string());
 
     // Skip unloadable sub-workflows rather than failing — load errors are
-    // reported by FlowEngine::validate_with_registries, which collects all
-    // of them. Failing here would only surface the first one.
+    // reported by the caller's validation pass, which collects all of them.
+    // Failing here would only surface the first one.
     let def = match loader(name) {
         Ok(d) => d,
         Err(_) => {
