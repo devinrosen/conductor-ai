@@ -385,23 +385,19 @@ pub fn execute_parallel(
                         }
                     }
                 } else {
-                    interpret_agent_output(
-                        run.result_text.as_deref(),
-                        child.schema.as_ref(),
-                        false,
-                    )
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(
-                            "parallel: '{}' schema validation failed, falling back: {e}",
-                            child.agent_name
-                        );
-                        let fb = run
-                            .result_text
-                            .as_deref()
-                            .and_then(parse_conductor_output)
-                            .unwrap_or_default();
-                        (fb.markers, fb.context, None)
-                    })
+                    interpret_agent_output(run.result_text.as_deref(), child.schema.as_ref(), false)
+                        .unwrap_or_else(|e| {
+                            tracing::warn!(
+                                "parallel: '{}' schema validation failed, falling back: {e}",
+                                child.agent_name
+                            );
+                            let fb = run
+                                .result_text
+                                .as_deref()
+                                .and_then(parse_conductor_output)
+                                .unwrap_or_default();
+                            (fb.markers, fb.context, None)
+                        })
                 };
 
                 let markers_json = serde_json::to_string(&markers).unwrap_or_default();
@@ -445,9 +441,7 @@ pub fn execute_parallel(
 
                 // Best-effort mid-run metrics flush after each parallel agent
                 if let Err(e) = state.flush_metrics() {
-                    tracing::warn!(
-                        "Failed to flush mid-run metrics after parallel agent: {e}"
-                    );
+                    tracing::warn!("Failed to flush mid-run metrics after parallel agent: {e}");
                 }
 
                 tracing::info!(
