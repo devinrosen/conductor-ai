@@ -6,7 +6,10 @@ use runkon_flow::dsl::{Condition, IfNode, UnlessNode, WorkflowNode};
 use runkon_flow::traits::persistence::WorkflowPersistence;
 use runkon_flow::FlowEngineBuilder;
 
-use common::{call_node, make_def, make_persistence, make_state, named_executors, ActionExecutor, MockExecutor};
+use common::{
+    call_node, make_def, make_persistence, make_state, named_executors, ActionExecutor,
+    MockExecutor,
+};
 
 // ---------------------------------------------------------------------------
 // if — condition taken (BoolInput = "true")
@@ -117,9 +120,7 @@ fn unless_condition_false_runs_body() {
     let mut state = make_state(
         "unless-false",
         Arc::clone(&persistence),
-        named_executors([
-            Box::new(MockExecutor::new("fallback-step")) as Box<dyn ActionExecutor>,
-        ]),
+        named_executors([Box::new(MockExecutor::new("fallback-step")) as Box<dyn ActionExecutor>]),
     );
     state
         .inputs
@@ -163,9 +164,7 @@ fn unless_condition_true_skips_body() {
     let mut state = make_state(
         "unless-true",
         Arc::clone(&persistence),
-        named_executors([
-            Box::new(MockExecutor::new("fallback-step")) as Box<dyn ActionExecutor>,
-        ]),
+        named_executors([Box::new(MockExecutor::new("fallback-step")) as Box<dyn ActionExecutor>]),
     );
     state
         .inputs
@@ -215,7 +214,8 @@ fn if_step_marker_condition_taken() {
         "if-marker",
         Arc::clone(&persistence),
         named_executors([
-            Box::new(MockExecutor::with_markers("detector", &["has_issues"])) as Box<dyn ActionExecutor>,
+            Box::new(MockExecutor::with_markers("detector", &["has_issues"]))
+                as Box<dyn ActionExecutor>,
             Box::new(MockExecutor::new("reporter")) as Box<dyn ActionExecutor>,
         ]),
     );

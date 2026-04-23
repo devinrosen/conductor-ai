@@ -136,7 +136,10 @@ fn gate_timeout_continue_succeeds() {
         .build()
         .expect("engine build failed");
 
-    let def = make_def("gate-timeout-continue", vec![timeout_gate(OnTimeout::Continue)]);
+    let def = make_def(
+        "gate-timeout-continue",
+        vec![timeout_gate(OnTimeout::Continue)],
+    );
 
     let persistence = make_persistence();
     let mut state = make_state(
@@ -262,9 +265,7 @@ fn pre_cancelled_token_stops_run() {
     let mut state = make_state(
         "cancel-test",
         Arc::clone(&persistence),
-        named_executors([
-            Box::new(MockExecutor::new("should-not-run")) as Box<dyn ActionExecutor>,
-        ]),
+        named_executors([Box::new(MockExecutor::new("should-not-run")) as Box<dyn ActionExecutor>]),
     );
 
     // Cancel before run starts
