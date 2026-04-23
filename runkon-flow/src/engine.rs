@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
 use crate::dsl::{InputType, OnFail, WorkflowDef, WorkflowNode};
 use crate::engine_error::{EngineError, Result};
+use crate::events::{EngineEvent, EngineEventData, EventSink};
 use crate::output_schema::OutputSchema;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::action_executor::ActionRegistry;
@@ -91,6 +92,8 @@ pub struct ExecutionState {
     pub child_runner: Option<Arc<dyn ChildWorkflowRunner>>,
     pub last_heartbeat_at: Arc<AtomicI64>,
     pub registry: Arc<ItemProviderRegistry>,
+    /// Event sinks — slice shared cheaply across sub-workflow states.
+    pub event_sinks: Arc<[Arc<dyn EventSink>]>,
 }
 
 /// Input parameters for child workflow execution.
@@ -190,6 +193,28 @@ pub fn resolve_schema(state: &ExecutionState, name: &str) -> Result<OutputSchema
     }
 }
 
+/// Emit an engine event to all registered sinks.
+///
+/// Each sink is called inside `catch_unwind(AssertUnwindSafe(...))`. Panics are
+/// logged via `tracing::warn!` and do not abort the run or skip remaining sinks.
+pub fn emit_event(state: &ExecutionState, event: EngineEvent) {
+    if state.event_sinks.is_empty() {
+        return;
+    }
+    let data = EngineEventData::new(state.workflow_run_id.clone(), event);
+    for sink in state.event_sinks.iter() {
+        let sink = Arc::clone(sink);
+        let data_clone = data.clone();
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            sink.emit(&data_clone);
+        }))
+        .is_err()
+        {
+            tracing::warn!("EventSink::emit panicked — continuing with remaining sinks");
+        }
+    }
+}
+
 /// Extract completed step keys from a slice of step records.
 pub fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<StepKey> {
     steps
@@ -230,6 +255,23 @@ pub fn run_workflow_engine(
     state: &mut ExecutionState,
     workflow: &WorkflowDef,
 ) -> Result<WorkflowResult> {
+    // Emit RunStarted or RunResumed (DB write for the run record already happened before this fn).
+    if state.resume_ctx.is_some() {
+        emit_event(
+            state,
+            EngineEvent::RunResumed {
+                workflow_name: workflow.name.clone(),
+            },
+        );
+    } else {
+        emit_event(
+            state,
+            EngineEvent::RunStarted {
+                workflow_name: workflow.name.clone(),
+            },
+        );
+    }
+
     // Execute main body
     let mut body_error: Option<String> = None;
     let body_result = execute_nodes(state, &workflow.body, true);
@@ -264,6 +306,26 @@ pub fn run_workflow_engine(
 
     // Finalize run status via persistence
     let wf_run_id = state.workflow_run_id.clone();
+    let is_cancelled = body_error
+        .as_deref()
+        .map(|e| e.contains("cancelled"))
+        .unwrap_or(false);
+
+    if let Err(e) = state.flush_metrics() {
+        tracing::warn!(
+            workflow_run_id = %wf_run_id,
+            "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
+        );
+    }
+    emit_event(
+        state,
+        EngineEvent::MetricsUpdated {
+            total_cost: state.total_cost,
+            total_turns: state.total_turns,
+            total_duration_ms: state.total_duration_ms,
+        },
+    );
+
     if state.all_succeeded {
         state.persistence.update_run_status(
             &wf_run_id,
@@ -272,6 +334,16 @@ pub fn run_workflow_engine(
             None,
         )?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
+        emit_event(state, EngineEvent::RunCompleted { succeeded: true });
+    } else if is_cancelled {
+        state.persistence.update_run_status(
+            &wf_run_id,
+            WorkflowRunStatus::Failed,
+            Some(&summary),
+            body_error.as_deref(),
+        )?;
+        tracing::warn!("Workflow '{}' was cancelled", workflow.name);
+        emit_event(state, EngineEvent::RunCancelled);
     } else {
         state.persistence.update_run_status(
             &wf_run_id,
@@ -280,13 +352,7 @@ pub fn run_workflow_engine(
             body_error.as_deref(),
         )?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
-    }
-
-    if let Err(e) = state.flush_metrics() {
-        tracing::warn!(
-            workflow_run_id = %wf_run_id,
-            "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
-        );
+        emit_event(state, EngineEvent::RunCompleted { succeeded: false });
     }
 
     tracing::info!(

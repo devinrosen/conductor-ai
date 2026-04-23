@@ -156,6 +156,8 @@ pub(super) struct ExecutionState<'a> {
     /// Action executor registry — routes `call <name>` steps to the right executor.
     /// Stored as `Arc` so it can be cloned before dispatch without borrowing `state`.
     pub action_registry: std::sync::Arc<crate::workflow::action_executor::ActionRegistry>,
+    /// Event sinks — slice shared cheaply across sub-workflow states.
+    pub event_sinks: std::sync::Arc<[std::sync::Arc<dyn runkon_flow::events::EventSink>]>,
 }
 
 impl ExecutionState<'_> {
@@ -558,9 +560,32 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         last_heartbeat_at: ExecutionState::new_heartbeat(),
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
         action_registry: std::sync::Arc::new(build_default_action_registry(config)),
+        event_sinks: std::sync::Arc::from(input.exec_config.event_sinks.clone()),
     };
 
     run_workflow_engine(&mut state, workflow)
+}
+
+/// Emit an engine event to all registered sinks.
+///
+/// Each sink is called inside `catch_unwind(AssertUnwindSafe(...))`. Panics are
+/// logged via `tracing::warn!` and do not abort the run or skip remaining sinks.
+pub(super) fn emit_event(state: &ExecutionState<'_>, event: runkon_flow::events::EngineEvent) {
+    if state.event_sinks.is_empty() {
+        return;
+    }
+    let data = runkon_flow::events::EngineEventData::new(state.workflow_run_id.clone(), event);
+    for sink in state.event_sinks.iter() {
+        let sink = Arc::clone(sink);
+        let data_clone = data.clone();
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            sink.emit(&data_clone);
+        }))
+        .is_err()
+        {
+            tracing::warn!("EventSink::emit panicked — continuing with remaining sinks");
+        }
+    }
 }
 
 /// Shared orchestration: execute body → always block → build summary → finalize.
@@ -571,6 +596,23 @@ pub(super) fn run_workflow_engine(
     state: &mut ExecutionState<'_>,
     workflow: &WorkflowDef,
 ) -> Result<WorkflowResult> {
+    // Emit RunStarted or RunResumed (DB write for the run record already happened before this fn).
+    if state.resume_ctx.is_some() {
+        emit_event(
+            state,
+            runkon_flow::events::EngineEvent::RunResumed {
+                workflow_name: workflow.name.clone(),
+            },
+        );
+    } else {
+        emit_event(
+            state,
+            runkon_flow::events::EngineEvent::RunStarted {
+                workflow_name: workflow.name.clone(),
+            },
+        );
+    }
+
     // Notify Vantage on dispatch (best-effort — don't fail the workflow)
     let vantage_lc = resolve_vantage_lifecycle(state.conn, state);
     if let Some(ref lc) = vantage_lc {
@@ -614,6 +656,26 @@ pub(super) fn run_workflow_engine(
     // Finalize
     let wf_run_id = state.workflow_run_id.clone();
     let parent_run_id = state.parent_run_id.clone();
+    let is_cancelled = body_error
+        .as_deref()
+        .map(|e| e.contains("cancelled"))
+        .unwrap_or(false);
+
+    if let Err(e) = state.flush_metrics() {
+        tracing::warn!(
+            workflow_run_id = %wf_run_id,
+            "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
+        );
+    }
+    emit_event(
+        state,
+        runkon_flow::events::EngineEvent::MetricsUpdated {
+            total_cost: state.total_cost,
+            total_turns: state.total_turns,
+            total_duration_ms: state.total_duration_ms,
+        },
+    );
+
     if state.all_succeeded {
         state.agent_mgr.update_run_completed(
             &parent_run_id,
@@ -634,6 +696,10 @@ pub(super) fn run_workflow_engine(
             None,
         )?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
+        emit_event(
+            state,
+            runkon_flow::events::EngineEvent::RunCompleted { succeeded: true },
+        );
 
         // Notify Vantage of completion (best-effort)
         if let Some(ref lc) = vantage_lc {
@@ -647,6 +713,25 @@ pub(super) fn run_workflow_engine(
                 tracing::warn!("Vantage completion notification failed: {e}");
             }
         }
+    } else if is_cancelled {
+        state
+            .agent_mgr
+            .update_run_failed(&parent_run_id, &summary)?;
+        state.wf_mgr.update_workflow_status(
+            &wf_run_id,
+            WorkflowRunStatus::Failed,
+            Some(&summary),
+            body_error.as_deref(),
+        )?;
+        tracing::warn!("Workflow '{}' was cancelled", workflow.name);
+        emit_event(state, runkon_flow::events::EngineEvent::RunCancelled);
+
+        // Notify Vantage of failure (best-effort)
+        if let Some(ref lc) = vantage_lc {
+            if let Err(e) = lc.on_failed(&summary) {
+                tracing::warn!("Vantage failure notification failed: {e}");
+            }
+        }
     } else {
         state
             .agent_mgr
@@ -658,6 +743,10 @@ pub(super) fn run_workflow_engine(
             body_error.as_deref(),
         )?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
+        emit_event(
+            state,
+            runkon_flow::events::EngineEvent::RunCompleted { succeeded: false },
+        );
 
         // Notify Vantage of failure (best-effort)
         if let Some(ref lc) = vantage_lc {
@@ -665,13 +754,6 @@ pub(super) fn run_workflow_engine(
                 tracing::warn!("Vantage failure notification failed: {e}");
             }
         }
-    }
-
-    if let Err(e) = state.flush_metrics() {
-        tracing::warn!(
-            workflow_run_id = %wf_run_id,
-            "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
-        );
     }
 
     tracing::info!(
@@ -1143,6 +1225,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         last_heartbeat_at: ExecutionState::new_heartbeat(),
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
         action_registry: std::sync::Arc::new(build_default_action_registry(config)),
+        event_sinks: std::sync::Arc::from(vec![]),
     };
 
     run_workflow_engine(&mut state, &workflow)

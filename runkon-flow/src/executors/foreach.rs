@@ -2,9 +2,10 @@ use std::collections::HashSet;
 
 use crate::dsl::{ForEachNode, OnChildFail};
 use crate::engine::{
-    record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
+    emit_event, record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
 };
 use crate::engine_error::{EngineError, Result};
+use crate::events::EngineEvent;
 use crate::status::WorkflowStepStatus;
 use crate::traits::item_provider::ProviderContext;
 use crate::traits::persistence::{FanOutItemStatus, FanOutItemUpdate, NewStep, StepUpdate};
@@ -126,6 +127,11 @@ pub fn execute_foreach(
         node.max_parallel,
     );
 
+    emit_event(
+        state,
+        EngineEvent::FanOutItemsCollected { count: total_items },
+    );
+
     if total_items == 0 {
         let context = format!("foreach {}: no items to process", node.name);
         state
@@ -175,6 +181,13 @@ pub fn execute_foreach(
         .map_err(|e| EngineError::Persistence(e.to_string()))?;
 
     for item in pending_items {
+        emit_event(
+            state,
+            EngineEvent::FanOutItemStarted {
+                item_id: item.item_id.clone(),
+            },
+        );
+
         // Mark as running
         state
             .persistence
@@ -235,6 +248,13 @@ pub fn execute_foreach(
                         },
                     )
                     .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                emit_event(
+                    state,
+                    EngineEvent::FanOutItemCompleted {
+                        item_id: item.item_id.clone(),
+                        succeeded: result.all_succeeded,
+                    },
+                );
                 if result.all_succeeded {
                     tracing::info!(
                         "foreach '{}': item '{}' → {terminal}",
@@ -272,6 +292,13 @@ pub fn execute_foreach(
                         },
                     )
                     .map_err(|e2| EngineError::Persistence(e2.to_string()))?;
+                emit_event(
+                    state,
+                    EngineEvent::FanOutItemCompleted {
+                        item_id: item.item_id.clone(),
+                        succeeded: false,
+                    },
+                );
 
                 match node.on_child_fail {
                     OnChildFail::Halt => {

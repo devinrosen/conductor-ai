@@ -317,7 +317,7 @@ impl WorkflowRunStep {
 }
 
 /// Configuration for workflow execution.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkflowExecConfig {
     pub poll_interval: Duration,
     pub step_timeout: Duration,
@@ -326,6 +326,26 @@ pub struct WorkflowExecConfig {
     /// Optional shutdown flag. When set to `true`, in-flight steps are
     /// cancelled with "workflow cancelled: TUI was closed".
     pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Event sinks that receive observability events after each state transition.
+    /// Defaults to empty (no sinks). Use `..WorkflowExecConfig::default()` spread
+    /// syntax to leave this unset when you don't need events.
+    pub event_sinks: Vec<std::sync::Arc<dyn runkon_flow::events::EventSink>>,
+}
+
+impl std::fmt::Debug for WorkflowExecConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowExecConfig")
+            .field("poll_interval", &self.poll_interval)
+            .field("step_timeout", &self.step_timeout)
+            .field("fail_fast", &self.fail_fast)
+            .field("dry_run", &self.dry_run)
+            .field("shutdown", &self.shutdown)
+            .field(
+                "event_sinks",
+                &format_args!("[{} sink(s)]", self.event_sinks.len()),
+            )
+            .finish()
+    }
 }
 
 impl Default for WorkflowExecConfig {
@@ -336,6 +356,7 @@ impl Default for WorkflowExecConfig {
             fail_fast: true,
             dry_run: false,
             shutdown: None,
+            event_sinks: vec![],
         }
     }
 }
