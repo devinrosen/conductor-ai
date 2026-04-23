@@ -20,6 +20,8 @@ pub mod types;
 pub mod workflow_resolver_directory;
 pub mod workflow_resolver_memory;
 
+pub use cancellation::CancellationToken;
+pub use cancellation_reason::CancellationReason;
 pub use channel_event_sink::ChannelEventSink;
 pub use dsl::ValidationError;
 pub use events::{EngineEvent, EngineEventData, EventSink};

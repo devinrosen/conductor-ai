@@ -15,6 +15,9 @@ pub enum WorkflowRunStatus {
     /// tick, CAS-flips it back to `failed`, and spawns a resume thread.
     /// Neither active nor terminal — consumed within one background tick.
     NeedsResume,
+    /// Transient state: a cancel signal has been sent; the engine is cleaning up.
+    /// Neither active nor terminal — the engine transitions to `Cancelled` once cleanup completes.
+    Cancelling,
 }
 
 impl std::fmt::Display for WorkflowRunStatus {
@@ -27,6 +30,7 @@ impl std::fmt::Display for WorkflowRunStatus {
             Self::Cancelled => "cancelled",
             Self::Waiting => "waiting",
             Self::NeedsResume => "needs_resume",
+            Self::Cancelling => "cancelling",
         };
         write!(f, "{s}")
     }
@@ -43,6 +47,7 @@ impl std::str::FromStr for WorkflowRunStatus {
             "cancelled" => Ok(Self::Cancelled),
             "waiting" => Ok(Self::Waiting),
             "needs_resume" => Ok(Self::NeedsResume),
+            "cancelling" => Ok(Self::Cancelling),
             _ => Err(format!("unknown WorkflowRunStatus: {s}")),
         }
     }

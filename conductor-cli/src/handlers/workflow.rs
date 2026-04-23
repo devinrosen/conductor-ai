@@ -717,30 +717,11 @@ pub fn handle_workflow(
         }
         WorkflowCommands::Cancel { id } => {
             let wf_mgr = WorkflowManager::new(conn);
-            match wf_mgr.get_workflow_run(&id)? {
-                Some(run) => {
-                    if matches!(
-                        run.status,
-                        conductor_core::workflow::WorkflowRunStatus::Completed
-                            | conductor_core::workflow::WorkflowRunStatus::Failed
-                            | conductor_core::workflow::WorkflowRunStatus::Cancelled
-                    ) {
-                        println!(
-                            "Workflow run {} is already in terminal state: {}",
-                            id, run.status
-                        );
-                    } else {
-                        wf_mgr.update_workflow_status(
-                            &id,
-                            conductor_core::workflow::WorkflowRunStatus::Cancelled,
-                            Some("Cancelled by user"),
-                            None,
-                        )?;
-                        println!("Workflow run {} cancelled.", id);
-                    }
-                }
-                None => {
-                    println!("Workflow run not found: {id}");
+            match wf_mgr.cancel_run(&id, "Cancelled by user") {
+                Ok(()) => println!("Workflow run {id} cancelled."),
+                Err(e) => {
+                    eprintln!("Failed to cancel workflow run {id}: {e}");
+                    std::process::exit(1);
                 }
             }
         }

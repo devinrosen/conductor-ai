@@ -43,7 +43,12 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         drop(rx);
         let sink = ChannelEventSink(tx);
-        let data = EngineEventData::new("run-2".to_string(), EngineEvent::RunCancelled);
+        let data = EngineEventData::new(
+            "run-2".to_string(),
+            EngineEvent::RunCancelled {
+                reason: crate::cancellation_reason::CancellationReason::UserRequested(None),
+            },
+        );
         sink.emit(&data);
     }
 }

@@ -140,6 +140,7 @@ mod tests {
             with: vec![],
             bot_name: None,
             plugin_dirs: vec![],
+            timeout: None,
         })
     }
 
@@ -320,6 +321,7 @@ mod tests {
             with: vec![],
             bot_name: None,
             plugin_dirs: vec![],
+            timeout: None,
         });
         let keys = collect_leaf_step_keys(&node);
         assert_eq!(keys, vec!["plan".to_string()]);

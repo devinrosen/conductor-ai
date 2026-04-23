@@ -328,6 +328,7 @@ pub fn execute_call_workflow(
                 bot_name: effective_bot_name.clone(),
                 depth: child_depth,
                 parent_step_id: Some(step_id.clone()),
+                cancellation: state.cancellation.child(),
             },
         ) {
             Ok(result) => {

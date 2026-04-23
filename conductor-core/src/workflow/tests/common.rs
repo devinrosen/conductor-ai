@@ -89,6 +89,7 @@ pub(in crate::workflow) fn base_execution_state<'a>(
             ),
         ),
         event_sinks: std::sync::Arc::from(vec![]),
+        cancel_reason: None,
     }
 }
 

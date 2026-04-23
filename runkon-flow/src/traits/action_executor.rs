@@ -124,6 +124,20 @@ impl ActionRegistry {
             ))),
         }
     }
+
+    /// Call `cancel()` on the executor for `name`, if registered.
+    /// Used by `FlowEngine::cancel_run()` to fire-and-forget executor-level cancellation.
+    pub fn cancel(&self, name: &str, execution_id: &str) -> Result<(), EngineError> {
+        let executor = self
+            .named
+            .get(name)
+            .map(|e| e.as_ref())
+            .or(self.fallback.as_deref());
+        match executor {
+            Some(e) => e.cancel(execution_id),
+            None => Ok(()),
+        }
+    }
 }
 
 #[cfg(test)]

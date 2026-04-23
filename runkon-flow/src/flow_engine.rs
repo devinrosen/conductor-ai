@@ -1,13 +1,18 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
+use crate::cancellation::CancellationToken;
+use crate::cancellation_reason::CancellationReason;
 use crate::dsl::{detect_workflow_cycles, GateType, ValidationError, WorkflowDef, WorkflowNode};
 use crate::engine::{run_workflow_engine, ExecutionState};
 use crate::engine_error::EngineError;
 use crate::events::EventSink;
+use crate::status::WorkflowRunStatus;
 use crate::traits::action_executor::{ActionExecutor, ActionRegistry};
 use crate::traits::gate_resolver::{GateResolver, GateResolverRegistry};
 use crate::traits::item_provider::{ItemProvider, ItemProviderRegistry};
+use crate::traits::persistence::WorkflowPersistence;
 use crate::traits::script_env_provider::{NoOpScriptEnvProvider, ScriptEnvProvider};
 use crate::traits::workflow_resolver::WorkflowResolver;
 use crate::types::WorkflowResult;
@@ -30,6 +35,17 @@ pub struct EngineBundle {
 // FlowEngine
 // ---------------------------------------------------------------------------
 
+/// All per-run state needed by `cancel_run()` and `Drop`. Stored atomically in
+/// a single `Mutex<HashMap>` so register/deregister/drain are each one lock.
+struct ActiveRunEntry {
+    token: CancellationToken,
+    shutdown: Arc<AtomicBool>,
+    persistence: Arc<dyn WorkflowPersistence>,
+    registry: Arc<ActionRegistry>,
+    /// (executor_label, step_id) of the step currently in flight, if any.
+    exec_info: Arc<Mutex<Option<(String, String)>>>,
+}
+
 /// The primary harness for running and validating workflows.
 ///
 /// Produced by [`FlowEngineBuilder::build()`].
@@ -42,6 +58,9 @@ pub struct FlowEngine {
     pub(crate) script_env_provider: Arc<dyn ScriptEnvProvider>,
     pub(crate) workflow_resolver: Option<Arc<dyn WorkflowResolver>>,
     pub(crate) event_sinks: Vec<Arc<dyn EventSink>>,
+    /// All per-run cancellation state in a single map so register/deregister
+    /// are atomic (one lock covers token + shutdown + persistence + registry).
+    active_runs: Mutex<HashMap<String, ActiveRunEntry>>,
 }
 
 impl FlowEngine {
@@ -104,7 +123,103 @@ impl FlowEngine {
             )));
         }
         state.event_sinks = Arc::from(self.event_sinks.clone());
-        run_workflow_engine(state, def)
+
+        // Ensure the exec_config.shutdown arc exists so cancel_run() can set it.
+        let shutdown_arc = state
+            .exec_config
+            .shutdown
+            .get_or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone();
+
+        // Register all per-run cancellation state in a single lock so cancel_run()
+        // and Drop each see a consistent snapshot.
+        let run_id = state.workflow_run_id.clone();
+        {
+            let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.insert(
+                run_id.clone(),
+                ActiveRunEntry {
+                    token: state.cancellation.clone(),
+                    shutdown: shutdown_arc,
+                    persistence: Arc::clone(&state.persistence),
+                    registry: Arc::clone(&state.action_registry),
+                    exec_info: Arc::clone(&state.current_execution_id),
+                },
+            );
+        }
+
+        let result = run_workflow_engine(state, def);
+
+        // Deregister on completion regardless of outcome.
+        {
+            let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.remove(&run_id);
+        }
+
+        result
+    }
+
+    /// Cancel a running workflow by run ID.
+    ///
+    /// Marks the DB run as `Cancelling`, signals the in-memory token so the engine
+    /// halts at the next step boundary, and fire-and-forgets `executor.cancel()`
+    /// for the step currently in flight.
+    ///
+    /// Returns `Err` if the run is not currently active in this engine instance.
+    pub fn cancel_run(
+        &self,
+        run_id: &str,
+        reason: CancellationReason,
+    ) -> crate::engine_error::Result<()> {
+        // Pull all per-run state out in a single lock.
+        let entry = {
+            let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.get(run_id).map(|e| {
+                (
+                    e.token.clone(),
+                    Arc::clone(&e.shutdown),
+                    Arc::clone(&e.persistence),
+                    Arc::clone(&e.registry),
+                    Arc::clone(&e.exec_info),
+                )
+            })
+        };
+
+        let (token, shutdown, persistence, registry, exec_info) = match entry {
+            Some(e) => e,
+            None => {
+                return Err(EngineError::Workflow(format!(
+                    "cancel_run: run '{run_id}' is not active in this engine instance"
+                )))
+            }
+        };
+
+        // Mark DB as Cancelling so cross-process engines also observe the signal.
+        if let Err(e) =
+            persistence.update_run_status(run_id, WorkflowRunStatus::Cancelling, None, None)
+        {
+            tracing::warn!("cancel_run: failed to mark run {run_id} as Cancelling in DB: {e}");
+        }
+
+        // Set the executor shutdown flag so the in-flight step stops promptly.
+        shutdown.store(true, Ordering::SeqCst);
+
+        // Signal the cancellation token so the engine halts at the next step boundary.
+        token.cancel(reason);
+
+        // Fire-and-forget: call executor.cancel() on the currently running step, if any.
+        let exec_snap = exec_info.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some((exec_label, step_id)) = exec_snap {
+            std::thread::spawn(move || {
+                if let Err(e) = registry.cancel(&exec_label, &step_id) {
+                    tracing::warn!(
+                        "cancel_run: executor.cancel() for '{exec_label}' step '{step_id}' failed: {e}"
+                    );
+                }
+            });
+        }
+
+        Ok(())
     }
 
     /// Inner validation implementation. Accepts explicit registry references so
@@ -475,6 +590,7 @@ impl FlowEngineBuilder {
             script_env_provider: Arc::from(self.script_env_provider),
             workflow_resolver: self.workflow_resolver.map(Arc::from),
             event_sinks: self.event_sinks,
+            active_runs: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -482,6 +598,19 @@ impl FlowEngineBuilder {
 impl Default for FlowEngineBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for FlowEngine {
+    fn drop(&mut self) {
+        let entries: Vec<ActiveRunEntry> = {
+            let mut guard = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            guard.drain().map(|(_, e)| e).collect()
+        };
+        for entry in entries {
+            entry.shutdown.store(true, Ordering::SeqCst);
+            entry.token.cancel(CancellationReason::EngineShutdown);
+        }
     }
 }
 
@@ -595,6 +724,7 @@ mod tests {
             with: vec![],
             bot_name: None,
             plugin_dirs: vec![],
+            timeout: None,
         })
     }
 
@@ -952,6 +1082,7 @@ mod tests {
 
     // Builds a minimal ExecutionState with empty registries for run() tests.
     fn make_bare_state(wf_name: &str) -> crate::engine::ExecutionState {
+        use crate::cancellation::CancellationToken;
         use crate::engine::{ExecutionState, WorktreeContext};
         use crate::persistence_memory::InMemoryWorkflowPersistence;
         use crate::traits::script_env_provider::NoOpScriptEnvProvider;
@@ -1000,6 +1131,8 @@ mod tests {
             last_heartbeat_at: ExecutionState::new_heartbeat(),
             registry: Arc::new(ItemProviderRegistry::new()),
             event_sinks: Arc::from(vec![]),
+            cancellation: CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -1127,6 +1260,7 @@ mod tests {
 
     /// Build an ExecutionState with a fresh InMemoryWorkflowPersistence.
     fn make_state_with_persistence(wf_name: &str) -> crate::engine::ExecutionState {
+        use crate::cancellation::CancellationToken;
         use crate::engine::{ExecutionState, WorktreeContext};
         use crate::traits::persistence::{NewRun, WorkflowPersistence};
         use crate::traits::script_env_provider::NoOpScriptEnvProvider;
@@ -1204,6 +1338,8 @@ mod tests {
             last_heartbeat_at: crate::engine::ExecutionState::new_heartbeat(),
             registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
             event_sinks: Arc::from(vec![]),
+            cancellation: CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -1296,7 +1432,7 @@ mod tests {
                 EngineEvent::RunStarted { .. } => "RunStarted",
                 EngineEvent::RunCompleted { .. } => "RunCompleted",
                 EngineEvent::RunResumed { .. } => "RunResumed",
-                EngineEvent::RunCancelled => "RunCancelled",
+                EngineEvent::RunCancelled { .. } => "RunCancelled",
                 EngineEvent::StepStarted { .. } => "StepStarted",
                 EngineEvent::StepCompleted { .. } => "StepCompleted",
                 EngineEvent::StepRetrying { .. } => "StepRetrying",
@@ -1336,5 +1472,403 @@ mod tests {
         fn emit(&self, event: &EngineEventData) {
             self.0.emit(event);
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Cancellation integration tests (Task 16)
+    // ---------------------------------------------------------------------------
+
+    /// Executor that always fails — used to trigger fail_fast in parallel tests.
+    struct FailingExecutor;
+    impl ActionExecutor for FailingExecutor {
+        fn name(&self) -> &str {
+            "failing"
+        }
+        fn execute(
+            &self,
+            _ectx: &ExecutionContext,
+            _params: &ActionParams,
+        ) -> Result<ActionOutput, EngineError> {
+            Err(EngineError::Workflow("intentional failure".to_string()))
+        }
+    }
+
+    // AC: cancel_run marks run as Cancelling in DB and signals the token.
+    #[test]
+    fn cancel_run_marks_cancelling_in_db() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::status::WorkflowRunStatus;
+        use crate::traits::persistence::{NewRun, WorkflowPersistence};
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = persistence
+            .create_run(NewRun {
+                workflow_name: "wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+        persistence
+            .update_run_status(&run.id, WorkflowRunStatus::Running, None, None)
+            .unwrap();
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+
+        // Register a dummy active run entry so cancel_run finds it.
+        {
+            let mut runs = engine.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.insert(
+                run.id.clone(),
+                ActiveRunEntry {
+                    token: crate::cancellation::CancellationToken::new(),
+                    shutdown: Arc::new(AtomicBool::new(false)),
+                    persistence: Arc::clone(&persistence) as Arc<dyn WorkflowPersistence>,
+                    registry: Arc::new(ActionRegistry::new(HashMap::new(), None)),
+                    exec_info: Arc::new(Mutex::new(None)),
+                },
+            );
+        }
+
+        engine
+            .cancel_run(&run.id, CancellationReason::UserRequested(None))
+            .unwrap();
+
+        let updated = persistence.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            updated.status,
+            WorkflowRunStatus::Cancelling,
+            "DB status should be Cancelling after cancel_run"
+        );
+    }
+
+    // AC: cancel_run returns Err when run is not active in this engine instance.
+    #[test]
+    fn cancel_run_returns_err_for_unknown_run() {
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let result = engine.cancel_run("nonexistent-run", CancellationReason::UserRequested(None));
+        assert!(result.is_err(), "cancel_run on unknown run must return Err");
+    }
+
+    // AC: token cancelled before run() starts causes the run to not succeed.
+    #[test]
+    fn pre_cancelled_token_causes_immediate_failure() {
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .build()
+            .unwrap();
+        let def = make_def("wf", vec![call_node("alpha")]);
+        let mut state = make_state_with_persistence("wf");
+
+        // Cancel the token before run() starts.
+        state
+            .cancellation
+            .cancel(CancellationReason::UserRequested(None));
+
+        // The engine handles cancellation internally, returning Ok(WorkflowResult{ all_succeeded: false }).
+        let result = engine.run(&def, &mut state);
+        let did_not_succeed = match result {
+            Ok(wr) => !wr.all_succeeded,
+            Err(_) => true,
+        };
+        assert!(
+            did_not_succeed,
+            "run with pre-cancelled token should not succeed"
+        );
+    }
+
+    // AC: fail_fast on a parallel block stops remaining branches after first failure.
+    #[test]
+    fn parallel_fail_fast_skips_remaining_branches() {
+        use crate::dsl::{ParallelNode, WorkflowNode};
+        use crate::engine::{ExecutionState, WorktreeContext};
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::persistence::NewRun;
+        use crate::types::WorkflowExecConfig;
+
+        // Build engine with both alpha and failing executors.
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .action(Box::new(FailingExecutor))
+            .build()
+            .unwrap();
+
+        let parallel = WorkflowNode::Parallel(ParallelNode {
+            fail_fast: true,
+            min_success: None,
+            calls: vec![
+                crate::dsl::AgentRef::Name("failing".to_string()),
+                crate::dsl::AgentRef::Name("alpha".to_string()),
+                crate::dsl::AgentRef::Name("alpha".to_string()),
+            ],
+            output: None,
+            call_outputs: HashMap::new(),
+            with: vec![],
+            call_with: HashMap::new(),
+            call_if: HashMap::new(),
+        });
+
+        let def = make_def("wf", vec![parallel]);
+
+        let persistence: Arc<dyn crate::traits::persistence::WorkflowPersistence> =
+            Arc::new(InMemoryWorkflowPersistence::new());
+        let run = persistence
+            .create_run(NewRun {
+                workflow_name: "wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+
+        // Build a state with both executors in the registry.
+        let mut m = HashMap::new();
+        m.insert(
+            "alpha".to_string(),
+            Box::new(AlphaExecutor) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        m.insert(
+            "failing".to_string(),
+            Box::new(FailingExecutor) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        let mut state = ExecutionState {
+            persistence: Arc::clone(&persistence),
+            action_registry: Arc::new(ActionRegistry::new(m, None)),
+            script_env_provider: Arc::new(
+                crate::traits::script_env_provider::NoOpScriptEnvProvider,
+            ),
+            workflow_run_id: run.id.clone(),
+            workflow_name: "wf".to_string(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                worktree_slug: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                conductor_bin_dir: None,
+                extra_plugin_dirs: vec![],
+            },
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: false,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+            cancellation: crate::cancellation::CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        };
+
+        engine.run(&def, &mut state).ok(); // may fail due to min_success
+
+        // The fail_fast scope token skips branches after the first failure.
+        // Exactly one branch should have been dispatched and failed; the rest are skipped.
+        let steps = persistence.get_steps(&run.id).unwrap();
+        let failed = steps
+            .iter()
+            .filter(|s| s.status == crate::status::WorkflowStepStatus::Failed)
+            .count();
+        assert_eq!(
+            failed, 1,
+            "only the first (failing) branch should be Failed; got steps: {:?}",
+            steps
+        );
+    }
+
+    // AC: step-level timeout marks step TimedOut when DSL timeout fires.
+    #[test]
+    fn step_timeout_marks_timed_out() {
+        use crate::dsl::{CallNode, WorkflowNode};
+        use crate::engine::{ExecutionState, WorktreeContext};
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::persistence::NewRun;
+        use crate::types::WorkflowExecConfig;
+
+        // Executor that sleeps longer than the DSL timeout.
+        struct SlowExecutor;
+        impl ActionExecutor for SlowExecutor {
+            fn name(&self) -> &str {
+                "slow"
+            }
+            fn execute(
+                &self,
+                _ectx: &ExecutionContext,
+                _params: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                Ok(ActionOutput::default())
+            }
+        }
+
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(SlowExecutor))
+            .build()
+            .unwrap();
+
+        let timed_out_call = WorkflowNode::Call(CallNode {
+            agent: crate::dsl::AgentRef::Name("slow".to_string()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec![],
+            bot_name: None,
+            plugin_dirs: vec![],
+            timeout: Some("10ms".to_string()),
+        });
+
+        let def = make_def("wf", vec![timed_out_call]);
+
+        let persistence: Arc<dyn crate::traits::persistence::WorkflowPersistence> =
+            Arc::new(InMemoryWorkflowPersistence::new());
+        let run = persistence
+            .create_run(NewRun {
+                workflow_name: "wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+
+        let mut m = HashMap::new();
+        m.insert(
+            "slow".to_string(),
+            Box::new(SlowExecutor) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        let mut state = ExecutionState {
+            persistence: Arc::clone(&persistence),
+            action_registry: Arc::new(ActionRegistry::new(m, None)),
+            script_env_provider: Arc::new(
+                crate::traits::script_env_provider::NoOpScriptEnvProvider,
+            ),
+            workflow_run_id: run.id.clone(),
+            workflow_name: "wf".to_string(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                worktree_slug: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                conductor_bin_dir: None,
+                extra_plugin_dirs: vec![],
+            },
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: false,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+            cancellation: crate::cancellation::CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        };
+
+        engine.run(&def, &mut state).ok();
+
+        let steps = persistence.get_steps(&run.id).unwrap();
+        let timed_out = steps
+            .iter()
+            .any(|s| s.status == crate::status::WorkflowStepStatus::TimedOut);
+        assert!(
+            timed_out,
+            "step should be marked TimedOut; got: {:?}",
+            steps
+        );
+    }
+
+    // AC: cross-process cancel — is_run_cancelled returns true for Cancelling status.
+    #[test]
+    fn cross_process_cancel_via_db_poll() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::status::WorkflowRunStatus;
+        use crate::traits::persistence::{NewRun, WorkflowPersistence};
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = persistence
+            .create_run(NewRun {
+                workflow_name: "wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+
+        // Simulate cross-process cancel by directly writing Cancelling to DB.
+        persistence
+            .update_run_status(&run.id, WorkflowRunStatus::Cancelling, None, None)
+            .unwrap();
+
+        // is_run_cancelled must return true for Cancelling status.
+        assert!(
+            persistence.is_run_cancelled(&run.id).unwrap(),
+            "is_run_cancelled should return true when status is Cancelling"
+        );
     }
 }

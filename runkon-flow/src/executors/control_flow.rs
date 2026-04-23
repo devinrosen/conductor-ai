@@ -304,6 +304,8 @@ mod tests {
             last_heartbeat_at: Arc::new(AtomicI64::new(0)),
             registry: Arc::new(ItemProviderRegistry::default()),
             event_sinks: Arc::from(vec![]),
+            cancellation: crate::cancellation::CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
