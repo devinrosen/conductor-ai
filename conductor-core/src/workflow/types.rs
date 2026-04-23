@@ -560,6 +560,8 @@ pub struct WorkflowResumeInput<'a> {
     pub restart: bool,
     /// Directory containing the conductor binary, injected into script step PATH.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// Event sinks for run observability. Defaults to empty (no sinks).
+    pub event_sinks: Vec<std::sync::Arc<dyn runkon_flow::events::EventSink>>,
 }
 
 /// Resolve the directory containing the current executable.

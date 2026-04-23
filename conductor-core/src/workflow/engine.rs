@@ -567,25 +567,8 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 }
 
 /// Emit an engine event to all registered sinks.
-///
-/// Each sink is called inside `catch_unwind(AssertUnwindSafe(...))`. Panics are
-/// logged via `tracing::warn!` and do not abort the run or skip remaining sinks.
 pub(super) fn emit_event(state: &ExecutionState<'_>, event: runkon_flow::events::EngineEvent) {
-    if state.event_sinks.is_empty() {
-        return;
-    }
-    let data = runkon_flow::events::EngineEventData::new(state.workflow_run_id.clone(), event);
-    for sink in state.event_sinks.iter() {
-        let sink = Arc::clone(sink);
-        let data_clone = data.clone();
-        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            sink.emit(&data_clone);
-        }))
-        .is_err()
-        {
-            tracing::warn!("EventSink::emit panicked — continuing with remaining sinks");
-        }
-    }
+    runkon_flow::events::emit_to_sinks(&state.workflow_run_id, event, &state.event_sinks);
 }
 
 /// Shared orchestration: execute body → always block → build summary → finalize.
@@ -656,10 +639,7 @@ pub(super) fn run_workflow_engine(
     // Finalize
     let wf_run_id = state.workflow_run_id.clone();
     let parent_run_id = state.parent_run_id.clone();
-    let is_cancelled = body_error
-        .as_deref()
-        .map(|e| e.contains("cancelled"))
-        .unwrap_or(false);
+    let is_cancelled = matches!(&body_result, Err(ConductorError::WorkflowCancelled));
 
     if let Err(e) = state.flush_metrics() {
         tracing::warn!(
@@ -984,6 +964,7 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
         from_step: params.from_step.as_deref(),
         restart: params.restart,
         conductor_bin_dir: params.conductor_bin_dir.clone(),
+        event_sinks: vec![],
     };
 
     resume_workflow(&input)
@@ -1225,7 +1206,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         last_heartbeat_at: ExecutionState::new_heartbeat(),
         registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
         action_registry: std::sync::Arc::new(build_default_action_registry(config)),
-        event_sinks: std::sync::Arc::from(vec![]),
+        event_sinks: std::sync::Arc::from(input.event_sinks.clone()),
     };
 
     run_workflow_engine(&mut state, &workflow)

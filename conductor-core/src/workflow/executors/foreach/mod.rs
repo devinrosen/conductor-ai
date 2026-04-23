@@ -713,7 +713,7 @@ fn build_child_dispatch_params(
             fail_fast: state.exec_config.fail_fast,
             dry_run: state.exec_config.dry_run,
             shutdown: state.exec_config.shutdown.clone(),
-            event_sinks: vec![],
+            event_sinks: state.exec_config.event_sinks.clone(),
         },
         inputs: child_inputs,
         target_label,

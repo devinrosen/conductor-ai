@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A single workflow engine event with timestamp and run identity.
@@ -93,4 +94,29 @@ pub enum EngineEvent {
 ///   logs panics; they do not abort the run.
 pub trait EventSink: Send + Sync + 'static {
     fn emit(&self, event: &EngineEventData);
+}
+
+/// Emit an event to all sinks, catching and logging any panics.
+///
+/// Panics are caught per-sink so one bad sink cannot abort the run or silence
+/// subsequent sinks. The `run_id` is included in the warning for debuggability.
+pub fn emit_to_sinks(run_id: &str, event: EngineEvent, sinks: &[Arc<dyn EventSink>]) {
+    if sinks.is_empty() {
+        return;
+    }
+    let data = EngineEventData::new(run_id.to_string(), event);
+    for sink in sinks.iter() {
+        let sink = Arc::clone(sink);
+        let data_clone = data.clone();
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            sink.emit(&data_clone);
+        }))
+        .is_err()
+        {
+            tracing::warn!(
+                run_id = %run_id,
+                "EventSink::emit panicked — continuing with remaining sinks"
+            );
+        }
+    }
 }
