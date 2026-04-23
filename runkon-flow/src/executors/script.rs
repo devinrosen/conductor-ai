@@ -97,9 +97,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             repo_path: &'a str,
         }
         impl RunContext for ScriptRunCtx<'_> {
-            fn injected_variables(
-                &self,
-            ) -> std::collections::HashMap<&'static str, String> {
+            fn injected_variables(&self) -> std::collections::HashMap<&'static str, String> {
                 std::collections::HashMap::new()
             }
             fn working_dir(&self) -> &Path {

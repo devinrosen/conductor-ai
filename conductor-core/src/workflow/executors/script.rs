@@ -133,15 +133,16 @@ pub fn execute_script(
     let extra_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
     let (working_dir, repo_path) = {
         let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        (ctx.working_dir().to_path_buf(), ctx.repo_path().to_path_buf())
+        (
+            ctx.working_dir().to_path_buf(),
+            ctx.repo_path().to_path_buf(),
+        )
     };
     let script_env = {
         // ConductorScriptEnvProvider::env() ignores the ctx parameter; pass a stub.
         struct NoopCtx;
         impl runkon_flow::traits::run_context::RunContext for NoopCtx {
-            fn injected_variables(
-                &self,
-            ) -> std::collections::HashMap<&'static str, String> {
+            fn injected_variables(&self) -> std::collections::HashMap<&'static str, String> {
                 std::collections::HashMap::new()
             }
             fn working_dir(&self) -> &std::path::Path {

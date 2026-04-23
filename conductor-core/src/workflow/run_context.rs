@@ -266,5 +266,4 @@ mod tests {
             std::path::Path::new("/home/user/repo/worktree")
         );
     }
-
 }
