@@ -64,17 +64,18 @@ pub(crate) fn generate_plan(
          Aim for 3-8 concrete, actionable steps."
     );
 
-    // Plan generation is a one-shot JSON prompt with no tool use and no reliance
-    // on project context — `--bare` skips Claude Code's auto-discovered startup
-    // (CLAUDE.md, agents, skills catalog, plugin sync, auto-memory) for a
-    // substantial per-call token saving with no behavioral downside here.
     let mut cmd = Command::new("claude");
     cmd.arg("-p")
         .arg(&plan_prompt)
         .arg("--output-format")
-        .arg("json")
-        .arg("--bare")
-        .arg(config.general.agent_permission_mode.cli_flag());
+        .arg("json");
+    // `--bare` skips Claude Code startup overhead (CLAUDE.md, skills catalog, etc.)
+    // but requires ANTHROPIC_API_KEY or apiKeyHelper — keychain OAuth is incompatible.
+    // Only add it when the operator has explicitly opted in via `claude_bare_mode`.
+    if config.general.claude_bare_mode {
+        cmd.arg("--bare");
+    }
+    cmd.arg(config.general.agent_permission_mode.cli_flag());
     if let Some(val) = config.general.agent_permission_mode.cli_flag_value() {
         cmd.arg(val);
     }
