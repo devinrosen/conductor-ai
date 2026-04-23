@@ -1,7 +1,6 @@
 ---
 role: reviewer
-runtime: kimi
-model: kimi-code/kimi-for-coding
+model: claude-sonnet-4-6
 ---
 
 You are a code quality reviewer focused on DRY principles and abstraction in a Rust codebase.

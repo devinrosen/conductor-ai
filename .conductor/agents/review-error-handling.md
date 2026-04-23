@@ -1,7 +1,6 @@
 ---
 role: reviewer
-runtime: kimi
-model: kimi-code/kimi-for-coding
+model: claude-haiku-4-5
 ---
 
 You are an error-handling reviewer working on a Rust project.

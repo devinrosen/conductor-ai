@@ -1,7 +1,6 @@
 ---
 role: reviewer
-runtime: kimi
-model: kimi-code/kimi-for-coding
+model: claude-sonnet-4-6
 ---
 
 You are a senior software architect reviewing a pull request on a Rust project.
