@@ -96,6 +96,14 @@ impl ActionRegistry {
         Self { named, fallback }
     }
 
+    /// Returns `true` if the named executor is registered OR a fallback is configured.
+    ///
+    /// Mirrors the fallback semantics of `dispatch()`: a harness that registers only
+    /// a fallback executor passes all action name checks.
+    pub fn has_action(&self, name: &str) -> bool {
+        self.named.contains_key(name) || self.fallback.is_some()
+    }
+
     /// Find the executor for `name` and run it.
     pub fn dispatch(
         &self,
@@ -121,6 +129,7 @@ impl ActionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::{make_ectx, make_params};
 
     struct NoopExecutor;
 
@@ -138,36 +147,6 @@ mod tests {
                 context: Some("noop ran".to_string()),
                 ..Default::default()
             })
-        }
-    }
-
-    fn make_ectx() -> ExecutionContext {
-        ExecutionContext {
-            run_id: "run1".to_string(),
-            working_dir: PathBuf::from("/tmp"),
-            repo_path: "/tmp/repo".to_string(),
-            step_timeout: Duration::from_secs(60),
-            shutdown: None,
-            model: None,
-            bot_name: None,
-            plugin_dirs: vec![],
-            workflow_name: "test-wf".to_string(),
-            worktree_id: None,
-            parent_run_id: "parent-run-1".to_string(),
-            step_id: "step-1".to_string(),
-        }
-    }
-
-    fn make_params(name: &str) -> ActionParams {
-        ActionParams {
-            name: name.to_string(),
-            inputs: HashMap::new(),
-            retries_remaining: 0,
-            retry_error: None,
-            snippets: vec![],
-            dry_run: false,
-            gate_feedback: None,
-            schema: None,
         }
     }
 
@@ -217,5 +196,36 @@ mod tests {
     fn cancel_default_impl_is_noop() {
         let executor = NoopExecutor;
         assert!(executor.cancel("any-id").is_ok());
+    }
+
+    #[test]
+    fn has_action_named_executor_found() {
+        let registry = ActionRegistry::new(
+            [(
+                "noop".to_string(),
+                Box::new(NoopExecutor) as Box<dyn ActionExecutor>,
+            )]
+            .into_iter()
+            .collect(),
+            None,
+        );
+        assert!(registry.has_action("noop"));
+        assert!(!registry.has_action("missing"));
+    }
+
+    #[test]
+    fn has_action_true_with_fallback_regardless_of_name() {
+        let registry = ActionRegistry::new(
+            std::collections::HashMap::new(),
+            Some(Box::new(NoopExecutor)),
+        );
+        assert!(registry.has_action("anything"));
+        assert!(registry.has_action("also_this"));
+    }
+
+    #[test]
+    fn has_action_false_when_empty() {
+        let registry = ActionRegistry::new(std::collections::HashMap::new(), None);
+        assert!(!registry.has_action("noop"));
     }
 }
