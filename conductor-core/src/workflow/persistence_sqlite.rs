@@ -11,8 +11,8 @@ use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
-    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
-    NewStep, StepUpdate, WorkflowPersistence,
+    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState,
+    NewFanOutItem, NewRun, NewStep, StepUpdate, WorkflowPersistence,
 };
 
 /// SQLite-backed implementation of `WorkflowPersistence`.
@@ -163,7 +163,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
     fn insert_fan_out_items_batch(
         &self,
         step_run_id: &str,
-        items: &[(String, String, String)],
+        items: &[NewFanOutItem],
     ) -> Result<(), EngineError> {
         let guard = self.conn.lock().map_err(|_| lock_err())?;
         WorkflowManager::new(&guard)

@@ -86,6 +86,13 @@ pub enum FanOutItemUpdate {
     Terminal { status: FanOutItemStatus },
 }
 
+/// Parameters for batch-inserting fan-out items.
+pub struct NewFanOutItem {
+    pub item_type: String,
+    pub item_id: String,
+    pub item_ref: String,
+}
+
 /// Current approval state of a gate step.
 #[derive(Debug, Clone)]
 pub enum GateApprovalState {
@@ -160,7 +167,7 @@ pub trait WorkflowPersistence: Send + Sync {
     fn insert_fan_out_items_batch(
         &self,
         step_run_id: &str,
-        items: &[(String, String, String)],
+        items: &[NewFanOutItem],
     ) -> Result<(), EngineError>;
     fn update_fan_out_item(
         &self,

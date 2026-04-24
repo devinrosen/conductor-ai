@@ -34,6 +34,7 @@ use crate::workflow::engine::{
     emit_event, record_step_failure, record_step_success, restore_step, should_skip, ExecutionState,
 };
 use crate::workflow::item_provider::ProviderContext;
+use crate::workflow::persistence::NewFanOutItem;
 use crate::workflow::prompt_builder::build_variable_map;
 use crate::workflow::run_context::RunContext;
 use crate::workflow::status::WorkflowStepStatus;
@@ -167,15 +168,19 @@ pub fn execute_foreach(
         &node.filter,
         &existing_set,
     )?;
-    let items: Vec<(String, String, String)> = provider_items
+    let items: Vec<NewFanOutItem> = provider_items
         .into_iter()
-        .map(|i| (i.item_type, i.item_id, i.item_ref))
+        .map(|i| NewFanOutItem {
+            item_type: i.item_type,
+            item_id: i.item_id,
+            item_ref: i.item_ref,
+        })
         .collect();
 
     // Write pending rows for newly discovered items.
-    let new_items: Vec<(String, String, String)> = items
+    let new_items: Vec<NewFanOutItem> = items
         .into_iter()
-        .filter(|(_, item_id, _)| !existing_set.contains(item_id))
+        .filter(|i| !existing_set.contains(&i.item_id))
         .collect();
     let new_count = new_items.len() as i64;
     state

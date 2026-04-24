@@ -11,8 +11,8 @@ use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
-    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
-    NewStep, StepUpdate, WorkflowPersistence,
+    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState,
+    NewFanOutItem, NewRun, NewStep, StepUpdate, WorkflowPersistence,
 };
 
 struct InMemoryStore {
@@ -278,14 +278,14 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
     fn insert_fan_out_items_batch(
         &self,
         step_run_id: &str,
-        items: &[(String, String, String)],
+        items: &[NewFanOutItem],
     ) -> Result<(), EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
-        for (item_type, item_id, item_ref) in items {
+        for item in items {
             if store
                 .fan_out_items
                 .values()
-                .any(|i| i.step_run_id == step_run_id && &i.item_id == item_id)
+                .any(|i| i.step_run_id == step_run_id && i.item_id == item.item_id)
             {
                 continue;
             }
@@ -295,9 +295,9 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
                 FanOutItemRow {
                     id: id.clone(),
                     step_run_id: step_run_id.to_string(),
-                    item_type: item_type.to_string(),
-                    item_id: item_id.to_string(),
-                    item_ref: item_ref.to_string(),
+                    item_type: item.item_type.to_string(),
+                    item_id: item.item_id.to_string(),
+                    item_ref: item.item_ref.to_string(),
                     child_run_id: None,
                     status: "pending".to_string(),
                     dispatched_at: None,

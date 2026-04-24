@@ -15,7 +15,7 @@ use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::ActionRegistry;
 use crate::traits::item_provider::{ItemProviderRegistry, ProviderContext};
 use crate::traits::persistence::{
-    FanOutItemStatus, FanOutItemUpdate, NewStep, StepUpdate, WorkflowPersistence,
+    FanOutItemStatus, FanOutItemUpdate, NewFanOutItem, NewStep, StepUpdate, WorkflowPersistence,
 };
 use crate::traits::script_env_provider::ScriptEnvProvider;
 
@@ -234,15 +234,19 @@ pub fn execute_foreach(
         &existing_set,
     )?;
 
-    let items: Vec<(String, String, String)> = provider_items
+    let items: Vec<NewFanOutItem> = provider_items
         .into_iter()
-        .map(|i| (i.item_type, i.item_id, i.item_ref))
+        .map(|i| NewFanOutItem {
+            item_type: i.item_type,
+            item_id: i.item_id,
+            item_ref: i.item_ref,
+        })
         .collect();
 
     // Write pending rows for newly discovered items.
-    let new_items: Vec<(String, String, String)> = items
+    let new_items: Vec<NewFanOutItem> = items
         .into_iter()
-        .filter(|(_, item_id, _)| !existing_set.contains(item_id))
+        .filter(|i| !existing_set.contains(&i.item_id))
         .collect();
     let new_item_count = new_items.len();
     state

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
+use crate::workflow::persistence::NewFanOutItem;
 
 use super::WorkflowManager;
 
@@ -42,19 +43,19 @@ impl<'a> WorkflowManager<'a> {
     pub fn insert_fan_out_items_batch(
         &self,
         step_run_id: &str,
-        items: &[(String, String, String)],
+        items: &[NewFanOutItem],
     ) -> Result<()> {
         if items.is_empty() {
             return Ok(());
         }
         let tx = self.conn.unchecked_transaction()?;
-        for (item_type, item_id, item_ref) in items {
+        for item in items {
             let id = crate::new_id();
             tx.execute(
                 "INSERT OR IGNORE INTO workflow_run_step_fan_out_items \
                  (id, step_run_id, item_type, item_id, item_ref, status) \
                  VALUES (:id, :step_run_id, :item_type, :item_id, :item_ref, 'pending')",
-                named_params![":id": id, ":step_run_id": step_run_id, ":item_type": item_type, ":item_id": item_id, ":item_ref": item_ref],
+                named_params![":id": id, ":step_run_id": step_run_id, ":item_type": item.item_type, ":item_id": item.item_id, ":item_ref": item.item_ref],
             )?;
         }
         tx.commit()?;
