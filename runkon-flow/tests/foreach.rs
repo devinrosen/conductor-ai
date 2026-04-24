@@ -159,7 +159,11 @@ fn test_foreach_on_child_fail_halt() {
 
     let items = fan_out_items(&persistence, &state.workflow_run_id, "foreach:fan-out");
     assert_eq!(items.len(), 3, "should have 3 fan-out items");
-    assert_eq!(count_status(&items, "completed"), 0, "no items should complete");
+    assert_eq!(
+        count_status(&items, "completed"),
+        0,
+        "no items should complete"
+    );
     assert_eq!(count_status(&items, "failed"), 1, "t_fail should fail");
     // t1 and t2 were never dispatched; halt fired before them
     assert_eq!(
