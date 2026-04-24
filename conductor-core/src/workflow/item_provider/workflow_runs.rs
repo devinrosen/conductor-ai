@@ -87,7 +87,7 @@ mod tests {
             )
             .unwrap();
 
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
         let items = provider
             .items(&ctx, None, &HashMap::new(), &HashSet::new())
@@ -140,7 +140,7 @@ mod tests {
         let mut filter = HashMap::new();
         filter.insert("status".to_string(), "failed".to_string());
 
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
         let items = provider
             .items(&ctx, None, &filter, &HashSet::new())
@@ -192,7 +192,7 @@ mod tests {
         let mut filter = HashMap::new();
         filter.insert("workflow_name".to_string(), "wf-alpha".to_string());
 
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorkflowRunsProvider
             .items(&ctx, None, &filter, &HashSet::new())
             .unwrap();
@@ -225,7 +225,7 @@ mod tests {
         let mut existing = HashSet::new();
         existing.insert(run1.id.clone());
 
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorkflowRunsProvider
             .items(&ctx, None, &HashMap::new(), &existing)
             .unwrap();

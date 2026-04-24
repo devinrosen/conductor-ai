@@ -46,7 +46,7 @@ mod tests {
     fn test_repos_items_returns_registered_repos() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = ReposProvider
             .items(&ctx, None, &HashMap::new(), &HashSet::new())
             .unwrap();
@@ -59,7 +59,7 @@ mod tests {
     fn test_repos_items_skips_existing_set() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let mut existing = HashSet::new();
         existing.insert("r1".to_string());
         let items = ReposProvider
