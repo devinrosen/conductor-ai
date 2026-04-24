@@ -830,7 +830,7 @@ impl<'a> WorkflowManager<'a> {
                     "SELECT {RUN_COLUMNS} FROM workflow_runs \
                      WHERE parent_workflow_run_id = :parent_workflow_run_id \
                        AND workflow_name = :child_workflow_name \
-                       AND status IN ('failed', 'pending', 'waiting', 'timed_out') \
+                       AND status IN ('failed', 'pending', 'waiting') \
                      ORDER BY started_at DESC \
                      LIMIT 1"
                 ),
