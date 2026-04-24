@@ -43,20 +43,10 @@ pub(super) struct GateParams {
 ///
 /// This struct is intentionally concrete and minimal for Phase 1. It will be
 /// replaced by `&dyn RunContext` when Step 1.1 lands.
-#[allow(dead_code)] // token_cache and db_path are available for resolver use; not all consumed
+#[allow(dead_code)] // db_path is available for resolver use; not all consumed
 pub(super) struct GateContext<'a> {
-    pub working_dir: &'a str,
     pub config: &'a Config,
-    pub default_bot_name: Option<&'a str>,
-    pub token_cache: Arc<GitHubTokenCache>,
     pub db_path: &'a Path,
-}
-
-impl<'a> GateContext<'a> {
-    pub(super) fn resolve_token(&self, params: &GateParams) -> Option<String> {
-        let effective_bot = params.bot_name.as_deref().or(self.default_bot_name);
-        self.token_cache.get(self.config, effective_bot)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,10 +130,27 @@ fn register(map: &mut HashMap<String, Box<dyn GateResolver>>, resolver: Box<dyn 
 
 pub(super) fn build_default_gate_resolvers(
     persistence: Arc<dyn WorkflowPersistence>,
+    working_dir: String,
+    default_bot_name: Option<String>,
+    token_cache: Arc<GitHubTokenCache>,
 ) -> HashMap<String, Box<dyn GateResolver>> {
     let mut map: HashMap<String, Box<dyn GateResolver>> = HashMap::new();
-    register(&mut map, Box::new(PrApprovalGateResolver::new()));
-    register(&mut map, Box::new(PrChecksGateResolver::new()));
+    register(
+        &mut map,
+        Box::new(PrApprovalGateResolver::new(
+            working_dir.clone(),
+            default_bot_name.clone(),
+            Arc::clone(&token_cache),
+        )),
+    );
+    register(
+        &mut map,
+        Box::new(PrChecksGateResolver::new(
+            working_dir,
+            default_bot_name,
+            token_cache,
+        )),
+    );
     register(
         &mut map,
         Box::new(HumanApprovalGateResolver::new(
@@ -194,9 +201,18 @@ mod tests {
         );
     }
 
+    fn make_test_resolvers() -> HashMap<String, Box<dyn GateResolver>> {
+        build_default_gate_resolvers(
+            make_test_persistence(),
+            "/tmp".to_string(),
+            None,
+            Arc::new(GitHubTokenCache::new(None)),
+        )
+    }
+
     #[test]
     fn test_unknown_gate_type_returns_error() {
-        let resolvers = build_default_gate_resolvers(make_test_persistence());
+        let resolvers = make_test_resolvers();
         assert!(
             !resolvers.contains_key("unknown_gate_xyz"),
             "unknown gate type should not be registered"
@@ -205,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_build_default_gate_resolvers_registers_all_four_types() {
-        let resolvers = build_default_gate_resolvers(make_test_persistence());
+        let resolvers = make_test_resolvers();
         assert!(
             resolvers.contains_key("pr_approval"),
             "pr_approval resolver must be registered"
@@ -270,16 +286,18 @@ mod tests {
         mode: crate::workflow_dsl::ApprovalMode,
     ) -> GatePoll {
         let token_cache = Arc::new(GitHubTokenCache::new(None));
-        let resolvers = build_default_gate_resolvers(make_test_persistence());
+        let resolvers = build_default_gate_resolvers(
+            make_test_persistence(),
+            "/nonexistent/conductor/test/dir".to_string(),
+            None,
+            Arc::clone(&token_cache),
+        );
         let resolver = resolvers
             .get(resolver_key)
             .unwrap_or_else(|| panic!("{resolver_key} not registered"));
         let config = Config::default();
         let ctx = GateContext {
-            working_dir: "/nonexistent/conductor/test/dir",
             config: &config,
-            default_bot_name: None,
-            token_cache: Arc::clone(&token_cache),
             db_path: Path::new("/tmp/test.db"),
         };
         let params = make_params(mode);
@@ -322,56 +340,6 @@ mod tests {
             matches!(poll, GatePoll::Pending),
             "pr_checks poll must return Pending when gh is unavailable"
         );
-    }
-
-    #[test]
-    fn test_resolve_token_uses_override_when_set() {
-        let token_cache = Arc::new(GitHubTokenCache::new(Some("override-tok".into())));
-        let config = Config::default();
-        let ctx = GateContext {
-            working_dir: "/tmp",
-            config: &config,
-            default_bot_name: None,
-            token_cache: Arc::clone(&token_cache),
-            db_path: Path::new("/tmp/test.db"),
-        };
-        let params = make_params(crate::workflow_dsl::ApprovalMode::MinApprovals);
-        assert_eq!(ctx.resolve_token(&params).as_deref(), Some("override-tok"));
-    }
-
-    #[test]
-    fn test_resolve_token_returns_none_when_no_app_and_no_override() {
-        let token_cache = Arc::new(GitHubTokenCache::new(None));
-        let config = Config::default();
-        let ctx = GateContext {
-            working_dir: "/tmp",
-            config: &config,
-            default_bot_name: None,
-            token_cache: Arc::clone(&token_cache),
-            db_path: Path::new("/tmp/test.db"),
-        };
-        let params = make_params(crate::workflow_dsl::ApprovalMode::MinApprovals);
-        assert!(
-            ctx.resolve_token(&params).is_none(),
-            "resolve_token must return None when no app and no override"
-        );
-    }
-
-    #[test]
-    fn test_resolve_token_prefers_params_bot_name_over_context_default() {
-        let token_cache = Arc::new(GitHubTokenCache::new(Some("override-tok".into())));
-        let config = Config::default();
-        let ctx = GateContext {
-            working_dir: "/tmp",
-            config: &config,
-            default_bot_name: Some("context-bot"),
-            token_cache: Arc::clone(&token_cache),
-            db_path: Path::new("/tmp/test.db"),
-        };
-        let mut params = make_params(crate::workflow_dsl::ApprovalMode::MinApprovals);
-        params.bot_name = Some("params-bot".into());
-        // Both have a name; with the override token, we just confirm it resolves successfully.
-        assert!(ctx.resolve_token(&params).is_some());
     }
 
     // Stale success entry (56 min old) must trigger a refresh instead of returning the cached token.

@@ -23,8 +23,6 @@ pub struct FanOutItem {
 pub struct ProviderContext<'a> {
     pub conn: &'a Connection,
     pub config: &'a Config,
-    pub repo_id: Option<&'a str>,
-    pub worktree_id: Option<&'a str>,
 }
 
 /// Trait for a foreach item source registered with the engine.
@@ -83,12 +81,18 @@ impl Default for ItemProviderRegistry {
 }
 
 /// Build the default registry with the four built-in providers.
-pub fn build_default_registry() -> ItemProviderRegistry {
+pub fn build_default_registry(
+    repo_id: Option<&str>,
+    worktree_id: Option<&str>,
+) -> ItemProviderRegistry {
     let mut r = ItemProviderRegistry::new();
-    r.register(tickets::TicketsProvider);
+    r.register(tickets::TicketsProvider::new(repo_id.map(String::from)));
     r.register(repos::ReposProvider);
     r.register(workflow_runs::WorkflowRunsProvider);
-    r.register(worktrees::WorktreesProvider);
+    r.register(worktrees::WorktreesProvider::new(
+        repo_id.map(String::from),
+        worktree_id.map(String::from),
+    ));
     r
 }
 
@@ -142,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_build_default_registry_has_all_four_providers() {
-        let registry = build_default_registry();
+        let registry = build_default_registry(None, None);
         for name in ["tickets", "repos", "workflow_runs", "worktrees"] {
             assert!(
                 registry.get(name).is_some(),
