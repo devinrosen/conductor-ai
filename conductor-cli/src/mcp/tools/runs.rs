@@ -1023,7 +1023,12 @@ mod tests {
         let (_f, db) = make_test_db();
         let (run_id, step_id) = make_run_with_step(&db, "build");
 
-        // Create a child agent run with a known nonexistent log_file path.
+        // Create a child agent run with a nonexistent log_file path inside agent_log_dir.
+        let log_dir = conductor_core::config::agent_log_dir();
+        std::fs::create_dir_all(&log_dir).ok();
+        let nonexistent = log_dir.join("test-nonexistent-missing.log");
+        let nonexistent_str = nonexistent.to_str().unwrap().to_string();
+
         let conn = open_database(&db).expect("open db");
         let agent_mgr = AgentManager::new(&conn);
         let child_run = agent_mgr
@@ -1031,7 +1036,7 @@ mod tests {
             .expect("create child run");
         conn.execute(
             "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
-            rusqlite::params!["/nonexistent/path/log.txt", child_run.id],
+            rusqlite::params![nonexistent_str, child_run.id],
         )
         .expect("set log_file");
         let mgr = WorkflowManager::new(&conn);
@@ -1057,7 +1062,7 @@ mod tests {
             .unwrap_or("");
         assert!(text.contains("Log file not found"), "got: {text}");
         assert!(
-            text.contains("/nonexistent/path/log.txt"),
+            text.contains("test-nonexistent-missing.log"),
             "error should include log file path; got: {text}"
         );
         assert!(
@@ -1080,8 +1085,12 @@ mod tests {
         let (_f, db) = make_test_db();
         let (run_id, step_id) = make_run_with_step(&db, "test-step");
 
-        // Write a temporary log file.
-        let log_file = tempfile::NamedTempFile::new().expect("temp log file");
+        // Write a temporary log file inside agent_log_dir so validation passes.
+        let log_dir = conductor_core::config::agent_log_dir();
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = tempfile::Builder::new()
+            .tempfile_in(&log_dir)
+            .expect("temp log file");
         writeln!(log_file.as_file(), "agent log line 1").expect("write");
         writeln!(log_file.as_file(), "agent log line 2").expect("write");
         let log_path = log_file.path().to_str().unwrap().to_string();
@@ -1135,10 +1144,16 @@ mod tests {
         let (_f, db) = make_test_db();
         let (run_id, step0_id) = make_run_with_step(&db, "build");
 
-        // Write log files for each iteration.
-        let log_iter0 = tempfile::NamedTempFile::new().expect("temp log iter0");
+        // Write log files inside agent_log_dir so validation passes.
+        let log_dir = conductor_core::config::agent_log_dir();
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_iter0 = tempfile::Builder::new()
+            .tempfile_in(&log_dir)
+            .expect("temp log iter0");
         writeln!(log_iter0.as_file(), "iteration 0 log").expect("write iter0");
-        let log_iter1 = tempfile::NamedTempFile::new().expect("temp log iter1");
+        let log_iter1 = tempfile::Builder::new()
+            .tempfile_in(&log_dir)
+            .expect("temp log iter1");
         writeln!(log_iter1.as_file(), "iteration 1 log").expect("write iter1");
         let path0 = log_iter0.path().to_str().unwrap().to_string();
         let path1 = log_iter1.path().to_str().unwrap().to_string();
@@ -1211,12 +1226,20 @@ mod tests {
         let (_f, db) = make_test_db();
         let (run_id, build_step_id) = make_run_with_step(&db, "build");
 
-        // Write log files.
-        let log_build = tempfile::NamedTempFile::new().expect("temp log build");
+        // Write log files inside agent_log_dir so validation passes.
+        let log_dir = conductor_core::config::agent_log_dir();
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_build = tempfile::Builder::new()
+            .tempfile_in(&log_dir)
+            .expect("temp log build");
         writeln!(log_build.as_file(), "build step log").expect("write build");
-        let log_test0 = tempfile::NamedTempFile::new().expect("temp log test iter0");
+        let log_test0 = tempfile::Builder::new()
+            .tempfile_in(&log_dir)
+            .expect("temp log test iter0");
         writeln!(log_test0.as_file(), "test iteration 0 log").expect("write test0");
-        let log_test1 = tempfile::NamedTempFile::new().expect("temp log test iter1");
+        let log_test1 = tempfile::Builder::new()
+            .tempfile_in(&log_dir)
+            .expect("temp log test iter1");
         writeln!(log_test1.as_file(), "test iteration 1 log").expect("write test1");
         let path_build = log_build.path().to_str().unwrap().to_string();
         let path_test0 = log_test0.path().to_str().unwrap().to_string();

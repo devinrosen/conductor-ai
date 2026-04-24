@@ -2886,7 +2886,14 @@ mod tests {
         {
             let db = state.db.lock().await;
             // Insert a second agent run to act as the child
-            let ar2 = insert_agent_run(&db, "w1", "child", "running", "/nonexistent/path/log.txt");
+            let log_dir = conductor_core::config::agent_log_dir();
+            std::fs::create_dir_all(&log_dir).ok();
+            let nonexistent = log_dir
+                .join("test-web-nonexistent-missing.log")
+                .to_str()
+                .unwrap()
+                .to_string();
+            let ar2 = insert_agent_run(&db, "w1", "child", "running", &nonexistent);
             let mgr = WorkflowManager::new(&db);
             let step_id = mgr
                 .insert_step(&run_id, "my-step", "actor", false, 0, 0)
@@ -2908,7 +2915,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_error_contains(&body, "/nonexistent/path/log.txt");
+        assert_error_contains(&body, "test-web-nonexistent-missing.log");
         assert_error_contains(&body, &run_id);
         assert_error_contains(&body, "my-step");
     }
@@ -2918,8 +2925,10 @@ mod tests {
         let state = empty_state();
         let run_id = seed_workflow_fixtures(&state).await;
 
-        // Write a temp log file
-        let log_file = tempfile::NamedTempFile::new().unwrap();
+        // Write a temp log file inside agent_log_dir so validation passes.
+        let log_dir = conductor_core::config::agent_log_dir();
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_file.path(), "hello from the agent").unwrap();
         let log_path = log_file.path().to_str().unwrap().to_string();
 
@@ -2956,10 +2965,12 @@ mod tests {
         let state = empty_state();
         let run_id = seed_workflow_fixtures(&state).await;
 
-        // Write two log files — one for each iteration
-        let log_iter0 = tempfile::NamedTempFile::new().unwrap();
+        // Write two log files inside agent_log_dir so validation passes.
+        let log_dir = conductor_core::config::agent_log_dir();
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_iter0 = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_iter0.path(), "iteration 0 log").unwrap();
-        let log_iter1 = tempfile::NamedTempFile::new().unwrap();
+        let log_iter1 = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_iter1.path(), "iteration 1 log").unwrap();
         let path0 = log_iter0.path().to_str().unwrap().to_string();
         let path1 = log_iter1.path().to_str().unwrap().to_string();
@@ -3016,11 +3027,14 @@ mod tests {
         let state = empty_state();
         let run_id = seed_workflow_fixtures(&state).await;
 
-        let log_iter0 = tempfile::NamedTempFile::new().unwrap();
+        // Write log files inside agent_log_dir so validation passes.
+        let log_dir = conductor_core::config::agent_log_dir();
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_iter0 = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_iter0.path(), "iteration 0 log").unwrap();
-        let log_iter1 = tempfile::NamedTempFile::new().unwrap();
+        let log_iter1 = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_iter1.path(), "iteration 1 log").unwrap();
-        let log_iter2 = tempfile::NamedTempFile::new().unwrap();
+        let log_iter2 = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_iter2.path(), "iteration 2 log").unwrap();
         let path0 = log_iter0.path().to_str().unwrap().to_string();
         let path1 = log_iter1.path().to_str().unwrap().to_string();
@@ -3065,11 +3079,14 @@ mod tests {
         let state = empty_state();
         let run_id = seed_workflow_fixtures(&state).await;
 
-        let log_build = tempfile::NamedTempFile::new().unwrap();
+        // Write log files inside agent_log_dir so validation passes.
+        let log_dir = conductor_core::config::agent_log_dir();
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_build = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_build.path(), "build step log").unwrap();
-        let log_deploy0 = tempfile::NamedTempFile::new().unwrap();
+        let log_deploy0 = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_deploy0.path(), "deploy iteration 0 log").unwrap();
-        let log_deploy1 = tempfile::NamedTempFile::new().unwrap();
+        let log_deploy1 = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
         std::fs::write(log_deploy1.path(), "deploy iteration 1 log").unwrap();
         let path_build = log_build.path().to_str().unwrap().to_string();
         let path_deploy0 = log_deploy0.path().to_str().unwrap().to_string();

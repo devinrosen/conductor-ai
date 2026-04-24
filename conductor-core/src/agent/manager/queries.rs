@@ -437,6 +437,21 @@ mod tests {
     }
 
     #[test]
+    fn test_log_path_for_run_rejects_dotdot_traversal() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
+        let log_dir = crate::config::agent_log_dir();
+        let traversal = log_dir.join("../../../etc/passwd");
+        mgr.update_run_log_file(&run.id, traversal.to_str().unwrap())
+            .unwrap();
+        assert!(
+            mgr.log_path_for_run(&run.id).is_err(),
+            "log_path_for_run must reject .. traversal that escapes log_dir"
+        );
+    }
+
+    #[test]
     fn test_log_path_for_run_missing_run_returns_error() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
