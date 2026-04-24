@@ -34,8 +34,7 @@ impl ActionExecutor for ApiCallExecutor {
             ConductorError::Workflow("ApiCallExecutor requires ANTHROPIC_API_KEY".into())
         })?;
 
-        let (_agent_def, prompt) =
-            super::helpers::load_agent_and_build_prompt(ectx, params)?;
+        let (_agent_def, prompt) = super::helpers::load_agent_and_build_prompt(ectx, params)?;
 
         let model = ectx
             .model
