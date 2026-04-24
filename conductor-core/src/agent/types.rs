@@ -385,10 +385,7 @@ mod tests {
     #[test]
     fn log_path_accepts_log_file_inside_log_dir() {
         let inside = crate::config::agent_log_dir().join("foo.log");
-        let run = make_run(
-            "01JVFJT9K7XPPQ9MH6JV7XRM3M",
-            Some(inside.to_str().unwrap()),
-        );
+        let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", Some(inside.to_str().unwrap()));
         assert_eq!(run.log_path().unwrap(), inside);
     }
 
