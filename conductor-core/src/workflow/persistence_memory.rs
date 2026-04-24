@@ -281,12 +281,14 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         items: &[NewFanOutItem],
     ) -> Result<(), EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let existing: std::collections::HashSet<String> = store
+            .fan_out_items
+            .values()
+            .filter(|i| i.step_run_id == step_run_id)
+            .map(|i| i.item_id.clone())
+            .collect();
         for item in items {
-            if store
-                .fan_out_items
-                .values()
-                .any(|i| i.step_run_id == step_run_id && i.item_id == item.item_id)
-            {
+            if existing.contains(&item.item_id) {
                 continue;
             }
             let id = crate::new_id();
