@@ -290,14 +290,21 @@ fn pre_cancelled_token_stops_run() {
 
 #[test]
 fn channel_event_sink_records_events_in_order() {
-    use runkon_flow::ChannelEventSink;
+    use runkon_flow::events::{EngineEventData, EventSink};
     use runkon_flow::EngineEvent;
     use std::sync::mpsc;
+
+    struct TestChannelSink(mpsc::Sender<EngineEventData>);
+    impl EventSink for TestChannelSink {
+        fn emit(&self, event: &EngineEventData) {
+            let _ = self.0.send(event.clone());
+        }
+    }
 
     let (tx, rx) = mpsc::channel();
     let engine = FlowEngineBuilder::new()
         .action(Box::new(MockExecutor::new("worker")))
-        .event_sink(Box::new(ChannelEventSink(tx)))
+        .event_sink(Box::new(TestChannelSink(tx)))
         .build()
         .expect("engine build failed");
 
