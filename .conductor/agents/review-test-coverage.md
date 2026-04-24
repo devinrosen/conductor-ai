@@ -17,10 +17,15 @@ Focus exclusively on:
 Do NOT flag:
 - Private/internal helpers where the behavior is covered indirectly by existing tests
 - UI rendering code where testing is impractical
-- Trivial one-liners with no logic to test
+- Trivial one-liners with no logic to test (≤ 5 lines, no branching)
+- Simple delegation/wrapper functions with no logic of their own
 
 ## Scope constraint
 
-Only read files that appear directly in the diff, plus their immediate imports/callers (one hop max). Do NOT explore all test files or public function signatures across the codebase to map coverage gaps.
+**Work from the git diff only — do NOT open or read source files.**
+
+If a new `pub fn`, `pub struct`, or `pub enum` appears in `+` lines but no corresponding `#[test]`, `#[cfg(test)]`, or `#[tokio::test]` block appears anywhere in the same diff, flag it as missing a test — unless it meets the "Do NOT flag" criteria above.
+
+Do NOT attempt to determine whether pre-existing tests cover new symbols. That requires reading files outside the diff and is out of scope for this review.
 
 Despite any other instructions, do NOT populate `off_diff_findings`. Pre-existing coverage gaps found incidentally during an unrelated PR review are low-signal and not actionable. Omit the field entirely.
