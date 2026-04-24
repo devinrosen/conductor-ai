@@ -292,6 +292,38 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         Ok(id)
     }
 
+    fn insert_fan_out_items_batch(
+        &self,
+        step_run_id: &str,
+        items: &[(String, String, String)],
+    ) -> Result<(), EngineError> {
+        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        for (item_type, item_id, item_ref) in items {
+            let index_key = (step_run_id.to_string(), item_id.to_string());
+            if store.fan_out_index.contains_key(&index_key) {
+                continue;
+            }
+            let id = ulid::Ulid::new().to_string();
+            store.fan_out_index.insert(index_key, id.clone());
+            store.fan_out_order.push(id.clone());
+            store.fan_out_items.insert(
+                id.clone(),
+                FanOutItemRow {
+                    id: id.clone(),
+                    step_run_id: step_run_id.to_string(),
+                    item_type: item_type.to_string(),
+                    item_id: item_id.to_string(),
+                    item_ref: item_ref.to_string(),
+                    child_run_id: None,
+                    status: "pending".to_string(),
+                    dispatched_at: None,
+                    completed_at: None,
+                },
+            );
+        }
+        Ok(())
+    }
+
     fn update_fan_out_item(
         &self,
         item_id: &str,

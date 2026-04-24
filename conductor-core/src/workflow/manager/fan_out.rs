@@ -37,6 +37,30 @@ fn fan_out_item_from_row(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow>
 }
 
 impl<'a> WorkflowManager<'a> {
+    /// Insert multiple fan-out item rows in a single transaction.
+    /// Ignores duplicates (idempotent). No-ops if `items` is empty.
+    pub fn insert_fan_out_items_batch(
+        &self,
+        step_run_id: &str,
+        items: &[(String, String, String)],
+    ) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        for (item_type, item_id, item_ref) in items {
+            let id = crate::new_id();
+            tx.execute(
+                "INSERT OR IGNORE INTO workflow_run_step_fan_out_items \
+                 (id, step_run_id, item_type, item_id, item_ref, status) \
+                 VALUES (:id, :step_run_id, :item_type, :item_id, :item_ref, 'pending')",
+                named_params![":id": id, ":step_run_id": step_run_id, ":item_type": item_type, ":item_id": item_id, ":item_ref": item_ref],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Insert a fan-out item row with status = 'pending'.
     /// Ignores duplicates (idempotent — safe to call on resume).
     pub fn insert_fan_out_item(

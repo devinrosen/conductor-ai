@@ -173,19 +173,13 @@ pub fn execute_foreach(
         .collect();
 
     // Write pending rows for newly discovered items.
-    let total_items = {
-        let mut count = 0i64;
-        for (item_type, item_id, item_ref) in &items {
-            if !existing_set.contains(item_id) {
-                state
-                    .wf_mgr
-                    .insert_fan_out_item(&step_id, item_type, item_id, item_ref)?;
-                count += 1;
-            }
-        }
-        // Total = newly inserted + already existing
-        count + existing_set.len() as i64
-    };
+    let new_items: Vec<(String, String, String)> = items
+        .into_iter()
+        .filter(|(_, item_id, _)| !existing_set.contains(item_id))
+        .collect();
+    let new_count = new_items.len() as i64;
+    state.wf_mgr.insert_fan_out_items_batch(&step_id, &new_items)?;
+    let total_items = new_count + existing_set.len() as i64;
 
     if total_items > 0 {
         // Update or set the fan_out_total (always recalculate from all items).

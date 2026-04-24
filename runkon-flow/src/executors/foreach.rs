@@ -240,19 +240,15 @@ pub fn execute_foreach(
         .collect();
 
     // Write pending rows for newly discovered items.
-    for (item_type, item_id, item_ref) in &items {
-        if !existing_set.contains(item_id) {
-            state
-                .persistence
-                .insert_fan_out_item(&step_id, item_type, item_id, item_ref)
-                .map_err(p_err)?;
-        }
-    }
-
-    let new_item_count = items
-        .iter()
-        .filter(|(_, id, _)| !existing_set.contains(id))
-        .count();
+    let new_items: Vec<(String, String, String)> = items
+        .into_iter()
+        .filter(|(_, item_id, _)| !existing_set.contains(item_id))
+        .collect();
+    let new_item_count = new_items.len();
+    state
+        .persistence
+        .insert_fan_out_items_batch(&step_id, &new_items)
+        .map_err(p_err)?;
     let total_items = existing_items.len() + new_item_count;
 
     tracing::info!(

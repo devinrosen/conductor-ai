@@ -160,6 +160,17 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             .map_err(to_engine_err)
     }
 
+    fn insert_fan_out_items_batch(
+        &self,
+        step_run_id: &str,
+        items: &[(String, String, String)],
+    ) -> Result<(), EngineError> {
+        let guard = self.conn.lock().map_err(|_| lock_err())?;
+        WorkflowManager::new(&guard)
+            .insert_fan_out_items_batch(step_run_id, items)
+            .map_err(to_engine_err)
+    }
+
     fn update_fan_out_item(
         &self,
         item_id: &str,
