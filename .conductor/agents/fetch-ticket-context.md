@@ -38,7 +38,7 @@ gh pr list --search "closes:#{{ticket_source_id}}" --json number,baseRefName,hea
 ```
 
 - If one or more PRs are found, use the `baseRefName` of the first result as `base_branch`.
-- If no PRs are found, default `base_branch` to `main`.
+- If no PRs are found, use `{{feature_base_branch}}` as `base_branch` (the worktree's configured target branch).
 
 ## Step 4 — Scan the codebase
 
@@ -61,7 +61,7 @@ If the fetch fails, fall back to `git log --oneline -20`.
 Emit `<<<CONDUCTOR_OUTPUT>>>` with a `context` string containing:
 - Full ticket title and body
 - Summary of all linked/blocking issues and their states
-- The resolved `base_branch` (from linked PR or defaulted to `main`)
+- The resolved `base_branch` (from linked PR, or the worktree's configured target branch)
 - List of codebase symbols/paths referenced in the ticket and whether each was found
 - Any recent commits that appear related
 - Any comments from the ticket thread that add requirements or constraints
