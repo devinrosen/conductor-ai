@@ -8,7 +8,7 @@ use crate::workflow_dsl::{ForeachScope, TicketScope};
 use super::{FanOutItem, ItemProvider, ProviderContext};
 
 pub struct TicketsProvider {
-    pub repo_id: Option<String>,
+    repo_id: Option<String>,
 }
 
 impl TicketsProvider {

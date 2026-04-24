@@ -10,8 +10,8 @@ use crate::worktree::{Worktree, WorktreeManager};
 use super::{FanOutItem, ItemProvider, ProviderContext};
 
 pub struct WorktreesProvider {
-    pub repo_id: Option<String>,
-    pub worktree_id: Option<String>,
+    repo_id: Option<String>,
+    worktree_id: Option<String>,
 }
 
 impl WorktreesProvider {

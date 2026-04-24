@@ -7,6 +7,46 @@ pub(in crate::workflow::executors) use pr_approval::PrApprovalGateResolver;
 pub(in crate::workflow::executors) use pr_checks::PrChecksGateResolver;
 
 use std::process::Command;
+use std::sync::Arc;
+
+use crate::workflow::executors::gate_resolver::{GateContext, GitHubTokenCache};
+
+/// Shared state for gate resolvers that call `gh` on behalf of a bot account.
+///
+/// Centralises the 3-field constructor and token resolution so concrete
+/// resolver types stay thin and a single-point change (e.g. adding a timeout)
+/// applies to all of them.
+pub(super) struct GhGateCommon {
+    pub(super) working_dir: String,
+    default_bot_name: Option<String>,
+    token_cache: Arc<GitHubTokenCache>,
+}
+
+impl GhGateCommon {
+    pub(super) fn new(
+        working_dir: String,
+        default_bot_name: Option<String>,
+        token_cache: Arc<GitHubTokenCache>,
+    ) -> Self {
+        Self {
+            working_dir,
+            default_bot_name,
+            token_cache,
+        }
+    }
+
+    /// Resolve the effective bot token and run a `gh` JSON command.
+    pub(super) fn run_gh(
+        &self,
+        args: &[&str],
+        params_bot: Option<&str>,
+        ctx: &GateContext<'_>,
+    ) -> Option<serde_json::Value> {
+        let effective_bot = params_bot.or(self.default_bot_name.as_deref());
+        let token = self.token_cache.get(ctx.config, effective_bot);
+        run_gh_json(args, &self.working_dir, token.as_deref())
+    }
+}
 
 /// Run a `gh` command and parse stdout as JSON.
 ///
