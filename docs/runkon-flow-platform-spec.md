@@ -26,7 +26,7 @@ becomes the second. The engine is published to crates.io so any project can buil
     │ (first harness) │    │ (second harness)       │
     │                 │    │                        │
     │ ActionExecutor  │    │ ActionExecutor         │
-    │  → Claude/tmux  │    │  → email/Slack/HTTP    │
+    │  → Claude subp. │    │  → email/Slack/HTTP    │
     │ ItemProvider    │    │ ItemProvider           │
     │  → tickets/     │    │  → inbox/threads/      │
     │    repos        │    │    channels            │
@@ -51,7 +51,7 @@ domain-agnostic. But four coupling points make it impossible to use outside cond
 2. `ENGINE_INJECTED_KEYS` hardcodes 14 conductor-specific variable names
 3. `ForeachOver` is a closed enum: `Tickets | Repos | WorkflowRuns`
 4. Gate executor calls `gh` CLI directly for `pr_approval` and `pr_checks`
-5. `call` steps are hardwired to spawn Claude agents via tmux
+5. `call` steps are hardwired to spawn Claude agents via headless subprocess (PID-based)
 
 The DSL parser and AST are already clean. The extraction surface is the execution layer only.
 
@@ -67,7 +67,7 @@ ones it needs and registers them at engine startup.
 ### 1. `ActionExecutor`
 
 What a `call` step does. This is the most important trait — it replaces the hardcoded
-Claude/tmux invocation.
+Claude subprocess invocation.
 
 ```rust
 pub trait ActionExecutor: Send + Sync {
@@ -93,7 +93,7 @@ pub trait ActionExecutor: Send + Sync {
     /// cancelled (user request, parallel fail_fast, timeout, parent cancel,
     /// engine shutdown). The engine fires this and moves on — it does not
     /// wait for `cancel()` to return. Executors use this to preempt external
-    /// work: conductor's `ClaudeAgentExecutor` kills the tmux window; an
+    /// work: conductor's `ClaudeAgentExecutor` kills the subprocess (via PID); an
     /// HTTP-based executor aborts the in-flight request.
     ///
     /// Well-behaved executors also check `ectx.cancellation.is_cancelled()`
@@ -123,8 +123,8 @@ pub struct ActionOutput {
 ```
 
 **Conductor's implementation:** `ClaudeAgentExecutor` — resolves the agent `.md` file,
-builds the prompt, spawns a tmux session, polls for `CONDUCTOR_OUTPUT`, and maps the
-result to `ActionOutput`.
+builds the prompt, spawns a headless subprocess (PID-based), polls for `CONDUCTOR_OUTPUT`,
+and maps the result to `ActionOutput`.
 
 **Communication harness implementations:** `SendEmailExecutor`, `PostSlackExecutor`,
 `CreateJiraTicketExecutor`, `HttpRequestExecutor`, etc. Each one is a small struct that
@@ -787,7 +787,7 @@ out of scope.
   registry, parallel fail_fast wiring, step-level timeout → `token.cancel()`,
   `ActionExecutor::cancel()` escalation, cross-process DB-backed propagation,
   `RunCancelled` event emission, `ConductorClaudeAgentExecutor::cancel()`
-  killing tmux windows.
+  killing the subprocess (via PID).
 
 ---
 
@@ -812,7 +812,7 @@ out of scope.
 
 ### `conductor-core` (conductor's harness layer)
 
-- `ClaudeAgentExecutor` — agent `.md` resolution, tmux, `CONDUCTOR_OUTPUT` parsing
+- `ClaudeAgentExecutor` — agent `.md` resolution, headless subprocess spawn, `CONDUCTOR_OUTPUT` parsing
 - `TicketsProvider`, `ReposProvider`, `WorkflowRunsProvider`, `WorktreesProvider`
 - `PrApprovalGateResolver`, `PrChecksGateResolver`, `HumanApprovalGateResolver`
 - `WorktreeRunContext` — resolves conductor-specific injected variables
@@ -920,7 +920,7 @@ breakage. Existing behavior is preserved end-to-end; every step should keep the
 
 **Step 1.4 — `ActionExecutor`**
 
-- Lower risk than it appears: the tmux/Claude spawn already lives in
+- Lower risk than it appears: the headless Claude spawn already lives in
   `agent_runtime/`, so `ClaudeAgentExecutor` is a thin wrapper around the
   existing `try_spawn_headless_run` entry point plus the direct-API path.
 - Keep `ActionOutput` shape aligned with what `output.rs` already parses from
@@ -937,7 +937,7 @@ breakage. Existing behavior is preserved end-to-end; every step should keep the
   `workflow_run_steps`, `workflow_run_step_fan_out_items`) unchanged.
 - Ship an `InMemoryWorkflowPersistence` in the same PR for test usage.
 
-**Step 1.6 (optional, can defer to Phase 3) — `TriggerSource`**
+**Step 1.6 (optional, can defer to Phase 5) — `TriggerSource`**
 
 - Implement as first-class instead of the current stubs.
 - Defer until the comm-harness needs it; extracting it in isolation gives no
@@ -974,9 +974,156 @@ breakage. Existing behavior is preserved end-to-end; every step should keep the
   `.workflow_dir(".conductor/workflows")`; existing sub-workflow resolution logic in
   `conductor-core` moves into `DirectoryWorkflowResolver`.
 - Publish `runkon-flow 0.1.0-alpha` to crates.io. Do not stabilize the API yet —
-  wait for Phase 3 validation.
+  wait for Phase 5 validation.
 
-### Phase 3 — Second harness + stabilize (~2–3 weeks)
+### Phase 3 — Wire conductor-core through runkon-flow's FlowEngine (~1–2 weeks)
+
+Phase 2 built `runkon-flow` as a parallel, complete workflow engine — DSL, traits,
+execution loop, all node executors, `FlowEngineBuilder`, `WorkflowResolver`, `validate()`,
+`EventSink`, cancellation — but did **not** switch conductor-core to use it. As of
+Phase 2, `conductor-core` depends on `runkon-flow` only for a handful of re-exports
+(`EngineError`, `CancellationReason`, `ScriptEnvProvider`). The CLI and TUI call
+`execute_workflow_standalone` / `resume_workflow_standalone`, which go entirely through
+conductor-core's own `engine.rs` using `crate::workflow_dsl`. The two engines are
+parallel, not wired together.
+
+Until this phase completes, the comm-harness (Phase 5) would be using a different engine
+than conductor, and the Phase 4 persistence work would be migrating out of an engine
+that conductor doesn't actually run through.
+
+**Step 3.1 — Replace `execute_workflow_standalone` internals with `FlowEngine::run()`**
+
+- Wire `execute_workflow_standalone` to build a `FlowEngine` via `FlowEngineBuilder`,
+  register conductor's trait implementations (`ClaudeAgentExecutor` as fallback,
+  the four `ItemProvider`s, the three `GateResolver`s, `WorktreeRunContext`,
+  `SqliteWorkflowPersistence`), and call `runkon_flow::FlowEngine::run(&workflow_def, inputs)`.
+- The function signature and return type are unchanged — all callers (CLI, TUI, web) are unaffected.
+- Run the full test suite after each sub-step to catch divergence early.
+
+**Step 3.2 — Replace `resume_workflow_standalone` internals with `FlowEngine::resume()`**
+
+- Wire `resume_workflow_standalone` to call `runkon_flow::FlowEngine::resume(run_id)`.
+- Gate resumability (precondition checks, `validate_resume_preconditions`) stays in
+  conductor-core — these are conductor domain rules, not engine rules.
+
+**Step 3.3 — Delete conductor-core's own engine and DSL**
+
+Once Steps 3.1 and 3.2 are green end-to-end:
+- Delete `conductor-core/src/workflow/engine.rs` (the old execution loop).
+- Delete `conductor-core/src/workflow_dsl/` (the old DSL copy: lexer, parser, types,
+  validation, api, script_utils, tests).
+- Update all `crate::workflow_dsl::` import sites to use `runkon_flow::dsl::` instead.
+- Update `conductor-core/src/workflow/mod.rs` re-exports to source from `runkon_flow`.
+- After deletion, `cargo test --workspace` must stay green. This is the validation gate
+  that confirms the migration is complete.
+
+**Step 3.4 — Delete conductor-core's duplicate `FlowEngineBuilder`**
+
+`conductor-core/src/workflow/flow_engine.rs` contains its own `FlowEngineBuilder` that
+only builds an `ActionRegistry` — a partial reimplementation of the full builder in
+`runkon-flow`. Once conductor-core delegates to `runkon_flow::FlowEngine`, this file
+is dead code and should be deleted. Callers are updated to use `runkon_flow::FlowEngineBuilder`.
+
+### Phase 4 — Consolidate persistence implementations (~1 week)
+
+Phase 2 left `SqliteWorkflowPersistence` in `conductor-core` and
+`InMemoryWorkflowPersistence` duplicated across both crates. Phase 4 fixes
+both so that any future harness gets a production-ready SQLite backend for free
+from `runkon-flow`, without writing its own.
+
+**Current state (post Phase 2):**
+- `InMemoryWorkflowPersistence` exists in **both** `conductor-core/src/workflow/persistence_memory.rs`
+  (674 lines, uses `crate::workflow::` paths) and `runkon-flow/src/persistence_memory.rs`
+  (747 lines, canonical). Structurally identical implementations with diverged imports.
+- `SqliteWorkflowPersistence` lives in `conductor-core/src/workflow/persistence_sqlite.rs`
+  (368 lines). Blocked from moving to `runkon-flow` by three dependencies:
+  `WorkflowManager` (conductor's SQL manager — used as a transient delegate for every
+  method), `ConductorError` (conductor-specific error type), and conductor-internal
+  types (`FanOutItemRow`, `WorkflowRun`, `WorkflowRunStep`) imported via `crate::workflow::`.
+- `runkon-flow` has **no `rusqlite` dependency** — it is pure Rust with no DB deps.
+
+**Step 4.1 — Consolidate `InMemoryWorkflowPersistence`** (quick win, ~2 hours)
+
+- Delete `conductor-core/src/workflow/persistence_memory.rs`.
+- Update all `conductor-core` import sites to use
+  `runkon_flow::persistence_memory::InMemoryWorkflowPersistence` directly.
+- No behavior change — the two implementations are structurally identical; the
+  conductor-core copy has simply fallen behind the canonical `runkon-flow` version.
+
+**Step 4.2 — Break `SqliteWorkflowPersistence`'s `WorkflowManager` dependency** (~3 hours)
+
+`SqliteWorkflowPersistence` currently works like this:
+
+```rust
+fn create_run(&self, ...) -> Result<String, EngineError> {
+    let conn = self.conn.lock()?;
+    let mgr = WorkflowManager::new(&conn);   // transient delegate
+    mgr.create_run(...).map_err(|e| EngineError::Persistence(e.to_string()))
+}
+```
+
+- Rewrite each method to use `rusqlite` directly, inlining the SQL that `WorkflowManager`
+  currently provides. The SQL is straightforward CRUD against
+  `workflow_runs`, `workflow_run_steps`, and `workflow_run_step_fan_out_items`.
+- After this step, `persistence_sqlite.rs` imports only: `rusqlite`, `EngineError`,
+  and the `WorkflowPersistence` trait types. No `ConductorError`, no `WorkflowManager`,
+  no `crate::workflow::` paths.
+- `WorkflowManager` is unaffected — it continues to exist in `conductor-core` for other
+  callers (lifecycle, queries, fan-out). This step only removes the delegation pattern
+  inside `SqliteWorkflowPersistence`.
+
+**Step 4.3 — Move `SqliteWorkflowPersistence` to `runkon-flow` as an optional feature** (~2 hours)
+
+- Add to `runkon-flow/Cargo.toml`:
+  ```toml
+  [features]
+  sqlite = ["dep:rusqlite"]
+
+  [dependencies]
+  rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+  ```
+- Move `persistence_sqlite.rs` to `runkon-flow/src/persistence_sqlite.rs`, gate the
+  module with `#[cfg(feature = "sqlite")]`.
+- Update `conductor-core/Cargo.toml` to depend on `runkon-flow` with
+  `features = ["sqlite"]`.
+- `conductor-core` re-exports `SqliteWorkflowPersistence` from its own `workflow` module
+  for backwards compatibility with existing callers.
+- The comm-harness (Phase 5) gets a production-ready SQLite backend by simply enabling
+  the `sqlite` feature — no implementation work required.
+
+**Step 4.4 — Schema migration ownership (deferred to post-Phase 5)**
+
+The ~10 workflow migration files in `conductor-core/src/db/migrations/` (
+`020_workflow_runs.sql`, `021_workflow_redesign.sql`, etc.) define the schema that
+`SqliteWorkflowPersistence` expects. `runkon-flow` can document the required schema
+without owning the migration files — conductor continues to manage migrations for its
+own DB. Full schema ownership transfer is deferred until the comm-harness (Phase 5)
+reveals what its persistence needs look like and whether the schema needs to evolve for
+multi-harness use.
+
+**DB topology:** `runkon-flow` has no opinion about which database the workflow tables
+live in. `SqliteWorkflowPersistence::new(conn)` accepts whatever connection the harness
+passes — the harness decides the topology. Two patterns:
+
+- **Conductor (shared DB):** workflow tables live alongside `worktrees`, `repos`,
+  `agent_runs`, etc. in `~/.conductor/conductor.db`. This is required, not optional:
+  `workflow_runs` carries FK references to `worktrees.id` and `repos.id`, and
+  `agent_runs` references `workflow_runs` in the other direction. SQLite has no
+  cross-database FK enforcement, so moving workflow tables to a separate file would
+  silently drop referential integrity and break cross-table JOINs. Single DB also
+  preserves transaction atomicity across workflow + harness state changes.
+- **comm-harness (fresh start):** no FK entanglement with external tables, so it can
+  put everything in one DB or hand `SqliteWorkflowPersistence` a dedicated
+  `workflow.db` connection — either works.
+
+**Schema self-description:** when `SqliteWorkflowPersistence` moves to `runkon-flow`
+in Step 4.3, it should expose `SqliteWorkflowPersistence::create_tables(&conn)` — the
+authoritative DDL for the three workflow tables. Conductor's migration runner invokes
+this (or mirrors the DDL in an explicit migration file); the comm-harness calls it
+directly as its sole initial migration. Future workflow schema changes are coordinated
+as a `runkon-flow` semver bump plus a new migration file in each harness.
+
+### Phase 5 — Second harness + stabilize (~2–3 weeks)
 
 - Build `comm-harness` in a separate repo depending on `runkon-flow` from crates.io.
 - Implement `ImapTriggerSource`, `SendEmailExecutor`, `PostSlackExecutor`,
@@ -984,7 +1131,7 @@ breakage. Existing behavior is preserved end-to-end; every step should keep the
 - This is where trait gaps surface (harness discovery validation, `call
   workflow` resolution, `PATH` injection — see Open Questions).
 - Publish `runkon-flow 0.1.0` stable once the comm-harness ships end-to-end.
-- If cross-repo development friction becomes painful during Phase 3, extract
+- If cross-repo development friction becomes painful during Phase 5, extract
   `runkon-flow` from the conductor workspace into its own repo (Option B) before
   stabilizing.
 
@@ -1014,7 +1161,7 @@ breakage. Existing behavior is preserved end-to-end; every step should keep the
    libraries internally build their own runtime or accept a `tokio::runtime::Handle` at
    construction and call `handle.block_on(future)`. Async host applications (axum/tokio)
    call into `FlowEngine::run()` via `tokio::task::spawn_blocking` — standard pattern.
-   An `AsyncAction` helper wrapper is deferred to Phase 3 — ship when the comm-harness
+   An `AsyncAction` helper wrapper is deferred to Phase 5 — ship when the comm-harness
    reveals what ergonomics actually matter. Rejected: async-first engine (2–3× the
    Phase 1 refactor scope, drags tokio into conductor-core/CLI/TUI, breaks the TUI
    threading model, no identified use case requires it — comm-harness works fine with

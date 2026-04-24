@@ -7,9 +7,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 cargo build                    # Build all crates
 cargo build --release          # Release build
-cargo test                     # Run all tests
-cargo test --lib github        # Run specific module tests (e.g., github)
-cargo test -p conductor-core   # Test a single crate
+
+# Progressive testing — only test what you touched (much faster dev loop)
+cargo test -p conductor-core          # touched core logic
+cargo test -p conductor-tui           # touched TUI
+cargo test -p conductor-web           # touched web backend
+cargo test -p conductor-core --lib agent  # specific module within a crate
+cargo test -p conductor-core <test_name>  # single test by name
+
+# Full suite — run before pushing (matches CI)
+cargo test --workspace
+
 cargo clippy -- -D warnings    # Lint (CI enforces -D warnings)
 cargo fmt --all                # Auto-format
 cargo fmt --all --check        # Check formatting (CI gate)
@@ -55,7 +63,7 @@ Domain logic is organized into manager structs that take `&Connection` + `&Confi
 - `WorktreeManager` — Git worktree lifecycle (branch, create worktree, auto-install JS deps)
 - `TicketSyncer` — Upsert/list tickets, link to worktrees
 - `IssueSourceManager` — Configure per-repo issue sources (GitHub, Jira)
-- `AgentManager` — Launch/stop Claude agents in tmux, track runs and events
+- `AgentManager` — Launch/stop Claude agents via PID-based headless subprocess, track runs and events
 
 ### Error Handling
 
@@ -70,7 +78,12 @@ All git operations and GitHub sync use `std::process::Command` (synchronous subp
 
 ### Database
 
-SQLite at `~/.conductor/conductor.db` with WAL mode, foreign keys on, 5s busy timeout. Schema managed via versioned migrations in `conductor-core/src/db/migrations/`. Tables: `repos`, `repo_issue_sources`, `worktrees`, `tickets`, `agent_runs`, `workflow_runs`, `workflow_run_steps`, `_conductor_meta`.
+SQLite at `~/.conductor/conductor.db` with WAL mode, foreign keys on, 5s busy timeout. Schema managed via versioned migrations in `conductor-core/src/db/migrations/`. Key tables by domain:
+- **Repos/worktrees:** `repos`, `repo_issue_sources`, `worktrees`
+- **Tickets:** `tickets`, `ticket_labels`, `ticket_dependencies`
+- **Agent runs:** `agent_runs`, `agent_run_events`, `agent_created_issues`, `conversations`
+- **Workflows:** `workflow_runs`, `workflow_run_steps`, `workflow_run_step_fan_out_items`
+- **Misc:** `notification_log`, `push_subscriptions`
 
 ### Data Directory
 
@@ -158,7 +171,7 @@ Do all work — edits, builds, tests, commits — inside the worktree directory.
 
 ```bash
 cd ~/.conductor/workspaces/conductor-ai/<name>
-# ... make changes, run cargo test, cargo fmt --all ...
+# ... make changes, run cargo test -p <affected-crate>, cargo fmt --all ...
 git add <files> && git commit -m "..."
 git push -u origin <branch>
 gh pr create ...
