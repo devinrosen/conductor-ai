@@ -1545,16 +1545,18 @@ mod tests {
 
         engine.run(&def, &mut state).ok(); // may fail due to min_success
 
-        // The fail_fast scope token skips branches after the first failure.
-        // Exactly one branch should have been dispatched and failed; the rest are skipped.
+        // With true parallel execution all branches are spawned simultaneously. The scope
+        // token is cancelled as soon as the first failure result is processed; branches
+        // that haven't dispatched yet will see the cancellation and return early. At minimum
+        // the explicitly-failing branch must be recorded as Failed.
         let steps = persistence.get_steps(&run.id).unwrap();
         let failed = steps
             .iter()
             .filter(|s| s.status == crate::status::WorkflowStepStatus::Failed)
             .count();
-        assert_eq!(
-            failed, 1,
-            "only the first (failing) branch should be Failed; got steps: {:?}",
+        assert!(
+            failed >= 1,
+            "at least the first (failing) branch should be Failed; got steps: {:?}",
             steps
         );
     }

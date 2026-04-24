@@ -38,6 +38,13 @@ pub fn execute_parallel(
         attempt: u32,
     }
 
+    struct DispatchInput {
+        step_id: String,
+        agent_name: String,
+        ectx: ExecutionContext,
+        params: ActionParams,
+    }
+
     let mut skipped_count = 0u32;
     let mut call_inputs: Vec<(
         usize,
@@ -77,27 +84,16 @@ pub fn execute_parallel(
         call_inputs.push((i, agent_step_key.clone(), effective_schema, effective_with));
     }
 
-    // Second pass: execute each non-skipped agent synchronously via action registry
-    // Note: in the full implementation these would be parallel; here we serialize for simplicity
-    // The conductor-core parallel executor handles true parallelism via headless subprocesses.
-    let mut results: Vec<ParallelCallResult> = Vec::new();
-    let mut merged_markers: Vec<String> = Vec::new();
-    let mut successes = 0u32;
-    let mut failures = 0u32;
+    // Pre-dispatch pass: evaluate per-call `if` conditions, create step records, and build
+    // the dispatch queue. All records are created before any thread is spawned so the DB
+    // reflects the full parallel block immediately (important for UI and resume).
+    let mut dispatch_queue: Vec<DispatchInput> = Vec::new();
 
-    // Parallel-scope token: child of the run root. Cancelling it prevents later branches
-    // from executing when fail_fast fires.
+    // Parallel-scope token: child of the run root. Cancelling it signals running branches
+    // to exit early when fail_fast fires.
     let scope_token = state.cancellation.child();
 
     for (i, _agent_step_key, call_schema, effective_with) in call_inputs {
-        // Check scope token before dispatching each branch (fail_fast from a prior branch).
-        if scope_token.is_cancelled() {
-            tracing::info!(
-                "parallel: scope token cancelled (fail_fast), skipping remaining branches"
-            );
-            break;
-        }
-
         let pos = pos_base + i as i64;
         let agent_ref = &node.calls[i];
         let agent_label = agent_ref.label();
@@ -195,16 +191,49 @@ pub fn execute_parallel(
             snippets: effective_with,
             dry_run: state.exec_config.dry_run,
             gate_feedback: state.last_gate_feedback.clone(),
-            schema: call_schema.clone(),
+            schema: call_schema,
         };
 
-        let registry = Arc::clone(&state.action_registry);
-        let result = registry.dispatch(&params.name, &ectx, &params);
+        dispatch_queue.push(DispatchInput {
+            step_id,
+            agent_name: agent_label.to_string(),
+            ectx,
+            params,
+        });
+    }
 
-        // If fail_fast and this branch failed, cancel the scope token to stop remaining branches.
+    // Spawn all agents concurrently. Each thread checks the scope token before dispatching
+    // so that a fail_fast cancellation from a result that arrives while threads are still
+    // starting will prevent those threads from doing any work.
+    let (completion_tx, completion_rx) =
+        std::sync::mpsc::channel::<(String, String, std::result::Result<ActionOutput, EngineError>)>();
+
+    for dispatch_input in dispatch_queue {
+        let tx = completion_tx.clone();
+        let registry = Arc::clone(&state.action_registry);
+        let scope = scope_token.clone();
+        std::thread::spawn(move || {
+            let result = if scope.is_cancelled() {
+                Err(EngineError::Cancelled(CancellationReason::FailFast))
+            } else {
+                registry.dispatch(
+                    &dispatch_input.params.name,
+                    &dispatch_input.ectx,
+                    &dispatch_input.params,
+                )
+            };
+            let _ = tx.send((dispatch_input.step_id, dispatch_input.agent_name, result));
+        });
+    }
+    // Drop the sender so the receiver knows when all threads have completed.
+    drop(completion_tx);
+
+    // Collect results as threads complete, triggering fail_fast cancellation as needed.
+    let mut results: Vec<ParallelCallResult> = Vec::new();
+    for (step_id, agent_name, result) in completion_rx {
         let failed = result.is_err();
         results.push(ParallelCallResult {
-            agent_name: agent_label.to_string(),
+            agent_name,
             step_id,
             result,
             attempt: 0,
@@ -215,6 +244,10 @@ pub fn execute_parallel(
     }
 
     // Process results
+    let mut merged_markers: Vec<String> = Vec::new();
+    let mut successes = 0u32;
+    let mut failures = 0u32;
+
     for pr in &results {
         match &pr.result {
             Ok(output) => {
@@ -517,6 +550,9 @@ mod tests {
     }
 
     /// Verifies that fail_fast cancels remaining branches after the first failure.
+    /// With true parallel execution, all branches are spawned simultaneously; the
+    /// scope token is cancelled as soon as the first failure result arrives, so
+    /// any branches that haven't dispatched yet will see the cancellation and skip.
     #[test]
     fn parallel_fail_fast_stops_after_first_failure() {
         struct FailExec;
@@ -572,10 +608,15 @@ mod tests {
             .iter()
             .filter(|s| s.status == WorkflowStepStatus::Failed)
             .count();
-        assert_eq!(
-            failed, 1,
-            "only the first (failing) branch should be Failed; steps: {:?}",
+        assert!(
+            failed >= 1,
+            "at least one branch should be Failed; steps: {:?}",
             steps
+        );
+        // The overall workflow should be marked as not all-succeeded
+        assert!(
+            !state.all_succeeded,
+            "all_succeeded should be false when fail_fast fires"
         );
     }
 }
