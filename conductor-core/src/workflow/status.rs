@@ -199,6 +199,15 @@ mod tests {
     }
 
     #[test]
+    fn timed_out_is_not_a_valid_run_status() {
+        use std::str::FromStr;
+        // 'timed_out' is valid only for workflow_run_steps (WorkflowStepStatus::TimedOut).
+        // workflow_runs.status must never be 'timed_out'; the schema CHECK constraint
+        // (migration 080) enforces this at the DB level.
+        assert!(WorkflowRunStatus::from_str("timed_out").is_err());
+    }
+
+    #[test]
     fn run_terminal_and_active_are_mutually_exclusive() {
         // These statuses must be exactly one of terminal or active.
         let exactly_one = [
