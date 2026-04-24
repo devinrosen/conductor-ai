@@ -386,7 +386,8 @@ impl<'a> AgentManager<'a> {
 
     /// Returns the log file path for a run, verifying the run exists in the DB.
     ///
-    /// Respects `AgentRun.log_file` when set; falls back to the default
+    /// Respects `AgentRun.log_file` when set, but containment within `agent_log_dir()`
+    /// is enforced by `AgentRun::log_path()`; falls back to the default
     /// `~/.conductor/agent-logs/{run_id}.log` (with ULID validation) otherwise.
     ///
     /// Use this at API boundaries where `run_id` comes from user input.
@@ -414,14 +415,25 @@ mod tests {
     }
 
     #[test]
-    fn test_log_path_for_run_respects_log_file() {
+    fn test_log_path_for_run_rejects_log_file_outside_log_dir() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
         let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.update_run_log_file(&run.id, "/custom/path/run.log")
             .unwrap();
+        assert!(mgr.log_path_for_run(&run.id).is_err());
+    }
+
+    #[test]
+    fn test_log_path_for_run_valid_log_file_inside_log_dir() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
+        let inside = crate::config::agent_log_dir().join("custom.log");
+        mgr.update_run_log_file(&run.id, inside.to_str().unwrap())
+            .unwrap();
         let path = mgr.log_path_for_run(&run.id).unwrap();
-        assert_eq!(path.to_string_lossy(), "/custom/path/run.log");
+        assert_eq!(path, inside);
     }
 
     #[test]

@@ -125,11 +125,23 @@ impl AgentRun {
 
     /// Returns the log file path for this run.
     ///
-    /// Uses `log_file` when set; falls back to the default
+    /// Uses `log_file` when set, but validates that it is contained within
+    /// `agent_log_dir()` to prevent path traversal; returns `ConductorError::Agent`
+    /// for paths outside that directory. Falls back to the default
     /// `~/.conductor/agent-logs/{id}.log` (validated as a ULID) otherwise.
     pub fn log_path(&self) -> Result<PathBuf> {
         match self.log_file.as_deref() {
-            Some(path) => Ok(PathBuf::from(path)),
+            Some(path) => {
+                let resolved = PathBuf::from(path);
+                let log_dir = crate::config::agent_log_dir();
+                if resolved.starts_with(&log_dir) {
+                    Ok(resolved)
+                } else {
+                    Err(crate::error::ConductorError::Agent(format!(
+                        "log_file path is outside agent log directory: {path}"
+                    )))
+                }
+            }
             None => crate::config::agent_log_path(&self.id),
         }
     }
@@ -365,10 +377,19 @@ mod tests {
     }
 
     #[test]
-    fn log_path_uses_log_file_when_set() {
+    fn log_path_rejects_log_file_outside_log_dir() {
         let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", Some("/tmp/custom.log"));
-        let path = run.log_path().unwrap();
-        assert_eq!(path, std::path::PathBuf::from("/tmp/custom.log"));
+        assert!(run.log_path().is_err());
+    }
+
+    #[test]
+    fn log_path_accepts_log_file_inside_log_dir() {
+        let inside = crate::config::agent_log_dir().join("foo.log");
+        let run = make_run(
+            "01JVFJT9K7XPPQ9MH6JV7XRM3M",
+            Some(inside.to_str().unwrap()),
+        );
+        assert_eq!(run.log_path().unwrap(), inside);
     }
 
     #[test]
