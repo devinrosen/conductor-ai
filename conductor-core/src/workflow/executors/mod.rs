@@ -7,6 +7,7 @@ mod gate;
 mod gate_resolver;
 mod parallel;
 mod resolvers;
+pub(super) mod rk_gate_bridge;
 mod script;
 
 #[cfg(test)]
@@ -23,6 +24,7 @@ pub(super) use gate::execute_gate;
 #[cfg(test)]
 pub(super) use gate::handle_gate_timeout;
 pub(super) use parallel::execute_parallel;
+pub(super) use rk_gate_bridge::register_rk_gate_resolvers;
 pub(super) use script::execute_script;
 
 // Private helpers exposed to inline tests via #[cfg(test)]

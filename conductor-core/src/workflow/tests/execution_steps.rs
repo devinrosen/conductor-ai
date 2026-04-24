@@ -231,6 +231,7 @@ fn test_execute_do_restores_state_on_error() {
             with: vec![],
             bot_name: None,
             plugin_dirs: vec![],
+            timeout: None,
         })],
     };
 
@@ -386,6 +387,7 @@ fn test_execute_call_merges_block_state() {
         with: vec!["call-snippet".into()],
         bot_name: None,
         plugin_dirs: vec![],
+        timeout: None,
     };
 
     // Call will error on load_agent, but the merging logic should execute
@@ -418,6 +420,7 @@ fn test_execute_call_node_output_overrides_block_output() {
         with: vec![],
         bot_name: None,
         plugin_dirs: vec![],
+        timeout: None,
     };
 
     let result = execute_call(&mut state, &node, 0);

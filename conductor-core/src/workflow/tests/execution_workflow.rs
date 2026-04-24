@@ -449,6 +449,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         with: vec![],
         bot_name: None,
         plugin_dirs: vec![],
+        timeout: None,
     }));
 
     let input = make_exec_input(&conn, &config, &workflow, working_dir, "", &exec_config);
@@ -504,6 +505,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         with: vec![],
         bot_name: None,
         plugin_dirs: vec![],
+        timeout: None,
     }));
 
     let input = make_exec_input(
@@ -570,6 +572,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         with: vec![],
         bot_name: None,
         plugin_dirs: vec![],
+        timeout: None,
     }));
 
     let input = make_exec_input(

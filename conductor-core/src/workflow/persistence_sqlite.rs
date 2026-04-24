@@ -38,6 +38,12 @@ impl SqliteWorkflowPersistence {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
+
+    /// Wrap an existing shared connection. Used by `execute_workflow_standalone`
+    /// to share one `Connection` between the setup phase and the engine.
+    pub fn from_shared_connection(conn: Arc<Mutex<Connection>>) -> Self {
+        Self { conn }
+    }
 }
 
 fn to_engine_err(e: ConductorError) -> EngineError {
@@ -257,6 +263,469 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         let guard = self.conn.lock().map_err(|_| lock_err())?;
         WorkflowManager::new(&guard)
             .reject_gate(step_id, rejected_by, feedback)
+            .map_err(to_engine_err)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Type converters between runkon-flow and conductor-core persistence types
+// ---------------------------------------------------------------------------
+
+mod rk_conv {
+    use crate::workflow::manager::FanOutItemRow as CoreFanOutItemRow;
+    use crate::workflow::persistence::{
+        FanOutItemStatus as CoreFanOutItemStatus, FanOutItemUpdate as CoreFanOutItemUpdate,
+        GateApprovalState as CoreGateApprovalState, NewRun as CoreNewRun, NewStep as CoreNewStep,
+        StepUpdate as CoreStepUpdate,
+    };
+    use crate::workflow::types::{
+        BlockedOn as CoreBlockedOn, WorkflowRun as CoreRun, WorkflowRunStep as CoreStep,
+    };
+    use runkon_flow::traits::persistence::{
+        FanOutItemStatus as RkFanOutItemStatus, FanOutItemUpdate as RkFanOutItemUpdate,
+        GateApprovalState as RkGateApprovalState, NewRun as RkNewRun, NewStep as RkNewStep,
+        StepUpdate as RkStepUpdate,
+    };
+    use runkon_flow::types::{
+        BlockedOn as RkBlockedOn, FanOutItemRow as RkFanOutItemRow, WorkflowRun as RkRun,
+        WorkflowRunStep as RkStep,
+    };
+
+    pub fn run_status_to_core(
+        s: runkon_flow::status::WorkflowRunStatus,
+    ) -> crate::workflow::status::WorkflowRunStatus {
+        s.to_string()
+            .parse()
+            .unwrap_or(crate::workflow::status::WorkflowRunStatus::Pending)
+    }
+
+    pub fn run_status_to_rk(
+        s: crate::workflow::status::WorkflowRunStatus,
+    ) -> runkon_flow::status::WorkflowRunStatus {
+        s.to_string()
+            .parse()
+            .unwrap_or(runkon_flow::status::WorkflowRunStatus::Pending)
+    }
+
+    pub fn step_status_to_core(
+        s: runkon_flow::status::WorkflowStepStatus,
+    ) -> crate::workflow::status::WorkflowStepStatus {
+        s.to_string()
+            .parse()
+            .unwrap_or(crate::workflow::status::WorkflowStepStatus::Pending)
+    }
+
+    pub fn step_status_to_rk(
+        s: crate::workflow::status::WorkflowStepStatus,
+    ) -> runkon_flow::status::WorkflowStepStatus {
+        s.to_string()
+            .parse()
+            .unwrap_or(runkon_flow::status::WorkflowStepStatus::Pending)
+    }
+
+    pub fn new_run_to_core(r: RkNewRun) -> CoreNewRun {
+        CoreNewRun {
+            workflow_name: r.workflow_name,
+            worktree_id: r.worktree_id,
+            ticket_id: r.ticket_id,
+            repo_id: r.repo_id,
+            parent_run_id: r.parent_run_id,
+            dry_run: r.dry_run,
+            trigger: r.trigger,
+            definition_snapshot: r.definition_snapshot,
+            parent_workflow_run_id: r.parent_workflow_run_id,
+            target_label: r.target_label,
+        }
+    }
+
+    pub fn new_step_to_core(s: RkNewStep) -> CoreNewStep {
+        CoreNewStep {
+            workflow_run_id: s.workflow_run_id,
+            step_name: s.step_name,
+            role: s.role,
+            can_commit: s.can_commit,
+            position: s.position,
+            iteration: s.iteration,
+            retry_count: s.retry_count,
+        }
+    }
+
+    pub fn step_update_to_core(u: RkStepUpdate) -> CoreStepUpdate {
+        CoreStepUpdate {
+            status: step_status_to_core(u.status),
+            child_run_id: u.child_run_id,
+            result_text: u.result_text,
+            context_out: u.context_out,
+            markers_out: u.markers_out,
+            retry_count: u.retry_count,
+            structured_output: u.structured_output,
+            step_error: u.step_error,
+        }
+    }
+
+    pub fn fan_out_update_to_core(u: RkFanOutItemUpdate) -> CoreFanOutItemUpdate {
+        match u {
+            RkFanOutItemUpdate::Running { child_run_id } => {
+                CoreFanOutItemUpdate::Running { child_run_id }
+            }
+            RkFanOutItemUpdate::Terminal { status } => CoreFanOutItemUpdate::Terminal {
+                status: fan_out_status_to_core(status),
+            },
+        }
+    }
+
+    pub fn fan_out_status_to_core(s: RkFanOutItemStatus) -> CoreFanOutItemStatus {
+        match s {
+            RkFanOutItemStatus::Pending => CoreFanOutItemStatus::Pending,
+            RkFanOutItemStatus::Running => CoreFanOutItemStatus::Running,
+            RkFanOutItemStatus::Completed => CoreFanOutItemStatus::Completed,
+            RkFanOutItemStatus::Failed => CoreFanOutItemStatus::Failed,
+            RkFanOutItemStatus::Skipped => CoreFanOutItemStatus::Skipped,
+        }
+    }
+
+    pub fn run_to_rk(r: CoreRun) -> RkRun {
+        RkRun {
+            id: r.id,
+            workflow_name: r.workflow_name,
+            worktree_id: r.worktree_id,
+            parent_run_id: r.parent_run_id,
+            status: run_status_to_rk(r.status),
+            dry_run: r.dry_run,
+            trigger: r.trigger,
+            started_at: r.started_at,
+            ended_at: r.ended_at,
+            result_summary: r.result_summary,
+            error: r.error,
+            definition_snapshot: r.definition_snapshot,
+            inputs: r.inputs,
+            ticket_id: r.ticket_id,
+            repo_id: r.repo_id,
+            parent_workflow_run_id: r.parent_workflow_run_id,
+            target_label: r.target_label,
+            default_bot_name: r.default_bot_name,
+            iteration: r.iteration,
+            blocked_on: r.blocked_on.map(blocked_on_to_rk),
+            workflow_title: r.workflow_title,
+            total_input_tokens: r.total_input_tokens,
+            total_output_tokens: r.total_output_tokens,
+            total_cache_read_input_tokens: r.total_cache_read_input_tokens,
+            total_cache_creation_input_tokens: r.total_cache_creation_input_tokens,
+            total_turns: r.total_turns,
+            total_cost_usd: r.total_cost_usd,
+            total_duration_ms: r.total_duration_ms,
+            model: r.model,
+            dismissed: r.dismissed,
+        }
+    }
+
+    fn blocked_on_to_rk(b: CoreBlockedOn) -> RkBlockedOn {
+        match b {
+            CoreBlockedOn::HumanApproval {
+                gate_name,
+                prompt,
+                options,
+            } => RkBlockedOn::HumanApproval {
+                gate_name,
+                prompt,
+                options,
+            },
+            CoreBlockedOn::HumanReview {
+                gate_name,
+                prompt,
+                options,
+            } => RkBlockedOn::HumanReview {
+                gate_name,
+                prompt,
+                options,
+            },
+            CoreBlockedOn::PrApproval {
+                gate_name,
+                approvals_needed,
+            } => RkBlockedOn::PrApproval {
+                gate_name,
+                approvals_needed,
+            },
+            CoreBlockedOn::PrChecks { gate_name } => RkBlockedOn::PrChecks { gate_name },
+        }
+    }
+
+    pub fn step_to_rk(s: CoreStep) -> RkStep {
+        let gate_type = s
+            .gate_type
+            .and_then(|gt| gt.to_string().parse::<runkon_flow::dsl::GateType>().ok());
+        RkStep {
+            id: s.id,
+            workflow_run_id: s.workflow_run_id,
+            step_name: s.step_name,
+            role: s.role,
+            can_commit: s.can_commit,
+            condition_expr: s.condition_expr,
+            status: step_status_to_rk(s.status),
+            child_run_id: s.child_run_id,
+            position: s.position,
+            started_at: s.started_at,
+            ended_at: s.ended_at,
+            result_text: s.result_text,
+            condition_met: s.condition_met,
+            iteration: s.iteration,
+            parallel_group_id: s.parallel_group_id,
+            context_out: s.context_out,
+            markers_out: s.markers_out,
+            retry_count: s.retry_count,
+            gate_type,
+            gate_prompt: s.gate_prompt,
+            gate_timeout: s.gate_timeout,
+            gate_approved_by: s.gate_approved_by,
+            gate_approved_at: s.gate_approved_at,
+            gate_feedback: s.gate_feedback,
+            structured_output: s.structured_output,
+            output_file: s.output_file,
+            gate_options: s.gate_options,
+            gate_selections: s.gate_selections,
+            input_tokens: s.input_tokens,
+            output_tokens: s.output_tokens,
+            cache_read_input_tokens: s.cache_read_input_tokens,
+            cache_creation_input_tokens: s.cache_creation_input_tokens,
+            fan_out_total: s.fan_out_total,
+            fan_out_completed: s.fan_out_completed,
+            fan_out_failed: s.fan_out_failed,
+            fan_out_skipped: s.fan_out_skipped,
+            step_error: s.step_error,
+        }
+    }
+
+    pub fn fan_out_item_to_rk(r: CoreFanOutItemRow) -> RkFanOutItemRow {
+        RkFanOutItemRow {
+            id: r.id,
+            step_run_id: r.step_run_id,
+            item_type: r.item_type,
+            item_id: r.item_id,
+            item_ref: r.item_ref,
+            child_run_id: r.child_run_id,
+            status: r.status,
+            dispatched_at: r.dispatched_at,
+            completed_at: r.completed_at,
+        }
+    }
+
+    pub fn gate_approval_to_rk(s: CoreGateApprovalState) -> RkGateApprovalState {
+        match s {
+            CoreGateApprovalState::Pending => RkGateApprovalState::Pending,
+            CoreGateApprovalState::Approved {
+                feedback,
+                selections,
+            } => RkGateApprovalState::Approved {
+                feedback,
+                selections,
+            },
+            CoreGateApprovalState::Rejected { feedback } => {
+                RkGateApprovalState::Rejected { feedback }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// runkon-flow WorkflowPersistence impl — delegates to the core trait impl
+// ---------------------------------------------------------------------------
+
+impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPersistence {
+    fn create_run(
+        &self,
+        new_run: runkon_flow::traits::persistence::NewRun,
+    ) -> Result<runkon_flow::types::WorkflowRun, EngineError> {
+        let core_run =
+            <Self as WorkflowPersistence>::create_run(self, rk_conv::new_run_to_core(new_run))?;
+        Ok(rk_conv::run_to_rk(core_run))
+    }
+
+    fn get_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<runkon_flow::types::WorkflowRun>, EngineError> {
+        let result = <Self as WorkflowPersistence>::get_run(self, run_id)?;
+        Ok(result.map(rk_conv::run_to_rk))
+    }
+
+    fn list_active_runs(
+        &self,
+        statuses: &[runkon_flow::status::WorkflowRunStatus],
+    ) -> Result<Vec<runkon_flow::types::WorkflowRun>, EngineError> {
+        let core_statuses: Vec<crate::workflow::status::WorkflowRunStatus> = statuses
+            .iter()
+            .map(|s| rk_conv::run_status_to_core(s.clone()))
+            .collect();
+        let result = <Self as WorkflowPersistence>::list_active_runs(self, &core_statuses)?;
+        Ok(result.into_iter().map(rk_conv::run_to_rk).collect())
+    }
+
+    fn update_run_status(
+        &self,
+        run_id: &str,
+        status: runkon_flow::status::WorkflowRunStatus,
+        result_summary: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<(), EngineError> {
+        <Self as WorkflowPersistence>::update_run_status(
+            self,
+            run_id,
+            rk_conv::run_status_to_core(status),
+            result_summary,
+            error,
+        )
+    }
+
+    fn insert_step(
+        &self,
+        new_step: runkon_flow::traits::persistence::NewStep,
+    ) -> Result<String, EngineError> {
+        <Self as WorkflowPersistence>::insert_step(self, rk_conv::new_step_to_core(new_step))
+    }
+
+    fn update_step(
+        &self,
+        step_id: &str,
+        update: runkon_flow::traits::persistence::StepUpdate,
+    ) -> Result<(), EngineError> {
+        <Self as WorkflowPersistence>::update_step(
+            self,
+            step_id,
+            rk_conv::step_update_to_core(update),
+        )
+    }
+
+    fn get_steps(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<runkon_flow::types::WorkflowRunStep>, EngineError> {
+        let result = <Self as WorkflowPersistence>::get_steps(self, run_id)?;
+        Ok(result.into_iter().map(rk_conv::step_to_rk).collect())
+    }
+
+    fn insert_fan_out_item(
+        &self,
+        step_run_id: &str,
+        item_type: &str,
+        item_id: &str,
+        item_ref: &str,
+    ) -> Result<String, EngineError> {
+        <Self as WorkflowPersistence>::insert_fan_out_item(
+            self,
+            step_run_id,
+            item_type,
+            item_id,
+            item_ref,
+        )
+    }
+
+    fn update_fan_out_item(
+        &self,
+        item_id: &str,
+        update: runkon_flow::traits::persistence::FanOutItemUpdate,
+    ) -> Result<(), EngineError> {
+        <Self as WorkflowPersistence>::update_fan_out_item(
+            self,
+            item_id,
+            rk_conv::fan_out_update_to_core(update),
+        )
+    }
+
+    fn get_fan_out_items(
+        &self,
+        step_run_id: &str,
+        status_filter: Option<runkon_flow::traits::persistence::FanOutItemStatus>,
+    ) -> Result<Vec<runkon_flow::types::FanOutItemRow>, EngineError> {
+        let core_filter = status_filter.map(rk_conv::fan_out_status_to_core);
+        let result =
+            <Self as WorkflowPersistence>::get_fan_out_items(self, step_run_id, core_filter)?;
+        Ok(result
+            .into_iter()
+            .map(rk_conv::fan_out_item_to_rk)
+            .collect())
+    }
+
+    fn get_gate_approval(
+        &self,
+        step_id: &str,
+    ) -> Result<runkon_flow::traits::persistence::GateApprovalState, EngineError> {
+        let result = <Self as WorkflowPersistence>::get_gate_approval(self, step_id)?;
+        Ok(rk_conv::gate_approval_to_rk(result))
+    }
+
+    fn approve_gate(
+        &self,
+        step_id: &str,
+        approved_by: &str,
+        feedback: Option<&str>,
+        selections: Option<&[String]>,
+    ) -> Result<(), EngineError> {
+        <Self as WorkflowPersistence>::approve_gate(
+            self,
+            step_id,
+            approved_by,
+            feedback,
+            selections,
+        )
+    }
+
+    fn reject_gate(
+        &self,
+        step_id: &str,
+        rejected_by: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), EngineError> {
+        <Self as WorkflowPersistence>::reject_gate(self, step_id, rejected_by, feedback)
+    }
+
+    fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
+        let guard = self.conn.lock().map_err(|_| lock_err())?;
+        let status: Option<String> = guard
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![run_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        Ok(matches!(
+            status.as_deref(),
+            Some("cancelled") | Some("cancelling")
+        ))
+    }
+
+    fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError> {
+        let guard = self.conn.lock().map_err(|_| lock_err())?;
+        WorkflowManager::new(&guard)
+            .tick_heartbeat(run_id)
+            .map_err(to_engine_err)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn persist_metrics(
+        &self,
+        run_id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_input_tokens: i64,
+        cache_creation_input_tokens: i64,
+        cost_usd: f64,
+        num_turns: i64,
+        duration_ms: i64,
+    ) -> Result<(), EngineError> {
+        let guard = self.conn.lock().map_err(|_| lock_err())?;
+        WorkflowManager::new(&guard)
+            .persist_workflow_metrics(
+                run_id,
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                num_turns, // rk pos 7 → core pos 6
+                cost_usd,  // rk pos 6 → core pos 7
+                duration_ms,
+                None,
+            )
             .map_err(to_engine_err)
     }
 }
