@@ -10,7 +10,13 @@ The ticket is: {{ticket_id}}
 Prior step context: {{prior_context}}
 
 Steps:
-1. Read the linked ticket (check `gh issue view` or the ticket metadata provided in the worktree context).
+1. Fetch the full ticket content, including any comments or discussion:
+   - If `{{ticket_source_type}}` is `github`:
+     ```
+     gh issue view {{ticket_source_id}} --json title,body,labels,milestone,assignees,comments,state
+     ```
+   - Otherwise, use the ticket body and prior context already provided (`{{prior_context}}`).
+   Incorporate any comments that add requirements, constraints, or resolution decisions into your understanding of the ticket.
 2. Review the relevant areas of the codebase that will be affected.
 3. Produce a structured plan that includes:
    - A summary of what needs to be built or changed
