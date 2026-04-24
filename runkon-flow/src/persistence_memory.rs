@@ -31,9 +31,8 @@ struct InMemoryStore {
 /// is dropped. No SQLite or filesystem access is required.
 pub struct InMemoryWorkflowPersistence {
     store: Mutex<InMemoryStore>,
-    /// When `true`, `get_fan_out_items` returns a `Persistence` error. Used by tests
-    /// to verify that the executor propagates database failures correctly.
-    pub fail_get_fan_out_items: AtomicBool,
+    /// When `true`, `get_fan_out_items` returns a `Persistence` error.
+    fail_get_fan_out_items: AtomicBool,
 }
 
 impl InMemoryWorkflowPersistence {
@@ -54,6 +53,15 @@ impl InMemoryWorkflowPersistence {
 impl Default for InMemoryWorkflowPersistence {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl InMemoryWorkflowPersistence {
+    /// Inject a failure into `get_fan_out_items`. When `fail` is `true`, the next
+    /// call to `get_fan_out_items` returns `EngineError::Persistence`.
+    pub fn set_fail_get_fan_out_items(&self, fail: bool) {
+        self.fail_get_fan_out_items
+            .store(fail, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

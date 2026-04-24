@@ -405,8 +405,6 @@ fn test_foreach_empty_items() {
 
 #[test]
 fn test_foreach_persistence_error_propagates() {
-    use std::sync::atomic::Ordering;
-
     let persistence = make_persistence();
     let mut state = make_foreach_state(
         "persistence-fail-test",
@@ -416,9 +414,7 @@ fn test_foreach_persistence_error_propagates() {
     );
 
     // Inject a failure into get_fan_out_items before executing.
-    persistence
-        .fail_get_fan_out_items
-        .store(true, Ordering::Relaxed);
+    persistence.set_fail_get_fan_out_items(true);
 
     let node = foreach_node("fan-out", "tickets", "child-wf", 1, OnChildFail::Halt);
     let result = execute_foreach(&mut state, &node, 0);
@@ -456,5 +452,12 @@ fn test_foreach_ordered_dependencies_error_propagates() {
     assert!(
         result.is_err(),
         "expected Err from dependency fetch failure"
+    );
+    assert!(
+        matches!(
+            result.unwrap_err(),
+            runkon_flow::engine_error::EngineError::Workflow(_)
+        ),
+        "error should be EngineError::Workflow"
     );
 }

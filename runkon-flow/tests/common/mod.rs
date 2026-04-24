@@ -577,45 +577,32 @@ impl ItemProvider for MockOrderedItemProvider {
 
 /// Ordered item provider whose `dependencies()` always returns an error.
 /// Used to verify that the executor propagates dependency fetch failures.
+/// Delegates name/items/supports_ordered to `MockOrderedItemProvider`.
 pub struct FailingOrderedItemProvider {
-    name: String,
-    items: Vec<(String, String, String)>,
+    inner: MockOrderedItemProvider,
 }
 
 impl FailingOrderedItemProvider {
     pub fn new(name: &str, items: Vec<(&str, &str, &str)>) -> Self {
         Self {
-            name: name.to_string(),
-            items: items
-                .into_iter()
-                .map(|(t, i, r)| (t.to_string(), i.to_string(), r.to_string()))
-                .collect(),
+            inner: MockOrderedItemProvider::new(name, items, vec![]),
         }
     }
 }
 
 impl ItemProvider for FailingOrderedItemProvider {
     fn name(&self) -> &str {
-        &self.name
+        self.inner.name()
     }
 
     fn items(
         &self,
-        _ctx: &ProviderContext,
-        _scope: Option<&runkon_flow::dsl::ForeachScope>,
-        _filter: &HashMap<String, String>,
+        ctx: &ProviderContext,
+        scope: Option<&runkon_flow::dsl::ForeachScope>,
+        filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>, EngineError> {
-        Ok(self
-            .items
-            .iter()
-            .filter(|(_, id, _)| !existing_set.contains(id))
-            .map(|(t, i, r)| FanOutItem {
-                item_type: t.clone(),
-                item_id: i.clone(),
-                item_ref: r.clone(),
-            })
-            .collect())
+        self.inner.items(ctx, scope, filter, existing_set)
     }
 
     fn dependencies(&self, _step_id: &str) -> Result<Vec<(String, String)>, EngineError> {
@@ -625,7 +612,7 @@ impl ItemProvider for FailingOrderedItemProvider {
     }
 
     fn supports_ordered(&self) -> bool {
-        true
+        self.inner.supports_ordered()
     }
 }
 
