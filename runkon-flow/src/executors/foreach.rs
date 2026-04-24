@@ -476,11 +476,8 @@ pub fn execute_foreach(
                         halt = true;
                     }
                     OnChildFail::SkipDependents => {
-                        let to_skip = collect_transitive_dependents(
-                            &item_id,
-                            &dependents_map,
-                            &terminal_ids,
-                        );
+                        let to_skip =
+                            collect_transitive_dependents(&item_id, &dependents_map, &terminal_ids);
                         for skip_id in &to_skip {
                             if let Some(skip_db_id) = item_id_to_db_id.get(skip_id) {
                                 state
@@ -600,8 +597,10 @@ pub fn execute_foreach(
         }
 
         // 4. Exit when all work is done.
-        let has_eligible =
-            !halt && pending.iter().any(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+        let has_eligible = !halt
+            && pending
+                .iter()
+                .any(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
 
         if in_flight == 0 && !has_eligible {
             break;

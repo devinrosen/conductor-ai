@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use runkon_flow::cancellation::CancellationToken;
-use runkon_flow::CancellationReason;
 use runkon_flow::dsl::{
     AgentRef, ApprovalMode, CallNode, ForEachNode, GateNode, GateType, OnChildFail, OnCycle,
     OnTimeout, WorkflowDef, WorkflowNode, WorkflowTrigger,
@@ -23,6 +22,7 @@ use runkon_flow::traits::item_provider::{FanOutItem, ItemProvider, ProviderConte
 use runkon_flow::traits::persistence::{NewRun, WorkflowPersistence};
 use runkon_flow::traits::script_env_provider::NoOpScriptEnvProvider;
 use runkon_flow::types::{WorkflowExecConfig, WorkflowResult};
+use runkon_flow::CancellationReason;
 use runkon_flow::ItemProviderRegistry;
 
 // ---------------------------------------------------------------------------
@@ -609,8 +609,7 @@ impl ChildWorkflowRunner for CancellingMockRunner {
         let mut count = self.call_count.lock().unwrap();
         *count += 1;
         if *count >= self.cancel_after {
-            self.token
-                .cancel(CancellationReason::UserRequested(None));
+            self.token.cancel(CancellationReason::UserRequested(None));
         }
         let succeeded = self.outcomes.get(&item_id).copied().unwrap_or(true);
         Ok(WorkflowResult {

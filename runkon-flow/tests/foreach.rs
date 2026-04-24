@@ -245,10 +245,20 @@ fn test_foreach_on_child_fail_skip_dependents() {
         MockOrderedItemProvider::new("tickets", items_data, vec![("t1", "t2")]),
     );
 
-    let node = ordered_foreach_node("fan-out", "tickets", "child-wf", 1, OnChildFail::SkipDependents);
+    let node = ordered_foreach_node(
+        "fan-out",
+        "tickets",
+        "child-wf",
+        1,
+        OnChildFail::SkipDependents,
+    );
     let result = execute_foreach(&mut state, &node, 0);
 
-    assert!(result.is_ok(), "expected Ok (fail_fast=false), got: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "expected Ok (fail_fast=false), got: {:?}",
+        result
+    );
     assert!(!state.all_succeeded, "all_succeeded should be false");
 
     let items = fan_out_items(&persistence, &state.workflow_run_id, "foreach:fan-out");
@@ -256,7 +266,11 @@ fn test_foreach_on_child_fail_skip_dependents() {
     assert_eq!(count_status(&items, "failed"), 1, "t1 should fail");
     assert_eq!(count_status(&items, "skipped"), 1, "t2 should be skipped");
     assert_eq!(count_status(&items, "completed"), 1, "t3 should complete");
-    assert_eq!(count_status(&items, "pending"), 0, "no items should remain pending");
+    assert_eq!(
+        count_status(&items, "pending"),
+        0,
+        "no items should remain pending"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -282,11 +296,7 @@ fn test_foreach_ordered_with_dependencies() {
         "ordered-test",
         Arc::clone(&persistence),
         MockChildRunner::new(outcomes),
-        MockOrderedItemProvider::new(
-            "tickets",
-            items_data,
-            vec![("t1", "t2"), ("t2", "t3")],
-        ),
+        MockOrderedItemProvider::new("tickets", items_data, vec![("t1", "t2"), ("t2", "t3")]),
     );
 
     let node = ordered_foreach_node("fan-out", "tickets", "child-wf", 3, OnChildFail::Continue);
@@ -297,7 +307,11 @@ fn test_foreach_ordered_with_dependencies() {
 
     let items = fan_out_items(&persistence, &state.workflow_run_id, "foreach:fan-out");
     assert_eq!(items.len(), 3);
-    assert_eq!(count_status(&items, "completed"), 3, "all 3 should complete");
+    assert_eq!(
+        count_status(&items, "completed"),
+        3,
+        "all 3 should complete"
+    );
     assert_eq!(count_status(&items, "pending"), 0);
     assert_eq!(count_status(&items, "failed"), 0);
 }
@@ -338,7 +352,11 @@ fn test_foreach_cancellation() {
 
     let items = fan_out_items(&persistence, &state.workflow_run_id, "foreach:fan-out");
     assert_eq!(items.len(), 3, "all 3 fan-out items should be created");
-    assert_eq!(count_status(&items, "completed"), 1, "only t1 should complete");
+    assert_eq!(
+        count_status(&items, "completed"),
+        1,
+        "only t1 should complete"
+    );
     assert_eq!(
         count_status(&items, "pending"),
         2,
