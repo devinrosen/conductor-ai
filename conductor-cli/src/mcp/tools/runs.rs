@@ -325,9 +325,12 @@ pub(super) fn tool_get_step_log(
     let log_path = match agent_mgr.get_run(&child_run_id) {
         Ok(Some(agent_run)) => match agent_run.log_file {
             Some(path) => PathBuf::from(path),
-            None => conductor_core::config::agent_log_path(&child_run_id),
+            None => match conductor_core::config::agent_log_path(&child_run_id) {
+                Ok(p) => p,
+                Err(e) => return tool_err(e),
+            },
         },
-        Ok(None) => conductor_core::config::agent_log_path(&child_run_id),
+        Ok(None) => return tool_err(format!("agent run not found: {child_run_id}")),
         Err(e) => return tool_err(e),
     };
 

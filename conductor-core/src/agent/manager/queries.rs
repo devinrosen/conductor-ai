@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-use rusqlite::named_params;
+use rusqlite::{named_params, Connection};
 
 use crate::db::query_collect;
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
 
 use super::super::db::{
     row_to_agent_run, AGENT_RUN_COLS_A, AGENT_RUN_COLS_AR, AGENT_RUN_COLS_A_NULL_PLAN,
@@ -382,6 +383,17 @@ impl<'a> AgentManager<'a> {
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
+}
+
+/// Returns the log file path for `run_id` after verifying the run exists in the DB.
+///
+/// Use this at API boundaries where `run_id` comes from user input and both ULID
+/// validity (path traversal guard) and DB existence should be confirmed.
+pub fn agent_log_path_verified(conn: &Connection, run_id: &str) -> Result<PathBuf> {
+    AgentManager::new(conn)
+        .get_run(run_id)?
+        .ok_or_else(|| ConductorError::Agent(format!("agent run not found: {run_id}")))?;
+    crate::config::agent_log_path(run_id)
 }
 
 #[cfg(test)]

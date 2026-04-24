@@ -169,7 +169,8 @@ fn poll_unix(
     let (stderr_pipe, stdout_pipe, finish) = handle.into_stderr_drain_parts();
 
     let run_id_owned = run_id.to_string();
-    let log_path = crate::config::agent_log_path(run_id);
+    let log_path =
+        crate::config::agent_log_path(run_id).map_err(|e| PollError::Failed(e.to_string()))?;
     let (tx, rx) = std::sync::mpsc::channel::<DrainOutcome>();
 
     std::thread::spawn(move || {
@@ -499,10 +500,11 @@ mod tests {
     #[test]
     fn poll_shutdown_flag_returns_cancelled() {
         let (runtime, _tmp, db_file) = make_sleeping_runtime();
+        let run_id = crate::new_id();
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let result = runtime.poll(
-            "test-shutdown-run",
+            &run_id,
             Some(&shutdown),
             std::time::Duration::from_secs(60),
             &db_file,
@@ -519,9 +521,10 @@ mod tests {
     #[test]
     fn poll_timeout_returns_no_result() {
         let (runtime, _tmp, db_file) = make_sleeping_runtime();
+        let run_id = crate::new_id();
 
         let result = runtime.poll(
-            "test-timeout-run",
+            &run_id,
             None,
             std::time::Duration::from_millis(10),
             &db_file,
@@ -569,9 +572,10 @@ mod tests {
 
         // poll() must not panic — the poisoned prompt_file is handled gracefully.
         // Use the shutdown flag so we get a fast, deterministic termination.
+        let run_id = crate::new_id();
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let result = runtime.poll(
-            "test-poisoned-prompt-file",
+            &run_id,
             Some(&shutdown),
             std::time::Duration::from_secs(60),
             &db_file,

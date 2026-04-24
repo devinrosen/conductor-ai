@@ -556,8 +556,13 @@ pub fn themes_dir() -> PathBuf {
 /// Returns the log file path for a given agent run ID.
 ///
 /// Convention: `~/.conductor/agent-logs/{run_id}.log`
-pub fn agent_log_path(run_id: &str) -> PathBuf {
-    agent_log_dir().join(format!("{run_id}.log"))
+///
+/// Returns an error if `run_id` is not a valid ULID, preventing path traversal.
+pub fn agent_log_path(run_id: &str) -> Result<PathBuf> {
+    run_id
+        .parse::<ulid::Ulid>()
+        .map_err(|_| ConductorError::Agent(format!("invalid run_id: {run_id}")))?;
+    Ok(agent_log_dir().join(format!("{run_id}.log")))
 }
 
 impl Config {

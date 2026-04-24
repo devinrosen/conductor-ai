@@ -553,7 +553,13 @@ impl App {
             });
 
             let run_id = run.id.clone();
-            let log_path = conductor_core::config::agent_log_path(&run_id);
+            let log_path = match conductor_core::config::agent_log_path(&run_id) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("invalid run_id {run_id}: {e}");
+                    return;
+                }
+            };
             let tx2 = tx.clone();
             let (stdout, finish) = handle.into_drain_parts();
             conductor_core::agent_runtime::drain_stream_json(
@@ -701,7 +707,13 @@ impl App {
             });
 
             let run_id = run.id.clone();
-            let log_path = conductor_core::config::agent_log_path(&run_id);
+            let log_path = match conductor_core::config::agent_log_path(&run_id) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("invalid run_id {run_id}: {e}");
+                    return;
+                }
+            };
             let tx2 = tx.clone();
             let (stdout, finish) = handle.into_drain_parts();
             conductor_core::agent_runtime::drain_stream_json(
@@ -815,7 +827,13 @@ impl App {
             });
 
             let new_run_id = new_run.id.clone();
-            let log_path = conductor_core::config::agent_log_path(&new_run_id);
+            let log_path = match conductor_core::config::agent_log_path(&new_run_id) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("invalid run_id {new_run_id}: {e}");
+                    return;
+                }
+            };
             let tx2 = tx.clone();
             let (stdout, finish) = handle.into_drain_parts();
             conductor_core::agent_runtime::drain_stream_json(

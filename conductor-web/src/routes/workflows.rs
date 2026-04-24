@@ -1576,13 +1576,19 @@ pub async fn get_workflow_step_log(
             )))
         })?;
 
-        // Resolve log path from agent run, fall back to default path
+        // Resolve log path from agent run, falling back to default path
         let agent_mgr = AgentManager::new(&db);
-        agent_mgr
-            .get_run(&child_run_id)?
-            .and_then(|r| r.log_file)
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| conductor_core::config::agent_log_path(&child_run_id))
+        let run = agent_mgr.get_run(&child_run_id)?.ok_or_else(|| {
+            ApiError::Core(ConductorError::Agent(format!(
+                "agent run not found: {child_run_id}"
+            )))
+        })?;
+        match run.log_file {
+            Some(path) => std::path::PathBuf::from(path),
+            None => {
+                conductor_core::config::agent_log_path(&child_run_id).map_err(ApiError::Core)?
+            }
+        }
     }; // DB lock released here
 
     // Non-blocking async file read — does not block the tokio worker thread

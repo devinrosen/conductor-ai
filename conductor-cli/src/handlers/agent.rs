@@ -258,7 +258,7 @@ pub(crate) fn run_agent(
     // Set up log file path once; created on turn 0, appended on feedback resume turns.
     let log_dir = conductor_core::config::agent_log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
-    let log_path = conductor_core::config::agent_log_path(run_id);
+    let log_path = conductor_core::config::agent_log_path(run_id)?;
 
     // session_id persists across turns so feedback resumes can use --resume <sid>
     let mut session_id_parsed: Option<String> = None;
