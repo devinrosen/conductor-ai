@@ -53,7 +53,7 @@ impl GateResolver for HumanApprovalGateResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GitHubTokenCache};
+    use crate::workflow::executors::gate_resolver::{GateContext, GateParams};
     use crate::workflow::persistence::WorkflowPersistence;
     use crate::workflow::persistence_sqlite::SqliteWorkflowPersistence;
     use crate::workflow_dsl::ApprovalMode;
@@ -92,13 +92,7 @@ mod tests {
         config: &'a crate::config::Config,
         db_path: &'a std::path::Path,
     ) -> GateContext<'a> {
-        GateContext {
-            working_dir: "/tmp",
-            config,
-            default_bot_name: None,
-            token_cache: Arc::new(GitHubTokenCache::new(None)),
-            db_path,
-        }
+        GateContext { config, db_path }
     }
 
     fn make_persistence(db_path: &std::path::Path) -> Arc<dyn WorkflowPersistence> {

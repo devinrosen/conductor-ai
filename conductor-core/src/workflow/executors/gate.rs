@@ -225,7 +225,12 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
     let token_cache = Arc::new(GitHubTokenCache::new(None));
     let persistence: Arc<dyn crate::workflow::persistence::WorkflowPersistence> =
         Arc::new(crate::workflow::persistence_sqlite::SqliteWorkflowPersistence::open(&db_path)?);
-    let resolvers = build_default_gate_resolvers(persistence);
+    let resolvers = build_default_gate_resolvers(
+        persistence,
+        working_dir,
+        state.default_bot_name.clone(),
+        token_cache,
+    );
 
     let resolver = resolvers.get(gate_type_str).ok_or_else(|| {
         ConductorError::Workflow(format!("no registered GateResolver for '{gate_type_str}'"))
@@ -243,10 +248,7 @@ pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: 
     };
 
     let ctx = GateContext {
-        working_dir: &working_dir,
         config: state.config,
-        default_bot_name: state.default_bot_name.as_deref(),
-        token_cache,
         db_path: &db_path,
     };
 

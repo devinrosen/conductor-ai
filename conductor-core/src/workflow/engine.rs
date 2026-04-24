@@ -561,7 +561,10 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         default_bot_name: input.default_bot_name.clone(),
         triggered_by_hook: input.triggered_by_hook,
         last_heartbeat_at: ExecutionState::new_heartbeat(),
-        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry(
+            effective_repo_id,
+            input.worktree_id,
+        )),
         action_registry: std::sync::Arc::new(build_default_action_registry(config)),
         event_sinks: std::sync::Arc::from(input.exec_config.event_sinks.clone()),
         cancel_reason: None,
@@ -1217,7 +1220,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         default_bot_name: wf_run.default_bot_name.clone(),
         triggered_by_hook: wf_run.is_triggered_by_hook(),
         last_heartbeat_at: ExecutionState::new_heartbeat(),
-        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
+        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry(
+            wf_run.repo_id.as_deref(),
+            wf_run.worktree_id.as_deref(),
+        )),
         action_registry: std::sync::Arc::new(build_default_action_registry(config)),
         event_sinks: std::sync::Arc::from(input.event_sinks.clone()),
         cancel_reason: None,

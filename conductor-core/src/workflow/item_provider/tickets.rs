@@ -7,7 +7,15 @@ use crate::workflow_dsl::{ForeachScope, TicketScope};
 
 use super::{FanOutItem, ItemProvider, ProviderContext};
 
-pub struct TicketsProvider;
+pub struct TicketsProvider {
+    pub repo_id: Option<String>,
+}
+
+impl TicketsProvider {
+    pub fn new(repo_id: Option<String>) -> Self {
+        Self { repo_id }
+    }
+}
 
 impl ItemProvider for TicketsProvider {
     fn name(&self) -> &str {
@@ -24,7 +32,7 @@ impl ItemProvider for TicketsProvider {
         use crate::tickets::{TicketFilter, TicketSyncer};
 
         let syncer = TicketSyncer::new(ctx.conn);
-        let repo_id = ctx.repo_id.ok_or_else(|| {
+        let repo_id = self.repo_id.as_deref().ok_or_else(|| {
             ConductorError::Workflow(
                 "foreach over tickets requires a repo_id in the execution context".to_string(),
             )
@@ -164,8 +172,8 @@ mod tests {
     fn test_tickets_items_missing_repo_id_returns_error() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
-        let result = TicketsProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let result = TicketsProvider::new(None).items(&ctx, None, &HashMap::new(), &HashSet::new());
         assert!(
             result.is_err(),
             "items() without repo_id should return an error"
@@ -194,8 +202,8 @@ mod tests {
                 ],
             )
             .unwrap();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, None, &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 2);
@@ -226,8 +234,8 @@ mod tests {
         assert_eq!(all.len(), 1);
         let mut existing = HashSet::new();
         existing.insert(all[0].id.clone());
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, None, &HashMap::new(), &existing)
             .unwrap();
         assert!(
@@ -240,12 +248,17 @@ mod tests {
     fn test_tickets_items_worktree_scope_returns_error() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let scope = ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
             base_branch: None,
             has_open_pr: None,
         });
-        let result = TicketsProvider.items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new());
+        let result = TicketsProvider::new(Some("r1".into())).items(
+            &ctx,
+            Some(&scope),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
         assert!(result.is_err());
     }
 
@@ -272,8 +285,8 @@ mod tests {
         let internal_id = all[0].id.clone();
 
         let scope = ForeachScope::Ticket(TicketScope::TicketId(internal_id.clone()));
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1);
@@ -298,8 +311,8 @@ mod tests {
             .unwrap();
 
         let scope = ForeachScope::Ticket(TicketScope::Label("bug".to_string()));
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1, "only the labeled ticket returned");
@@ -327,8 +340,8 @@ mod tests {
             .unwrap();
 
         let scope = ForeachScope::Ticket(TicketScope::Unlabeled);
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1, "only unlabeled ticket returned");
@@ -339,7 +352,7 @@ mod tests {
     fn test_tickets_dependencies_empty_when_no_items() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
-        let edges = TicketsProvider
+        let edges = TicketsProvider::new(None)
             .dependencies(&conn, &config, "nonexistent-step")
             .unwrap();
         assert!(edges.is_empty());
@@ -387,7 +400,7 @@ mod tests {
             .insert_fan_out_item(&step_id, "ticket", &id2, "2")
             .unwrap();
 
-        let edges = TicketsProvider
+        let edges = TicketsProvider::new(None)
             .dependencies(&conn, &config, &step_id)
             .unwrap();
         assert_eq!(edges.len(), 1, "one blocking edge expected");

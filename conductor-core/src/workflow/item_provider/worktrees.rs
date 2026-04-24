@@ -9,7 +9,19 @@ use crate::worktree::{Worktree, WorktreeManager};
 
 use super::{FanOutItem, ItemProvider, ProviderContext};
 
-pub struct WorktreesProvider;
+pub struct WorktreesProvider {
+    pub repo_id: Option<String>,
+    pub worktree_id: Option<String>,
+}
+
+impl WorktreesProvider {
+    pub fn new(repo_id: Option<String>, worktree_id: Option<String>) -> Self {
+        Self {
+            repo_id,
+            worktree_id,
+        }
+    }
+}
 
 impl ItemProvider for WorktreesProvider {
     fn name(&self) -> &str {
@@ -23,7 +35,7 @@ impl ItemProvider for WorktreesProvider {
         _filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
-        let repo_id = ctx.repo_id.ok_or_else(|| {
+        let repo_id = self.repo_id.as_deref().ok_or_else(|| {
             ConductorError::Workflow(
                 "foreach over worktrees requires a repo_id in the execution context".to_string(),
             )
@@ -38,7 +50,7 @@ impl ItemProvider for WorktreesProvider {
         let base_branch: &str = match wt_scope_opt.and_then(|s| s.base_branch.as_deref()) {
             Some(b) => b,
             None => {
-                let wt_id = ctx.worktree_id.ok_or_else(|| {
+                let wt_id = self.worktree_id.as_deref().ok_or_else(|| {
                     ConductorError::Workflow(
                         "foreach over worktrees requires either scope = { base_branch = \"...\" } \
                          or a worktree_id in the execution context"
@@ -170,8 +182,9 @@ mod tests {
     fn test_worktrees_items_missing_repo_id_returns_error() {
         let conn = test_helpers::setup_db();
         let config = Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
-        let result = WorktreesProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let result =
+            WorktreesProvider::new(None, None).items(&ctx, None, &HashMap::new(), &HashSet::new());
         assert!(result.is_err());
         let Err(e) = result else {
             panic!("expected error")
@@ -187,8 +200,13 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = Config::default();
         // repo_id present but no scope and no worktree_id
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let result = WorktreesProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let result = WorktreesProvider::new(Some("r1".into()), None).items(
+            &ctx,
+            None,
+            &HashMap::new(),
+            &HashSet::new(),
+        );
         assert!(result.is_err());
         let Err(e) = result else {
             panic!("expected error")
@@ -223,8 +241,8 @@ mod tests {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
         });
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = WorktreesProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = WorktreesProvider::new(Some("r1".into()), None)
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1);
@@ -243,8 +261,8 @@ mod tests {
         });
         let mut existing = HashSet::new();
         existing.insert("w2".to_string());
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = WorktreesProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = WorktreesProvider::new(Some("r1".into()), None)
             .items(&ctx, Some(&scope), &HashMap::new(), &existing)
             .unwrap();
         assert!(
@@ -260,8 +278,8 @@ mod tests {
         insert_worktree_with_base_branch(&conn, "w2", "r1", "feat-child", "feat/test");
         let config = Config::default();
         // No scope — should resolve base_branch from w1.branch
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), Some("w1"));
-        let items = WorktreesProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = WorktreesProvider::new(Some("r1".into()), Some("w1".into()))
             .items(&ctx, None, &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1);
@@ -326,7 +344,7 @@ mod tests {
     fn test_worktrees_dependencies_empty_when_no_items() {
         let conn = test_helpers::setup_db();
         let config = Config::default();
-        let edges = WorktreesProvider
+        let edges = WorktreesProvider::new(None, None)
             .dependencies(&conn, &config, "nonexistent-step")
             .unwrap();
         assert!(edges.is_empty());
@@ -385,7 +403,7 @@ mod tests {
             .insert_fan_out_item(&step_id, "worktree", "wt2", "wt2-slug")
             .unwrap();
 
-        let edges = WorktreesProvider
+        let edges = WorktreesProvider::new(None, None)
             .dependencies(&conn, &config, &step_id)
             .unwrap();
         assert_eq!(edges.len(), 1, "one blocking edge expected");
