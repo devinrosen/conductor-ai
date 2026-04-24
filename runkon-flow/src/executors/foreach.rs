@@ -19,6 +19,11 @@ use crate::traits::persistence::{
 };
 use crate::traits::script_env_provider::ScriptEnvProvider;
 
+#[inline]
+fn p_err(e: EngineError) -> EngineError {
+    EngineError::Persistence(e.to_string())
+}
+
 /// Shared parent-state snapshot captured before thread spawning.
 ///
 /// All fields are either `Arc` clones or cheap `Clone` copies — no borrows into
@@ -189,7 +194,7 @@ pub fn execute_foreach(
             iteration: iteration as i64,
             retry_count: Some(0),
         })
-        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        .map_err(p_err)?;
 
     state
         .persistence
@@ -206,7 +211,7 @@ pub fn execute_foreach(
                 step_error: None,
             },
         )
-        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        .map_err(p_err)?;
 
     // Validate the provider exists
     let provider = state.registry.get(&node.over).ok_or_else(|| {
@@ -237,7 +242,7 @@ pub fn execute_foreach(
     let existing_items = state
         .persistence
         .get_fan_out_items(&step_id, None)
-        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        .map_err(p_err)?;
     let existing_set: HashSet<String> = existing_items.iter().map(|i| i.item_id.clone()).collect();
 
     let provider_items = provider.items(
@@ -258,14 +263,14 @@ pub fn execute_foreach(
             state
                 .persistence
                 .insert_fan_out_item(&step_id, item_type, item_id, item_ref)
-                .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                .map_err(p_err)?;
         }
     }
 
     let all_items = state
         .persistence
         .get_fan_out_items(&step_id, None)
-        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        .map_err(p_err)?;
     let total_items = all_items.len();
 
     tracing::info!(
@@ -298,7 +303,7 @@ pub fn execute_foreach(
                     step_error: None,
                 },
             )
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
         record_step_success(
             state,
@@ -333,7 +338,7 @@ pub fn execute_foreach(
     let pending_items = state
         .persistence
         .get_fan_out_items(&step_id, Some(FanOutItemStatus::Pending))
-        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        .map_err(p_err)?;
 
     // Build dependency maps when ordered execution is requested.
     // edges: (blocker_item_id, dependent_item_id) — blocker must finish before dependent starts.
@@ -442,7 +447,7 @@ pub fn execute_foreach(
                         },
                     },
                 )
-                .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                .map_err(p_err)?;
 
             emit_event(
                 state,
@@ -482,7 +487,7 @@ pub fn execute_foreach(
                                             status: FanOutItemStatus::Skipped,
                                         },
                                     )
-                                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                                    .map_err(p_err)?;
                             }
                             terminal_ids.insert(skip_id.clone());
                         }
@@ -538,7 +543,7 @@ pub fn execute_foreach(
                             child_run_id: "dispatching".to_string(),
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
 
                 let mut child_inputs = node.inputs.clone();
                 child_inputs.insert("item.id".to_string(), item.item_id.clone());
@@ -605,7 +610,7 @@ pub fn execute_foreach(
     let fan_out_items = state
         .persistence
         .get_fan_out_items(&step_id, None)
-        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        .map_err(p_err)?;
     let completed_count = fan_out_items
         .iter()
         .filter(|i| i.status == "completed")
@@ -643,7 +648,7 @@ pub fn execute_foreach(
                     step_error: None,
                 },
             )
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
         record_step_success(
             state,
@@ -685,7 +690,7 @@ pub fn execute_foreach(
                     step_error: Some(error_msg.clone()),
                 },
             )
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
         return record_step_failure(state, step_key, &node.name, error_msg, 1, true);
     }

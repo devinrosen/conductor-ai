@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use chrono::Utc;
@@ -30,6 +31,9 @@ struct InMemoryStore {
 /// is dropped. No SQLite or filesystem access is required.
 pub struct InMemoryWorkflowPersistence {
     store: Mutex<InMemoryStore>,
+    /// When `true`, `get_fan_out_items` returns a `Persistence` error. Used by tests
+    /// to verify that the executor propagates database failures correctly.
+    pub fail_get_fan_out_items: AtomicBool,
 }
 
 impl InMemoryWorkflowPersistence {
@@ -42,6 +46,7 @@ impl InMemoryWorkflowPersistence {
                 fan_out_index: HashMap::new(),
                 fan_out_order: Vec::new(),
             }),
+            fail_get_fan_out_items: AtomicBool::new(false),
         }
     }
 }
@@ -309,6 +314,11 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step_run_id: &str,
         status_filter: Option<FanOutItemStatus>,
     ) -> Result<Vec<FanOutItemRow>, EngineError> {
+        if self.fail_get_fan_out_items.load(Ordering::Relaxed) {
+            return Err(EngineError::Persistence(
+                "injected get_fan_out_items failure".into(),
+            ));
+        }
         let store = self.store.lock().map_err(|_| lock_err())?;
         // Iterate in insertion order (mirrors SQLite rowid order) so callers get a
         // stable, deterministic sequence regardless of ULID timestamp collisions.

@@ -9,8 +9,8 @@ use runkon_flow::traits::persistence::WorkflowPersistence;
 
 use common::{
     foreach_node, make_foreach_state, make_foreach_state_cancellable, make_persistence,
-    ordered_foreach_node, CancellingMockRunner, MockChildRunner, MockItemProvider,
-    MockOrderedItemProvider,
+    ordered_foreach_node, CancellingMockRunner, FailingOrderedItemProvider, MockChildRunner,
+    MockItemProvider, MockOrderedItemProvider,
 };
 
 // ---------------------------------------------------------------------------
@@ -397,4 +397,64 @@ fn test_foreach_empty_items() {
     // No fan-out items were created
     let items = persistence.get_fan_out_items(&step.id, None).unwrap();
     assert_eq!(items.len(), 0, "no fan-out items for empty provider");
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: persistence error in Phase 1 (get_fan_out_items) propagates as Err
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_foreach_persistence_error_propagates() {
+    use std::sync::atomic::Ordering;
+
+    let persistence = make_persistence();
+    let mut state = make_foreach_state(
+        "persistence-fail-test",
+        Arc::clone(&persistence),
+        MockChildRunner::all_succeed(&["t1"]),
+        MockItemProvider::new("tickets", vec![("ticket", "t1", "T-1")]),
+    );
+
+    // Inject a failure into get_fan_out_items before executing.
+    persistence
+        .fail_get_fan_out_items
+        .store(true, Ordering::Relaxed);
+
+    let node = foreach_node("fan-out", "tickets", "child-wf", 1, OnChildFail::Halt);
+    let result = execute_foreach(&mut state, &node, 0);
+
+    assert!(result.is_err(), "expected Err from persistence failure");
+    assert!(
+        matches!(
+            result.unwrap_err(),
+            runkon_flow::engine_error::EngineError::Persistence(_)
+        ),
+        "error should be EngineError::Persistence"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: ordered execution with failing dependencies() propagates as Err
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_foreach_ordered_dependencies_error_propagates() {
+    let persistence = make_persistence();
+    let mut state = make_foreach_state(
+        "deps-fail-test",
+        Arc::clone(&persistence),
+        MockChildRunner::all_succeed(&["t1", "t2"]),
+        FailingOrderedItemProvider::new(
+            "tickets",
+            vec![("ticket", "t1", "T-1"), ("ticket", "t2", "T-2")],
+        ),
+    );
+
+    let node = ordered_foreach_node("fan-out", "tickets", "child-wf", 1, OnChildFail::Halt);
+    let result = execute_foreach(&mut state, &node, 0);
+
+    assert!(
+        result.is_err(),
+        "expected Err from dependency fetch failure"
+    );
 }

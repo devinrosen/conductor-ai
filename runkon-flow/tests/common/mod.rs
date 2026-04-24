@@ -575,6 +575,60 @@ impl ItemProvider for MockOrderedItemProvider {
     }
 }
 
+/// Ordered item provider whose `dependencies()` always returns an error.
+/// Used to verify that the executor propagates dependency fetch failures.
+pub struct FailingOrderedItemProvider {
+    name: String,
+    items: Vec<(String, String, String)>,
+}
+
+impl FailingOrderedItemProvider {
+    pub fn new(name: &str, items: Vec<(&str, &str, &str)>) -> Self {
+        Self {
+            name: name.to_string(),
+            items: items
+                .into_iter()
+                .map(|(t, i, r)| (t.to_string(), i.to_string(), r.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl ItemProvider for FailingOrderedItemProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn items(
+        &self,
+        _ctx: &ProviderContext,
+        _scope: Option<&runkon_flow::dsl::ForeachScope>,
+        _filter: &HashMap<String, String>,
+        existing_set: &HashSet<String>,
+    ) -> Result<Vec<FanOutItem>, EngineError> {
+        Ok(self
+            .items
+            .iter()
+            .filter(|(_, id, _)| !existing_set.contains(id))
+            .map(|(t, i, r)| FanOutItem {
+                item_type: t.clone(),
+                item_id: i.clone(),
+                item_ref: r.clone(),
+            })
+            .collect())
+    }
+
+    fn dependencies(&self, _step_id: &str) -> Result<Vec<(String, String)>, EngineError> {
+        Err(EngineError::Workflow(
+            "injected dependency fetch failure".to_string(),
+        ))
+    }
+
+    fn supports_ordered(&self) -> bool {
+        true
+    }
+}
+
 /// Child runner that cancels a `CancellationToken` after `cancel_after` calls.
 pub struct CancellingMockRunner {
     outcomes: HashMap<String, bool>,
