@@ -8,7 +8,9 @@ use runkon_flow::executors::foreach::execute_foreach;
 use runkon_flow::traits::persistence::WorkflowPersistence;
 
 use common::{
-    foreach_node, make_foreach_state, make_persistence, MockChildRunner, MockItemProvider,
+    foreach_node, make_foreach_state, make_foreach_state_cancellable, make_persistence,
+    ordered_foreach_node, CancellingMockRunner, MockChildRunner, MockItemProvider,
+    MockOrderedItemProvider,
 };
 
 // ---------------------------------------------------------------------------
@@ -218,7 +220,134 @@ fn test_foreach_on_child_fail_continue() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: empty provider — step completes immediately with 0-item summary
+// Test 5: SkipDependents — failing item causes its dependents to be skipped
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_foreach_on_child_fail_skip_dependents() {
+    // t2 depends on t1; t3 has no dependencies.
+    // t1 fails → t2 must be skipped; t3 must still complete.
+    let items_data = vec![
+        ("ticket", "t1", "T-1"),
+        ("ticket", "t2", "T-2"),
+        ("ticket", "t3", "T-3"),
+    ];
+    let mut outcomes = HashMap::new();
+    outcomes.insert("t1".to_string(), false); // fails
+    outcomes.insert("t2".to_string(), true); // would succeed but must be skipped
+    outcomes.insert("t3".to_string(), true); // independent — must complete
+
+    let persistence = make_persistence();
+    let mut state = make_foreach_state(
+        "skip-deps-test",
+        Arc::clone(&persistence),
+        MockChildRunner::new(outcomes),
+        MockOrderedItemProvider::new("tickets", items_data, vec![("t1", "t2")]),
+    );
+
+    let node = ordered_foreach_node("fan-out", "tickets", "child-wf", 1, OnChildFail::SkipDependents);
+    let result = execute_foreach(&mut state, &node, 0);
+
+    assert!(result.is_ok(), "expected Ok (fail_fast=false), got: {:?}", result);
+    assert!(!state.all_succeeded, "all_succeeded should be false");
+
+    let items = fan_out_items(&persistence, &state.workflow_run_id, "foreach:fan-out");
+    assert_eq!(items.len(), 3);
+    assert_eq!(count_status(&items, "failed"), 1, "t1 should fail");
+    assert_eq!(count_status(&items, "skipped"), 1, "t2 should be skipped");
+    assert_eq!(count_status(&items, "completed"), 1, "t3 should complete");
+    assert_eq!(count_status(&items, "pending"), 0, "no items should remain pending");
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: ordered dependency graph — dep constraint enforced even with high parallelism
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_foreach_ordered_with_dependencies() {
+    // Chain: t1 → t2 → t3. Even with max_parallel=3 each item must wait for its
+    // predecessor to land in terminal_ids before it can be dispatched.
+    let items_data = vec![
+        ("ticket", "t1", "T-1"),
+        ("ticket", "t2", "T-2"),
+        ("ticket", "t3", "T-3"),
+    ];
+    let outcomes: HashMap<String, bool> = items_data
+        .iter()
+        .map(|(_, id, _)| (id.to_string(), true))
+        .collect();
+
+    let persistence = make_persistence();
+    let mut state = make_foreach_state(
+        "ordered-test",
+        Arc::clone(&persistence),
+        MockChildRunner::new(outcomes),
+        MockOrderedItemProvider::new(
+            "tickets",
+            items_data,
+            vec![("t1", "t2"), ("t2", "t3")],
+        ),
+    );
+
+    let node = ordered_foreach_node("fan-out", "tickets", "child-wf", 3, OnChildFail::Continue);
+    let result = execute_foreach(&mut state, &node, 0);
+
+    assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+    assert!(state.all_succeeded, "all items should succeed");
+
+    let items = fan_out_items(&persistence, &state.workflow_run_id, "foreach:fan-out");
+    assert_eq!(items.len(), 3);
+    assert_eq!(count_status(&items, "completed"), 3, "all 3 should complete");
+    assert_eq!(count_status(&items, "pending"), 0);
+    assert_eq!(count_status(&items, "failed"), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: cancellation during parallel dispatch stops further item dispatch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_foreach_cancellation() {
+    // The runner cancels the parent token after the first item completes.
+    // Items t2 and t3 must remain pending (never dispatched).
+    let items_data = vec![
+        ("ticket", "t1", "T-1"),
+        ("ticket", "t2", "T-2"),
+        ("ticket", "t3", "T-3"),
+    ];
+    let outcomes: HashMap<String, bool> = items_data
+        .iter()
+        .map(|(_, id, _)| (id.to_string(), true))
+        .collect();
+
+    let cancellation = runkon_flow::CancellationToken::new();
+
+    let persistence = make_persistence();
+    let mut state = make_foreach_state_cancellable(
+        "cancel-test",
+        Arc::clone(&persistence),
+        CancellingMockRunner::new(outcomes, 1, cancellation.clone()),
+        MockItemProvider::new("tickets", items_data),
+        cancellation,
+    );
+
+    let node = foreach_node("fan-out", "tickets", "child-wf", 1, OnChildFail::Continue);
+    let result = execute_foreach(&mut state, &node, 0);
+
+    assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+
+    let items = fan_out_items(&persistence, &state.workflow_run_id, "foreach:fan-out");
+    assert_eq!(items.len(), 3, "all 3 fan-out items should be created");
+    assert_eq!(count_status(&items, "completed"), 1, "only t1 should complete");
+    assert_eq!(
+        count_status(&items, "pending"),
+        2,
+        "t2 and t3 should remain pending after cancellation"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: empty provider — step completes immediately with 0-item summary
 // ---------------------------------------------------------------------------
 
 #[test]

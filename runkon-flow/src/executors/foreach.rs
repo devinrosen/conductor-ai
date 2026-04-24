@@ -153,6 +153,18 @@ fn collect_transitive_dependents(
     result
 }
 
+/// Returns true if all declared dependencies of `item_id` are in `terminal_ids`.
+fn is_eligible(
+    item_id: &str,
+    dep_map: &HashMap<String, HashSet<String>>,
+    terminal_ids: &HashSet<String>,
+) -> bool {
+    dep_map
+        .get(item_id)
+        .map(|deps| deps.iter().all(|d| terminal_ids.contains(d)))
+        .unwrap_or(true)
+}
+
 /// Execute a `foreach` step: fan out a child workflow over a collection of items.
 pub fn execute_foreach(
     state: &mut ExecutionState,
@@ -401,93 +413,100 @@ pub fn execute_foreach(
     );
 
     loop {
-        // 1. Drain completed results from threads.
-        loop {
-            match rx.try_recv() {
-                Ok((item_db_id, succeeded)) => {
-                    in_flight -= 1;
+        // 1. When threads are in-flight, block briefly on the first result to yield
+        //    the CPU instead of spinning. Then drain any additional ready results.
+        let mut completed: Vec<(String, bool)> = Vec::new();
+        if in_flight > 0 {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(m) => completed.push(m),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+        while let Ok(m) = rx.try_recv() {
+            completed.push(m);
+        }
 
-                    let item_id = db_id_to_item_id
-                        .get(&item_db_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    let item_ref = item_ref_map.get(&item_id).cloned().unwrap_or_default();
+        for (item_db_id, succeeded) in completed {
+            in_flight -= 1;
 
-                    state
-                        .persistence
-                        .update_fan_out_item(
-                            &item_db_id,
-                            FanOutItemUpdate::Terminal {
-                                status: if succeeded {
-                                    FanOutItemStatus::Completed
-                                } else {
-                                    FanOutItemStatus::Failed
-                                },
-                            },
-                        )
-                        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            let item_id = db_id_to_item_id
+                .get(&item_db_id)
+                .cloned()
+                .unwrap_or_default();
+            let item_ref = item_ref_map.get(&item_id).cloned().unwrap_or_default();
 
-                    emit_event(
-                        state,
-                        EngineEvent::FanOutItemCompleted {
-                            item_id: item_id.clone(),
-                            succeeded,
+            state
+                .persistence
+                .update_fan_out_item(
+                    &item_db_id,
+                    FanOutItemUpdate::Terminal {
+                        status: if succeeded {
+                            FanOutItemStatus::Completed
+                        } else {
+                            FanOutItemStatus::Failed
                         },
-                    );
+                    },
+                )
+                .map_err(|e| EngineError::Persistence(e.to_string()))?;
 
-                    if succeeded {
-                        tracing::info!("foreach '{}': item '{}' → completed", node.name, item_ref);
-                    } else {
-                        tracing::warn!("foreach '{}': item '{}' → failed", node.name, item_ref);
+            emit_event(
+                state,
+                EngineEvent::FanOutItemCompleted {
+                    item_id: item_id.clone(),
+                    succeeded,
+                },
+            );
+
+            if succeeded {
+                tracing::info!("foreach '{}': item '{}' → completed", node.name, item_ref);
+            } else {
+                tracing::warn!("foreach '{}': item '{}' → failed", node.name, item_ref);
+            }
+
+            terminal_ids.insert(item_id.clone());
+
+            if !succeeded {
+                match node.on_child_fail {
+                    OnChildFail::Halt => {
+                        tracing::warn!(
+                            "foreach '{}': on_child_fail=halt, stopping dispatch",
+                            node.name
+                        );
+                        halt = true;
                     }
-
-                    terminal_ids.insert(item_id.clone());
-
-                    if !succeeded {
-                        match node.on_child_fail {
-                            OnChildFail::Halt => {
-                                tracing::warn!(
-                                    "foreach '{}': on_child_fail=halt, stopping dispatch",
-                                    node.name
-                                );
-                                halt = true;
+                    OnChildFail::SkipDependents => {
+                        let to_skip = collect_transitive_dependents(
+                            &item_id,
+                            &dependents_map,
+                            &terminal_ids,
+                        );
+                        for skip_id in &to_skip {
+                            if let Some(skip_db_id) = item_id_to_db_id.get(skip_id) {
+                                state
+                                    .persistence
+                                    .update_fan_out_item(
+                                        skip_db_id,
+                                        FanOutItemUpdate::Terminal {
+                                            status: FanOutItemStatus::Skipped,
+                                        },
+                                    )
+                                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
                             }
-                            OnChildFail::SkipDependents => {
-                                let to_skip = collect_transitive_dependents(
-                                    &item_id,
-                                    &dependents_map,
-                                    &terminal_ids,
-                                );
-                                for skip_id in &to_skip {
-                                    if let Some(skip_db_id) = item_id_to_db_id.get(skip_id) {
-                                        state
-                                            .persistence
-                                            .update_fan_out_item(
-                                                skip_db_id,
-                                                FanOutItemUpdate::Terminal {
-                                                    status: FanOutItemStatus::Skipped,
-                                                },
-                                            )
-                                            .map_err(|e| EngineError::Persistence(e.to_string()))?;
-                                    }
-                                    terminal_ids.insert(skip_id.clone());
-                                }
-                                pending.retain(|i| !to_skip.contains(&i.item_id));
-                                if !to_skip.is_empty() {
-                                    tracing::info!(
-                                        "foreach '{}': skipped {} dependents of '{}'",
-                                        node.name,
-                                        to_skip.len(),
-                                        item_id
-                                    );
-                                }
-                            }
-                            OnChildFail::Continue => {}
+                            terminal_ids.insert(skip_id.clone());
+                        }
+                        pending.retain(|i| !to_skip.contains(&i.item_id));
+                        if !to_skip.is_empty() {
+                            tracing::info!(
+                                "foreach '{}': skipped {} dependents of '{}'",
+                                node.name,
+                                to_skip.len(),
+                                item_id
+                            );
                         }
                     }
+                    OnChildFail::Continue => {}
                 }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => break,
             }
         }
 
@@ -504,13 +523,9 @@ pub fn execute_foreach(
         // 3. Dispatch new items while slots are available and we're not halted.
         if !halt {
             while in_flight < max_slots {
-                // Find the first eligible pending item (no unfinished dependencies).
-                let eligible_pos = pending.iter().position(|item| {
-                    dep_map
-                        .get(&item.item_id)
-                        .map(|deps| deps.iter().all(|d| terminal_ids.contains(d)))
-                        .unwrap_or(true)
-                });
+                let eligible_pos = pending
+                    .iter()
+                    .position(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
 
                 let item = match eligible_pos {
                     Some(pos) => pending.remove(pos),
@@ -534,12 +549,10 @@ pub fn execute_foreach(
                     )
                     .map_err(|e| EngineError::Persistence(e.to_string()))?;
 
-                // Build per-item inputs.
                 let mut child_inputs = node.inputs.clone();
                 child_inputs.insert("item.id".to_string(), item.item_id.clone());
                 child_inputs.insert("item.ref".to_string(), item.item_ref.clone());
 
-                // Capture everything the thread needs.
                 let ctx = Arc::clone(&parent_ctx);
                 let def = placeholder_def.clone();
                 let inputs = child_inputs;
@@ -565,9 +578,21 @@ pub fn execute_foreach(
                             },
                         )
                         .map(|r| r.all_succeeded)
-                        .unwrap_or(false);
+                        .unwrap_or_else(|e| {
+                            tracing::error!(
+                                item_db_id = %item_db_id,
+                                error = %e,
+                                "foreach: child workflow execution error; treating item as failed"
+                            );
+                            false
+                        });
 
-                    let _ = tx_clone.send((item_db_id, succeeded));
+                    if let Err(e) = tx_clone.send((item_db_id, succeeded)) {
+                        tracing::error!(
+                            "foreach: result channel broken (main thread dropped): {}",
+                            e
+                        );
+                    }
                 });
 
                 in_flight += 1;
@@ -575,26 +600,19 @@ pub fn execute_foreach(
         }
 
         // 4. Exit when all work is done.
-        let has_eligible = !halt
-            && pending.iter().any(|item| {
-                dep_map
-                    .get(&item.item_id)
-                    .map(|deps| deps.iter().all(|d| terminal_ids.contains(d)))
-                    .unwrap_or(true)
-            });
+        let has_eligible =
+            !halt && pending.iter().any(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
 
         if in_flight == 0 && !has_eligible {
             break;
         }
-
-        thread::sleep(Duration::from_millis(100));
     }
 
     // Phase 3: Step completion
     let fan_out_items = state
         .persistence
         .get_fan_out_items(&step_id, None)
-        .unwrap_or_default();
+        .map_err(|e| EngineError::Persistence(e.to_string()))?;
     let completed_count = fan_out_items
         .iter()
         .filter(|i| i.status == "completed")

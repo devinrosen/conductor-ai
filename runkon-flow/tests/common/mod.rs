@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use runkon_flow::cancellation::CancellationToken;
+use runkon_flow::CancellationReason;
 use runkon_flow::dsl::{
     AgentRef, ApprovalMode, CallNode, ForEachNode, GateNode, GateType, OnChildFail, OnCycle,
     OnTimeout, WorkflowDef, WorkflowNode, WorkflowTrigger,
@@ -451,14 +452,36 @@ pub fn foreach_node(
     }
 }
 
-/// Build an `ExecutionState` wired with a `MockChildRunner` and `MockItemProvider`.
+/// Like `foreach_node` but with `ordered = true`.
+pub fn ordered_foreach_node(
+    name: &str,
+    provider: &str,
+    workflow: &str,
+    max_parallel: u32,
+    on_child_fail: OnChildFail,
+) -> ForEachNode {
+    ForEachNode {
+        name: name.to_string(),
+        over: provider.to_string(),
+        scope: None,
+        filter: HashMap::new(),
+        ordered: true,
+        on_cycle: OnCycle::Fail,
+        max_parallel,
+        workflow: workflow.to_string(),
+        inputs: HashMap::new(),
+        on_child_fail,
+    }
+}
+
+/// Build an `ExecutionState` wired with a `MockChildRunner` and an item provider.
 ///
 /// Sets `fail_fast = false` so tests can inspect state after step failures.
-pub fn make_foreach_state(
+pub fn make_foreach_state<P: ItemProvider + 'static>(
     wf_name: &str,
     persistence: Arc<InMemoryWorkflowPersistence>,
     child_runner: MockChildRunner,
-    provider: MockItemProvider,
+    provider: P,
 ) -> ExecutionState {
     let mut state = make_state(wf_name, Arc::clone(&persistence), HashMap::new());
     state.child_runner = Some(Arc::new(child_runner));
@@ -469,4 +492,155 @@ pub fn make_foreach_state(
     state.registry = Arc::new(registry);
 
     state
+}
+
+/// Like `make_foreach_state` but uses a `CancellingMockRunner` and a caller-supplied
+/// `CancellationToken` so tests can trigger cancellation mid-dispatch.
+pub fn make_foreach_state_cancellable(
+    wf_name: &str,
+    persistence: Arc<InMemoryWorkflowPersistence>,
+    child_runner: CancellingMockRunner,
+    provider: MockItemProvider,
+    cancellation: CancellationToken,
+) -> ExecutionState {
+    let mut state = make_state(wf_name, Arc::clone(&persistence), HashMap::new());
+    state.child_runner = Some(Arc::new(child_runner));
+    state.exec_config.fail_fast = false;
+    state.cancellation = cancellation;
+
+    let mut registry = ItemProviderRegistry::new();
+    registry.register(provider);
+    state.registry = Arc::new(registry);
+
+    state
+}
+
+// ---------------------------------------------------------------------------
+// Additional mock types for ordered / cancellation tests
+// ---------------------------------------------------------------------------
+
+/// Item provider that supports ordered execution and returns configurable dependencies.
+pub struct MockOrderedItemProvider {
+    name: String,
+    items: Vec<(String, String, String)>,
+    deps: Vec<(String, String)>,
+}
+
+impl MockOrderedItemProvider {
+    pub fn new(name: &str, items: Vec<(&str, &str, &str)>, deps: Vec<(&str, &str)>) -> Self {
+        Self {
+            name: name.to_string(),
+            items: items
+                .into_iter()
+                .map(|(t, i, r)| (t.to_string(), i.to_string(), r.to_string()))
+                .collect(),
+            deps: deps
+                .into_iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl ItemProvider for MockOrderedItemProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn items(
+        &self,
+        _ctx: &ProviderContext,
+        _scope: Option<&runkon_flow::dsl::ForeachScope>,
+        _filter: &HashMap<String, String>,
+        existing_set: &HashSet<String>,
+    ) -> Result<Vec<FanOutItem>, EngineError> {
+        Ok(self
+            .items
+            .iter()
+            .filter(|(_, id, _)| !existing_set.contains(id))
+            .map(|(t, i, r)| FanOutItem {
+                item_type: t.clone(),
+                item_id: i.clone(),
+                item_ref: r.clone(),
+            })
+            .collect())
+    }
+
+    fn dependencies(&self, _step_id: &str) -> Result<Vec<(String, String)>, EngineError> {
+        Ok(self.deps.clone())
+    }
+
+    fn supports_ordered(&self) -> bool {
+        true
+    }
+}
+
+/// Child runner that cancels a `CancellationToken` after `cancel_after` calls.
+pub struct CancellingMockRunner {
+    outcomes: HashMap<String, bool>,
+    cancel_after: usize,
+    call_count: Mutex<usize>,
+    token: CancellationToken,
+}
+
+impl CancellingMockRunner {
+    pub fn new(
+        outcomes: HashMap<String, bool>,
+        cancel_after: usize,
+        token: CancellationToken,
+    ) -> Self {
+        Self {
+            outcomes,
+            cancel_after,
+            call_count: Mutex::new(0),
+            token,
+        }
+    }
+}
+
+impl ChildWorkflowRunner for CancellingMockRunner {
+    fn execute_child(
+        &self,
+        child_def: &WorkflowDef,
+        _parent_state: &ExecutionState,
+        params: ChildWorkflowInput,
+    ) -> runkon_flow::engine_error::Result<WorkflowResult> {
+        let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();
+        let mut count = self.call_count.lock().unwrap();
+        *count += 1;
+        if *count >= self.cancel_after {
+            self.token
+                .cancel(CancellationReason::UserRequested(None));
+        }
+        let succeeded = self.outcomes.get(&item_id).copied().unwrap_or(true);
+        Ok(WorkflowResult {
+            workflow_run_id: format!("mock-run-{}", item_id),
+            worktree_id: None,
+            workflow_name: child_def.name.clone(),
+            all_succeeded: succeeded,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+        })
+    }
+
+    fn resume_child(
+        &self,
+        _workflow_run_id: &str,
+        _model: Option<&str>,
+    ) -> runkon_flow::engine_error::Result<WorkflowResult> {
+        unimplemented!("CancellingMockRunner does not support resume_child")
+    }
+
+    fn find_resumable_child(
+        &self,
+        _parent_run_id: &str,
+        _workflow_name: &str,
+    ) -> runkon_flow::engine_error::Result<Option<runkon_flow::types::WorkflowRun>> {
+        Ok(None)
+    }
 }
