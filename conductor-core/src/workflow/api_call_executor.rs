@@ -35,7 +35,7 @@ impl ActionExecutor for ApiCallExecutor {
         })?;
 
         let (_agent_def, prompt) =
-            super::action_executor::load_agent_and_build_prompt(ectx, params)?;
+            super::helpers::load_agent_and_build_prompt(ectx, params)?;
 
         let model = ectx
             .model
