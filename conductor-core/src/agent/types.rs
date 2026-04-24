@@ -1,6 +1,9 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use super::status::{AgentRunStatus, FeedbackStatus, FeedbackType, StepStatus};
+use crate::error::Result;
 
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.
@@ -118,6 +121,17 @@ impl AgentRun {
             .as_ref()
             .map(|steps| steps.iter().filter(|s| !s.done).collect())
             .unwrap_or_default()
+    }
+
+    /// Returns the log file path for this run.
+    ///
+    /// Uses `log_file` when set; falls back to the default
+    /// `~/.conductor/agent-logs/{id}.log` (validated as a ULID) otherwise.
+    pub fn log_path(&self) -> Result<PathBuf> {
+        match self.log_file.as_deref() {
+            Some(path) => Ok(PathBuf::from(path)),
+            None => crate::config::agent_log_path(&self.id),
+        }
     }
 
     /// Build a resume prompt from the remaining plan steps.
@@ -319,6 +333,58 @@ pub struct LogResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::status::AgentRunStatus;
+
+    fn make_run(id: &str, log_file: Option<&str>) -> AgentRun {
+        AgentRun {
+            id: id.to_string(),
+            worktree_id: None,
+            repo_id: None,
+            claude_session_id: None,
+            prompt: String::new(),
+            status: AgentRunStatus::Completed,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2025-01-01T00:00:00Z".into(),
+            ended_at: None,
+            log_file: log_file.map(String::from),
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid: None,
+            runtime: "claude".into(),
+        }
+    }
+
+    #[test]
+    fn log_path_uses_log_file_when_set() {
+        let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", Some("/tmp/custom.log"));
+        let path = run.log_path().unwrap();
+        assert_eq!(path, std::path::PathBuf::from("/tmp/custom.log"));
+    }
+
+    #[test]
+    fn log_path_falls_back_to_ulid_derived_path() {
+        let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", None);
+        let path = run.log_path().unwrap();
+        assert!(path
+            .to_string_lossy()
+            .ends_with("01JVFJT9K7XPPQ9MH6JV7XRM3M.log"));
+    }
+
+    #[test]
+    fn log_path_rejects_non_ulid_id() {
+        let run = make_run("../../etc/passwd", None);
+        assert!(run.log_path().is_err());
+    }
 
     fn make_event(kind: &str, metadata: Option<&str>) -> AgentRunEvent {
         AgentRunEvent {
