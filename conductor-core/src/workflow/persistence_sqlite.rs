@@ -451,9 +451,19 @@ mod rk_conv {
     }
 
     pub fn step_to_rk(s: CoreStep) -> RkStep {
-        let gate_type = s
-            .gate_type
-            .and_then(|gt| gt.to_string().parse::<runkon_flow::dsl::GateType>().ok());
+        let gate_type = s.gate_type.as_ref().and_then(|gt| {
+            let gt_str = gt.to_string();
+            gt_str
+                .parse::<runkon_flow::dsl::GateType>()
+                .map_err(|_| {
+                    tracing::warn!(
+                        step_id = %s.id,
+                        gate_type = %gt_str,
+                        "Unrecognised gate type in step; treating as None",
+                    );
+                })
+                .ok()
+        });
         RkStep {
             id: s.id,
             workflow_run_id: s.workflow_run_id,
@@ -833,5 +843,49 @@ mod tests {
             .unwrap();
         let active = p.list_active_runs(&[WorkflowRunStatus::Running]).unwrap();
         assert!(active.iter().any(|r| r.id == run.id));
+    }
+
+    // ---------------------------------------------------------------------------
+    // from_shared_connection()
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn from_shared_connection_creates_working_persistence() {
+        let conn = crate::test_helpers::setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+
+        let shared = Arc::new(std::sync::Mutex::new(conn));
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared));
+
+        let run = p.create_run(make_new_run(parent.id)).unwrap();
+        assert_eq!(run.workflow_name, "test-wf");
+
+        let fetched = p.get_run(&run.id).unwrap();
+        assert!(
+            fetched.is_some(),
+            "run should be retrievable after creation"
+        );
+    }
+
+    #[test]
+    fn from_shared_connection_shares_state_with_raw_connection() {
+        let conn = crate::test_helpers::setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+
+        let shared = Arc::new(std::sync::Mutex::new(conn));
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared));
+
+        let run = p.create_run(make_new_run(parent.id)).unwrap();
+
+        // Verify state is visible through the shared connection handle too.
+        let guard = shared.lock().unwrap();
+        let mgr = crate::workflow::manager::WorkflowManager::new(&guard);
+        let found = mgr.get_workflow_run(&run.id).unwrap();
+        assert!(
+            found.is_some(),
+            "run written via persistence should be visible through shared conn"
+        );
     }
 }

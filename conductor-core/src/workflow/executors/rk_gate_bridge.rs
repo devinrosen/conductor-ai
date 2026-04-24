@@ -49,68 +49,51 @@ impl RkGateResolver for RkHumanApprovalGateResolver {
 }
 
 // ---------------------------------------------------------------------------
-// PR approval
+// PR gate resolvers (approval + checks)
+//
+// Both resolvers share an identical struct layout and poll() body — only the
+// gate_type() string and the inner resolver type differ.  A macro removes the
+// duplication while keeping the two distinct public type names.
 // ---------------------------------------------------------------------------
 
-pub(in crate::workflow) struct RkPrApprovalGateResolver {
-    inner: PrApprovalGateResolver,
-    config: Config,
-    db_path: PathBuf,
+macro_rules! impl_pr_gate_resolver {
+    ($name:ident, $inner_ty:ty, $gate_type_str:literal) => {
+        pub(in crate::workflow) struct $name {
+            inner: $inner_ty,
+            config: Config,
+            db_path: PathBuf,
+        }
+
+        impl RkGateResolver for $name {
+            fn gate_type(&self) -> &str {
+                $gate_type_str
+            }
+
+            fn poll(
+                &self,
+                run_id: &str,
+                params: &RkGateParams,
+                _ctx: &RkGateContext,
+            ) -> Result<RkGatePoll, EngineError> {
+                let core_params = rk_params_to_core(params);
+                let ctx = CoreGateContext {
+                    config: &self.config,
+                    db_path: &self.db_path,
+                };
+                let result = CoreGateResolver::poll(&self.inner, run_id, &core_params, &ctx)
+                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                Ok(gate_poll_to_rk(result))
+            }
+        }
+    };
 }
 
-impl RkGateResolver for RkPrApprovalGateResolver {
-    fn gate_type(&self) -> &str {
-        "pr_approval"
-    }
-
-    fn poll(
-        &self,
-        run_id: &str,
-        params: &RkGateParams,
-        _ctx: &RkGateContext,
-    ) -> Result<RkGatePoll, EngineError> {
-        let core_params = rk_params_to_core(params);
-        let ctx = CoreGateContext {
-            config: &self.config,
-            db_path: &self.db_path,
-        };
-        let result = CoreGateResolver::poll(&self.inner, run_id, &core_params, &ctx)
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
-        Ok(gate_poll_to_rk(result))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PR checks
-// ---------------------------------------------------------------------------
-
-pub(in crate::workflow) struct RkPrChecksGateResolver {
-    inner: PrChecksGateResolver,
-    config: Config,
-    db_path: PathBuf,
-}
-
-impl RkGateResolver for RkPrChecksGateResolver {
-    fn gate_type(&self) -> &str {
-        "pr_checks"
-    }
-
-    fn poll(
-        &self,
-        run_id: &str,
-        params: &RkGateParams,
-        _ctx: &RkGateContext,
-    ) -> Result<RkGatePoll, EngineError> {
-        let core_params = rk_params_to_core(params);
-        let ctx = CoreGateContext {
-            config: &self.config,
-            db_path: &self.db_path,
-        };
-        let result = CoreGateResolver::poll(&self.inner, run_id, &core_params, &ctx)
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
-        Ok(gate_poll_to_rk(result))
-    }
-}
+impl_pr_gate_resolver!(
+    RkPrApprovalGateResolver,
+    PrApprovalGateResolver,
+    "pr_approval"
+);
+impl_pr_gate_resolver!(RkPrChecksGateResolver, PrChecksGateResolver, "pr_checks");
 
 // ---------------------------------------------------------------------------
 // Conversion helpers

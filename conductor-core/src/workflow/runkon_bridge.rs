@@ -285,6 +285,38 @@ fn core_fan_out_item_to_rk(
     }
 }
 
+/// Shared body for every `RkItemProvider::items()` implementation.
+///
+/// Locks the connection, converts the scope, delegates to `provider`, and maps
+/// the result back into runkon-flow types.  All four adapters differ only in
+/// which `ItemProvider` implementation they pass here.
+fn delegate_items<P: ItemProvider>(
+    conn: &Arc<Mutex<rusqlite::Connection>>,
+    config: &crate::config::Config,
+    scope: Option<&runkon_flow::dsl::ForeachScope>,
+    filter: &HashMap<String, String>,
+    existing_set: &HashSet<String>,
+    provider: P,
+) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
+    let guard = conn
+        .lock()
+        .map_err(|e| EngineError::Workflow(format!("mutex poisoned: {e}")))?;
+    let core_ctx = crate::workflow::item_provider::ProviderContext {
+        conn: &guard,
+        config,
+    };
+    let core_scope = match scope {
+        Some(s) => Some(rk_scope_to_core(s).map_err(|e| EngineError::Workflow(e.to_string()))?),
+        None => None,
+    };
+    provider
+        .items(&core_ctx, core_scope.as_ref(), filter, existing_set)
+        .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
+            items.into_iter().map(core_fan_out_item_to_rk).collect()
+        })
+        .map_err(|e: crate::error::ConductorError| EngineError::Workflow(e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // 4a. RkTicketsItemProvider
 // ---------------------------------------------------------------------------
@@ -321,26 +353,14 @@ impl runkon_flow::traits::item_provider::ItemProvider for RkTicketsItemProvider 
         filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-        let guard = self
-            .conn
-            .lock()
-            .map_err(|e| EngineError::Workflow(format!("mutex poisoned: {e}")))?;
-        let core_ctx = crate::workflow::item_provider::ProviderContext {
-            conn: &guard,
-            config: &self.config,
-        };
-        let core_scope = match scope {
-            Some(s) => Some(rk_scope_to_core(s).map_err(|e| EngineError::Workflow(e.to_string()))?),
-            None => None,
-        };
-        let provider =
-            crate::workflow::item_provider::tickets::TicketsProvider::new(self.repo_id.clone());
-        provider
-            .items(&core_ctx, core_scope.as_ref(), filter, existing_set)
-            .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
-                items.into_iter().map(core_fan_out_item_to_rk).collect()
-            })
-            .map_err(|e: crate::error::ConductorError| EngineError::Workflow(e.to_string()))
+        delegate_items(
+            &self.conn,
+            &self.config,
+            scope,
+            filter,
+            existing_set,
+            crate::workflow::item_provider::tickets::TicketsProvider::new(self.repo_id.clone()),
+        )
     }
 }
 
@@ -374,25 +394,14 @@ impl runkon_flow::traits::item_provider::ItemProvider for RkReposItemProvider {
         filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-        let guard = self
-            .conn
-            .lock()
-            .map_err(|e| EngineError::Workflow(format!("mutex poisoned: {e}")))?;
-        let core_ctx = crate::workflow::item_provider::ProviderContext {
-            conn: &guard,
-            config: &self.config,
-        };
-        let core_scope = match scope {
-            Some(s) => Some(rk_scope_to_core(s).map_err(|e| EngineError::Workflow(e.to_string()))?),
-            None => None,
-        };
-        let provider = crate::workflow::item_provider::repos::ReposProvider;
-        provider
-            .items(&core_ctx, core_scope.as_ref(), filter, existing_set)
-            .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
-                items.into_iter().map(core_fan_out_item_to_rk).collect()
-            })
-            .map_err(|e: crate::error::ConductorError| EngineError::Workflow(e.to_string()))
+        delegate_items(
+            &self.conn,
+            &self.config,
+            scope,
+            filter,
+            existing_set,
+            crate::workflow::item_provider::repos::ReposProvider,
+        )
     }
 }
 
@@ -426,25 +435,14 @@ impl runkon_flow::traits::item_provider::ItemProvider for RkWorkflowRunsItemProv
         filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-        let guard = self
-            .conn
-            .lock()
-            .map_err(|e| EngineError::Workflow(format!("mutex poisoned: {e}")))?;
-        let core_ctx = crate::workflow::item_provider::ProviderContext {
-            conn: &guard,
-            config: &self.config,
-        };
-        let core_scope = match scope {
-            Some(s) => Some(rk_scope_to_core(s).map_err(|e| EngineError::Workflow(e.to_string()))?),
-            None => None,
-        };
-        let provider = crate::workflow::item_provider::workflow_runs::WorkflowRunsProvider;
-        provider
-            .items(&core_ctx, core_scope.as_ref(), filter, existing_set)
-            .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
-                items.into_iter().map(core_fan_out_item_to_rk).collect()
-            })
-            .map_err(|e: crate::error::ConductorError| EngineError::Workflow(e.to_string()))
+        delegate_items(
+            &self.conn,
+            &self.config,
+            scope,
+            filter,
+            existing_set,
+            crate::workflow::item_provider::workflow_runs::WorkflowRunsProvider,
+        )
     }
 }
 
@@ -484,30 +482,19 @@ impl runkon_flow::traits::item_provider::ItemProvider for RkWorktreesItemProvide
         filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-        let guard = self
-            .conn
-            .lock()
-            .map_err(|e| EngineError::Workflow(format!("mutex poisoned: {e}")))?;
-        let core_ctx = crate::workflow::item_provider::ProviderContext {
-            conn: &guard,
-            config: &self.config,
-        };
-        let core_scope = match scope {
-            Some(s) => Some(rk_scope_to_core(s).map_err(|e| EngineError::Workflow(e.to_string()))?),
-            None => None,
-        };
         // WorktreesProvider requires repo_id and worktree_id; pass repo_id from self,
         // worktree_id is not available in this context.
-        let provider = crate::workflow::item_provider::worktrees::WorktreesProvider::new(
-            self.repo_id.clone(),
-            None,
-        );
-        provider
-            .items(&core_ctx, core_scope.as_ref(), filter, existing_set)
-            .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
-                items.into_iter().map(core_fan_out_item_to_rk).collect()
-            })
-            .map_err(|e: crate::error::ConductorError| EngineError::Workflow(e.to_string()))
+        delegate_items(
+            &self.conn,
+            &self.config,
+            scope,
+            filter,
+            existing_set,
+            crate::workflow::item_provider::worktrees::WorktreesProvider::new(
+                self.repo_id.clone(),
+                None,
+            ),
+        )
     }
 }
 
@@ -541,12 +528,6 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         let core_def: crate::workflow_dsl::WorkflowDef =
             serde_json::from_str(&def_json).map_err(|e| EngineError::Workflow(e.to_string()))?;
 
-        // Open a fresh connection for this child run.
-        let conn = crate::db::open_database(&self.db_path)
-            .map_err(|e| EngineError::Workflow(e.to_string()))?;
-
-        // Build exec config from parent state — no event_sinks propagated here
-        // (the child run will fire its own events independently).
         let exec_config = crate::workflow::types::WorkflowExecConfig {
             poll_interval: parent_state.exec_config.poll_interval,
             step_timeout: parent_state.exec_config.step_timeout,
@@ -556,32 +537,35 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             event_sinks: parent_state.event_sinks.iter().cloned().collect(),
         };
 
-        let input = crate::workflow::types::WorkflowExecInput {
-            conn: &conn,
-            config: &self.config,
-            workflow: &core_def,
-            worktree_id: parent_state.worktree_ctx.worktree_id.as_deref(),
-            working_dir: &parent_state.worktree_ctx.working_dir,
-            repo_path: &parent_state.worktree_ctx.repo_path,
-            model: parent_state.model.as_deref(),
-            exec_config: &exec_config,
+        // Route child workflows through execute_workflow_standalone so they use
+        // FlowEngine::run() — keeping event emission and step tracking consistent
+        // between parent and child runs.
+        let standalone_params = crate::workflow::types::WorkflowExecStandalone {
+            config: self.config.clone(),
+            workflow: core_def,
+            worktree_id: parent_state.worktree_ctx.worktree_id.clone(),
+            working_dir: parent_state.worktree_ctx.working_dir.clone(),
+            repo_path: parent_state.worktree_ctx.repo_path.clone(),
+            ticket_id: parent_state.inputs.get("ticket_id").cloned(),
+            repo_id: parent_state.inputs.get("repo_id").cloned(),
+            model: parent_state.model.clone(),
+            exec_config,
             inputs: params.inputs,
-            ticket_id: parent_state.inputs.get("ticket_id").map(String::as_str),
-            repo_id: parent_state.inputs.get("repo_id").map(String::as_str),
-            depth: params.depth,
-            parent_workflow_run_id: Some(&parent_state.workflow_run_id),
-            target_label: parent_state.target_label.as_deref(),
-            default_bot_name: params.bot_name,
-            iteration: params.iteration,
+            target_label: parent_state.target_label.clone(),
             run_id_notify: None,
             triggered_by_hook: parent_state.triggered_by_hook,
             conductor_bin_dir: None,
             force: false,
             extra_plugin_dirs: parent_state.worktree_ctx.extra_plugin_dirs.clone(),
+            db_path: Some(self.db_path.clone()),
+            parent_workflow_run_id: Some(parent_state.workflow_run_id.clone()),
+            depth: params.depth,
             parent_step_id: params.parent_step_id,
+            default_bot_name: params.bot_name,
+            iteration: params.iteration,
         };
 
-        let core_result = crate::workflow::engine::execute_workflow(&input)
+        let core_result = crate::workflow::engine::execute_workflow_standalone(&standalone_params)
             .map_err(|e| EngineError::Workflow(e.to_string()))?;
 
         Ok(core_workflow_result_to_rk(core_result))
@@ -655,16 +639,32 @@ fn core_workflow_result_to_rk(
 fn core_workflow_run_to_rk(
     run: crate::workflow::types::WorkflowRun,
 ) -> runkon_flow::types::WorkflowRun {
-    let rk_status = run
-        .status
-        .to_string()
+    let status_str = run.status.to_string();
+    let rk_status = status_str
         .parse::<runkon_flow::status::WorkflowRunStatus>()
-        .unwrap_or(runkon_flow::status::WorkflowRunStatus::Failed);
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                run_id = %run.id,
+                status = %status_str,
+                "Unrecognised workflow run status; defaulting to Failed",
+            );
+            runkon_flow::status::WorkflowRunStatus::Failed
+        });
 
     let rk_blocked_on = run.blocked_on.and_then(|bo| {
-        serde_json::to_string(&bo)
-            .ok()
-            .and_then(|json| serde_json::from_str(&json).ok())
+        match serde_json::to_string(&bo) {
+            Ok(json) => match serde_json::from_str(&json) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(run_id = %run.id, error = %e, "Failed to deserialize blocked_on; treating as unblocked");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(run_id = %run.id, error = %e, "Failed to serialize blocked_on; treating as unblocked");
+                None
+            }
+        }
     });
 
     runkon_flow::types::WorkflowRun {
@@ -760,4 +760,193 @@ pub(super) fn build_rk_script_env_provider(
             params.extra_plugin_dirs.clone(),
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::status::WorkflowRunStatus as CoreStatus;
+    use std::collections::HashMap;
+
+    fn make_core_run(id: &str, status: CoreStatus) -> crate::workflow::types::WorkflowRun {
+        crate::workflow::types::WorkflowRun {
+            id: id.to_string(),
+            workflow_name: "test-workflow".to_string(),
+            worktree_id: None,
+            parent_run_id: "parent-run".to_string(),
+            status,
+            dry_run: false,
+            trigger: "manual".to_string(),
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: None,
+            inputs: HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed: false,
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // core_workflow_run_to_rk — status conversion
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn status_completed_maps_correctly() {
+        let run = make_core_run("r1", CoreStatus::Completed);
+        let rk = core_workflow_run_to_rk(run);
+        assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Completed);
+    }
+
+    #[test]
+    fn status_failed_maps_correctly() {
+        let run = make_core_run("r1", CoreStatus::Failed);
+        let rk = core_workflow_run_to_rk(run);
+        assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Failed);
+    }
+
+    #[test]
+    fn status_running_maps_correctly() {
+        let run = make_core_run("r1", CoreStatus::Running);
+        let rk = core_workflow_run_to_rk(run);
+        assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Running);
+    }
+
+    #[test]
+    fn blocked_on_none_maps_to_none() {
+        let run = make_core_run("r1", CoreStatus::Completed);
+        let rk = core_workflow_run_to_rk(run);
+        assert!(rk.blocked_on.is_none());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Schema conversion round-trips
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn schema_round_trip_string_field() {
+        let core = crate::schema_config::OutputSchema {
+            name: "my-schema".to_string(),
+            fields: vec![crate::schema_config::FieldDef {
+                name: "title".to_string(),
+                required: true,
+                field_type: crate::schema_config::FieldType::String,
+                desc: Some("A title".to_string()),
+                examples: None,
+            }],
+            markers: None,
+        };
+        let rk = core_schema_to_rk(core.clone());
+        assert_eq!(rk.name, core.name);
+        assert_eq!(rk.fields.len(), 1);
+        assert_eq!(rk.fields[0].name, "title");
+        assert!(matches!(
+            rk.fields[0].field_type,
+            runkon_flow::output_schema::FieldType::String
+        ));
+    }
+
+    #[test]
+    fn schema_round_trip_enum_field() {
+        let core = crate::schema_config::OutputSchema {
+            name: "s".to_string(),
+            fields: vec![crate::schema_config::FieldDef {
+                name: "color".to_string(),
+                required: false,
+                field_type: crate::schema_config::FieldType::Enum(vec![
+                    "red".to_string(),
+                    "blue".to_string(),
+                ]),
+                desc: None,
+                examples: None,
+            }],
+            markers: None,
+        };
+        let rk = core_schema_to_rk(core);
+        let back = rk_schema_to_core(rk);
+        assert_eq!(back.fields[0].name, "color");
+        assert!(matches!(
+            back.fields[0].field_type,
+            crate::schema_config::FieldType::Enum(_)
+        ));
+        if let crate::schema_config::FieldType::Enum(v) = &back.fields[0].field_type {
+            assert_eq!(v, &["red", "blue"]);
+        }
+    }
+
+    #[test]
+    fn schema_round_trip_array_field() {
+        use crate::schema_config::{ArrayItems, FieldType};
+        let core = crate::schema_config::OutputSchema {
+            name: "s".to_string(),
+            fields: vec![crate::schema_config::FieldDef {
+                name: "items".to_string(),
+                required: false,
+                field_type: FieldType::Array {
+                    items: ArrayItems::Scalar(Box::new(FieldType::Number)),
+                },
+                desc: None,
+                examples: None,
+            }],
+            markers: None,
+        };
+        let rk = core_schema_to_rk(core);
+        let back = rk_schema_to_core(rk);
+        assert!(matches!(back.fields[0].field_type, FieldType::Array { .. }));
+    }
+
+    // ---------------------------------------------------------------------------
+    // delegate_items — mutex poison propagates as EngineError
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn delegate_items_propagates_mutex_poison() {
+        use std::collections::HashSet;
+        let conn = Arc::new(Mutex::new(
+            rusqlite::Connection::open_in_memory().expect("in-memory db"),
+        ));
+        // Poison the mutex by panicking inside a lock guard in another thread.
+        let conn_clone = Arc::clone(&conn);
+        let _ = std::thread::spawn(move || {
+            let _guard = conn_clone.lock().unwrap();
+            panic!("intentional panic to poison mutex");
+        })
+        .join();
+
+        let config = crate::config::Config::default();
+        let result = delegate_items(
+            &conn,
+            &config,
+            None,
+            &HashMap::new(),
+            &HashSet::new(),
+            crate::workflow::item_provider::repos::ReposProvider,
+        );
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("mutex poisoned"),
+                    "expected poison error, got: {msg}"
+                );
+            }
+            Ok(_) => panic!("expected mutex-poison error, got Ok"),
+        }
+    }
 }

@@ -1168,6 +1168,10 @@ impl App {
                 extra_plugin_dirs: vec![],
                 db_path: None,
                 parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1225,6 +1229,10 @@ impl App {
                 extra_plugin_dirs,
                 db_path: None,
                 parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1281,6 +1289,10 @@ impl App {
                 extra_plugin_dirs,
                 db_path: None,
                 parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1334,6 +1346,10 @@ impl App {
                 extra_plugin_dirs: vec![],
                 db_path: None,
                 parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
             };
 
             let result = execute_workflow_standalone(&params);

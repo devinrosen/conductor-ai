@@ -714,6 +714,10 @@ fn build_child_dispatch_params(
         extra_plugin_dirs: extra_plugin_dirs.clone(),
         db_path: None,
         parent_workflow_run_id: Some(state.workflow_run_id.clone()),
+        depth: 0,
+        parent_step_id: None,
+        default_bot_name: None,
+        iteration: 0,
     })
 }
 

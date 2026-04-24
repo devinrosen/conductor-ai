@@ -530,6 +530,16 @@ pub struct WorkflowExecStandalone {
     pub db_path: Option<std::path::PathBuf>,
     /// Optional parent workflow run ID. Links this run as a child of a foreach step.
     pub parent_workflow_run_id: Option<String>,
+    /// Current nesting depth (0 = top-level). Used to skip the active-run guard
+    /// for child workflows dispatched from foreach / call steps.
+    pub depth: u32,
+    /// ID of the parent step that dispatched this run. Written back to that step
+    /// record immediately after the child run is created, enabling TUI drill-in.
+    pub parent_step_id: Option<String>,
+    /// Default bot name for the workflow run (propagated from foreach context).
+    pub default_bot_name: Option<String>,
+    /// Iteration number for foreach child runs (0 for top-level runs).
+    pub iteration: u32,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues

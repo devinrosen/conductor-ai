@@ -394,6 +394,10 @@ pub fn handle_workflow(
                         extra_plugin_dirs: plugin_dirs,
                         db_path: None,
                         parent_workflow_run_id: None,
+                        depth: 0,
+                        parent_step_id: None,
+                        default_bot_name: None,
+                        iteration: 0,
                     };
                     let run_id = crate::background::fork_and_run_workflow(params)?;
                     println!("{}", run_id);

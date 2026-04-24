@@ -910,7 +910,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     // -----------------------------------------------------------------------
     // Setup phase — acquire lock once, do all pre-run work, release.
     // -----------------------------------------------------------------------
-    let (wf_run_id, parent_run_id, merged_inputs, effective_repo_id_owned) = {
+    let (wf_run_id, parent_run_id, merged_inputs, effective_repo_id_owned, snapshot_json) = {
         let guard = shared_conn
             .lock()
             .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))?;
@@ -994,19 +994,22 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             ConductorError::Workflow(format!("Failed to serialize workflow definition: {e}"))
         })?;
 
-        // Guard active runs (depth == 0 only; force cancels any existing run).
-        if let Some(ref wt_id) = params.worktree_id {
-            if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
-                if params.force {
-                    tracing::info!(
-                        "Force override: cancelling active run {} to start new run",
-                        active.id
-                    );
-                    wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
-                } else {
-                    return Err(ConductorError::WorkflowRunAlreadyActive {
-                        name: active.workflow_name,
-                    });
+        // Guard active runs at depth 0 only — child workflows (depth > 0) run
+        // concurrently with their parent and must not trigger this check.
+        if params.depth == 0 {
+            if let Some(ref wt_id) = params.worktree_id {
+                if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
+                    if params.force {
+                        tracing::info!(
+                            "Force override: cancelling active run {} to start new run",
+                            active.id
+                        );
+                        wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
+                    } else {
+                        return Err(ConductorError::WorkflowRunAlreadyActive {
+                            name: active.workflow_name,
+                        });
+                    }
                 }
             }
         }
@@ -1055,11 +1058,26 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             params.target_label.as_deref(),
         )?;
 
+        // Write child run ID back to parent step immediately so TUI can drill in while running.
+        if let Some(ref step_id) = params.parent_step_id {
+            wf_mgr.update_step_child_run_id(step_id, &wf_run.id)?;
+        }
+
         // Notify any waiting caller of the freshly-created run ID.
         if let Some(pair) = &params.run_id_notify {
             let (lock, cvar) = pair.as_ref();
             *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(wf_run.id.clone());
             cvar.notify_one();
+        }
+
+        // Persist default_bot_name so it can be restored on resume.
+        if let Some(ref bot_name) = params.default_bot_name {
+            wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
+        }
+
+        // Persist loop iteration number for sub-workflow runs.
+        if params.iteration > 0 {
+            wf_mgr.set_workflow_run_iteration(&wf_run.id, params.iteration as i64)?;
         }
 
         // Build merged inputs, injecting ticket/repo/worktree variables.
@@ -1088,7 +1106,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
                 .entry("ticket_raw_json".to_string())
                 .or_insert_with(|| ticket.raw_json.clone());
         }
-        if let Some(ref rid) = effective_repo_id {
+        let fetched_repo = if let Some(ref rid) = effective_repo_id {
             let repo = crate::repo::RepoManager::new(conn, config).get_by_id(rid)?;
             merged_inputs
                 .entry("repo_id".to_string())
@@ -1099,11 +1117,22 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             merged_inputs
                 .entry("repo_name".to_string())
                 .or_insert_with(|| repo.slug.clone());
-        }
+            Some(repo)
+        } else {
+            None
+        };
         if let Some(ref wt_id) = params.worktree_id {
             let wt = crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id)?;
-            let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&wt.repo_id)?;
-            inject_worktree_variables(&wt, &repo.default_branch, &mut merged_inputs);
+            // Reuse the already-fetched repo when the IDs match (the common case where
+            // effective_repo_id was derived from this same worktree).
+            let default_branch = if let Some(ref r) = fetched_repo {
+                r.default_branch.clone()
+            } else {
+                crate::repo::RepoManager::new(conn, config)
+                    .get_by_id(&wt.repo_id)?
+                    .default_branch
+            };
+            inject_worktree_variables(&wt, &default_branch, &mut merged_inputs);
         }
 
         // Persist inputs.
@@ -1114,7 +1143,13 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         // Mark as running.
         wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
 
-        (wf_run.id, parent_run.id, merged_inputs, effective_repo_id)
+        (
+            wf_run.id,
+            parent_run.id,
+            merged_inputs,
+            effective_repo_id,
+            snapshot_json,
+        )
         // guard drops here — connection lock released
     };
 
@@ -1122,15 +1157,11 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     // Build the runkon-flow engine and execution state.
     // -----------------------------------------------------------------------
 
-    // Convert workflow def to runkon-flow via JSON round-trip.
-    let rk_def: runkon_flow::dsl::WorkflowDef = {
-        let json = serde_json::to_string(workflow).map_err(|e| {
-            ConductorError::Workflow(format!("Failed to serialize workflow definition: {e}"))
-        })?;
-        serde_json::from_str(&json).map_err(|e| {
+    // Reuse the snapshot JSON already computed during setup to avoid a second serialization.
+    let rk_def: runkon_flow::dsl::WorkflowDef =
+        serde_json::from_str(&snapshot_json).map_err(|e| {
             ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
-        })?
-    };
+        })?;
 
     let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
@@ -1201,7 +1232,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         exec_config: rk_exec_config,
         inputs: merged_inputs,
         parent_run_id,
-        depth: 0,
+        depth: params.depth,
         target_label: params.target_label.clone(),
         step_results: HashMap::new(),
         contexts: Vec::new(),
@@ -1218,7 +1249,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         block_output: None,
         block_with: Vec::new(),
         resume_ctx: None,
-        default_bot_name: None,
+        default_bot_name: params.default_bot_name.clone(),
         triggered_by_hook: params.triggered_by_hook,
         schema_resolver: Some(schema_resolver),
         child_runner: Some(child_runner),
