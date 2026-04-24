@@ -178,7 +178,9 @@ pub fn execute_foreach(
         .filter(|(_, item_id, _)| !existing_set.contains(item_id))
         .collect();
     let new_count = new_items.len() as i64;
-    state.wf_mgr.insert_fan_out_items_batch(&step_id, &new_items)?;
+    state
+        .wf_mgr
+        .insert_fan_out_items_batch(&step_id, &new_items)?;
     let total_items = new_count + existing_set.len() as i64;
 
     if total_items > 0 {
