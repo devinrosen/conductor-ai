@@ -627,6 +627,57 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_fan_out_items_batch_deduplicates_within_batch() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
+
+        // Batch contains two entries with the same item_id — only one should be stored.
+        let items = vec![
+            NewFanOutItem {
+                item_type: "ticket".to_string(),
+                item_id: "t-dup".to_string(),
+                item_ref: "ref-a".to_string(),
+            },
+            NewFanOutItem {
+                item_type: "ticket".to_string(),
+                item_id: "t-dup".to_string(),
+                item_ref: "ref-b".to_string(),
+            },
+        ];
+        p.insert_fan_out_items_batch(&step_id, &items).unwrap();
+
+        let stored = p.get_fan_out_items(&step_id, None).unwrap();
+        assert_eq!(stored.len(), 1, "within-batch duplicate must be dropped");
+        assert_eq!(stored[0].item_id, "t-dup");
+    }
+
+    #[test]
+    fn test_insert_fan_out_items_batch_cross_call_dedup() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
+
+        let first = vec![NewFanOutItem {
+            item_type: "ticket".to_string(),
+            item_id: "t-1".to_string(),
+            item_ref: "ref-1".to_string(),
+        }];
+        p.insert_fan_out_items_batch(&step_id, &first).unwrap();
+
+        // Second call with same item_id must not insert a duplicate.
+        let second = vec![NewFanOutItem {
+            item_type: "ticket".to_string(),
+            item_id: "t-1".to_string(),
+            item_ref: "ref-1".to_string(),
+        }];
+        p.insert_fan_out_items_batch(&step_id, &second).unwrap();
+
+        let stored = p.get_fan_out_items(&step_id, None).unwrap();
+        assert_eq!(stored.len(), 1, "cross-call duplicate must be dropped");
+    }
+
+    #[test]
     fn test_gate_pending_by_default() {
         let p = InMemoryWorkflowPersistence::new();
         let run = p.create_run(make_new_run("test")).unwrap();
