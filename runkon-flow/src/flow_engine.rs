@@ -286,6 +286,18 @@ impl FlowEngine {
     }
 }
 
+fn body_of(node: &WorkflowNode) -> Option<&[WorkflowNode]> {
+    match node {
+        WorkflowNode::If(n) => Some(&n.body),
+        WorkflowNode::Unless(n) => Some(&n.body),
+        WorkflowNode::While(n) => Some(&n.body),
+        WorkflowNode::DoWhile(n) => Some(&n.body),
+        WorkflowNode::Do(n) => Some(&n.body),
+        WorkflowNode::Always(n) => Some(&n.body),
+        _ => None,
+    }
+}
+
 fn validate_nodes_impl(
     action_registry: &ActionRegistry,
     item_provider_registry: &ItemProviderRegistry,
@@ -413,73 +425,19 @@ fn validate_nodes_impl(
                     }
                 }
             }
-            WorkflowNode::If(n) => {
-                validate_nodes_impl(
-                    action_registry,
-                    item_provider_registry,
-                    gate_resolver_registry,
-                    workflow_resolver,
-                    &n.body,
-                    errors,
-                    visited,
-                );
+            _ => {
+                if let Some(body) = body_of(node) {
+                    validate_nodes_impl(
+                        action_registry,
+                        item_provider_registry,
+                        gate_resolver_registry,
+                        workflow_resolver,
+                        body,
+                        errors,
+                        visited,
+                    );
+                }
             }
-            WorkflowNode::Unless(n) => {
-                validate_nodes_impl(
-                    action_registry,
-                    item_provider_registry,
-                    gate_resolver_registry,
-                    workflow_resolver,
-                    &n.body,
-                    errors,
-                    visited,
-                );
-            }
-            WorkflowNode::While(n) => {
-                validate_nodes_impl(
-                    action_registry,
-                    item_provider_registry,
-                    gate_resolver_registry,
-                    workflow_resolver,
-                    &n.body,
-                    errors,
-                    visited,
-                );
-            }
-            WorkflowNode::DoWhile(n) => {
-                validate_nodes_impl(
-                    action_registry,
-                    item_provider_registry,
-                    gate_resolver_registry,
-                    workflow_resolver,
-                    &n.body,
-                    errors,
-                    visited,
-                );
-            }
-            WorkflowNode::Do(n) => {
-                validate_nodes_impl(
-                    action_registry,
-                    item_provider_registry,
-                    gate_resolver_registry,
-                    workflow_resolver,
-                    &n.body,
-                    errors,
-                    visited,
-                );
-            }
-            WorkflowNode::Always(n) => {
-                validate_nodes_impl(
-                    action_registry,
-                    item_provider_registry,
-                    gate_resolver_registry,
-                    workflow_resolver,
-                    &n.body,
-                    errors,
-                    visited,
-                );
-            }
-            WorkflowNode::Script(_) => {}
         }
     }
 }
