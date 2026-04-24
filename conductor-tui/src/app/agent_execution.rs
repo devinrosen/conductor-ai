@@ -10,10 +10,13 @@ use crate::state::{InputAction, Modal, WorkflowPickerItem};
 
 use super::App;
 
-fn resolve_log_path(mgr: &AgentManager<'_>, run_id: &str) -> Option<std::path::PathBuf> {
-    mgr.log_path_for_run(run_id)
-        .map_err(|e| tracing::error!("invalid run_id {run_id}: {e}"))
-        .ok()
+fn resolve_log_path(run: &AgentRun) -> Option<std::path::PathBuf> {
+    match run.log_file.as_deref() {
+        Some(path) => Some(std::path::PathBuf::from(path)),
+        None => conductor_core::config::agent_log_path(&run.id)
+            .map_err(|e| tracing::error!("invalid run_id {}: {e}", run.id))
+            .ok(),
+    }
 }
 
 impl App {
@@ -559,7 +562,7 @@ impl App {
             });
 
             let run_id = run.id.clone();
-            let Some(log_path) = resolve_log_path(&mgr, &run_id) else {
+            let Some(log_path) = resolve_log_path(&run) else {
                 return;
             };
             let tx2 = tx.clone();
@@ -709,7 +712,7 @@ impl App {
             });
 
             let run_id = run.id.clone();
-            let Some(log_path) = resolve_log_path(&mgr, &run_id) else {
+            let Some(log_path) = resolve_log_path(&run) else {
                 return;
             };
             let tx2 = tx.clone();
@@ -825,7 +828,7 @@ impl App {
             });
 
             let new_run_id = new_run.id.clone();
-            let Some(log_path) = resolve_log_path(&mgr, &new_run_id) else {
+            let Some(log_path) = resolve_log_path(&new_run) else {
                 return;
             };
             let tx2 = tx.clone();
