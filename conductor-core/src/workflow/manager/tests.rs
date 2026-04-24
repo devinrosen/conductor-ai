@@ -1531,7 +1531,10 @@ fn test_cancel_run_idempotent_when_cancelling() {
 
     // Second cancel while already Cancelling must succeed without mutating state.
     let result = mgr.cancel_run(&run.id, "duplicate cancel");
-    assert!(result.is_ok(), "cancel_run on a Cancelling run should be a no-op Ok(())");
+    assert!(
+        result.is_ok(),
+        "cancel_run on a Cancelling run should be a no-op Ok(())"
+    );
 
     let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
     assert_eq!(
