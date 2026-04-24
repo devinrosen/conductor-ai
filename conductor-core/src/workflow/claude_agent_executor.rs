@@ -1,5 +1,4 @@
 use crate::agent::AgentRunStatus;
-use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::runtime::PollError;
@@ -44,19 +43,8 @@ impl ActionExecutor for ClaudeAgentExecutor {
             }
         }
 
-        // Hot-reload: read the .md file fresh on every call so that new agent
-        // definitions take effect without restarting the conductor process.
-        let working_dir_str = ectx.working_dir.to_string_lossy();
-        let agent_def = crate::agent_config::load_agent(
-            &working_dir_str,
-            &ectx.repo_path,
-            &AgentSpec::Name(params.name.clone()),
-            Some(&ectx.workflow_name),
-            &ectx.plugin_dirs,
-        )?;
-
-        let prompt =
-            crate::workflow::prompt_builder::build_agent_prompt_from_params(&agent_def, params);
+        let (agent_def, prompt) =
+            super::helpers::load_agent_and_build_prompt(ectx, params)?;
 
         let runtime = crate::runtime::resolve_runtime(&agent_def.runtime, &self.config)?;
 

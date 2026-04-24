@@ -1,4 +1,3 @@
-use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow::action_executor::{
@@ -35,18 +34,8 @@ impl ActionExecutor for ApiCallExecutor {
             ConductorError::Workflow("ApiCallExecutor requires ANTHROPIC_API_KEY".into())
         })?;
 
-        // Hot-reload: read agent definition fresh on every call (same pattern as ClaudeAgentExecutor).
-        let working_dir_str = ectx.working_dir.to_string_lossy();
-        let agent_def = crate::agent_config::load_agent(
-            &working_dir_str,
-            &ectx.repo_path,
-            &AgentSpec::Name(params.name.clone()),
-            Some(&ectx.workflow_name),
-            &ectx.plugin_dirs,
-        )?;
-
-        let prompt =
-            crate::workflow::prompt_builder::build_agent_prompt_from_params(&agent_def, params);
+        let (_agent_def, prompt) =
+            super::helpers::load_agent_and_build_prompt(ectx, params)?;
 
         let model = ectx
             .model
