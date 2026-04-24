@@ -391,7 +391,7 @@ pub fn execute_parallel(
                     run.status,
                     AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
                 ) {
-                    let fail_msg = "drain completed without result";
+                    let fail_msg = "dispatch completed without result";
                     tracing::warn!(
                         "parallel: '{}' still in {:?} after dispatch — applying race guard",
                         child.agent_name,
