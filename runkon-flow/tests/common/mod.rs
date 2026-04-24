@@ -322,6 +322,22 @@ pub fn named_executors(
 // foreach test helpers
 // ---------------------------------------------------------------------------
 
+fn mock_workflow_result(item_id: &str, wf_name: &str, succeeded: bool) -> WorkflowResult {
+    WorkflowResult {
+        workflow_run_id: format!("mock-run-{}", item_id),
+        worktree_id: None,
+        workflow_name: wf_name.to_string(),
+        all_succeeded: succeeded,
+        total_cost: 0.0,
+        total_turns: 0,
+        total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
+    }
+}
+
 /// Mock child workflow runner.
 ///
 /// Reads `params.inputs["item.id"]` to determine success from the pre-configured
@@ -355,19 +371,7 @@ impl ChildWorkflowRunner for MockChildRunner {
         let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();
         self.call_log.lock().unwrap().push(item_id.clone());
         let succeeded = self.outcomes.get(&item_id).copied().unwrap_or(true);
-        Ok(WorkflowResult {
-            workflow_run_id: format!("mock-run-{}", item_id),
-            worktree_id: None,
-            workflow_name: child_def.name.clone(),
-            all_succeeded: succeeded,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_input_tokens: 0,
-            total_cache_creation_input_tokens: 0,
-        })
+        Ok(mock_workflow_result(&item_id, &child_def.name, succeeded))
     }
 
     fn resume_child(
@@ -659,19 +663,7 @@ impl ChildWorkflowRunner for CancellingMockRunner {
             self.token.cancel(CancellationReason::UserRequested(None));
         }
         let succeeded = self.outcomes.get(&item_id).copied().unwrap_or(true);
-        Ok(WorkflowResult {
-            workflow_run_id: format!("mock-run-{}", item_id),
-            worktree_id: None,
-            workflow_name: child_def.name.clone(),
-            all_succeeded: succeeded,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_input_tokens: 0,
-            total_cache_creation_input_tokens: 0,
-        })
+        Ok(mock_workflow_result(&item_id, &child_def.name, succeeded))
     }
 
     fn resume_child(
