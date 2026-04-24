@@ -388,13 +388,6 @@ mod tests {
         run.id
     }
 
-    /// Returns the agent log dir, creating it if necessary.
-    fn ensure_agent_log_dir() -> std::path::PathBuf {
-        let dir = conductor_core::config::agent_log_dir();
-        std::fs::create_dir_all(&dir).ok();
-        dir
-    }
-
     /// Helper: create an agent run and set its log_file in one shot. Returns the run id.
     fn create_run_with_log(conn: &rusqlite::Connection, log_path: &str) -> String {
         use conductor_core::agent::AgentManager;
@@ -1031,7 +1024,7 @@ mod tests {
         let (run_id, step_id) = make_run_with_step(&db, "build");
 
         // Create a child agent run with a nonexistent log_file path inside agent_log_dir.
-        let log_dir = ensure_agent_log_dir();
+        let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
         let nonexistent = log_dir.join("test-nonexistent-missing.log");
         let nonexistent_str = nonexistent.to_str().unwrap().to_string();
 
@@ -1092,7 +1085,7 @@ mod tests {
         let (run_id, step_id) = make_run_with_step(&db, "test-step");
 
         // Write a temporary log file inside agent_log_dir so validation passes.
-        let log_dir = ensure_agent_log_dir();
+        let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
         let log_file = tempfile::Builder::new()
             .tempfile_in(&log_dir)
             .expect("temp log file");
@@ -1150,7 +1143,7 @@ mod tests {
         let (run_id, step0_id) = make_run_with_step(&db, "build");
 
         // Write log files inside agent_log_dir so validation passes.
-        let log_dir = ensure_agent_log_dir();
+        let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
         let log_iter0 = tempfile::Builder::new()
             .tempfile_in(&log_dir)
             .expect("temp log iter0");
@@ -1231,7 +1224,7 @@ mod tests {
         let (run_id, build_step_id) = make_run_with_step(&db, "build");
 
         // Write log files inside agent_log_dir so validation passes.
-        let log_dir = ensure_agent_log_dir();
+        let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
         let log_build = tempfile::Builder::new()
             .tempfile_in(&log_dir)
             .expect("temp log build");

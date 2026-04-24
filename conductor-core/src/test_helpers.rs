@@ -164,3 +164,10 @@ pub fn setup_db_with_agent_run() -> Connection {
     insert_test_agent_run(&conn, "ar1", "w1");
     conn
 }
+
+/// Returns the agent log dir, creating it if necessary.
+pub fn ensure_agent_log_dir() -> std::path::PathBuf {
+    let dir = crate::config::agent_log_dir();
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
