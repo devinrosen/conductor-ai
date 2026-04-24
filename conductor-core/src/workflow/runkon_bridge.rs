@@ -522,11 +522,15 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         parent_state: &runkon_flow::engine::ExecutionState,
         params: runkon_flow::engine::ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
-        // Convert runkon-flow WorkflowDef → conductor-core WorkflowDef via JSON.
-        let def_json =
-            serde_json::to_string(child_def).map_err(|e| EngineError::Workflow(e.to_string()))?;
-        let core_def: crate::workflow_dsl::WorkflowDef =
-            serde_json::from_str(&def_json).map_err(|e| EngineError::Workflow(e.to_string()))?;
+        // Load the real workflow definition from disk. The caller passes a placeholder
+        // WorkflowDef with body=[] — the child runner is responsible for resolving the
+        // actual definition by name from the worktree/repo .conductor/workflows/ directory.
+        let core_def = crate::workflow_dsl::load_workflow_by_name(
+            &parent_state.worktree_ctx.working_dir,
+            &parent_state.worktree_ctx.repo_path,
+            &child_def.name,
+        )
+        .map_err(|e| EngineError::Workflow(e.to_string()))?;
 
         let exec_config = crate::workflow::types::WorkflowExecConfig {
             poll_interval: parent_state.exec_config.poll_interval,
