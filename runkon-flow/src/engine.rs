@@ -37,11 +37,9 @@ pub const ENGINE_INJECTED_KEYS: &[&str] = &[
 pub struct WorktreeContext {
     pub worktree_id: Option<String>,
     pub working_dir: String,
-    pub worktree_slug: String,
     pub repo_path: String,
     pub ticket_id: Option<String>,
     pub repo_id: Option<String>,
-    pub conductor_bin_dir: Option<std::path::PathBuf>,
     pub extra_plugin_dirs: Vec<String>,
 }
 
