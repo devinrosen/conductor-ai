@@ -20,6 +20,7 @@ jobs:
       workflows: ${{ steps.filter.outputs.workflows }}
       desktop: ${{ steps.filter.outputs.desktop }}
       migrations: ${{ steps.filter.outputs.migrations }}
+      runkon-flow: ${{ steps.filter.outputs.runkon-flow }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -32,6 +33,9 @@ jobs:
               - 'Cargo.lock'
               - 'conductor-web/frontend/**'
               - '.github/workflows/ci.yml'
+            runkon-flow:
+              - 'runkon-flow/**'
+              - 'Cargo.lock'
             core:
               - 'conductor-core/**'
               - 'Cargo.lock'
@@ -120,6 +124,8 @@ jobs:
         if: needs.changes.outputs.web == 'true' && needs.changes.outputs.desktop != 'true'
       - run: cargo nextest run -p conductor-web -p conductor-desktop
         if: needs.changes.outputs.web == 'true' && needs.changes.outputs.desktop == 'true'
+      - run: cargo nextest run -p runkon-flow --features test-utils
+        if: needs.changes.outputs['runkon-flow'] == 'true'
 
   validate-workflows:
     name: Validate Workflows
