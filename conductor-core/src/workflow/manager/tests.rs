@@ -1521,6 +1521,27 @@ fn test_cancel_run_fails_on_terminal_state() {
 }
 
 #[test]
+fn test_cancel_run_idempotent_when_cancelling() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Cancelling, None, None)
+        .unwrap();
+
+    // Second cancel while already Cancelling must succeed without mutating state.
+    let result = mgr.cancel_run(&run.id, "duplicate cancel");
+    assert!(result.is_ok(), "cancel_run on a Cancelling run should be a no-op Ok(())");
+
+    let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(
+        updated.status,
+        WorkflowRunStatus::Cancelling,
+        "status should remain Cancelling"
+    );
+}
+
+#[test]
 fn test_cancel_run_marks_active_steps_failed() {
     let conn = setup_db();
     let mgr = WorkflowManager::new(&conn);
