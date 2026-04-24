@@ -239,11 +239,10 @@ impl FlowEngine {
         if let Some(resolver) = &self.workflow_resolver {
             let r = Arc::clone(resolver);
             let root_name = def.name.clone();
-            let root_def_clone = def.clone();
             // Inject the root def so detect_workflow_cycles can resolve it by name.
-            let cycle_loader = move |name: &str| -> std::result::Result<WorkflowDef, String> {
+            let cycle_loader = |name: &str| -> std::result::Result<WorkflowDef, String> {
                 if name == root_name.as_str() {
-                    Ok(root_def_clone.clone())
+                    Ok(def.clone())
                 } else {
                     r.resolve(name)
                         .map(|arc_def| (*arc_def).clone())
