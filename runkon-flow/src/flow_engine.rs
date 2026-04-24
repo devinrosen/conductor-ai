@@ -285,18 +285,6 @@ impl FlowEngine {
     }
 }
 
-fn body_of(node: &WorkflowNode) -> Option<&[WorkflowNode]> {
-    match node {
-        WorkflowNode::If(n) => Some(&n.body),
-        WorkflowNode::Unless(n) => Some(&n.body),
-        WorkflowNode::While(n) => Some(&n.body),
-        WorkflowNode::DoWhile(n) => Some(&n.body),
-        WorkflowNode::Do(n) => Some(&n.body),
-        WorkflowNode::Always(n) => Some(&n.body),
-        _ => None,
-    }
-}
-
 fn validate_nodes_impl(
     action_registry: &ActionRegistry,
     item_provider_registry: &ItemProviderRegistry,
@@ -425,7 +413,7 @@ fn validate_nodes_impl(
                 }
             }
             _ => {
-                if let Some(body) = body_of(node) {
+                if let Some(body) = node.body() {
                     validate_nodes_impl(
                         action_registry,
                         item_provider_registry,
