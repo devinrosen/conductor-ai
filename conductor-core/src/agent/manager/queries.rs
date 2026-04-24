@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use rusqlite::{named_params, Connection};
+use rusqlite::named_params;
 
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
@@ -383,17 +383,22 @@ impl<'a> AgentManager<'a> {
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
-}
 
-/// Returns the log file path for `run_id` after verifying the run exists in the DB.
-///
-/// Use this at API boundaries where `run_id` comes from user input and both ULID
-/// validity (path traversal guard) and DB existence should be confirmed.
-pub fn agent_log_path_verified(conn: &Connection, run_id: &str) -> Result<PathBuf> {
-    AgentManager::new(conn)
-        .get_run(run_id)?
-        .ok_or_else(|| ConductorError::Agent(format!("agent run not found: {run_id}")))?;
-    crate::config::agent_log_path(run_id)
+    /// Returns the log file path for a run, verifying the run exists in the DB.
+    ///
+    /// Respects `AgentRun.log_file` when set; falls back to the default
+    /// `~/.conductor/agent-logs/{run_id}.log` (with ULID validation) otherwise.
+    ///
+    /// Use this at API boundaries where `run_id` comes from user input.
+    pub fn log_path_for_run(&self, run_id: &str) -> Result<PathBuf> {
+        let run = self
+            .get_run(run_id)?
+            .ok_or_else(|| ConductorError::Agent(format!("agent run not found: {run_id}")))?;
+        match run.log_file {
+            Some(path) => Ok(PathBuf::from(path)),
+            None => crate::config::agent_log_path(run_id),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -401,6 +406,34 @@ mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
     use crate::agent::status::AgentRunStatus;
+
+    #[test]
+    fn test_log_path_for_run_default_path() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
+        let path = mgr.log_path_for_run(&run.id).unwrap();
+        assert!(path.to_string_lossy().ends_with(&format!("{}.log", run.id)));
+    }
+
+    #[test]
+    fn test_log_path_for_run_respects_log_file() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
+        mgr.update_run_log_file(&run.id, "/custom/path/run.log")
+            .unwrap();
+        let path = mgr.log_path_for_run(&run.id).unwrap();
+        assert_eq!(path.to_string_lossy(), "/custom/path/run.log");
+    }
+
+    #[test]
+    fn test_log_path_for_run_missing_run_returns_error() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let err = mgr.log_path_for_run("nonexistent-run-id").unwrap_err();
+        assert!(err.to_string().contains("agent run not found"));
+    }
 
     #[test]
     fn test_get_run() {

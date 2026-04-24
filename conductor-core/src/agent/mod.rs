@@ -15,7 +15,6 @@ pub use log_parsing::{
 };
 
 pub use manager::feedback::normalize_feedback_response;
-pub use manager::queries::agent_log_path_verified;
 pub use manager::AgentManager;
 
 pub use status::{

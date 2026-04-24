@@ -1705,4 +1705,23 @@ bot_name = "my-bot"
         assert!(rt.binary.is_none());
         assert!(rt.api_key_env.is_none());
     }
+
+    #[test]
+    fn agent_log_path_valid_ulid_returns_ok() {
+        let ulid = crate::new_id();
+        let path = super::agent_log_path(&ulid).expect("valid ULID should succeed");
+        assert!(path.to_string_lossy().ends_with(&format!("{ulid}.log")));
+    }
+
+    #[test]
+    fn agent_log_path_invalid_ulid_returns_error() {
+        let err = super::agent_log_path("../etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    #[test]
+    fn agent_log_path_path_traversal_rejected() {
+        let err = super::agent_log_path("../../secret").unwrap_err();
+        assert!(err.to_string().contains("invalid run_id"));
+    }
 }
