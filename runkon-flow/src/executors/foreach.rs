@@ -506,7 +506,7 @@ pub fn execute_foreach(
                     .position(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
 
                 let item = match eligible_pos {
-                    Some(pos) => pending.remove(pos),
+                    Some(pos) => pending.swap_remove(pos),
                     None => break,
                 };
 
