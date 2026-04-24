@@ -610,7 +610,7 @@ Multiple sinks can be registered; they receive every event in registration order
 ```rust
 let engine = FlowEngine::builder()
     .persistence(Box::new(SqliteWorkflowPersistence::new(&db)))
-    .event_sink(Box::new(ChannelEventSink::new(tx)))      // TUI live updates
+    .event_sink(Box::new(conductor_core::workflow::ChannelEventSink(tx))) // TUI live updates (lives in conductor-core, not runkon-flow)
     .event_sink(Box::new(PrometheusEventSink::new()))     // metrics
     .event_sink(Box::new(AuditLogEventSink::new(&path)))  // audit trail
     // ...

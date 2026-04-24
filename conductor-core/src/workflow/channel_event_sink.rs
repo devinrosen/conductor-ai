@@ -1,6 +1,6 @@
 use std::sync::mpsc::Sender;
 
-use crate::events::{EngineEventData, EventSink};
+use runkon_flow::events::{EngineEventData, EventSink};
 
 /// An `EventSink` that forwards events over an `mpsc` channel.
 ///
@@ -19,7 +19,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-    use crate::events::EngineEvent;
+    use runkon_flow::events::EngineEvent;
 
     #[test]
     fn emit_sends_event_to_receiver() {
@@ -43,10 +43,11 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         drop(rx);
         let sink = ChannelEventSink(tx);
+        use runkon_flow::CancellationReason;
         let data = EngineEventData::new(
             "run-2".to_string(),
             EngineEvent::RunCancelled {
-                reason: crate::cancellation_reason::CancellationReason::UserRequested(None),
+                reason: CancellationReason::UserRequested(None),
             },
         );
         sink.emit(&data);
