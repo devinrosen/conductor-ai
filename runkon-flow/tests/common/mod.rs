@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use runkon_flow::cancellation::CancellationToken;
@@ -8,7 +8,7 @@ use runkon_flow::dsl::{
     AgentRef, ApprovalMode, CallNode, GateNode, GateType, OnTimeout, WorkflowDef, WorkflowNode,
     WorkflowTrigger,
 };
-use runkon_flow::engine::{ExecutionState, WorktreeContext};
+use runkon_flow::engine::{ExecutionState, ResumeContext, WorktreeContext};
 use runkon_flow::engine_error::EngineError;
 use runkon_flow::events::{EngineEventData, EventSink};
 use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
@@ -202,6 +202,23 @@ pub fn make_state(
         cancellation: CancellationToken::new(),
         current_execution_id: Arc::new(Mutex::new(None)),
     }
+}
+
+/// Wrap `make_state` and set `resume_ctx` to signal a workflow resume.
+///
+/// The `skip_completed` set is empty so all steps execute normally — tests that
+/// need skipping behaviour should populate it directly after calling this helper.
+pub fn make_state_with_resume_ctx(
+    wf_name: &str,
+    persistence: Arc<InMemoryWorkflowPersistence>,
+    named_executors: HashMap<String, Box<dyn ActionExecutor>>,
+) -> ExecutionState {
+    let mut state = make_state(wf_name, persistence, named_executors);
+    state.resume_ctx = Some(ResumeContext {
+        skip_completed: HashSet::new(),
+        step_map: HashMap::new(),
+    });
+    state
 }
 
 // ---------------------------------------------------------------------------
