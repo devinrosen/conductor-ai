@@ -43,10 +43,8 @@ struct ForeachParentCtx {
     wt_working_dir: String,
     wt_repo_path: String,
     wt_worktree_id: Option<String>,
-    wt_worktree_slug: String,
     wt_ticket_id: Option<String>,
     wt_repo_id: Option<String>,
-    wt_conductor_bin_dir: Option<std::path::PathBuf>,
     wt_extra_plugin_dirs: Vec<String>,
 }
 
@@ -73,10 +71,8 @@ impl ForeachParentCtx {
             wt_working_dir: state.worktree_ctx.working_dir.clone(),
             wt_repo_path: state.worktree_ctx.repo_path.clone(),
             wt_worktree_id: state.worktree_ctx.worktree_id.clone(),
-            wt_worktree_slug: state.worktree_ctx.worktree_slug.clone(),
             wt_ticket_id: state.worktree_ctx.ticket_id.clone(),
             wt_repo_id: state.worktree_ctx.repo_id.clone(),
-            wt_conductor_bin_dir: state.worktree_ctx.conductor_bin_dir.clone(),
             wt_extra_plugin_dirs: state.worktree_ctx.extra_plugin_dirs.clone(),
         }
     }
@@ -92,10 +88,8 @@ impl ForeachParentCtx {
                 working_dir: self.wt_working_dir.clone(),
                 repo_path: self.wt_repo_path.clone(),
                 worktree_id: self.wt_worktree_id.clone(),
-                worktree_slug: self.wt_worktree_slug.clone(),
                 ticket_id: self.wt_ticket_id.clone(),
                 repo_id: self.wt_repo_id.clone(),
-                conductor_bin_dir: self.wt_conductor_bin_dir.clone(),
                 extra_plugin_dirs: self.wt_extra_plugin_dirs.clone(),
             },
             model: self.model.clone(),
