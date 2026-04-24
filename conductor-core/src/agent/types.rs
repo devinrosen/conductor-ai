@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +84,25 @@ fn default_runtime_field() -> String {
     "claude".to_string()
 }
 
+/// Resolves `..` and `.` components without touching the filesystem so that
+/// `starts_with` checks cannot be bypassed by paths like
+/// `/log/dir/../../../etc/passwd`.
+fn lexical_normalize(path: PathBuf) -> PathBuf {
+    let mut out: Vec<Component> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.last(), Some(Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.iter().collect()
+}
+
 impl AgentRun {
     /// Returns true if this run is currently active (running or waiting for feedback).
     pub fn is_active(&self) -> bool {
@@ -125,11 +144,23 @@ impl AgentRun {
 
     /// Returns the log file path for this run.
     ///
-    /// Uses `log_file` when set; falls back to the default
+    /// Uses `log_file` when set, but validates that it is contained within
+    /// `agent_log_dir()` to prevent path traversal; returns `ConductorError::Agent`
+    /// for paths outside that directory. Falls back to the default
     /// `~/.conductor/agent-logs/{id}.log` (validated as a ULID) otherwise.
     pub fn log_path(&self) -> Result<PathBuf> {
         match self.log_file.as_deref() {
-            Some(path) => Ok(PathBuf::from(path)),
+            Some(path) => {
+                let resolved = lexical_normalize(PathBuf::from(path));
+                let log_dir = lexical_normalize(crate::config::agent_log_dir());
+                if resolved.starts_with(&log_dir) {
+                    Ok(resolved)
+                } else {
+                    Err(crate::error::ConductorError::Agent(format!(
+                        "log_file path is outside agent log directory: {path}"
+                    )))
+                }
+            }
             None => crate::config::agent_log_path(&self.id),
         }
     }
@@ -365,10 +396,16 @@ mod tests {
     }
 
     #[test]
-    fn log_path_uses_log_file_when_set() {
+    fn log_path_rejects_log_file_outside_log_dir() {
         let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", Some("/tmp/custom.log"));
-        let path = run.log_path().unwrap();
-        assert_eq!(path, std::path::PathBuf::from("/tmp/custom.log"));
+        assert!(run.log_path().is_err());
+    }
+
+    #[test]
+    fn log_path_accepts_log_file_inside_log_dir() {
+        let inside = crate::config::agent_log_dir().join("foo.log");
+        let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", Some(inside.to_str().unwrap()));
+        assert_eq!(run.log_path().unwrap(), inside);
     }
 
     #[test]
@@ -384,6 +421,31 @@ mod tests {
     fn log_path_rejects_non_ulid_id() {
         let run = make_run("../../etc/passwd", None);
         assert!(run.log_path().is_err());
+    }
+
+    #[test]
+    fn log_path_rejects_dotdot_traversal_that_starts_with_log_dir() {
+        let log_dir = crate::config::agent_log_dir();
+        // Construct a path that textually starts with log_dir but escapes via `..`
+        let traversal = log_dir.join("../../../etc/passwd");
+        let run = make_run(
+            "01JVFJT9K7XPPQ9MH6JV7XRM3M",
+            Some(traversal.to_str().unwrap()),
+        );
+        assert!(
+            run.log_path().is_err(),
+            "path with .. components that escape log_dir must be rejected"
+        );
+    }
+
+    #[test]
+    fn log_path_accepts_path_with_harmless_dotdot_inside_log_dir() {
+        let log_dir = crate::config::agent_log_dir();
+        // A path that normalizes to something still inside log_dir is fine
+        let inside = log_dir.join("sub/../valid.log");
+        let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", Some(inside.to_str().unwrap()));
+        let result = run.log_path().unwrap();
+        assert_eq!(result, log_dir.join("valid.log"));
     }
 
     fn make_event(kind: &str, metadata: Option<&str>) -> AgentRunEvent {
