@@ -86,12 +86,7 @@ pub enum FanOutItemUpdate {
     Terminal { status: FanOutItemStatus },
 }
 
-/// Parameters for batch-inserting fan-out items.
-pub struct NewFanOutItem {
-    pub item_type: String,
-    pub item_id: String,
-    pub item_ref: String,
-}
+pub use runkon_flow::traits::persistence::NewFanOutItem;
 
 /// Current approval state of a gate step.
 #[derive(Debug, Clone)]
