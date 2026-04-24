@@ -114,6 +114,13 @@ impl ActionRegistry {
         self.named.contains_key(name) || self.fallback.is_some()
     }
 
+    fn find_executor(&self, name: &str) -> Option<&dyn ActionExecutor> {
+        self.named
+            .get(name)
+            .map(|e| e.as_ref())
+            .or(self.fallback.as_deref())
+    }
+
     /// Find the executor for `name` and run it.
     pub fn dispatch(
         &self,
@@ -121,12 +128,7 @@ impl ActionRegistry {
         ectx: &ExecutionContext,
         params: &ActionParams,
     ) -> Result<ActionOutput, EngineError> {
-        let executor = self
-            .named
-            .get(name)
-            .map(|e| e.as_ref())
-            .or(self.fallback.as_deref());
-        match executor {
+        match self.find_executor(name) {
             Some(e) => e.execute(ectx, params),
             None => Err(EngineError::Workflow(format!(
                 "no registered ActionExecutor for '{}' and no fallback configured",
@@ -138,12 +140,7 @@ impl ActionRegistry {
     /// Call `cancel()` on the executor for `name`, if registered.
     /// Used by `FlowEngine::cancel_run()` to fire-and-forget executor-level cancellation.
     pub fn cancel(&self, name: &str, execution_id: &str) -> Result<(), EngineError> {
-        let executor = self
-            .named
-            .get(name)
-            .map(|e| e.as_ref())
-            .or(self.fallback.as_deref());
-        match executor {
+        match self.find_executor(name) {
             Some(e) => e.cancel(execution_id),
             None => Ok(()),
         }
