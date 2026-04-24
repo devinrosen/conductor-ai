@@ -237,7 +237,7 @@ pub fn execute_foreach(
     let existing_items = state
         .persistence
         .get_fan_out_items(&step_id, None)
-        .unwrap_or_default();
+        .map_err(|e| EngineError::Persistence(e.to_string()))?;
     let existing_set: HashSet<String> = existing_items.iter().map(|i| i.item_id.clone()).collect();
 
     let provider_items = provider.items(
@@ -341,7 +341,7 @@ pub fn execute_foreach(
         HashMap<String, HashSet<String>>,
         HashMap<String, HashSet<String>>,
     ) = if node.ordered && provider.supports_ordered() {
-        let edges = provider.dependencies(&step_id).unwrap_or_default();
+        let edges = provider.dependencies(&step_id)?;
         let mut dep: HashMap<String, HashSet<String>> = HashMap::new();
         let mut rev: HashMap<String, HashSet<String>> = HashMap::new();
         for (blocker, dependent) in edges {
