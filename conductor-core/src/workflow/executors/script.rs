@@ -139,17 +139,19 @@ pub fn execute_script(
         )
     };
     let script_env = {
-        // ConductorScriptEnvProvider::env() ignores the ctx parameter; pass a stub.
-        struct NoopCtx;
-        impl runkon_flow::traits::run_context::RunContext for NoopCtx {
+        struct ScriptRunCtx<'a> {
+            working_dir: &'a std::path::Path,
+            repo_path: &'a std::path::Path,
+        }
+        impl runkon_flow::traits::run_context::RunContext for ScriptRunCtx<'_> {
             fn injected_variables(&self) -> std::collections::HashMap<&'static str, String> {
                 std::collections::HashMap::new()
             }
             fn working_dir(&self) -> &std::path::Path {
-                std::path::Path::new("")
+                self.working_dir
             }
             fn repo_path(&self) -> &std::path::Path {
-                std::path::Path::new("")
+                self.repo_path
             }
             fn worktree_id(&self) -> Option<&str> {
                 None
@@ -164,11 +166,15 @@ pub fn execute_script(
                 None
             }
         }
+        let run_ctx = ScriptRunCtx {
+            working_dir: &working_dir,
+            repo_path: &repo_path,
+        };
         crate::workflow::script_env_provider::ConductorScriptEnvProvider::new(
             conductor_bin_dir,
             extra_plugin_dirs,
         )
-        .env(&NoopCtx)
+        .env(&run_ctx)
     };
 
     // Check skip on resume
