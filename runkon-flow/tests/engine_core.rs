@@ -158,18 +158,13 @@ fn cancelled_run_emits_run_cancelled_event_and_status() {
         .build()
         .expect("engine build failed");
 
-    let def = make_def(
-        "cancel-event-test",
-        vec![call_node("should-not-run")],
-    );
+    let def = make_def("cancel-event-test", vec![call_node("should-not-run")]);
 
     let persistence = make_persistence();
     let mut state = make_state(
         "cancel-event-test",
         Arc::clone(&persistence),
-        named_executors([
-            Box::new(MockExecutor::new("should-not-run")) as Box<dyn ActionExecutor>,
-        ]),
+        named_executors([Box::new(MockExecutor::new("should-not-run")) as Box<dyn ActionExecutor>]),
     );
 
     let run_id = state.workflow_run_id.clone();
