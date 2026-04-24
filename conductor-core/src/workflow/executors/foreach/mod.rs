@@ -147,19 +147,9 @@ pub fn execute_foreach(
     let existing_ids = state.wf_mgr.get_existing_fan_out_item_ids(&step_id)?;
     let existing_set: HashSet<String> = existing_ids.into_iter().collect();
 
-    let repo_id_owned = {
-        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        ctx.repo_id().map(String::from)
-    };
-    let worktree_id_owned = {
-        let ctx = crate::workflow::run_context::WorktreeRunContext::new(state);
-        ctx.worktree_id().map(String::from)
-    };
     let provider_ctx = ProviderContext {
         conn: state.conn,
         config: state.config,
-        repo_id: repo_id_owned.as_deref(),
-        worktree_id: worktree_id_owned.as_deref(),
     };
     let provider_items = provider.items(
         &provider_ctx,
@@ -1001,7 +991,7 @@ fn load_worktree_dep_edges(
     state: &mut ExecutionState<'_>,
     step_id: &str,
 ) -> Result<Vec<(String, String)>> {
-    let provider = crate::workflow::item_provider::worktrees::WorktreesProvider;
+    let provider = crate::workflow::item_provider::worktrees::WorktreesProvider::new(None, None);
     crate::workflow::item_provider::ItemProvider::dependencies(
         &provider,
         state.conn,
@@ -1016,7 +1006,7 @@ fn load_ticket_dep_edges(
     state: &mut ExecutionState<'_>,
     step_id: &str,
 ) -> Result<Vec<(String, String)>> {
-    let provider = crate::workflow::item_provider::tickets::TicketsProvider;
+    let provider = crate::workflow::item_provider::tickets::TicketsProvider::new(None);
     crate::workflow::item_provider::ItemProvider::dependencies(
         &provider,
         state.conn,
@@ -1040,10 +1030,8 @@ fn collect_ticket_items(
     let ctx = crate::workflow::item_provider::ProviderContext {
         conn: state.conn,
         config: state.config,
-        repo_id: repo_id_owned.as_deref(),
-        worktree_id: None,
     };
-    let provider = crate::workflow::item_provider::tickets::TicketsProvider;
+    let provider = crate::workflow::item_provider::tickets::TicketsProvider::new(repo_id_owned);
     let items = crate::workflow::item_provider::ItemProvider::items(
         &provider,
         &ctx,
@@ -1076,10 +1064,11 @@ fn collect_worktree_items(
     let ctx = crate::workflow::item_provider::ProviderContext {
         conn: state.conn,
         config: state.config,
-        repo_id: repo_id_owned.as_deref(),
-        worktree_id: worktree_id_owned.as_deref(),
     };
-    let provider = crate::workflow::item_provider::worktrees::WorktreesProvider;
+    let provider = crate::workflow::item_provider::worktrees::WorktreesProvider::new(
+        repo_id_owned,
+        worktree_id_owned,
+    );
     let items = crate::workflow::item_provider::ItemProvider::items(
         &provider,
         &ctx,

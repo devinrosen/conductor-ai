@@ -216,8 +216,8 @@ pub fn execute_foreach(
 
     // Build provider context
     let provider_ctx = ProviderContext {
-        repo_id: state.worktree_ctx.repo_id.clone(),
-        worktree_id: state.worktree_ctx.worktree_id.clone(),
+        run_id: state.workflow_run_id.clone(),
+        step_id: step_id.clone(),
     };
 
     // Phase 1: Item collection
