@@ -1231,7 +1231,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         model: params.model.clone(),
         exec_config: rk_exec_config,
         inputs: merged_inputs,
-        parent_run_id,
+        parent_run_id: parent_run_id.clone(),
         depth: params.depth,
         target_label: params.target_label.clone(),
         step_results: HashMap::new(),
@@ -1274,6 +1274,38 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     let rk_result = engine
         .run(&rk_def, &mut rk_state)
         .map_err(|e| ConductorError::Workflow(e.to_string()))?;
+
+    // Close the parent agent run. It was created without a subprocess_pid (workflow
+    // parent runs never spawn a subprocess), so the orphan reaper would sweep it the
+    // moment the workflow_run becomes terminal unless we explicitly mark it done here.
+    {
+        let guard = shared_conn
+            .lock()
+            .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))?;
+        let agent_mgr = AgentManager::new(&*guard);
+        let summary = format!("Workflow '{}' completed", workflow.name);
+        if rk_result.all_succeeded {
+            if let Err(e) = agent_mgr.update_run_completed(
+                &parent_run_id,
+                None,
+                Some(&summary),
+                Some(rk_result.total_cost),
+                Some(rk_result.total_turns),
+                Some(rk_result.total_duration_ms),
+                Some(rk_result.total_input_tokens),
+                Some(rk_result.total_output_tokens),
+                Some(rk_result.total_cache_read_input_tokens),
+                Some(rk_result.total_cache_creation_input_tokens),
+            ) {
+                tracing::warn!("Failed to mark parent run {parent_run_id} completed: {e}");
+            }
+        } else if let Err(e) = agent_mgr.update_run_failed(
+            &parent_run_id,
+            &format!("Workflow '{}' failed", workflow.name),
+        ) {
+            tracing::warn!("Failed to mark parent run {parent_run_id} failed: {e}");
+        }
+    }
 
     Ok(WorkflowResult {
         workflow_run_id: rk_result.workflow_run_id,
