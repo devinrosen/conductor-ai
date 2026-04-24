@@ -19,6 +19,9 @@ struct InMemoryStore {
     fan_out_items: HashMap<String, FanOutItemRow>,
     /// Secondary index: (step_run_id, item_id) → fan_out_item id for O(1) idempotency check.
     fan_out_index: HashMap<(String, String), String>,
+    /// Insertion-order list of fan_out_item ids; used to return items in stable order
+    /// (mirrors real SQLite behaviour where rows sort by rowid = insertion order).
+    fan_out_order: Vec<String>,
 }
 
 /// In-memory implementation of `WorkflowPersistence` for test isolation.
@@ -37,6 +40,7 @@ impl InMemoryWorkflowPersistence {
                 steps: HashMap::new(),
                 fan_out_items: HashMap::new(),
                 fan_out_index: HashMap::new(),
+                fan_out_order: Vec::new(),
             }),
         }
     }
@@ -257,6 +261,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         }
         let id = ulid::Ulid::new().to_string();
         store.fan_out_index.insert(index_key, id.clone());
+        store.fan_out_order.push(id.clone());
         store.fan_out_items.insert(
             id.clone(),
             FanOutItemRow {
@@ -305,9 +310,12 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         status_filter: Option<FanOutItemStatus>,
     ) -> Result<Vec<FanOutItemRow>, EngineError> {
         let store = self.store.lock().map_err(|_| lock_err())?;
-        let mut items: Vec<FanOutItemRow> = store
-            .fan_out_items
-            .values()
+        // Iterate in insertion order (mirrors SQLite rowid order) so callers get a
+        // stable, deterministic sequence regardless of ULID timestamp collisions.
+        let items: Vec<FanOutItemRow> = store
+            .fan_out_order
+            .iter()
+            .filter_map(|id| store.fan_out_items.get(id))
             .filter(|i| {
                 i.step_run_id == step_run_id
                     && status_filter
@@ -316,7 +324,6 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             })
             .cloned()
             .collect();
-        items.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(items)
     }
 

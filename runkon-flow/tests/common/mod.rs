@@ -5,10 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use runkon_flow::cancellation::CancellationToken;
 use runkon_flow::dsl::{
-    AgentRef, ApprovalMode, CallNode, GateNode, GateType, OnTimeout, WorkflowDef, WorkflowNode,
-    WorkflowTrigger,
+    AgentRef, ApprovalMode, CallNode, ForEachNode, GateNode, GateType, OnChildFail, OnCycle,
+    OnTimeout, WorkflowDef, WorkflowNode, WorkflowTrigger,
 };
-use runkon_flow::engine::{ExecutionState, ResumeContext, WorktreeContext};
+use runkon_flow::engine::{
+    ChildWorkflowInput, ChildWorkflowRunner, ExecutionState, ResumeContext, WorktreeContext,
+};
 use runkon_flow::engine_error::EngineError;
 use runkon_flow::events::{EngineEventData, EventSink};
 use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
@@ -16,9 +18,10 @@ pub use runkon_flow::traits::action_executor::ActionExecutor;
 use runkon_flow::traits::action_executor::{
     ActionOutput, ActionParams, ActionRegistry, ExecutionContext,
 };
+use runkon_flow::traits::item_provider::{FanOutItem, ItemProvider, ProviderContext};
 use runkon_flow::traits::persistence::{NewRun, WorkflowPersistence};
 use runkon_flow::traits::script_env_provider::NoOpScriptEnvProvider;
-use runkon_flow::types::WorkflowExecConfig;
+use runkon_flow::types::{WorkflowExecConfig, WorkflowResult};
 use runkon_flow::ItemProviderRegistry;
 
 // ---------------------------------------------------------------------------
@@ -312,4 +315,158 @@ pub fn named_executors(
         .into_iter()
         .map(|e| (e.name().to_string(), e))
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// foreach test helpers
+// ---------------------------------------------------------------------------
+
+/// Mock child workflow runner.
+///
+/// Reads `params.inputs["item.id"]` to determine success from the pre-configured
+/// outcomes map. Records dispatch order in `call_log` for verification.
+pub struct MockChildRunner {
+    outcomes: HashMap<String, bool>,
+    pub call_log: Mutex<Vec<String>>,
+}
+
+impl MockChildRunner {
+    pub fn new(outcomes: HashMap<String, bool>) -> Self {
+        Self {
+            outcomes,
+            call_log: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Convenience: build a runner where every listed item_id succeeds.
+    pub fn all_succeed(item_ids: &[&str]) -> Self {
+        Self::new(item_ids.iter().map(|id| (id.to_string(), true)).collect())
+    }
+}
+
+impl ChildWorkflowRunner for MockChildRunner {
+    fn execute_child(
+        &self,
+        child_def: &WorkflowDef,
+        _parent_state: &ExecutionState,
+        params: ChildWorkflowInput,
+    ) -> runkon_flow::engine_error::Result<WorkflowResult> {
+        let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();
+        self.call_log.lock().unwrap().push(item_id.clone());
+        let succeeded = self.outcomes.get(&item_id).copied().unwrap_or(true);
+        Ok(WorkflowResult {
+            workflow_run_id: format!("mock-run-{}", item_id),
+            worktree_id: None,
+            workflow_name: child_def.name.clone(),
+            all_succeeded: succeeded,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+        })
+    }
+
+    fn resume_child(
+        &self,
+        _workflow_run_id: &str,
+        _model: Option<&str>,
+    ) -> runkon_flow::engine_error::Result<WorkflowResult> {
+        unimplemented!("MockChildRunner does not support resume_child")
+    }
+
+    fn find_resumable_child(
+        &self,
+        _parent_run_id: &str,
+        _workflow_name: &str,
+    ) -> runkon_flow::engine_error::Result<Option<runkon_flow::types::WorkflowRun>> {
+        Ok(None)
+    }
+}
+
+/// Mock item provider returning a fixed list of items.
+pub struct MockItemProvider {
+    name: String,
+    items: Vec<(String, String, String)>, // (item_type, item_id, item_ref)
+}
+
+impl MockItemProvider {
+    pub fn new(name: &str, items: Vec<(&str, &str, &str)>) -> Self {
+        Self {
+            name: name.to_string(),
+            items: items
+                .into_iter()
+                .map(|(t, i, r)| (t.to_string(), i.to_string(), r.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl ItemProvider for MockItemProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn items(
+        &self,
+        _ctx: &ProviderContext,
+        _scope: Option<&runkon_flow::dsl::ForeachScope>,
+        _filter: &HashMap<String, String>,
+        existing_set: &HashSet<String>,
+    ) -> Result<Vec<FanOutItem>, EngineError> {
+        Ok(self
+            .items
+            .iter()
+            .filter(|(_, id, _)| !existing_set.contains(id))
+            .map(|(t, i, r)| FanOutItem {
+                item_type: t.clone(),
+                item_id: i.clone(),
+                item_ref: r.clone(),
+            })
+            .collect())
+    }
+}
+
+/// Build a `ForEachNode` with the most common test parameters.
+pub fn foreach_node(
+    name: &str,
+    provider: &str,
+    workflow: &str,
+    max_parallel: u32,
+    on_child_fail: OnChildFail,
+) -> ForEachNode {
+    ForEachNode {
+        name: name.to_string(),
+        over: provider.to_string(),
+        scope: None,
+        filter: HashMap::new(),
+        ordered: false,
+        on_cycle: OnCycle::Fail,
+        max_parallel,
+        workflow: workflow.to_string(),
+        inputs: HashMap::new(),
+        on_child_fail,
+    }
+}
+
+/// Build an `ExecutionState` wired with a `MockChildRunner` and `MockItemProvider`.
+///
+/// Sets `fail_fast = false` so tests can inspect state after step failures.
+pub fn make_foreach_state(
+    wf_name: &str,
+    persistence: Arc<InMemoryWorkflowPersistence>,
+    child_runner: MockChildRunner,
+    provider: MockItemProvider,
+) -> ExecutionState {
+    let mut state = make_state(wf_name, Arc::clone(&persistence), HashMap::new());
+    state.child_runner = Some(Arc::new(child_runner));
+    state.exec_config.fail_fast = false;
+
+    let mut registry = ItemProviderRegistry::new();
+    registry.register(provider);
+    state.registry = Arc::new(registry);
+
+    state
 }
