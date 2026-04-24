@@ -249,11 +249,8 @@ pub fn execute_foreach(
         }
     }
 
-    let all_items = state
-        .persistence
-        .get_fan_out_items(&step_id, None)
-        .map_err(p_err)?;
-    let total_items = all_items.len();
+    let new_item_count = items.iter().filter(|(_, id, _)| !existing_set.contains(id)).count();
+    let total_items = existing_items.len() + new_item_count;
 
     tracing::info!(
         "foreach '{}': {} items to process (over={}, max_parallel={})",
