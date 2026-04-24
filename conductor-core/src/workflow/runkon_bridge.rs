@@ -217,10 +217,45 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         ectx: &runkon_flow::traits::action_executor::ExecutionContext,
         params: &runkon_flow::traits::action_executor::ActionParams,
     ) -> Result<runkon_flow::traits::action_executor::ActionOutput, EngineError> {
+        // The runtime (ClaudeAgentExecutor) expects an agent_runs row to exist with
+        // the run_id it receives. In the old conductor-core call executor this row was
+        // created by create_child_run() before dispatch. In the new runkon-flow path
+        // only a workflow_run_steps ID exists, so we create the agent_run here and
+        // use its ID as run_id. We also link it back to the step via child_run_id so
+        // the TUI can drill in while the agent is running.
+        let child_run_id = {
+            let conn = crate::db::open_database(&self.db_path)
+                .map_err(|e| EngineError::Workflow(e.to_string()))?;
+            let agent_mgr = crate::agent::AgentManager::new(&conn);
+            let child_run = agent_mgr
+                .create_child_run(
+                    ectx.worktree_id.as_deref(),
+                    &format!("Workflow step: {}", params.name),
+                    ectx.model.as_deref(),
+                    &ectx.parent_run_id,
+                    ectx.bot_name.as_deref(),
+                )
+                .map_err(|e| EngineError::Workflow(e.to_string()))?;
+
+            if !ectx.step_id.is_empty() {
+                let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+                if let Err(e) = wf_mgr.update_step_child_run_id(&ectx.step_id, &child_run.id) {
+                    tracing::warn!(
+                        "step '{}': failed to link child_run_id {}: {e}",
+                        params.name,
+                        child_run.id,
+                    );
+                }
+            }
+
+            child_run.id
+        };
+
         // Convert runkon-flow ExecutionContext → conductor-core ExecutionContext,
         // injecting db_path which exists only in the conductor-core variant.
+        // run_id is the freshly-created agent_run ID (not the workflow step ID).
         let core_ectx = crate::workflow::action_executor::ExecutionContext {
-            run_id: ectx.run_id.clone(),
+            run_id: child_run_id,
             working_dir: ectx.working_dir.clone(),
             repo_path: ectx.repo_path.clone(),
             db_path: self.db_path.clone(),

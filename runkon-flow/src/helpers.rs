@@ -4,6 +4,115 @@ use crate::status::WorkflowStepStatus;
 // Forward declaration for ExecutionState — defined in engine.rs
 use crate::engine::ExecutionState;
 
+// ---------------------------------------------------------------------------
+// Conductor output block parsing
+// ---------------------------------------------------------------------------
+
+/// Parsed `<<<CONDUCTOR_OUTPUT>>>` block.
+pub struct ConductorOutput {
+    pub markers: Vec<String>,
+    pub context: String,
+}
+
+/// Extract markers and context from a `<<<CONDUCTOR_OUTPUT>>> … <<<END_CONDUCTOR_OUTPUT>>>`
+/// block embedded in `text`. Returns `None` when no valid block is found.
+pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
+    const START: &str = "<<<CONDUCTOR_OUTPUT>>>";
+    const END: &str = "<<<END_CONDUCTOR_OUTPUT>>>";
+
+    // Find the last START marker that is immediately followed by `{` or whitespace
+    // (guards against occurrences inside JSON string values or code examples).
+    let start_pos = text
+        .rmatch_indices(START)
+        .find(|(pos, _)| {
+            let after = text[pos + START.len()..].trim_start();
+            after.starts_with('{') || after.starts_with('[')
+        })
+        .map(|(pos, _)| pos)?;
+
+    let after_start = &text[start_pos + START.len()..];
+    let end_pos = after_start.find(END)?;
+    let raw = after_start[..end_pos].trim();
+
+    // Strip optional markdown code fences (```json … ``` or ``` … ```)
+    let raw = if let Some(stripped) = raw.strip_prefix("```") {
+        let stripped = stripped.trim_start_matches(|c: char| c.is_alphanumeric());
+        stripped
+            .trim_start_matches('\n')
+            .trim_end_matches("```")
+            .trim()
+    } else {
+        raw
+    };
+
+    // Best-effort cleanup common in LLM output: trailing commas and bad escapes.
+    let cleaned = strip_trailing_commas(raw);
+    let cleaned = fix_backslash_escapes(&cleaned);
+
+    let value: serde_json::Value = serde_json::from_str(&cleaned)
+        .map_err(|e| {
+            tracing::warn!("parse_conductor_output: invalid JSON: {e}");
+        })
+        .ok()?;
+
+    let markers = value
+        .get("markers")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let context = value
+        .get("context")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Some(ConductorOutput { markers, context })
+}
+
+/// Strip trailing commas before `}` or `]` (common LLM JSON artifact).
+fn strip_trailing_commas(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == ',' {
+            let rest = chars.clone().skip_while(|ch| ch.is_whitespace()).next();
+            if matches!(rest, Some('}') | Some(']')) {
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Replace `\` followed by non-JSON-escape characters with `\\`.
+fn fix_backslash_escapes(s: &str) -> String {
+    const VALID: &[char] = &['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some(next) if VALID.contains(next) => {
+                    out.push('\\');
+                }
+                _ => {
+                    out.push('\\');
+                    out.push('\\');
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Build a human-readable summary of a workflow execution.
 pub fn build_workflow_summary(state: &ExecutionState) -> String {
     let steps = state

@@ -180,6 +180,25 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 duration_ms
             );
 
+            // Read stdout and parse the CONDUCTOR_OUTPUT block so markers like
+            // `has_code_changes` are available to downstream `if` conditions.
+            let stdout = output_file.as_ref().and_then(|p| {
+                std::fs::read_to_string(p)
+                    .map_err(|e| {
+                        tracing::warn!("script '{}': failed to read stdout: {e}", node.name)
+                    })
+                    .ok()
+            });
+            let (markers, context) = stdout
+                .as_deref()
+                .and_then(crate::helpers::parse_conductor_output)
+                .map(|out| (out.markers, out.context))
+                .unwrap_or_else(|| {
+                    let ctx = stdout.as_deref().unwrap_or("").chars().take(2000).collect();
+                    (vec![], ctx)
+                });
+
+            let markers_json = serde_json::to_string(&markers).unwrap_or_default();
             let output_file_path = output_file
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string());
@@ -192,8 +211,8 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                         status: WorkflowStepStatus::Completed,
                         child_run_id: None,
                         result_text: Some(format!("Script '{}' completed", node.name)),
-                        context_out: output_file_path.clone(),
-                        markers_out: None,
+                        context_out: Some(context.clone()),
+                        markers_out: Some(markers_json),
                         retry_count: Some(0),
                         structured_output: None,
                         step_error: None,
@@ -213,8 +232,8 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 None,
                 None,
                 None,
-                vec![],
-                String::new(),
+                markers,
+                context,
                 None,
                 iteration,
                 None,
