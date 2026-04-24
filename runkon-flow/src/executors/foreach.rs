@@ -249,7 +249,10 @@ pub fn execute_foreach(
         }
     }
 
-    let new_item_count = items.iter().filter(|(_, id, _)| !existing_set.contains(id)).count();
+    let new_item_count = items
+        .iter()
+        .filter(|(_, id, _)| !existing_set.contains(id))
+        .count();
     let total_items = existing_items.len() + new_item_count;
 
     tracing::info!(
