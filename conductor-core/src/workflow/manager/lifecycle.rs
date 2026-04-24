@@ -213,8 +213,10 @@ impl<'a> WorkflowManager<'a> {
     /// their child agent runs before marking the run itself as cancelled.
     ///
     /// Returns an error only if the run is not found or is already in a
-    /// terminal state (`completed`, `failed`, or `cancelled`).  Step and
-    /// child-run cancellation failures are silently ignored (best-effort).
+    /// terminal state (`completed`, `failed`, or `cancelled`).  Returns `Ok(())`
+    /// if the run is already `cancelling` (engine is mid-cleanup — idempotent
+    /// no-op).  Step and child-run cancellation failures are silently ignored
+    /// (best-effort).
     pub fn cancel_run(&self, run_id: &str, reason: &str) -> Result<()> {
         let run = self
             .get_workflow_run(run_id)?
@@ -228,6 +230,13 @@ impl<'a> WorkflowManager<'a> {
                 "Run {run_id} is already in terminal state: {}",
                 run.status
             )));
+        }
+
+        // Engine already set the run to Cancelling — cooperative cleanup is in
+        // progress. A second cancel_run() call would race the engine; return
+        // success without re-running the cancellation sequence.
+        if run.status == WorkflowRunStatus::Cancelling {
+            return Ok(());
         }
 
         let agent_mgr = AgentManager::new(self.conn);

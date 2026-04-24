@@ -556,8 +556,13 @@ pub fn themes_dir() -> PathBuf {
 /// Returns the log file path for a given agent run ID.
 ///
 /// Convention: `~/.conductor/agent-logs/{run_id}.log`
-pub fn agent_log_path(run_id: &str) -> PathBuf {
-    agent_log_dir().join(format!("{run_id}.log"))
+///
+/// Returns an error if `run_id` is not a valid ULID, preventing path traversal.
+pub fn agent_log_path(run_id: &str) -> Result<PathBuf> {
+    run_id
+        .parse::<ulid::Ulid>()
+        .map_err(|_| ConductorError::Agent(format!("invalid run_id: {run_id}")))?;
+    Ok(agent_log_dir().join(format!("{run_id}.log")))
 }
 
 impl Config {
@@ -1699,5 +1704,24 @@ bot_name = "my-bot"
         assert_eq!(rt.result_field.as_deref(), Some("output"));
         assert!(rt.binary.is_none());
         assert!(rt.api_key_env.is_none());
+    }
+
+    #[test]
+    fn agent_log_path_valid_ulid_returns_ok() {
+        let ulid = crate::new_id();
+        let path = super::agent_log_path(&ulid).expect("valid ULID should succeed");
+        assert!(path.to_string_lossy().ends_with(&format!("{ulid}.log")));
+    }
+
+    #[test]
+    fn agent_log_path_invalid_ulid_returns_error() {
+        let err = super::agent_log_path("../etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    #[test]
+    fn agent_log_path_path_traversal_rejected() {
+        let err = super::agent_log_path("../../secret").unwrap_err();
+        assert!(err.to_string().contains("invalid run_id"));
     }
 }

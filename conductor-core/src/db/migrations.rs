@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 79;
+pub const LATEST_SCHEMA_VERSION: u32 = 80;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1162,6 +1162,31 @@ pub fn run(conn: &Connection) -> Result<()> {
             })?;
         }
         bump_version(conn, 79)?;
+    }
+
+    // Migration 080: remove 'timed_out' from the workflow_runs.status CHECK constraint.
+    // No code path ever writes 'timed_out' to workflow_runs — the gate-step reaper
+    // marks only the step (WorkflowStepStatus::TimedOut) and transitions the run to
+    // Cancelled. Guard skips when the table is absent or already lacks 'timed_out'.
+    if version < 80 {
+        let still_has_timed_out: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_runs' AND sql LIKE '%timed_out%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if still_has_timed_out {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!(
+                    "migrations/080_workflow_run_drop_timed_out_status.sql"
+                ))?;
+                Ok(())
+            })?;
+        }
+        bump_version(conn, 80)?;
     }
 
     Ok(())

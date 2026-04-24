@@ -87,7 +87,7 @@ async fn wire_headless_drain(
     }
 
     let run_id_owned = run_id.to_owned();
-    let log_path = conductor_core::config::agent_log_path(&run_id_owned);
+    let log_path = conductor_core::config::agent_log_path(&run_id_owned).map_err(ApiError::Core)?;
     let events = state.events.clone();
     let db_path = state.db_path.clone();
     let run_id_for_panic = run_id_owned.clone();
