@@ -465,16 +465,8 @@ pub fn ordered_foreach_node(
     on_child_fail: OnChildFail,
 ) -> ForEachNode {
     ForEachNode {
-        name: name.to_string(),
-        over: provider.to_string(),
-        scope: None,
-        filter: HashMap::new(),
         ordered: true,
-        on_cycle: OnCycle::Fail,
-        max_parallel,
-        workflow: workflow.to_string(),
-        inputs: HashMap::new(),
-        on_child_fail,
+        ..foreach_node(name, provider, workflow, max_parallel, on_child_fail)
     }
 }
 
