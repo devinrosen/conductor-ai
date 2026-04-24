@@ -22,7 +22,7 @@ Do NOT flag:
 
 ## Scope constraint
 
-**Work from the git diff only — do NOT open or read source files.**
+**Work from the git diff only — do NOT open or read source files, and do NOT run any shell commands** (`cargo build`, `cargo test`, `grep`, `find`, or anything else). The diff is the only input you need.
 
 If a new `pub fn`, `pub struct`, or `pub enum` appears in `+` lines but no corresponding `#[test]`, `#[cfg(test)]`, or `#[tokio::test]` block appears anywhere in the same diff, flag it as missing a test — unless it meets the "Do NOT flag" criteria above.
 
