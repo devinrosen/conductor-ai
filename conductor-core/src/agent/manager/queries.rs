@@ -394,10 +394,7 @@ impl<'a> AgentManager<'a> {
         let run = self
             .get_run(run_id)?
             .ok_or_else(|| ConductorError::Agent(format!("agent run not found: {run_id}")))?;
-        match run.log_file {
-            Some(path) => Ok(PathBuf::from(path)),
-            None => crate::config::agent_log_path(run_id),
-        }
+        run.log_path()
     }
 }
 

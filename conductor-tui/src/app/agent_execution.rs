@@ -10,15 +10,6 @@ use crate::state::{InputAction, Modal, WorkflowPickerItem};
 
 use super::App;
 
-fn resolve_log_path(run: &AgentRun) -> Option<std::path::PathBuf> {
-    match run.log_file.as_deref() {
-        Some(path) => Some(std::path::PathBuf::from(path)),
-        None => conductor_core::config::agent_log_path(&run.id)
-            .map_err(|e| tracing::error!("invalid run_id {}: {e}", run.id))
-            .ok(),
-    }
-}
-
 impl App {
     pub(super) fn handle_toggle_agent_issues(&mut self) {
         let Some(repo) = self
@@ -562,8 +553,12 @@ impl App {
             });
 
             let run_id = run.id.clone();
-            let Some(log_path) = resolve_log_path(&run) else {
-                return;
+            let log_path = match run.log_path() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("invalid run_id {run_id}: {e}");
+                    return;
+                }
             };
             let tx2 = tx.clone();
             let (stdout, finish) = handle.into_drain_parts();
@@ -712,8 +707,12 @@ impl App {
             });
 
             let run_id = run.id.clone();
-            let Some(log_path) = resolve_log_path(&run) else {
-                return;
+            let log_path = match run.log_path() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("invalid run_id {run_id}: {e}");
+                    return;
+                }
             };
             let tx2 = tx.clone();
             let (stdout, finish) = handle.into_drain_parts();
@@ -828,8 +827,12 @@ impl App {
             });
 
             let new_run_id = new_run.id.clone();
-            let Some(log_path) = resolve_log_path(&new_run) else {
-                return;
+            let log_path = match new_run.log_path() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("invalid run_id {new_run_id}: {e}");
+                    return;
+                }
             };
             let tx2 = tx.clone();
             let (stdout, finish) = handle.into_drain_parts();

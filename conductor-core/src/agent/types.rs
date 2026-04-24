@@ -1,6 +1,9 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use super::status::{AgentRunStatus, FeedbackStatus, FeedbackType, StepStatus};
+use crate::error::Result;
 
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.
@@ -118,6 +121,17 @@ impl AgentRun {
             .as_ref()
             .map(|steps| steps.iter().filter(|s| !s.done).collect())
             .unwrap_or_default()
+    }
+
+    /// Returns the log file path for this run.
+    ///
+    /// Uses `log_file` when set; falls back to the default
+    /// `~/.conductor/agent-logs/{id}.log` (validated as a ULID) otherwise.
+    pub fn log_path(&self) -> Result<PathBuf> {
+        match self.log_file.as_deref() {
+            Some(path) => Ok(PathBuf::from(path)),
+            None => crate::config::agent_log_path(&self.id),
+        }
     }
 
     /// Build a resume prompt from the remaining plan steps.
