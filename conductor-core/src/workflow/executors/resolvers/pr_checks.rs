@@ -56,10 +56,11 @@ impl GateResolver for PrChecksGateResolver {
     }
 
     fn poll(&self, _run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll> {
-        if let Some(val) =
-            self.common
-                .run_gh(&["pr", "checks", "--json", "state"], params.bot_name.as_deref(), ctx)
-        {
+        if let Some(val) = self.common.run_gh(
+            &["pr", "checks", "--json", "state"],
+            params.bot_name.as_deref(),
+            ctx,
+        ) {
             return Ok(evaluate_checks(&val, &params.gate_name));
         }
         Ok(GatePoll::Pending)
