@@ -289,7 +289,10 @@ pub fn run_workflow_engine(
         state
             .inputs
             .insert("workflow_status".to_string(), workflow_status.to_string());
+        // Snapshot all_succeeded so the always block cannot change the terminal status.
+        let saved_all_succeeded = state.all_succeeded;
         let always_result = execute_nodes(state, &workflow.always, false);
+        state.all_succeeded = saved_all_succeeded;
         if let Err(ref e) = always_result {
             tracing::warn!("Always block error (non-fatal): {e}");
         }
