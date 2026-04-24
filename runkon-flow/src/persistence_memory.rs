@@ -262,13 +262,11 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
     fn insert_fan_out_item(
         &self,
         step_run_id: &str,
-        item_type: &str,
-        item_id: &str,
-        item_ref: &str,
+        item: &NewFanOutItem,
     ) -> Result<String, EngineError> {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
         // Idempotent: O(1) lookup via secondary index.
-        let index_key = (step_run_id.to_string(), item_id.to_string());
+        let index_key = (step_run_id.to_string(), item.item_id.to_string());
         if let Some(existing_id) = store.fan_out_index.get(&index_key) {
             return Ok(existing_id.clone());
         }
@@ -280,9 +278,9 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             FanOutItemRow {
                 id: id.clone(),
                 step_run_id: step_run_id.to_string(),
-                item_type: item_type.to_string(),
-                item_id: item_id.to_string(),
-                item_ref: item_ref.to_string(),
+                item_type: item.item_type.to_string(),
+                item_id: item.item_id.to_string(),
+                item_ref: item.item_ref.to_string(),
                 child_run_id: None,
                 status: "pending".to_string(),
                 dispatched_at: None,
@@ -486,8 +484,8 @@ mod tests {
     use super::*;
     use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
     use crate::traits::persistence::{
-        FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
-        WorkflowPersistence,
+        FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewFanOutItem, NewRun, NewStep,
+        StepUpdate, WorkflowPersistence,
     };
 
     fn make_new_run(name: &str) -> NewRun {
@@ -630,7 +628,14 @@ mod tests {
         let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
 
         let item_id = p
-            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .insert_fan_out_item(
+                &step_id,
+                &NewFanOutItem {
+                    item_type: "ticket".into(),
+                    item_id: "t-1".into(),
+                    item_ref: "ref-1".into(),
+                },
+            )
             .unwrap();
         assert!(!item_id.is_empty());
 
@@ -671,10 +676,24 @@ mod tests {
         let run = p.create_run(make_new_run("test")).unwrap();
         let step_id = p.insert_step(make_new_step(&run.id, "s")).unwrap();
 
-        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
-            .unwrap();
-        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
-            .unwrap();
+        p.insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "t-1".into(),
+                item_ref: "ref-1".into(),
+            },
+        )
+        .unwrap();
+        p.insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "t-1".into(),
+                item_ref: "ref-1".into(),
+            },
+        )
+        .unwrap();
 
         let items = p.get_fan_out_items(&step_id, None).unwrap();
         assert_eq!(items.len(), 1, "duplicate insert should be ignored");

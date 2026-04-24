@@ -164,6 +164,7 @@ fn dependencies_impl(
 mod tests {
     use super::*;
     use crate::test_helpers;
+    use crate::workflow::persistence::NewFanOutItem;
     use crate::workflow_dsl::WorktreeScope;
 
     #[test]
@@ -379,10 +380,24 @@ mod tests {
         let step_id = test_helpers::make_foreach_step(&conn);
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         wf_mgr
-            .insert_fan_out_item(&step_id, "worktree", "wt1", "wt1-slug")
+            .insert_fan_out_item(
+                &step_id,
+                &NewFanOutItem {
+                    item_type: "worktree".into(),
+                    item_id: "wt1".into(),
+                    item_ref: "wt1-slug".into(),
+                },
+            )
             .unwrap();
         wf_mgr
-            .insert_fan_out_item(&step_id, "worktree", "wt2", "wt2-slug")
+            .insert_fan_out_item(
+                &step_id,
+                &NewFanOutItem {
+                    item_type: "worktree".into(),
+                    item_id: "wt2".into(),
+                    item_ref: "wt2-slug".into(),
+                },
+            )
             .unwrap();
 
         let edges = WorktreesProvider

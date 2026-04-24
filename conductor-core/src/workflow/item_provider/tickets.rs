@@ -159,6 +159,7 @@ mod tests {
     use super::*;
     use crate::test_helpers;
     use crate::tickets::TicketSyncer;
+    use crate::workflow::persistence::NewFanOutItem;
 
     #[test]
     fn test_tickets_items_missing_repo_id_returns_error() {
@@ -381,10 +382,24 @@ mod tests {
         let step_id = test_helpers::make_foreach_step(&conn);
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         wf_mgr
-            .insert_fan_out_item(&step_id, "ticket", &id1, "1")
+            .insert_fan_out_item(
+                &step_id,
+                &NewFanOutItem {
+                    item_type: "ticket".into(),
+                    item_id: id1.clone(),
+                    item_ref: "1".into(),
+                },
+            )
             .unwrap();
         wf_mgr
-            .insert_fan_out_item(&step_id, "ticket", &id2, "2")
+            .insert_fan_out_item(
+                &step_id,
+                &NewFanOutItem {
+                    item_type: "ticket".into(),
+                    item_id: id2.clone(),
+                    item_ref: "2".into(),
+                },
+            )
             .unwrap();
 
         let edges = TicketsProvider

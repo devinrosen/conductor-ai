@@ -64,19 +64,13 @@ impl<'a> WorkflowManager<'a> {
 
     /// Insert a fan-out item row with status = 'pending'.
     /// Ignores duplicates (idempotent — safe to call on resume).
-    pub fn insert_fan_out_item(
-        &self,
-        step_run_id: &str,
-        item_type: &str,
-        item_id: &str,
-        item_ref: &str,
-    ) -> Result<String> {
+    pub fn insert_fan_out_item(&self, step_run_id: &str, item: &NewFanOutItem) -> Result<String> {
         let id = crate::new_id();
         self.conn.execute(
             "INSERT OR IGNORE INTO workflow_run_step_fan_out_items \
              (id, step_run_id, item_type, item_id, item_ref, status) \
              VALUES (:id, :step_run_id, :item_type, :item_id, :item_ref, 'pending')",
-            named_params![":id": id, ":step_run_id": step_run_id, ":item_type": item_type, ":item_id": item_id, ":item_ref": item_ref],
+            named_params![":id": id, ":step_run_id": step_run_id, ":item_type": item.item_type, ":item_id": item.item_id, ":item_ref": item.item_ref],
         )?;
         Ok(id)
     }

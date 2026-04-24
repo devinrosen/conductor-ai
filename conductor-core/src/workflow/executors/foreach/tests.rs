@@ -813,7 +813,14 @@ fn test_foreach_does_not_fail_item_on_first_failed_observation() {
         .unwrap();
 
     let item_id = wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", "ticket-1", "ticket-1")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-1".into(),
+                item_ref: "ticket-1".into(),
+            },
+        )
         .unwrap();
     wf_mgr
         .update_fan_out_item_running(&item_id, &child_run_id)
@@ -916,7 +923,14 @@ fn test_foreach_fails_item_after_two_consecutive_failed_observations() {
         .unwrap();
 
     let item_id = wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", "ticket-1", "ticket-1")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-1".into(),
+                item_ref: "ticket-1".into(),
+            },
+        )
         .unwrap();
     wf_mgr
         .update_fan_out_item_running(&item_id, &child_run_id)
@@ -1051,10 +1065,24 @@ fn test_load_worktree_dep_edges_basic() {
         .unwrap();
 
     wf_mgr
-        .insert_fan_out_item(&step_id, "worktree", "wt-1", "feat-1")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "worktree".into(),
+                item_id: "wt-1".into(),
+                item_ref: "feat-1".into(),
+            },
+        )
         .unwrap();
     wf_mgr
-        .insert_fan_out_item(&step_id, "worktree", "wt-2", "feat-2")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "worktree".into(),
+                item_id: "wt-2".into(),
+                item_ref: "feat-2".into(),
+            },
+        )
         .unwrap();
 
     let mut state = make_execution_state_with_worktree(
@@ -1109,10 +1137,24 @@ fn test_load_worktree_dep_edges_no_tickets() {
         .unwrap();
 
     wf_mgr
-        .insert_fan_out_item(&step_id, "worktree", "wt-a", "feat-a")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "worktree".into(),
+                item_id: "wt-a".into(),
+                item_ref: "feat-a".into(),
+            },
+        )
         .unwrap();
     wf_mgr
-        .insert_fan_out_item(&step_id, "worktree", "wt-b", "feat-b")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "worktree".into(),
+                item_id: "wt-b".into(),
+                item_ref: "feat-b".into(),
+            },
+        )
         .unwrap();
 
     let mut state = make_execution_state_with_worktree(
@@ -1193,13 +1235,34 @@ fn test_load_worktree_dep_edges_mixed_some_with_tickets() {
         .unwrap();
 
     wf_mgr
-        .insert_fan_out_item(&step_id, "worktree", "wt-1", "feat-dep")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "worktree".into(),
+                item_id: "wt-1".into(),
+                item_ref: "feat-dep".into(),
+            },
+        )
         .unwrap();
     wf_mgr
-        .insert_fan_out_item(&step_id, "worktree", "wt-2", "feat-blocker")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "worktree".into(),
+                item_id: "wt-2".into(),
+                item_ref: "feat-blocker".into(),
+            },
+        )
         .unwrap();
     wf_mgr
-        .insert_fan_out_item(&step_id, "worktree", "wt-3", "feat-no-ticket")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "worktree".into(),
+                item_id: "wt-3".into(),
+                item_ref: "feat-no-ticket".into(),
+            },
+        )
         .unwrap();
 
     let mut state = make_execution_state_with_worktree(
@@ -1262,10 +1325,24 @@ fn test_load_ticket_dep_edges_basic() {
         .unwrap();
 
     wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", &ticket1_id, "t1")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: ticket1_id.clone(),
+                item_ref: "t1".into(),
+            },
+        )
         .unwrap();
     wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", &ticket2_id, "t2")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: ticket2_id.clone(),
+                item_ref: "t2".into(),
+            },
+        )
         .unwrap();
 
     let mut state = make_execution_state_with_worktree(
@@ -1326,10 +1403,24 @@ fn test_load_ticket_dep_edges_no_deps() {
         .unwrap();
 
     wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", &ticket1_id, "nd1")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: ticket1_id.clone(),
+                item_ref: "nd1".into(),
+            },
+        )
         .unwrap();
     wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", &ticket2_id, "nd2")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: ticket2_id.clone(),
+                item_ref: "nd2".into(),
+            },
+        )
         .unwrap();
 
     let mut state = make_execution_state_with_worktree(
@@ -1388,10 +1479,24 @@ fn test_load_ticket_dep_edges_filters_external_blocker() {
 
     // t-ext is intentionally NOT in the fan-out.
     wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", &ticket_a_id, "ta")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: ticket_a_id.clone(),
+                item_ref: "ta".into(),
+            },
+        )
         .unwrap();
     wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", &ticket_b_id, "tb")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: ticket_b_id.clone(),
+                item_ref: "tb".into(),
+            },
+        )
         .unwrap();
 
     let mut state = make_execution_state_with_worktree(
@@ -1819,7 +1924,14 @@ fn test_foreach_resume_reuses_existing_step_and_resets_orphaned_items() {
 
     // Insert an orphaned item: running, no child_run_id.
     let orphan_item_id = wf_mgr
-        .insert_fan_out_item(&old_step_id, "ticket", "ticket-orphan", "orphan")
+        .insert_fan_out_item(
+            &old_step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-orphan".into(),
+                item_ref: "orphan".into(),
+            },
+        )
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_step_fan_out_items SET status = 'running' WHERE id = ?1",
@@ -1894,7 +2006,14 @@ fn test_foreach_resume_preserves_running_items_with_child_run_id() {
 
     // Item with child_run_id: must remain running after the call.
     let item_with_child = wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", "ticket-live", "live")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-live".into(),
+                item_ref: "live".into(),
+            },
+        )
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_step_fan_out_items \
@@ -1905,7 +2024,14 @@ fn test_foreach_resume_preserves_running_items_with_child_run_id() {
 
     // Orphaned item: no child_run_id — should be reset.
     let orphan = wf_mgr
-        .insert_fan_out_item(&step_id, "ticket", "ticket-orphan", "orphan")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-orphan".into(),
+                item_ref: "orphan".into(),
+            },
+        )
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_step_fan_out_items SET status = 'running' WHERE id = ?1",

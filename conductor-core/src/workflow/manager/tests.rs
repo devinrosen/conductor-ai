@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::AgentManager;
 use crate::db::sql_placeholders;
+use crate::workflow::persistence::NewFanOutItem;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{TimeGranularity, WorkflowRun};
 use crate::workflow_dsl::GateType;
@@ -3716,8 +3717,15 @@ fn test_get_fan_out_items_checked_returns_items_for_correct_run() {
     let step_id = mgr
         .insert_step(&run.id, "fan-step", "actor", false, 0, 0)
         .unwrap();
-    mgr.insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
-        .unwrap();
+    mgr.insert_fan_out_item(
+        &step_id,
+        &NewFanOutItem {
+            item_type: "ticket".into(),
+            item_id: "t1".into(),
+            item_ref: "TICKET-1".into(),
+        },
+    )
+    .unwrap();
 
     let items = mgr
         .get_fan_out_items_checked(&run.id, &step_id, None)
@@ -3784,12 +3792,33 @@ fn test_skip_fan_out_items_by_item_ids_marks_subset_skipped() {
         .unwrap();
 
     // Insert three pending items.
-    mgr.insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
-        .unwrap();
-    mgr.insert_fan_out_item(&step_id, "ticket", "t2", "TICKET-2")
-        .unwrap();
-    mgr.insert_fan_out_item(&step_id, "ticket", "t3", "TICKET-3")
-        .unwrap();
+    mgr.insert_fan_out_item(
+        &step_id,
+        &NewFanOutItem {
+            item_type: "ticket".into(),
+            item_id: "t1".into(),
+            item_ref: "TICKET-1".into(),
+        },
+    )
+    .unwrap();
+    mgr.insert_fan_out_item(
+        &step_id,
+        &NewFanOutItem {
+            item_type: "ticket".into(),
+            item_id: "t2".into(),
+            item_ref: "TICKET-2".into(),
+        },
+    )
+    .unwrap();
+    mgr.insert_fan_out_item(
+        &step_id,
+        &NewFanOutItem {
+            item_type: "ticket".into(),
+            item_id: "t3".into(),
+            item_ref: "TICKET-3".into(),
+        },
+    )
+    .unwrap();
 
     // Skip only t1 and t3.
     mgr.skip_fan_out_items_by_item_ids(&step_id, &["t1".to_string(), "t3".to_string()])
@@ -3825,7 +3854,14 @@ fn test_skip_fan_out_items_by_item_ids_ignores_non_pending() {
 
     // Insert one item then mark it running (simulates an in-flight dispatch).
     let fan_item_db_id = mgr
-        .insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "t1".into(),
+                item_ref: "TICKET-1".into(),
+            },
+        )
         .unwrap();
     mgr.update_fan_out_item_running(&fan_item_db_id, "child-run-1")
         .unwrap();
@@ -3850,8 +3886,15 @@ fn test_skip_fan_out_items_by_item_ids_empty_list_is_noop() {
     let step_id = mgr
         .insert_step(&run.id, "fan-step", "actor", false, 0, 0)
         .unwrap();
-    mgr.insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
-        .unwrap();
+    mgr.insert_fan_out_item(
+        &step_id,
+        &NewFanOutItem {
+            item_type: "ticket".into(),
+            item_id: "t1".into(),
+            item_ref: "TICKET-1".into(),
+        },
+    )
+    .unwrap();
 
     // Empty slice must be a no-op (not a panic or SQL error).
     mgr.skip_fan_out_items_by_item_ids(&step_id, &[]).unwrap();
@@ -4139,7 +4182,14 @@ fn test_reset_running_items_without_child_run() {
 
     // Item A: running, no child_run_id — should be reset to pending.
     let item_a = mgr
-        .insert_fan_out_item(&step_id, "ticket", "ticket-a", "a")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-a".into(),
+                item_ref: "a".into(),
+            },
+        )
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_step_fan_out_items SET status = 'running' WHERE id = ?1",
@@ -4149,7 +4199,14 @@ fn test_reset_running_items_without_child_run() {
 
     // Item B: running, WITH child_run_id — must NOT be reset.
     let item_b = mgr
-        .insert_fan_out_item(&step_id, "ticket", "ticket-b", "b")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-b".into(),
+                item_ref: "b".into(),
+            },
+        )
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_step_fan_out_items \
@@ -4160,12 +4217,26 @@ fn test_reset_running_items_without_child_run() {
 
     // Item C: pending — must NOT be changed.
     let item_c = mgr
-        .insert_fan_out_item(&step_id, "ticket", "ticket-c", "c")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-c".into(),
+                item_ref: "c".into(),
+            },
+        )
         .unwrap();
 
     // Item D: completed — must NOT be changed.
     let item_d = mgr
-        .insert_fan_out_item(&step_id, "ticket", "ticket-d", "d")
+        .insert_fan_out_item(
+            &step_id,
+            &NewFanOutItem {
+                item_type: "ticket".into(),
+                item_id: "ticket-d".into(),
+                item_ref: "d".into(),
+            },
+        )
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_step_fan_out_items SET status = 'completed' WHERE id = ?1",

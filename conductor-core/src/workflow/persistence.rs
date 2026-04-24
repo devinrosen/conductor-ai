@@ -155,9 +155,7 @@ pub trait WorkflowPersistence: Send + Sync {
     fn insert_fan_out_item(
         &self,
         step_run_id: &str,
-        item_type: &str,
-        item_id: &str,
-        item_ref: &str,
+        item: &NewFanOutItem,
     ) -> Result<String, EngineError>;
     fn insert_fan_out_items_batch(
         &self,
