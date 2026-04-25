@@ -46,9 +46,7 @@ pub struct WorktreeContext {
 
 /// Pre-loaded context for resuming a workflow run.
 pub struct ResumeContext {
-    /// Step keys to skip (e.g. `("lint", 0)`).
-    pub skip_completed: HashSet<StepKey>,
-    /// Completed step records keyed by step key, for O(1) restore.
+    /// Completed step records keyed by step key, for O(1) skip check and restore.
     pub step_map: HashMap<StepKey, WorkflowRunStep>,
 }
 
@@ -707,8 +705,8 @@ pub fn handle_on_fail(
 /// Check whether a step should be skipped on resume.
 pub fn should_skip(state: &ExecutionState, step_name: &str, iteration: u32) -> bool {
     state.resume_ctx.as_ref().is_some_and(|ctx| {
-        ctx.skip_completed
-            .contains(&(step_name.to_owned(), iteration))
+        ctx.step_map
+            .contains_key(&(step_name.to_owned(), iteration))
     })
 }
 

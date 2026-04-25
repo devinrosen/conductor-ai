@@ -208,7 +208,7 @@ pub fn make_state(
 
 /// Wrap `make_state` and set `resume_ctx` to signal a workflow resume.
 ///
-/// The `skip_completed` set is empty so all steps execute normally — tests that
+/// The `step_map` is empty so all steps execute normally — tests that
 /// need skipping behaviour should populate it directly after calling this helper.
 pub fn make_state_with_resume_ctx(
     wf_name: &str,
@@ -217,7 +217,6 @@ pub fn make_state_with_resume_ctx(
 ) -> ExecutionState {
     let mut state = make_state(wf_name, persistence, named_executors);
     state.resume_ctx = Some(ResumeContext {
-        skip_completed: HashSet::new(),
         step_map: HashMap::new(),
     });
     state

@@ -156,10 +156,11 @@ impl FlowEngine {
         def: &WorkflowDef,
         state: &mut ExecutionState,
     ) -> crate::engine_error::Result<WorkflowResult> {
-        debug_assert!(
-            state.resume_ctx.is_none(),
-            "resume() requires resume_ctx to be None on entry"
-        );
+        if state.resume_ctx.is_some() {
+            return Err(EngineError::Workflow(
+                "resume() requires resume_ctx to be None on entry".to_string(),
+            ));
+        }
         let steps = state
             .persistence
             .get_steps(&state.workflow_run_id)
@@ -169,20 +170,13 @@ impl FlowEngine {
                     state.workflow_run_id
                 ))
             })?;
-        let (step_map, skip_completed): (HashMap<_, _>, HashSet<_>) = steps
+        let step_map: HashMap<_, _> = steps
             .into_iter()
             .filter(|s| s.status == crate::status::WorkflowStepStatus::Completed)
-            .fold((HashMap::new(), HashSet::new()), |(mut map, mut set), s| {
-                let key = (s.step_name.clone(), s.iteration as u32);
-                set.insert(key.clone());
-                map.insert(key, s);
-                (map, set)
-            });
-        if !skip_completed.is_empty() {
-            state.resume_ctx = Some(crate::engine::ResumeContext {
-                skip_completed,
-                step_map,
-            });
+            .map(|s| ((s.step_name.clone(), s.iteration as u32), s))
+            .collect();
+        if !step_map.is_empty() {
+            state.resume_ctx = Some(crate::engine::ResumeContext { step_map });
         }
         self.run(def, state)
     }
@@ -1927,6 +1921,27 @@ mod tests {
         assert!(
             msg.contains("run-123"),
             "error should contain the run ID; got: {msg}"
+        );
+    }
+
+    // AC: resume() returns Err when called with a pre-seeded resume_ctx.
+    #[test]
+    fn resume_rejects_pre_seeded_resume_ctx() {
+        use crate::engine::ResumeContext;
+        use std::collections::HashMap;
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha")]);
+        let mut state = make_bare_state("wf");
+        state.resume_ctx = Some(ResumeContext {
+            step_map: HashMap::new(),
+        });
+        state.workflow_run_id = "run-precond".to_string();
+
+        let err = engine.resume(&def, &mut state).unwrap_err();
+        assert!(
+            err.to_string().contains("resume_ctx"),
+            "error should mention resume_ctx; got: {err}"
         );
     }
 

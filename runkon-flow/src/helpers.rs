@@ -245,8 +245,8 @@ pub fn collect_leaf_step_keys(node: &WorkflowNode) -> Vec<String> {
 /// while loop. Returns the max iteration that has all body nodes completed,
 /// so the loop resumes from the iteration where it failed.
 pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNode) -> u32 {
-    let skip_set = match state.resume_ctx {
-        Some(ref ctx) => &ctx.skip_completed,
+    let step_map = match state.resume_ctx {
+        Some(ref ctx) => &ctx.step_map,
         None => return 0,
     };
 
@@ -262,7 +262,7 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
     loop {
         let all_done = body_keys
             .iter()
-            .all(|k| skip_set.contains(&(k.clone(), iter)));
+            .all(|k| step_map.contains_key(&(k.clone(), iter)));
         if !all_done {
             break;
         }

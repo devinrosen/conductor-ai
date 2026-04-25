@@ -981,7 +981,7 @@ impl<'a> WorkflowManager<'a> {
 
     /// Return the set of completed step keys as `(step_name, iteration)` pairs.
     ///
-    /// Used to build the skip set for resume.
+    /// Used by the `--from-step` resume path to identify already-completed steps.
     pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
         let steps = self.get_workflow_steps(workflow_run_id)?;
         Ok(crate::workflow::engine::completed_keys_from_steps(&steps))

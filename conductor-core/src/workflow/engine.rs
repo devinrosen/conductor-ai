@@ -230,8 +230,8 @@ pub(super) fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<O
 
 /// Extract completed step keys from a slice of step records.
 ///
-/// Used by [`WorkflowManager::get_completed_step_keys`] for skip-set construction
-/// and by tests that verify resumption behaviour.
+/// Used by [`WorkflowManager::get_completed_step_keys`] and by tests that
+/// verify resumption behaviour.
 pub(super) fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<StepKey> {
     steps
         .iter()
@@ -1388,9 +1388,6 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             wf_run.id
         ))
     })?;
-    let workflow: WorkflowDef = serde_json::from_str(snapshot).map_err(|e| {
-        ConductorError::Workflow(format!("Failed to deserialize workflow snapshot: {e}"))
-    })?;
 
     // Determine execution paths based on target type.
     // - Worktree run: look up worktree and derive repo from it.
@@ -1497,7 +1494,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     tracing::info!(
         "Resuming workflow '{}' (run {}), {} completed steps to skip",
-        workflow.name,
+        wf_run.workflow_name,
         wf_run.id,
         skip_count,
     );
@@ -1541,7 +1538,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             Arc::clone(&shared_conn),
         ));
 
-    let workflow_name_for_resolver = workflow.name.clone();
+    let workflow_name_for_resolver = wf_run.workflow_name.clone();
     #[allow(clippy::type_complexity)]
     let schema_resolver: Arc<
         dyn Fn(
@@ -1569,7 +1566,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         action_registry,
         script_env_provider,
         workflow_run_id: wf_run.id.clone(),
-        workflow_name: workflow.name.clone(),
+        workflow_name: wf_run.workflow_name.clone(),
         worktree_ctx: runkon_flow::engine::WorktreeContext {
             worktree_id: wf_run.worktree_id.clone(),
             working_dir: worktree_path.clone(),
@@ -1622,12 +1619,15 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     .map_err(|e| {
         ConductorError::Workflow(format!(
             "failed to build engine for '{}': {e}",
-            workflow.name
+            wf_run.workflow_name
         ))
     })?;
 
     let rk_result = engine.resume(&rk_def, &mut rk_state).map_err(|e| {
-        ConductorError::Workflow(format!("workflow '{}' resume failed: {e}", workflow.name))
+        ConductorError::Workflow(format!(
+            "workflow '{}' resume failed: {e}",
+            wf_run.workflow_name
+        ))
     })?;
 
     Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
