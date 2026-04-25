@@ -1186,9 +1186,12 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.extra_plugin_dirs.clone(),
     );
 
-    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
-        super::runkon_bridge::ConductorChildWorkflowRunner::new(db.clone(), config.clone(), Arc::clone(&shared_conn)),
-    );
+    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
+        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
+            db.clone(),
+            config.clone(),
+            Arc::clone(&shared_conn),
+        ));
 
     let workflow_name_for_resolver = workflow.name.clone();
     #[allow(clippy::type_complexity)]
@@ -1550,7 +1553,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         .filter(|s| s.status == WorkflowStepStatus::Completed)
         .map(|s| {
             let key = (s.step_name.clone(), s.iteration as u32);
-            let rk_step = super::persistence_sqlite::rk_conv::step_to_rk(s);
+            let rk_step = super::rk_types::step_to_rk(s);
             (key, rk_step)
         })
         .filter(|(key, _)| skip_completed.contains(key))
@@ -1583,15 +1586,14 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     let raw_conn = crate::db::open_database(&db)?;
     let shared_conn = Arc::new(std::sync::Mutex::new(raw_conn));
 
-    let rk_def: runkon_flow::dsl::WorkflowDef =
-        serde_json::from_str(snapshot).map_err(|e| {
-            ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
-        })?;
+    let rk_def: runkon_flow::dsl::WorkflowDef = serde_json::from_str(snapshot).map_err(|e| {
+        ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
+    })?;
 
     let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
-        super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(
-            Arc::clone(&shared_conn),
-        ),
+        super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
+            &shared_conn,
+        )),
     );
 
     let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
@@ -1606,14 +1608,15 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         wf_run.repo_id.clone(),
     ));
 
-    let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(
-        input.conductor_bin_dir.clone(),
-        vec![],
-    );
+    let script_env_provider =
+        super::runkon_bridge::build_rk_script_env_provider(input.conductor_bin_dir.clone(), vec![]);
 
-    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
-        super::runkon_bridge::ConductorChildWorkflowRunner::new(db.clone(), config.clone(), Arc::clone(&shared_conn)),
-    );
+    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
+        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
+            db.clone(),
+            config.clone(),
+            Arc::clone(&shared_conn),
+        ));
 
     let workflow_name_for_resolver = workflow.name.clone();
     #[allow(clippy::type_complexity)]

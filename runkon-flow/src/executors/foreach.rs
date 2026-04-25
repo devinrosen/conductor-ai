@@ -19,10 +19,7 @@ use crate::traits::persistence::{
 };
 use crate::traits::script_env_provider::ScriptEnvProvider;
 
-#[inline]
-fn p_err(e: EngineError) -> EngineError {
-    EngineError::Persistence(e.to_string())
-}
+use super::p_err;
 
 /// Shared parent-state snapshot captured before thread spawning.
 ///

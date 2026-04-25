@@ -1797,6 +1797,17 @@ pub async fn resume_workflow_endpoint(
     ))
 }
 
+fn find_waiting_gate_or_err(
+    mgr: &WorkflowManager<'_>,
+    run_id: &str,
+) -> Result<WorkflowRunStep, ApiError> {
+    mgr.find_waiting_gate(run_id)?.ok_or_else(|| {
+        ApiError::Core(ConductorError::Workflow(
+            "No waiting gate found for this workflow run".to_string(),
+        ))
+    })
+}
+
 #[utoipa::path(
     post,
     path = "/api/workflows/runs/{id}/gate/approve",
@@ -1819,11 +1830,7 @@ pub async fn approve_gate(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
 
-    let step = mgr.find_waiting_gate(&id)?.ok_or_else(|| {
-        ApiError::Core(ConductorError::Workflow(
-            "No waiting gate found for this workflow run".to_string(),
-        ))
-    })?;
+    let step = find_waiting_gate_or_err(&mgr, &id)?;
 
     mgr.approve_gate(
         &step.id,
@@ -1866,11 +1873,7 @@ pub async fn reject_gate(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
 
-    let step = mgr.find_waiting_gate(&id)?.ok_or_else(|| {
-        ApiError::Core(ConductorError::Workflow(
-            "No waiting gate found for this workflow run".to_string(),
-        ))
-    })?;
+    let step = find_waiting_gate_or_err(&mgr, &id)?;
 
     mgr.reject_gate(&step.id, "user", None)?;
 

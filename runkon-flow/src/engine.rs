@@ -428,30 +428,8 @@ pub fn execute_nodes(
         if state.cancellation.is_cancelled() {
             return state.cancellation.error_if_cancelled();
         }
-        // Cross-process: DB polling for Cancelling status written by another process.
-        match state.persistence.is_run_cancelled(&state.workflow_run_id) {
-            Ok(true) => {
-                tracing::info!(
-                    "Workflow run {} cancelled externally, stopping execution",
-                    state.workflow_run_id
-                );
-                state
-                    .cancellation
-                    .cancel(CancellationReason::UserRequested(None));
-                return Err(EngineError::Cancelled(CancellationReason::UserRequested(
-                    None,
-                )));
-            }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!(
-                    "Database error during cancellation check for workflow run {}: {}",
-                    state.workflow_run_id,
-                    e
-                );
-            }
-        }
-        // Throttled heartbeat tick — write at most once every 5 seconds.
+        // Throttled cancel check + heartbeat tick — both hit the DB, so gate them together
+        // at most once every 5 seconds using the existing heartbeat timestamp.
         {
             let now_secs = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -460,6 +438,29 @@ pub fn execute_nodes(
             let last = state.last_heartbeat_at.load(Ordering::Relaxed);
             if now_secs - last >= 5 {
                 state.last_heartbeat_at.store(now_secs, Ordering::Relaxed);
+                // Cross-process: DB polling for Cancelling status written by another process.
+                match state.persistence.is_run_cancelled(&state.workflow_run_id) {
+                    Ok(true) => {
+                        tracing::info!(
+                            "Workflow run {} cancelled externally, stopping execution",
+                            state.workflow_run_id
+                        );
+                        state
+                            .cancellation
+                            .cancel(CancellationReason::UserRequested(None));
+                        return Err(EngineError::Cancelled(CancellationReason::UserRequested(
+                            None,
+                        )));
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            "Database error during cancellation check for workflow run {}: {}",
+                            state.workflow_run_id,
+                            e
+                        );
+                    }
+                }
                 if let Err(e) = state.persistence.tick_heartbeat(&state.workflow_run_id) {
                     tracing::warn!("tick_heartbeat failed (non-fatal): {e}");
                 }

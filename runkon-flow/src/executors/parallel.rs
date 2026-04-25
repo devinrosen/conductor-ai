@@ -9,10 +9,7 @@ use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContex
 use crate::traits::persistence::{NewStep, StepUpdate};
 use crate::types::{ContextEntry, StepResult};
 
-#[inline]
-fn p_err(e: EngineError) -> EngineError {
-    EngineError::Persistence(e.to_string())
-}
+use super::p_err;
 
 pub fn execute_parallel(
     state: &mut ExecutionState,
@@ -80,11 +77,15 @@ pub fn execute_parallel(
             .transpose()?;
         let effective_schema = call_schema.as_ref().or(block_schema.as_ref()).cloned();
 
-        // Combine block-level `with` + per-call `with` additions
-        let mut effective_with = node.with.clone();
-        if let Some(extra) = node.call_with.get(&i.to_string()) {
-            effective_with.extend(extra.iter().cloned());
-        }
+        // Combine block-level `with` + per-call `with` additions. Only clone when
+        // there are per-call extras to avoid N × snippet_total allocations.
+        let effective_with = if let Some(extra) = node.call_with.get(&i.to_string()) {
+            let mut w = node.with.clone();
+            w.extend(extra.iter().cloned());
+            w
+        } else {
+            node.with.clone()
+        };
 
         call_inputs.push((i, agent_step_key.clone(), effective_schema, effective_with));
     }
@@ -93,6 +94,16 @@ pub fn execute_parallel(
     // the dispatch queue. All records are created before any thread is spawned so the DB
     // reflects the full parallel block immediately (important for UI and resume).
     let mut dispatch_queue: Vec<DispatchInput> = Vec::new();
+
+    // Build the variable map once — state doesn't change between branches so there is
+    // no need to re-serialize state.contexts for every parallel branch.
+    let shared_inputs: std::collections::HashMap<String, String> = {
+        let var_map = crate::prompt_builder::build_variable_map(state);
+        var_map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    };
 
     // Parallel-scope token: child of the run root. Cancelling it signals running branches
     // to exit early when fail_fast fires.
@@ -163,15 +174,9 @@ pub fn execute_parallel(
                 iteration: iteration as i64,
                 retry_count: Some(0),
             })
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
-        let inputs: std::collections::HashMap<String, String> = {
-            let var_map = crate::prompt_builder::build_variable_map(state);
-            var_map
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect()
-        };
+        let inputs = shared_inputs.clone();
 
         let ectx = ExecutionContext {
             run_id: step_id.clone(),
@@ -231,7 +236,12 @@ pub fn execute_parallel(
                         &dispatch_input.params,
                     )
                 }))
-                .unwrap_or_else(|_| Err(EngineError::Workflow("executor panicked".to_string())))
+                .unwrap_or_else(|_| {
+                    Err(EngineError::Workflow(format!(
+                        "executor '{}' panicked",
+                        dispatch_input.params.name
+                    )))
+                })
             };
             let _ = tx.send((dispatch_input.step_id, dispatch_input.agent_name, result));
         });

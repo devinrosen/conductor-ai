@@ -5,16 +5,13 @@ use crate::engine::{
     record_step_failure, record_step_skipped, record_step_success, restore_step, should_skip,
     ExecutionState,
 };
-use crate::engine_error::{EngineError, Result};
+use crate::engine_error::Result;
 use crate::prompt_builder::build_variable_map;
 use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::{NewStep, StepUpdate};
 use crate::traits::run_context::RunContext;
 
-#[inline]
-fn p_err(e: EngineError) -> EngineError {
-    EngineError::Persistence(e.to_string())
-}
+use super::p_err;
 
 pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: u32) -> Result<()> {
     let pos = state.position;
@@ -536,5 +533,35 @@ mod tests {
             .and_then(|m| serde_json::from_str(m).ok())
             .unwrap_or_default();
         assert!(markers.is_empty(), "no markers expected for plain stdout");
+    }
+
+    /// When state.inputs contains a key with invalid env-var characters (e.g. `=`),
+    /// that key must be silently dropped while a valid key is still injected.
+    #[test]
+    fn invalid_env_var_key_is_dropped_valid_key_is_injected() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+
+        // One valid key and one invalid key (contains `=`).
+        state
+            .inputs
+            .insert("VALID_KEY".to_string(), "hello".to_string());
+        state
+            .inputs
+            .insert("INVALID=KEY".to_string(), "world".to_string());
+
+        // The script prints the value of the env var for the valid key and exits 0.
+        let node = make_node("env_test", "echo $CONDUCTOR_VALID_KEY");
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+        let ctx = step.context_out.as_deref().unwrap_or("");
+        assert!(
+            ctx.contains("hello"),
+            "valid key should be injected as CONDUCTOR_VALID_KEY; context: {ctx:?}"
+        );
     }
 }

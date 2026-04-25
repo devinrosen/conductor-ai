@@ -565,7 +565,11 @@ impl ConductorChildWorkflowRunner {
         config: crate::config::Config,
         conn: Arc<Mutex<rusqlite::Connection>>,
     ) -> Self {
-        Self { db_path, config, conn }
+        Self {
+            db_path,
+            config,
+            conn,
+        }
     }
 }
 
@@ -584,7 +588,12 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             &parent_state.worktree_ctx.repo_path,
             &child_def.name,
         )
-        .map_err(|e| EngineError::Workflow(e.to_string()))?;
+        .map_err(|e| {
+            EngineError::Workflow(format!(
+                "failed to load sub-workflow '{}': {e}",
+                child_def.name
+            ))
+        })?;
 
         let exec_config = crate::workflow::types::WorkflowExecConfig {
             poll_interval: parent_state.exec_config.poll_interval,
@@ -634,8 +643,12 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         workflow_run_id: &str,
         model: Option<&str>,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
-        let conn = crate::db::open_database(&self.db_path)
-            .map_err(|e| EngineError::Workflow(e.to_string()))?;
+        let conn = crate::db::open_database(&self.db_path).map_err(|e| {
+            EngineError::Workflow(format!(
+                "failed to open database at {}: {e}",
+                self.db_path.display()
+            ))
+        })?;
 
         let input = crate::workflow::types::WorkflowResumeInput {
             conn: &conn,
@@ -670,7 +683,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             .find_resumable_child_run(parent_run_id, workflow_name)
             .map_err(|e| EngineError::Workflow(e.to_string()))?;
 
-        Ok(core_run.map(crate::workflow::persistence_sqlite::rk_conv::run_to_rk))
+        Ok(core_run.map(crate::workflow::rk_types::run_to_rk))
     }
 }
 
@@ -802,28 +815,28 @@ mod tests {
     #[test]
     fn status_completed_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Completed);
-        let rk = crate::workflow::persistence_sqlite::rk_conv::run_to_rk(run);
+        let rk = crate::workflow::rk_types::run_to_rk(run);
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Completed);
     }
 
     #[test]
     fn status_failed_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Failed);
-        let rk = crate::workflow::persistence_sqlite::rk_conv::run_to_rk(run);
+        let rk = crate::workflow::rk_types::run_to_rk(run);
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Failed);
     }
 
     #[test]
     fn status_running_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Running);
-        let rk = crate::workflow::persistence_sqlite::rk_conv::run_to_rk(run);
+        let rk = crate::workflow::rk_types::run_to_rk(run);
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Running);
     }
 
     #[test]
     fn blocked_on_none_maps_to_none() {
         let run = make_core_run("r1", CoreStatus::Completed);
-        let rk = crate::workflow::persistence_sqlite::rk_conv::run_to_rk(run);
+        let rk = crate::workflow::rk_types::run_to_rk(run);
         assert!(rk.blocked_on.is_none());
     }
 

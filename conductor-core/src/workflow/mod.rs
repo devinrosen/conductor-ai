@@ -27,6 +27,7 @@ pub mod persistence;
 pub(crate) mod persistence_memory;
 pub mod persistence_sqlite;
 pub(crate) mod prompt_builder;
+pub(crate) mod rk_types;
 pub(crate) mod run_context;
 pub(crate) mod runkon_bridge;
 pub(crate) mod script_env_provider;
