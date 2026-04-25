@@ -830,4 +830,69 @@ mod tests {
         assert_eq!(core.iteration, 2);
         assert_eq!(core.retry_count, Some(1));
     }
+
+    // ---------------------------------------------------------------------------
+    // step_update_to_core — all 7 fields (guards transposition)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn step_update_to_core_maps_all_fields() {
+        use runkon_flow::status::WorkflowStepStatus as RkStepStatus;
+        let rk = RkStepUpdate {
+            status: RkStepStatus::Failed,
+            child_run_id: Some("child-1".to_string()),
+            result_text: Some("result".to_string()),
+            context_out: Some("ctx".to_string()),
+            markers_out: Some("markers".to_string()),
+            retry_count: Some(2),
+            structured_output: Some(r#"{"key":"val"}"#.to_string()),
+            step_error: Some("boom".to_string()),
+        };
+        let core = step_update_to_core(rk);
+        assert_eq!(
+            core.status,
+            crate::workflow::status::WorkflowStepStatus::Failed
+        );
+        assert_eq!(core.child_run_id.as_deref(), Some("child-1"));
+        assert_eq!(core.result_text.as_deref(), Some("result"));
+        assert_eq!(core.context_out.as_deref(), Some("ctx"));
+        assert_eq!(core.markers_out.as_deref(), Some("markers"));
+        assert_eq!(core.retry_count, Some(2));
+        assert_eq!(core.structured_output.as_deref(), Some(r#"{"key":"val"}"#));
+        assert_eq!(core.step_error.as_deref(), Some("boom"));
+    }
+
+    // ---------------------------------------------------------------------------
+    // core_workflow_result_to_rk — field-mapping correctness (core → rk direction)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn core_workflow_result_to_rk_maps_all_fields() {
+        use crate::workflow::types::WorkflowResult as CoreResult;
+        let core = CoreResult {
+            workflow_run_id: "run-2".to_string(),
+            worktree_id: Some("wt-2".to_string()),
+            workflow_name: "wf-name".to_string(),
+            all_succeeded: false,
+            total_cost: 2.5,
+            total_turns: 7,
+            total_duration_ms: 3000,
+            total_input_tokens: 300,
+            total_output_tokens: 150,
+            total_cache_read_input_tokens: 75,
+            total_cache_creation_input_tokens: 10,
+        };
+        let rk = core_workflow_result_to_rk(core);
+        assert_eq!(rk.workflow_run_id, "run-2");
+        assert_eq!(rk.worktree_id, Some("wt-2".to_string()));
+        assert_eq!(rk.workflow_name, "wf-name");
+        assert!(!rk.all_succeeded);
+        assert_eq!(rk.total_cost, 2.5);
+        assert_eq!(rk.total_turns, 7);
+        assert_eq!(rk.total_duration_ms, 3000);
+        assert_eq!(rk.total_input_tokens, 300);
+        assert_eq!(rk.total_output_tokens, 150);
+        assert_eq!(rk.total_cache_read_input_tokens, 75);
+        assert_eq!(rk.total_cache_creation_input_tokens, 10);
+    }
 }

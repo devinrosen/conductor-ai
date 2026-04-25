@@ -103,7 +103,7 @@ impl ActionRegistry {
         named: HashMap<String, Box<dyn ActionExecutor>>,
         fallback: Option<Box<dyn ActionExecutor>>,
     ) -> Self {
-        Self { named, fallback }
+        Self::new(named, fallback)
     }
 
     /// Returns `true` if the named executor is registered OR a fallback is configured.
