@@ -1115,3 +1115,85 @@ fn test_resume_deletes_orphaned_pending_steps() {
         "surviving step status must be Completed"
     );
 }
+
+/// Integration test: `resume_workflow()` must route through `FlowEngine::resume()`
+/// which re-queries the DB post-reset to build its skip set. A pre-completed step
+/// must survive the resume cycle unchanged (not reset by the FlowEngine path).
+#[test]
+fn test_resume_workflow_skips_completed_steps_via_flow_engine() {
+    let (_tmp, db_path) = make_standalone_db();
+
+    // Use a file-based connection so both the pre-flight phase (resume_workflow's
+    // conn) and the FlowEngine execution phase share the same on-disk DB.
+    let conn = crate::db::open_database(&db_path).unwrap();
+    let config = Config::default();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
+    let run = wf_mgr
+        .create_workflow_run(
+            "test-wf",
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            Some(&snapshot),
+        )
+        .unwrap();
+
+    // Pre-insert a completed step to simulate a partial run.
+    let step_id = wf_mgr
+        .insert_step(&run.id, "step-alpha", "actor", false, 0, 0)
+        .unwrap();
+    wf_mgr
+        .update_step_status(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("prior result"),
+            Some("prior context"),
+            Some(r#"["marker"]"#),
+            Some(0),
+        )
+        .unwrap();
+
+    // Mark the run as failed so resume_workflow accepts it.
+    wf_mgr
+        .update_workflow_status(
+            &run.id,
+            WorkflowRunStatus::Failed,
+            Some("step-b failed"),
+            None,
+        )
+        .unwrap();
+
+    // Pass the temp DB path so FlowEngine opens the same on-disk DB.
+    let result = resume_workflow(&WorkflowResumeInput {
+        conn: &conn,
+        config: &config,
+        workflow_run_id: &run.id,
+        model: None,
+        from_step: None,
+        restart: false,
+        conductor_bin_dir: None,
+        event_sinks: vec![],
+        db_path: Some(db_path),
+    })
+    .expect("resume_workflow must succeed for a failed run with a pre-completed step");
+
+    assert!(
+        result.all_succeeded,
+        "resumed empty workflow should complete with all_succeeded=true"
+    );
+
+    // The pre-completed step must still be Completed — FlowEngine::resume() reads
+    // DB post-reset and must not disturb already-completed steps.
+    let step = wf_mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(
+        step.status,
+        WorkflowStepStatus::Completed,
+        "completed step must not be reset during resume"
+    );
+}

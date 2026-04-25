@@ -230,8 +230,8 @@ pub(super) fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<O
 
 /// Extract completed step keys from a slice of step records.
 ///
-/// Used by [`WorkflowManager::get_completed_step_keys`] and by tests that
-/// verify resumption behaviour.
+/// Used by tests that verify resumption behaviour.
+#[cfg(test)]
 pub(super) fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<StepKey> {
     steps
         .iter()
@@ -1360,7 +1360,9 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     validate_resume_preconditions(&wf_run.status, input.restart, input.from_step)?;
 
-    // Load all steps once (avoids N+1 queries later)
+    // Load steps for --from-step validation and skip-count logging.
+    // Note: FlowEngine::resume() issues a second get_steps() query after all
+    // DB resets complete, so it reads the accurate post-reset state.
     let all_steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
 
     // Validate --from-step early (fail-fast before heavier worktree/snapshot operations)

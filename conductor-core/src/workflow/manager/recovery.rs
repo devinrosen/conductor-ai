@@ -688,6 +688,11 @@ impl<'a> WorkflowManager<'a> {
                             target_label_clone.as_deref(),
                             &e.to_string(),
                         );
+                    } else {
+                        tracing::warn!(
+                            run_id = %run_id_clone,
+                            "reap_heartbeat_stuck_runs: could not open DB to fire stuck-run notification"
+                        );
                     }
                 }
             });
@@ -981,10 +986,14 @@ impl<'a> WorkflowManager<'a> {
 
     /// Return the set of completed step keys as `(step_name, iteration)` pairs.
     ///
-    /// Used by the `--from-step` resume path to identify already-completed steps.
+    /// Used by tests to verify the skip set after a resume.
     pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
         let steps = self.get_workflow_steps(workflow_run_id)?;
-        Ok(crate::workflow::engine::completed_keys_from_steps(&steps))
+        Ok(steps
+            .iter()
+            .filter(|s| s.status == WorkflowStepStatus::Completed)
+            .map(|s| (s.step_name.clone(), s.iteration as u32))
+            .collect())
     }
 
     /// Delete a single workflow run by ID, along with all of its descendant runs
