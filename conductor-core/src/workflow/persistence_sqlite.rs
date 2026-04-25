@@ -11,8 +11,8 @@ use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
-    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
-    NewStep, StepUpdate, WorkflowPersistence,
+    FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
+    WorkflowPersistence,
 };
 
 /// SQLite-backed implementation of `WorkflowPersistence`.
@@ -33,6 +33,8 @@ impl SqliteWorkflowPersistence {
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(ConductorError::Database)?;
         conn.pragma_update(None, "foreign_keys", true)
+            .map_err(ConductorError::Database)?;
+        conn.pragma_update(None, "busy_timeout", 5000)
             .map_err(ConductorError::Database)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -196,49 +198,11 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             .map_err(to_engine_err)
     }
 
-    #[allow(clippy::type_complexity)]
     fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
         let guard = self.conn.lock().map_err(|_| lock_err())?;
-
-        let row: Option<(Option<String>, String, Option<String>, Option<String>)> = guard
-            .query_row(
-                "SELECT gate_approved_at, status, gate_feedback, gate_selections \
-                 FROM workflow_run_steps WHERE id = ?1",
-                rusqlite::params![step_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
-
-        let Some((approved_at, status_str, feedback, selections_json)) = row else {
-            return Ok(GateApprovalState::Pending);
-        };
-
-        use crate::workflow::status::WorkflowStepStatus;
-        let status = status_str
-            .parse::<WorkflowStepStatus>()
-            .unwrap_or_else(|_| {
-                tracing::warn!(
-                    "get_gate_approval: unrecognised step status '{status_str}' for step {step_id}, treating as Waiting"
-                );
-                WorkflowStepStatus::Waiting
-            });
-        let selections = selections_json.and_then(|json| {
-            serde_json::from_str::<Vec<String>>(&json)
-                .map_err(|e| {
-                    tracing::warn!(
-                        "get_gate_approval: failed to deserialize gate_selections for step {step_id}: {e}"
-                    );
-                })
-                .ok()
-        });
-
-        Ok(gate_approval_state_from_fields(
-            approved_at.as_deref(),
-            status,
-            feedback,
-            selections,
-        ))
+        WorkflowManager::new(&guard)
+            .get_gate_approval_state(step_id)
+            .map_err(to_engine_err)
     }
 
     fn approve_gate(
@@ -271,7 +235,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
 // Type converters between runkon-flow and conductor-core persistence types
 // ---------------------------------------------------------------------------
 
-mod rk_conv {
+pub(super) mod rk_conv {
     use crate::workflow::manager::FanOutItemRow as CoreFanOutItemRow;
     use crate::workflow::persistence::{
         FanOutItemStatus as CoreFanOutItemStatus, FanOutItemUpdate as CoreFanOutItemUpdate,
@@ -294,33 +258,67 @@ mod rk_conv {
     pub fn run_status_to_core(
         s: runkon_flow::status::WorkflowRunStatus,
     ) -> crate::workflow::status::WorkflowRunStatus {
-        s.to_string()
-            .parse()
-            .unwrap_or(crate::workflow::status::WorkflowRunStatus::Pending)
+        use crate::workflow::status::WorkflowRunStatus as Core;
+        use runkon_flow::status::WorkflowRunStatus as Rk;
+        match s {
+            Rk::Pending => Core::Pending,
+            Rk::Running => Core::Running,
+            Rk::Completed => Core::Completed,
+            Rk::Failed => Core::Failed,
+            Rk::Cancelled => Core::Cancelled,
+            Rk::Waiting => Core::Waiting,
+            Rk::NeedsResume => Core::NeedsResume,
+            Rk::Cancelling => Core::Cancelling,
+        }
     }
 
     pub fn run_status_to_rk(
         s: crate::workflow::status::WorkflowRunStatus,
     ) -> runkon_flow::status::WorkflowRunStatus {
-        s.to_string()
-            .parse()
-            .unwrap_or(runkon_flow::status::WorkflowRunStatus::Pending)
+        use crate::workflow::status::WorkflowRunStatus as Core;
+        use runkon_flow::status::WorkflowRunStatus as Rk;
+        match s {
+            Core::Pending => Rk::Pending,
+            Core::Running => Rk::Running,
+            Core::Completed => Rk::Completed,
+            Core::Failed => Rk::Failed,
+            Core::Cancelled => Rk::Cancelled,
+            Core::Waiting => Rk::Waiting,
+            Core::NeedsResume => Rk::NeedsResume,
+            Core::Cancelling => Rk::Cancelling,
+        }
     }
 
     pub fn step_status_to_core(
         s: runkon_flow::status::WorkflowStepStatus,
     ) -> crate::workflow::status::WorkflowStepStatus {
-        s.to_string()
-            .parse()
-            .unwrap_or(crate::workflow::status::WorkflowStepStatus::Pending)
+        use crate::workflow::status::WorkflowStepStatus as Core;
+        use runkon_flow::status::WorkflowStepStatus as Rk;
+        match s {
+            Rk::Pending => Core::Pending,
+            Rk::Running => Core::Running,
+            Rk::Completed => Core::Completed,
+            Rk::Failed => Core::Failed,
+            Rk::Skipped => Core::Skipped,
+            Rk::Waiting => Core::Waiting,
+            Rk::TimedOut => Core::TimedOut,
+        }
     }
 
     pub fn step_status_to_rk(
         s: crate::workflow::status::WorkflowStepStatus,
     ) -> runkon_flow::status::WorkflowStepStatus {
-        s.to_string()
-            .parse()
-            .unwrap_or(runkon_flow::status::WorkflowStepStatus::Pending)
+        use crate::workflow::status::WorkflowStepStatus as Core;
+        use runkon_flow::status::WorkflowStepStatus as Rk;
+        match s {
+            Core::Pending => Rk::Pending,
+            Core::Running => Rk::Running,
+            Core::Completed => Rk::Completed,
+            Core::Failed => Rk::Failed,
+            Core::Skipped => Rk::Skipped,
+            Core::Waiting => Rk::Waiting,
+            Core::TimedOut => Rk::TimedOut,
+        }
     }
 
     pub fn new_run_to_core(r: RkNewRun) -> CoreNewRun {

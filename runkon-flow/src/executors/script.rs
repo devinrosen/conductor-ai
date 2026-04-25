@@ -198,7 +198,10 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                     (vec![], ctx)
                 });
 
-            let markers_json = serde_json::to_string(&markers).unwrap_or_default();
+            let markers_json = serde_json::to_string(&markers).unwrap_or_else(|e| {
+                tracing::warn!("script '{}': failed to serialize markers: {e}", node.name);
+                "[]".to_string()
+            });
             let output_file_path = output_file
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string());

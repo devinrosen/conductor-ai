@@ -189,11 +189,16 @@ pub(super) fn core_action_output_to_rk(
 /// in the adapter and inject it when constructing the core `ExecutionContext`.
 pub(super) struct RkActionExecutorAdapter {
     inner: crate::workflow::claude_agent_executor::ClaudeAgentExecutor,
+    conn: Arc<Mutex<rusqlite::Connection>>,
     db_path: std::path::PathBuf,
 }
 
 impl RkActionExecutorAdapter {
-    pub(super) fn new(config: crate::config::Config, db_path: std::path::PathBuf) -> Self {
+    pub(super) fn new(
+        config: crate::config::Config,
+        conn: Arc<Mutex<rusqlite::Connection>>,
+        db_path: std::path::PathBuf,
+    ) -> Self {
         let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> = Box::new(
             crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
         );
@@ -202,6 +207,7 @@ impl RkActionExecutorAdapter {
                 config,
                 Some(api_executor),
             ),
+            conn,
             db_path,
         }
     }
@@ -224,8 +230,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         // use its ID as run_id. We also link it back to the step via child_run_id so
         // the TUI can drill in while the agent is running.
         let child_run_id = {
-            let conn = crate::db::open_database(&self.db_path)
-                .map_err(|e| EngineError::Workflow(e.to_string()))?;
+            let conn = self.conn.lock().map_err(|e| EngineError::Workflow(format!("db mutex poisoned: {e}")))?;
             let agent_mgr = crate::agent::AgentManager::new(&conn);
             let child_run = agent_mgr
                 .create_child_run(
@@ -301,12 +306,23 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 // ---------------------------------------------------------------------------
 
 /// Convert a runkon-flow `ForeachScope` to a conductor-core `ForeachScope` via
-/// JSON round-trip (both types share the same serialization schema).
+/// direct match (both types share identical variants).
 fn rk_scope_to_core(
     scope: &runkon_flow::dsl::ForeachScope,
-) -> crate::error::Result<crate::workflow_dsl::ForeachScope> {
-    let json = serde_json::to_string(scope).map_err(|e| ConductorError::Workflow(e.to_string()))?;
-    serde_json::from_str(&json).map_err(|e| ConductorError::Workflow(e.to_string()))
+) -> crate::workflow_dsl::ForeachScope {
+    use runkon_flow::dsl::{ForeachScope as Rk, TicketScope as RkTicket};
+    use crate::workflow_dsl::{ForeachScope as Core, TicketScope as CoreTicket, WorktreeScope as CoreWorktree};
+    match scope {
+        Rk::Ticket(ts) => Core::Ticket(match ts {
+            RkTicket::TicketId(id) => CoreTicket::TicketId(id.clone()),
+            RkTicket::Label(l) => CoreTicket::Label(l.clone()),
+            RkTicket::Unlabeled => CoreTicket::Unlabeled,
+        }),
+        Rk::Worktree(ws) => Core::Worktree(CoreWorktree {
+            base_branch: ws.base_branch.clone(),
+            has_open_pr: ws.has_open_pr,
+        }),
+    }
 }
 
 /// Convert a conductor-core `FanOutItem` to a runkon-flow `FanOutItem`.
@@ -340,10 +356,7 @@ fn delegate_items<P: ItemProvider>(
         conn: &guard,
         config,
     };
-    let core_scope = match scope {
-        Some(s) => Some(rk_scope_to_core(s).map_err(|e| EngineError::Workflow(e.to_string()))?),
-        None => None,
-    };
+    let core_scope = scope.map(rk_scope_to_core);
     provider
         .items(&core_ctx, core_scope.as_ref(), filter, existing_set)
         .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
@@ -648,7 +661,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             .find_resumable_child_run(parent_run_id, workflow_name)
             .map_err(|e| EngineError::Workflow(e.to_string()))?;
 
-        Ok(core_run.map(core_workflow_run_to_rk))
+        Ok(core_run.map(crate::workflow::persistence_sqlite::rk_conv::run_to_rk))
     }
 }
 
@@ -671,75 +684,6 @@ fn core_workflow_result_to_rk(
     }
 }
 
-/// Convert a conductor-core `WorkflowRun` to a runkon-flow `WorkflowRun`.
-///
-/// `status` is converted via `to_string()` / `parse()` since both types share
-/// the same string representations.  `blocked_on` is converted via JSON round-trip.
-fn core_workflow_run_to_rk(
-    run: crate::workflow::types::WorkflowRun,
-) -> runkon_flow::types::WorkflowRun {
-    let status_str = run.status.to_string();
-    let rk_status = status_str
-        .parse::<runkon_flow::status::WorkflowRunStatus>()
-        .unwrap_or_else(|_| {
-            tracing::warn!(
-                run_id = %run.id,
-                status = %status_str,
-                "Unrecognised workflow run status; defaulting to Failed",
-            );
-            runkon_flow::status::WorkflowRunStatus::Failed
-        });
-
-    let rk_blocked_on = run.blocked_on.and_then(|bo| {
-        match serde_json::to_string(&bo) {
-            Ok(json) => match serde_json::from_str(&json) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    tracing::warn!(run_id = %run.id, error = %e, "Failed to deserialize blocked_on; treating as unblocked");
-                    None
-                }
-            },
-            Err(e) => {
-                tracing::warn!(run_id = %run.id, error = %e, "Failed to serialize blocked_on; treating as unblocked");
-                None
-            }
-        }
-    });
-
-    runkon_flow::types::WorkflowRun {
-        id: run.id,
-        workflow_name: run.workflow_name,
-        worktree_id: run.worktree_id,
-        parent_run_id: run.parent_run_id,
-        status: rk_status,
-        dry_run: run.dry_run,
-        trigger: run.trigger,
-        started_at: run.started_at,
-        ended_at: run.ended_at,
-        result_summary: run.result_summary,
-        error: run.error,
-        definition_snapshot: run.definition_snapshot,
-        inputs: run.inputs,
-        ticket_id: run.ticket_id,
-        repo_id: run.repo_id,
-        parent_workflow_run_id: run.parent_workflow_run_id,
-        target_label: run.target_label,
-        default_bot_name: run.default_bot_name,
-        iteration: run.iteration,
-        blocked_on: rk_blocked_on,
-        workflow_title: run.workflow_title,
-        total_input_tokens: run.total_input_tokens,
-        total_output_tokens: run.total_output_tokens,
-        total_cache_read_input_tokens: run.total_cache_read_input_tokens,
-        total_cache_creation_input_tokens: run.total_cache_creation_input_tokens,
-        total_turns: run.total_turns,
-        total_cost_usd: run.total_cost_usd,
-        total_duration_ms: run.total_duration_ms,
-        model: run.model,
-        dismissed: run.dismissed,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 6. Helper builder functions
 // ---------------------------------------------------------------------------
@@ -748,9 +692,10 @@ fn core_workflow_run_to_rk(
 /// as the catch-all fallback executor.
 pub(super) fn build_rk_action_registry(
     config: &crate::config::Config,
+    conn: Arc<Mutex<rusqlite::Connection>>,
     db_path: &std::path::Path,
 ) -> runkon_flow::traits::action_executor::ActionRegistry {
-    let adapter = RkActionExecutorAdapter::new(config.clone(), db_path.to_path_buf());
+    let adapter = RkActionExecutorAdapter::new(config.clone(), conn, db_path.to_path_buf());
     runkon_flow::traits::action_executor::ActionRegistry::from_executors(
         HashMap::new(),
         Some(Box::new(adapter)),
@@ -843,34 +788,34 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // core_workflow_run_to_rk — status conversion
+    // rk_conv::run_to_rk — status conversion
     // ---------------------------------------------------------------------------
 
     #[test]
     fn status_completed_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Completed);
-        let rk = core_workflow_run_to_rk(run);
+        let rk = crate::workflow::persistence_sqlite::rk_conv::run_to_rk(run);
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Completed);
     }
 
     #[test]
     fn status_failed_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Failed);
-        let rk = core_workflow_run_to_rk(run);
+        let rk = crate::workflow::persistence_sqlite::rk_conv::run_to_rk(run);
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Failed);
     }
 
     #[test]
     fn status_running_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Running);
-        let rk = core_workflow_run_to_rk(run);
+        let rk = crate::workflow::persistence_sqlite::rk_conv::run_to_rk(run);
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Running);
     }
 
     #[test]
     fn blocked_on_none_maps_to_none() {
         let run = make_core_run("r1", CoreStatus::Completed);
-        let rk = core_workflow_run_to_rk(run);
+        let rk = crate::workflow::persistence_sqlite::rk_conv::run_to_rk(run);
         assert!(rk.blocked_on.is_none());
     }
 

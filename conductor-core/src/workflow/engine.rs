@@ -1169,7 +1169,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         )),
     );
 
-    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(config, &db));
+    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(config, Arc::clone(&shared_conn), &db));
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
         Arc::clone(&shared_conn),
@@ -1269,7 +1269,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         db,
     )
     .build()
-    .map_err(|e| ConductorError::Workflow(e.to_string()))?;
+    .map_err(|e| ConductorError::Workflow(format!("failed to build engine for '{}': {e}", workflow.name)))?;
 
     let rk_result = engine
         .run(&rk_def, &mut rk_state)

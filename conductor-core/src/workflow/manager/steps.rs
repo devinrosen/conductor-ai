@@ -343,6 +343,56 @@ impl<'a> WorkflowManager<'a> {
         Ok(exists)
     }
 
+    /// Query a step's gate approval state from the DB.
+    pub fn get_gate_approval_state(
+        &self,
+        step_id: &str,
+    ) -> Result<crate::workflow::persistence::GateApprovalState> {
+        use rusqlite::OptionalExtension;
+        let row: Option<(Option<String>, String, Option<String>, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT gate_approved_at, status, gate_feedback, gate_selections \
+                 FROM workflow_run_steps WHERE id = ?1",
+                rusqlite::params![step_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(ConductorError::Database)?;
+
+        let Some((approved_at, status_str, feedback, selections_json)) = row else {
+            return Ok(crate::workflow::persistence::GateApprovalState::Pending);
+        };
+
+        let status = status_str
+            .parse::<WorkflowStepStatus>()
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    step_id = %step_id,
+                    status = %status_str,
+                    "get_gate_approval_state: unrecognised step status; treating as Waiting",
+                );
+                WorkflowStepStatus::Waiting
+            });
+        let selections = selections_json.and_then(|json| {
+            serde_json::from_str::<Vec<String>>(&json)
+                .map_err(|e| {
+                    tracing::warn!(
+                        step_id = %step_id,
+                        "get_gate_approval_state: failed to deserialize gate_selections: {e}",
+                    );
+                })
+                .ok()
+        });
+
+        Ok(crate::workflow::persistence::gate_approval_state_from_fields(
+            approved_at.as_deref(),
+            status,
+            feedback,
+            selections,
+        ))
+    }
+
     /// Validate that gate selections are within the allowed options for this step.
     fn validate_gate_selections(&self, step_id: &str, selections: &[String]) -> Result<()> {
         // Get the stored gate options for this step

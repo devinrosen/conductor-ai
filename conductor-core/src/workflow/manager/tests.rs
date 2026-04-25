@@ -1226,6 +1226,42 @@ fn test_validate_single_reports_errors_for_missing_agent() {
     );
 }
 
+#[test]
+fn test_update_step_preserves_child_run_id_when_none_passed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+
+    let step_id = mgr
+        .insert_step(&run.id, "step-with-child", "actor", false, 0, 0)
+        .unwrap();
+
+    // Link a child_run_id to the step.
+    mgr.update_step_child_run_id(&step_id, "child-run-123").unwrap();
+
+    // Update to a terminal status passing child_run_id = None.
+    mgr.update_step_status_full(
+        &step_id,
+        crate::workflow::status::WorkflowStepStatus::Completed,
+        None, // child_run_id intentionally None
+        Some("done"),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let step = steps.iter().find(|s| s.id == step_id).unwrap();
+    assert_eq!(
+        step.child_run_id.as_deref(),
+        Some("child-run-123"),
+        "child_run_id must be preserved when None is passed in a terminal update"
+    );
+}
+
 // ── get_step_summaries_for_runs — child-chain traversal ─────────────────
 
 #[test]
