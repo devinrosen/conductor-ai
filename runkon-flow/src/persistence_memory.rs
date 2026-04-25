@@ -33,6 +33,8 @@ pub struct InMemoryWorkflowPersistence {
     store: Mutex<InMemoryStore>,
     /// When `true`, `get_fan_out_items` returns a `Persistence` error.
     fail_get_fan_out_items: AtomicBool,
+    /// When `true`, `get_steps` returns a `Workflow` error.
+    fail_get_steps: AtomicBool,
 }
 
 impl InMemoryWorkflowPersistence {
@@ -46,6 +48,7 @@ impl InMemoryWorkflowPersistence {
                 fan_out_order: Vec::new(),
             }),
             fail_get_fan_out_items: AtomicBool::new(false),
+            fail_get_steps: AtomicBool::new(false),
         }
     }
 }
@@ -61,6 +64,13 @@ impl InMemoryWorkflowPersistence {
     /// call to `get_fan_out_items` returns `EngineError::Persistence`.
     pub fn set_fail_get_fan_out_items(&self, fail: bool) {
         self.fail_get_fan_out_items
+            .store(fail, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Inject a failure into `get_steps`. When `fail` is `true`, every call to
+    /// `get_steps` returns `EngineError::Workflow`.
+    pub fn set_fail_get_steps(&self, fail: bool) {
+        self.fail_get_steps
             .store(fail, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -248,6 +258,9 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
     }
 
     fn get_steps(&self, run_id: &str) -> Result<Vec<WorkflowRunStep>, EngineError> {
+        if self.fail_get_steps.load(Ordering::Relaxed) {
+            return Err(EngineError::Workflow("injected get_steps failure".into()));
+        }
         let store = self.store.lock().map_err(|_| lock_err())?;
         let mut steps: Vec<WorkflowRunStep> = store
             .steps

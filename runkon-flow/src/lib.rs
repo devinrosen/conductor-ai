@@ -24,7 +24,7 @@ pub use cancellation::CancellationToken;
 pub use cancellation_reason::CancellationReason;
 pub use dsl::ValidationError;
 pub use events::{EngineEvent, EngineEventData, EventSink};
-pub use flow_engine::{EngineBundle, FlowEngine, FlowEngineBuilder};
+pub use flow_engine::{FlowEngine, FlowEngineBuilder};
 pub use traits::action_executor::ActionRegistry;
 pub use traits::gate_resolver::GateResolverRegistry;
 pub use traits::item_provider::ItemProviderRegistry;

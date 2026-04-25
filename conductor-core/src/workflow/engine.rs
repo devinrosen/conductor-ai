@@ -230,8 +230,8 @@ pub(super) fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<O
 
 /// Extract completed step keys from a slice of step records.
 ///
-/// Shared by [`WorkflowManager::get_completed_step_keys`] and [`resume_workflow`]
-/// so the key-building logic lives in one place.
+/// Used by [`WorkflowManager::get_completed_step_keys`] for skip-set construction
+/// and by tests that verify resumption behaviour.
 pub(super) fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<StepKey> {
     steps
         .iter()
@@ -1456,17 +1456,19 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     // skip set. These rows carry no useful state and would otherwise pollute step history.
     wf_mgr.delete_orphaned_pending_steps(&wf_run.id)?;
 
-    // Build the skip set
-    let skip_completed = if input.restart {
+    // Perform DB resets and count how many completed steps will be skipped (for logging).
+    let skip_count: usize = if input.restart {
         // Restart: clear all step results — skip nothing
         wf_mgr.reset_failed_steps(&wf_run.id)?;
         wf_mgr.reset_completed_steps(&wf_run.id)?;
-        HashSet::new()
+        0
     } else {
-        let mut keys = completed_keys_from_steps(&all_steps);
+        let completed_count = all_steps
+            .iter()
+            .filter(|s| s.status == WorkflowStepStatus::Completed)
+            .count();
 
-        // Handle --from-step: remove completed keys at or after the specified step
-        if let Some(from_step) = input.from_step {
+        let skip_count = if let Some(from_step) = input.from_step {
             // Safety: from_step existence was validated above
             let pos = all_steps
                 .iter()
@@ -1474,24 +1476,21 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                 .expect("from_step validated above")
                 .position;
 
-            let to_remove: Vec<StepKey> = all_steps
+            let reset_count = all_steps
                 .iter()
                 .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
-                .map(|s| (s.step_name.clone(), s.iteration as u32))
-                .collect();
-            for key in to_remove {
-                keys.remove(&key);
-            }
+                .count();
             // Reset those steps in DB
             wf_mgr.reset_steps_from_position(&wf_run.id, pos)?;
-        }
+            completed_count - reset_count
+        } else {
+            completed_count
+        };
 
         // Reset non-completed steps
         wf_mgr.reset_failed_steps(&wf_run.id)?;
-        keys
+        skip_count
     };
-
-    let skip_count = skip_completed.len();
 
     // Reset run status to Running
     wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
@@ -1627,9 +1626,9 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         ))
     })?;
 
-    let rk_result = engine
-        .resume(&rk_def, &mut rk_state)
-        .map_err(|e| ConductorError::Workflow(e.to_string()))?;
+    let rk_result = engine.resume(&rk_def, &mut rk_state).map_err(|e| {
+        ConductorError::Workflow(format!("workflow '{}' resume failed: {e}", workflow.name))
+    })?;
 
     Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
 }

@@ -19,19 +19,6 @@ use crate::types::WorkflowResult;
 use crate::workflow_resolver_directory::DirectoryWorkflowResolver;
 
 // ---------------------------------------------------------------------------
-// EngineBundle (kept for source compatibility)
-// ---------------------------------------------------------------------------
-
-/// Produced by earlier versions of `FlowEngineBuilder::build()`.
-///
-/// Kept so that importers of `runkon_flow::EngineBundle` continue to compile.
-/// New code should use `FlowEngine` instead.
-pub struct EngineBundle {
-    pub action_registry: ActionRegistry,
-    pub script_env_provider: Arc<dyn ScriptEnvProvider>,
-}
-
-// ---------------------------------------------------------------------------
 // FlowEngine
 // ---------------------------------------------------------------------------
 
@@ -679,6 +666,40 @@ mod tests {
             target_label: None,
         })
         .unwrap()
+    }
+
+    /// Build an `ExecutionState` wired with two `CountingExecutor`s (alpha, beta)
+    /// and return the counters alongside the state.
+    fn make_counting_state(
+        persistence: Arc<crate::persistence_memory::InMemoryWorkflowPersistence>,
+        run_id: String,
+    ) -> (
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+        crate::engine::ExecutionState,
+    ) {
+        let alpha_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let beta_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut m = HashMap::new();
+        m.insert(
+            "alpha".to_string(),
+            Box::new(CountingExecutor {
+                name: "alpha",
+                count: Arc::clone(&alpha_count),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        m.insert(
+            "beta".to_string(),
+            Box::new(CountingExecutor {
+                name: "beta",
+                count: Arc::clone(&beta_count),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        let mut state = make_bare_state("wf");
+        state.persistence = persistence;
+        state.action_registry = Arc::new(ActionRegistry::new(m, None));
+        state.workflow_run_id = run_id;
+        (alpha_count, beta_count, state)
     }
 
     struct TicketsProvider;
@@ -1804,10 +1825,7 @@ mod tests {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
         use crate::status::WorkflowStepStatus;
         use crate::traits::persistence::{NewStep, StepUpdate, WorkflowPersistence};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let alpha_count = Arc::new(AtomicUsize::new(0));
-        let beta_count = Arc::new(AtomicUsize::new(0));
+        use std::sync::atomic::Ordering;
 
         let persistence = Arc::new(InMemoryWorkflowPersistence::new());
         let run = make_test_run(&persistence);
@@ -1840,26 +1858,8 @@ mod tests {
             )
             .unwrap();
 
-        let mut m = HashMap::new();
-        m.insert(
-            "alpha".to_string(),
-            Box::new(CountingExecutor {
-                name: "alpha",
-                count: Arc::clone(&alpha_count),
-            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
-        );
-        m.insert(
-            "beta".to_string(),
-            Box::new(CountingExecutor {
-                name: "beta",
-                count: Arc::clone(&beta_count),
-            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
-        );
-
-        let mut state = make_bare_state("wf");
-        state.persistence = persistence;
-        state.action_registry = Arc::new(ActionRegistry::new(m, None));
-        state.workflow_run_id = run.id;
+        let (alpha_count, beta_count, mut state) =
+            make_counting_state(Arc::clone(&persistence), run.id);
 
         let engine = FlowEngineBuilder::new().build().unwrap();
         let def = make_def("wf", vec![call_node("alpha"), call_node("beta")]);
@@ -1881,34 +1881,12 @@ mod tests {
     #[test]
     fn resume_empty_skip_set_runs_all() {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let alpha_count = Arc::new(AtomicUsize::new(0));
-        let beta_count = Arc::new(AtomicUsize::new(0));
+        use std::sync::atomic::Ordering;
 
         let persistence = Arc::new(InMemoryWorkflowPersistence::new());
         let run = make_test_run(&persistence);
 
-        let mut m = HashMap::new();
-        m.insert(
-            "alpha".to_string(),
-            Box::new(CountingExecutor {
-                name: "alpha",
-                count: Arc::clone(&alpha_count),
-            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
-        );
-        m.insert(
-            "beta".to_string(),
-            Box::new(CountingExecutor {
-                name: "beta",
-                count: Arc::clone(&beta_count),
-            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
-        );
-
-        let mut state = make_bare_state("wf");
-        state.persistence = persistence;
-        state.action_registry = Arc::new(ActionRegistry::new(m, None));
-        state.workflow_run_id = run.id;
+        let (alpha_count, beta_count, mut state) = make_counting_state(persistence, run.id);
 
         let engine = FlowEngineBuilder::new().build().unwrap();
         let def = make_def("wf", vec![call_node("alpha"), call_node("beta")]);
@@ -1929,105 +1907,15 @@ mod tests {
     // AC: resume() propagates persistence errors from get_steps().
     #[test]
     fn resume_propagates_get_steps_error() {
-        use crate::engine_error::EngineError;
-        use crate::status::WorkflowRunStatus;
-        use crate::traits::persistence::{
-            FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
-            WorkflowPersistence,
-        };
-        use crate::types::{FanOutItemRow, WorkflowRun, WorkflowRunStep};
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
 
-        struct FailingSteps;
-        impl WorkflowPersistence for FailingSteps {
-            fn get_steps(&self, _: &str) -> Result<Vec<WorkflowRunStep>, EngineError> {
-                Err(EngineError::Workflow("injected get_steps failure".into()))
-            }
-            fn create_run(&self, _: NewRun) -> Result<WorkflowRun, EngineError> {
-                unimplemented!()
-            }
-            fn get_run(&self, _: &str) -> Result<Option<WorkflowRun>, EngineError> {
-                unimplemented!()
-            }
-            fn list_active_runs(
-                &self,
-                _: &[WorkflowRunStatus],
-            ) -> Result<Vec<WorkflowRun>, EngineError> {
-                unimplemented!()
-            }
-            fn update_run_status(
-                &self,
-                _: &str,
-                _: WorkflowRunStatus,
-                _: Option<&str>,
-                _: Option<&str>,
-            ) -> Result<(), EngineError> {
-                unimplemented!()
-            }
-            fn insert_step(&self, _: NewStep) -> Result<String, EngineError> {
-                unimplemented!()
-            }
-            fn update_step(&self, _: &str, _: StepUpdate) -> Result<(), EngineError> {
-                unimplemented!()
-            }
-            fn insert_fan_out_item(
-                &self,
-                _: &str,
-                _: &str,
-                _: &str,
-                _: &str,
-            ) -> Result<String, EngineError> {
-                unimplemented!()
-            }
-            fn update_fan_out_item(&self, _: &str, _: FanOutItemUpdate) -> Result<(), EngineError> {
-                unimplemented!()
-            }
-            fn get_fan_out_items(
-                &self,
-                _: &str,
-                _: Option<FanOutItemStatus>,
-            ) -> Result<Vec<FanOutItemRow>, EngineError> {
-                unimplemented!()
-            }
-            fn get_gate_approval(&self, _: &str) -> Result<GateApprovalState, EngineError> {
-                unimplemented!()
-            }
-            fn approve_gate(
-                &self,
-                _: &str,
-                _: &str,
-                _: Option<&str>,
-                _: Option<&[String]>,
-            ) -> Result<(), EngineError> {
-                unimplemented!()
-            }
-            fn reject_gate(&self, _: &str, _: &str, _: Option<&str>) -> Result<(), EngineError> {
-                unimplemented!()
-            }
-            fn is_run_cancelled(&self, _: &str) -> Result<bool, EngineError> {
-                unimplemented!()
-            }
-            fn tick_heartbeat(&self, _: &str) -> Result<(), EngineError> {
-                unimplemented!()
-            }
-            fn persist_metrics(
-                &self,
-                _: &str,
-                _: i64,
-                _: i64,
-                _: i64,
-                _: i64,
-                _: f64,
-                _: i64,
-                _: i64,
-            ) -> Result<(), EngineError> {
-                unimplemented!()
-            }
-        }
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        persistence.set_fail_get_steps(true);
 
         let engine = FlowEngineBuilder::new().build().unwrap();
         let def = make_def("wf", vec![call_node("alpha")]);
         let mut state = make_bare_state("wf");
-        state.persistence = Arc::new(FailingSteps);
+        state.persistence = persistence;
         state.workflow_run_id = "run-123".to_string();
 
         let err = engine.resume(&def, &mut state).unwrap_err();
