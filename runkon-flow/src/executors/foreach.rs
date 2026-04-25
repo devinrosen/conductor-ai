@@ -408,13 +408,16 @@ pub fn execute_foreach(
         for (item_db_id, succeeded) in completed {
             in_flight -= 1;
 
-            let item_id = db_id_to_item_id.get(&item_db_id).cloned().unwrap_or_else(|| {
-                tracing::warn!(
-                    item_db_id = %item_db_id,
-                    "foreach: dispatch map miss for completed item — item_id will be empty"
-                );
-                String::new()
-            });
+            let item_id = db_id_to_item_id
+                .get(&item_db_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        item_db_id = %item_db_id,
+                        "foreach: dispatch map miss for completed item — item_id will be empty"
+                    );
+                    String::new()
+                });
             let item_ref = item_ref_map.get(&item_id).cloned().unwrap_or_else(|| {
                 tracing::warn!(
                     item_id = %item_id,

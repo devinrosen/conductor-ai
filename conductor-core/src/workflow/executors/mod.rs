@@ -13,6 +13,7 @@ mod script;
 mod tests;
 
 // Public API — used by engine.rs and workflow/tests/
+pub(super) use super::runkon_gate_bridge::register_rk_gate_resolvers;
 pub(super) use call::execute_call;
 pub(super) use call_workflow::execute_call_workflow;
 pub(super) use control_flow::{
@@ -23,7 +24,6 @@ pub(super) use gate::execute_gate;
 #[cfg(test)]
 pub(super) use gate::handle_gate_timeout;
 pub(super) use parallel::execute_parallel;
-pub(super) use super::runkon_gate_bridge::register_rk_gate_resolvers;
 pub(super) use script::execute_script;
 
 // Private helpers exposed to inline tests via #[cfg(test)]

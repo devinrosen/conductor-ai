@@ -80,7 +80,11 @@ impl GitHubTokenCache {
     }
 
     #[cfg(test)]
-    pub(in crate::workflow) fn set_cache_for_test(&self, token: Option<String>, fetched_at: Instant) {
+    pub(in crate::workflow) fn set_cache_for_test(
+        &self,
+        token: Option<String>,
+        fetched_at: Instant,
+    ) {
         *self.cache.lock().expect("token cache mutex poisoned") = Some((token, fetched_at));
     }
 
@@ -88,7 +92,11 @@ impl GitHubTokenCache {
     ///
     /// Returns `None` when no GitHub App is configured and no override is set.
     /// Never sets `GH_TOKEN=""` — callers must only set the env var when `Some`.
-    pub(in crate::workflow) fn get(&self, config: &Config, bot_name: Option<&str>) -> Option<String> {
+    pub(in crate::workflow) fn get(
+        &self,
+        config: &Config,
+        bot_name: Option<&str>,
+    ) -> Option<String> {
         if let Some(ref t) = self.override_token {
             return Some(t.clone());
         }

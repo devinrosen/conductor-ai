@@ -366,6 +366,9 @@ mod tests {
     fn step_to_rk_status_roundtrip() {
         let step = make_core_step(None);
         let rk = step_to_rk(step);
-        assert_eq!(rk.status, runkon_flow::status::WorkflowStepStatus::Completed);
+        assert_eq!(
+            rk.status,
+            runkon_flow::status::WorkflowStepStatus::Completed
+        );
     }
 }

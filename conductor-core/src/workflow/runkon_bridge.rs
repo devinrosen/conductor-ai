@@ -400,7 +400,14 @@ macro_rules! impl_rk_item_provider {
                 filter: &HashMap<String, String>,
                 existing_set: &HashSet<String>,
             ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-                delegate_items(&self.conn, &self.config, scope, filter, existing_set, $inner)
+                delegate_items(
+                    &self.conn,
+                    &self.config,
+                    scope,
+                    filter,
+                    existing_set,
+                    $inner,
+                )
             }
         }
     };
@@ -419,7 +426,11 @@ macro_rules! impl_rk_item_provider {
                 config: crate::config::Config,
                 repo_id: Option<String>,
             ) -> Self {
-                Self { conn, config, repo_id }
+                Self {
+                    conn,
+                    config,
+                    repo_id,
+                }
             }
         }
         impl runkon_flow::traits::item_provider::ItemProvider for $name {
@@ -466,12 +477,9 @@ impl_rk_item_provider!(
 );
 
 // WorktreesProvider requires repo_id; worktree_id is not available in this context.
-impl_rk_item_provider!(
-    RkWorktreesItemProvider,
-    "worktrees",
-    repo_id,
-    |repo_id| crate::workflow::item_provider::worktrees::WorktreesProvider::new(repo_id, None)
-);
+impl_rk_item_provider!(RkWorktreesItemProvider, "worktrees", repo_id, |repo_id| {
+    crate::workflow::item_provider::worktrees::WorktreesProvider::new(repo_id, None)
+});
 
 // ---------------------------------------------------------------------------
 // 5. ConductorChildWorkflowRunner
