@@ -984,7 +984,11 @@ impl<'a> WorkflowManager<'a> {
     /// Used to build the skip set for resume.
     pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
         let steps = self.get_workflow_steps(workflow_run_id)?;
-        Ok(crate::workflow::engine::completed_keys_from_steps(&steps))
+        Ok(steps
+            .iter()
+            .filter(|s| s.status == WorkflowStepStatus::Completed)
+            .map(|s| (s.step_name.clone(), s.iteration as u32))
+            .collect())
     }
 
     /// Delete a single workflow run by ID, along with all of its descendant runs
