@@ -383,7 +383,7 @@ mod parse_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::collect_leaf_step_keys;
+    use super::{collect_leaf_step_keys, serialize_or_empty_array};
     use crate::dsl::{
         AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, ForEachNode, GateNode,
         GateType, IfNode, OnMaxIter, ParallelNode, ScriptNode, UnlessNode, WhileNode, WorkflowNode,
@@ -583,5 +583,27 @@ mod tests {
         });
         let keys = collect_leaf_step_keys(&node);
         assert_eq!(keys, vec!["plan".to_string()]);
+    }
+
+    // ---------------------------------------------------------------------------
+    // serialize_or_empty_array — happy path and fallback
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn serialize_or_empty_array_serializes_vec() {
+        let result = serialize_or_empty_array(&vec!["a", "b"], "test");
+        assert_eq!(result, r#"["a","b"]"#);
+    }
+
+    #[test]
+    fn serialize_or_empty_array_returns_bracket_pair_on_failure() {
+        struct AlwaysFails;
+        impl serde::Serialize for AlwaysFails {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("intentional failure"))
+            }
+        }
+        let result = serialize_or_empty_array(&AlwaysFails, "test");
+        assert_eq!(result, "[]");
     }
 }

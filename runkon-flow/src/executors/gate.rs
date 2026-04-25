@@ -421,7 +421,7 @@ pub fn handle_gate_timeout(
                         markers_out: None,
                         retry_count: None,
                         structured_output: None,
-                        step_error: None,
+                        step_error: Some(format!("Gate '{}' timed out", node.name)),
                     },
                 )
                 .map_err(p_err)?;

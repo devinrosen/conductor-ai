@@ -414,4 +414,174 @@ mod tests {
     run_status_roundtrip!(run_status_waiting, Core::Waiting, Rk::Waiting);
     run_status_roundtrip!(run_status_needs_resume, Core::NeedsResume, Rk::NeedsResume);
     run_status_roundtrip!(run_status_cancelling, Core::Cancelling, Rk::Cancelling);
+
+    // ---------------------------------------------------------------------------
+    // step_status_to_rk / step_status_to_core — all 7 variants in both directions
+    // ---------------------------------------------------------------------------
+
+    macro_rules! step_status_roundtrip {
+        ($name:ident, $core:expr, $rk:expr) => {
+            #[test]
+            fn $name() {
+                use crate::workflow::status::WorkflowStepStatus as Core;
+                use runkon_flow::status::WorkflowStepStatus as Rk;
+                assert_eq!(step_status_to_rk($core), $rk, "core→rk");
+                assert_eq!(step_status_to_core($rk), $core, "rk→core");
+            }
+        };
+    }
+
+    step_status_roundtrip!(step_status_pending, Core::Pending, Rk::Pending);
+    step_status_roundtrip!(step_status_running, Core::Running, Rk::Running);
+    step_status_roundtrip!(step_status_completed, Core::Completed, Rk::Completed);
+    step_status_roundtrip!(step_status_failed, Core::Failed, Rk::Failed);
+    step_status_roundtrip!(step_status_skipped, Core::Skipped, Rk::Skipped);
+    step_status_roundtrip!(step_status_waiting, Core::Waiting, Rk::Waiting);
+    step_status_roundtrip!(step_status_timed_out, Core::TimedOut, Rk::TimedOut);
+
+    // ---------------------------------------------------------------------------
+    // fan_out_update_to_core — Running and Terminal arms
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn fan_out_update_running_preserves_child_run_id() {
+        let update = RkFanOutItemUpdate::Running {
+            child_run_id: "child-123".to_string(),
+        };
+        match fan_out_update_to_core(update) {
+            CoreFanOutItemUpdate::Running { child_run_id } => {
+                assert_eq!(child_run_id, "child-123");
+            }
+            CoreFanOutItemUpdate::Terminal { .. } => panic!("expected Running"),
+        }
+    }
+
+    #[test]
+    fn fan_out_update_terminal_preserves_status() {
+        let update = RkFanOutItemUpdate::Terminal {
+            status: RkFanOutItemStatus::Completed,
+        };
+        match fan_out_update_to_core(update) {
+            CoreFanOutItemUpdate::Terminal { status } => {
+                assert_eq!(status, CoreFanOutItemStatus::Completed);
+            }
+            CoreFanOutItemUpdate::Running { .. } => panic!("expected Terminal"),
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // fan_out_status_to_core — all 5 variants
+    // ---------------------------------------------------------------------------
+
+    macro_rules! fan_out_status_roundtrip {
+        ($name:ident, $rk:expr, $core:expr) => {
+            #[test]
+            fn $name() {
+                assert_eq!(fan_out_status_to_core($rk), $core);
+            }
+        };
+    }
+
+    fan_out_status_roundtrip!(
+        fan_out_status_pending,
+        RkFanOutItemStatus::Pending,
+        CoreFanOutItemStatus::Pending
+    );
+    fan_out_status_roundtrip!(
+        fan_out_status_running,
+        RkFanOutItemStatus::Running,
+        CoreFanOutItemStatus::Running
+    );
+    fan_out_status_roundtrip!(
+        fan_out_status_completed,
+        RkFanOutItemStatus::Completed,
+        CoreFanOutItemStatus::Completed
+    );
+    fan_out_status_roundtrip!(
+        fan_out_status_failed,
+        RkFanOutItemStatus::Failed,
+        CoreFanOutItemStatus::Failed
+    );
+    fan_out_status_roundtrip!(
+        fan_out_status_skipped,
+        RkFanOutItemStatus::Skipped,
+        CoreFanOutItemStatus::Skipped
+    );
+
+    // ---------------------------------------------------------------------------
+    // rk_workflow_result_to_core — field-mapping correctness (guards transposition)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn rk_workflow_result_to_core_maps_all_fields() {
+        use runkon_flow::types::WorkflowResult as RkResult;
+        let rk = RkResult {
+            workflow_run_id: "run-1".to_string(),
+            worktree_id: Some("wt-1".to_string()),
+            workflow_name: "my-wf".to_string(),
+            all_succeeded: true,
+            total_cost: 1.5,
+            total_turns: 10,
+            total_duration_ms: 5000,
+            total_input_tokens: 100,
+            total_output_tokens: 200,
+            total_cache_read_input_tokens: 50,
+            total_cache_creation_input_tokens: 25,
+        };
+        let core = rk_workflow_result_to_core(rk);
+        assert_eq!(core.workflow_run_id, "run-1");
+        assert_eq!(core.worktree_id, Some("wt-1".to_string()));
+        assert_eq!(core.workflow_name, "my-wf");
+        assert!(core.all_succeeded);
+        assert_eq!(core.total_cost, 1.5);
+        assert_eq!(core.total_turns, 10);
+        assert_eq!(core.total_duration_ms, 5000);
+        assert_eq!(core.total_input_tokens, 100);
+        assert_eq!(core.total_output_tokens, 200);
+        assert_eq!(core.total_cache_read_input_tokens, 50);
+        assert_eq!(core.total_cache_creation_input_tokens, 25);
+    }
+
+    // ---------------------------------------------------------------------------
+    // gate_approval_to_rk — all 3 variants with payload verification
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn gate_approval_to_rk_pending() {
+        assert!(matches!(
+            gate_approval_to_rk(CoreGateApprovalState::Pending),
+            RkGateApprovalState::Pending
+        ));
+    }
+
+    #[test]
+    fn gate_approval_to_rk_approved_preserves_payload() {
+        let state = CoreGateApprovalState::Approved {
+            feedback: Some("lgtm".to_string()),
+            selections: Some(vec!["opt-a".to_string()]),
+        };
+        match gate_approval_to_rk(state) {
+            RkGateApprovalState::Approved {
+                feedback,
+                selections,
+            } => {
+                assert_eq!(feedback.as_deref(), Some("lgtm"));
+                assert_eq!(selections, Some(vec!["opt-a".to_string()]));
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gate_approval_to_rk_rejected_preserves_feedback() {
+        let state = CoreGateApprovalState::Rejected {
+            feedback: Some("not ready".to_string()),
+        };
+        match gate_approval_to_rk(state) {
+            RkGateApprovalState::Rejected { feedback } => {
+                assert_eq!(feedback.as_deref(), Some("not ready"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
 }
