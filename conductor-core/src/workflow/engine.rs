@@ -1187,7 +1187,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     );
 
     let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
-        super::runkon_bridge::ConductorChildWorkflowRunner::new(db.clone(), config.clone()),
+        super::runkon_bridge::ConductorChildWorkflowRunner::new(db.clone(), config.clone(), Arc::clone(&shared_conn)),
     );
 
     let workflow_name_for_resolver = workflow.name.clone();
@@ -1268,7 +1268,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     };
 
     let engine = super::executors::register_rk_gate_resolvers(
-        runkon_flow::FlowEngineBuilder::new(),
+        runkon_flow::FlowEngineBuilder::new().with_event_sinks(&rk_state.event_sinks),
         Arc::clone(&persistence),
         params.working_dir.clone(),
         None,
@@ -1612,7 +1612,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     );
 
     let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
-        super::runkon_bridge::ConductorChildWorkflowRunner::new(db.clone(), config.clone()),
+        super::runkon_bridge::ConductorChildWorkflowRunner::new(db.clone(), config.clone(), Arc::clone(&shared_conn)),
     );
 
     let workflow_name_for_resolver = workflow.name.clone();
@@ -1685,7 +1685,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     };
 
     let engine = super::executors::register_rk_gate_resolvers(
-        runkon_flow::FlowEngineBuilder::new(),
+        runkon_flow::FlowEngineBuilder::new().with_event_sinks(&rk_state.event_sinks),
         Arc::clone(&persistence),
         worktree_path,
         wf_run.default_bot_name.clone(),
@@ -2112,27 +2112,7 @@ pub(super) fn restore_completed_step(
     // Accumulate costs from the pre-loaded child agent run
     if let Some(ref child_run_id) = step.child_run_id {
         if let Some(run) = ctx.child_runs.get(child_run_id) {
-            if let Some(cost) = run.cost_usd {
-                state.total_cost += cost;
-            }
-            if let Some(turns) = run.num_turns {
-                state.total_turns += turns;
-            }
-            if let Some(dur) = run.duration_ms {
-                state.total_duration_ms += dur;
-            }
-            if let Some(t) = run.input_tokens {
-                state.total_input_tokens += t;
-            }
-            if let Some(t) = run.output_tokens {
-                state.total_output_tokens += t;
-            }
-            if let Some(t) = run.cache_read_input_tokens {
-                state.total_cache_read_input_tokens += t;
-            }
-            if let Some(t) = run.cache_creation_input_tokens {
-                state.total_cache_creation_input_tokens += t;
-            }
+            state.accumulate_agent_run(run);
         } else {
             tracing::warn!(
                 "resume: child agent run '{child_run_id}' for step '{step_key}' not found \

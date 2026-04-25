@@ -556,11 +556,16 @@ impl runkon_flow::traits::item_provider::ItemProvider for RkWorktreesItemProvide
 pub(super) struct ConductorChildWorkflowRunner {
     db_path: std::path::PathBuf,
     config: crate::config::Config,
+    conn: Arc<Mutex<rusqlite::Connection>>,
 }
 
 impl ConductorChildWorkflowRunner {
-    pub(super) fn new(db_path: std::path::PathBuf, config: crate::config::Config) -> Self {
-        Self { db_path, config }
+    pub(super) fn new(
+        db_path: std::path::PathBuf,
+        config: crate::config::Config,
+        conn: Arc<Mutex<rusqlite::Connection>>,
+    ) -> Self {
+        Self { db_path, config, conn }
     }
 }
 
@@ -655,8 +660,10 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         parent_run_id: &str,
         workflow_name: &str,
     ) -> runkon_flow::engine_error::Result<Option<runkon_flow::types::WorkflowRun>> {
-        let conn = crate::db::open_database(&self.db_path)
-            .map_err(|e| EngineError::Workflow(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| EngineError::Workflow(format!("db mutex poisoned: {e}")))?;
 
         let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let core_run = mgr

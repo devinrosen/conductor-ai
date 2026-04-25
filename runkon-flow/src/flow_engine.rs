@@ -526,6 +526,13 @@ impl FlowEngineBuilder {
         self
     }
 
+    /// Register multiple event sinks from an existing `Arc<[Arc<dyn EventSink>]>`.
+    /// Sinks are appended in slice order after any already registered.
+    pub fn with_event_sinks(mut self, sinks: &Arc<[Arc<dyn EventSink>]>) -> Self {
+        self.event_sinks.extend(sinks.iter().cloned());
+        self
+    }
+
     /// Consume the builder and produce a [`FlowEngine`].
     pub fn build(self) -> Result<FlowEngine, EngineError> {
         Ok(FlowEngine {
