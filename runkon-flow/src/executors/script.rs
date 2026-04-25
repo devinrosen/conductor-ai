@@ -189,6 +189,14 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     // (non-shell-quoted) variable map because values are passed as discrete env
     // var values, not interpolated into a shell command string.
     for (k, v) in &node.env {
+        if k.contains('=') || k.contains('\0') {
+            tracing::warn!(
+                "script '{}': env key {:?} contains '=' or null byte, skipping",
+                node.name,
+                k
+            );
+            continue;
+        }
         let resolved = crate::prompt_builder::substitute_variables(v, &vars);
         env_vars.insert(k.clone(), resolved);
     }
@@ -271,10 +279,10 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                     (vec![], ctx)
                 });
 
-            let markers_json = serde_json::to_string(&markers).unwrap_or_else(|e| {
-                tracing::warn!("script '{}': failed to serialize markers: {e}", node.name);
-                "[]".to_string()
-            });
+            let markers_json = crate::helpers::serialize_or_empty_array(
+                &markers,
+                &format!("script '{}'", node.name),
+            );
             let output_file_path = output_file
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string());
@@ -622,10 +630,7 @@ mod tests {
         });
 
         let mut env = HashMap::new();
-        env.insert(
-            "TEMPLATED_VAR".to_string(),
-            "{{prior_context}}".to_string(),
-        );
+        env.insert("TEMPLATED_VAR".to_string(), "{{prior_context}}".to_string());
         let node = ScriptNode {
             name: "env-template".to_string(),
             run: "echo $TEMPLATED_VAR".to_string(),

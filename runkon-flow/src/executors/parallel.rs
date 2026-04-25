@@ -97,13 +97,13 @@ pub fn execute_parallel(
 
     // Build the variable map once — state doesn't change between branches so there is
     // no need to re-serialize state.contexts for every parallel branch.
-    let shared_inputs: std::collections::HashMap<String, String> = {
+    let shared_inputs: Arc<std::collections::HashMap<String, String>> = Arc::new({
         let var_map = crate::prompt_builder::build_variable_map(state);
         var_map
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect()
-    };
+    });
 
     // Parallel-scope token: child of the run root. Cancelling it signals running branches
     // to exit early when fail_fast fires.
@@ -176,7 +176,7 @@ pub fn execute_parallel(
             })
             .map_err(p_err)?;
 
-        let inputs = shared_inputs.clone();
+        let inputs = Arc::clone(&shared_inputs);
 
         let ectx = ExecutionContext {
             run_id: step_id.clone(),
@@ -272,13 +272,10 @@ pub fn execute_parallel(
     for pr in &results {
         match &pr.result {
             Ok(output) => {
-                let markers_json = serde_json::to_string(&output.markers).unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "parallel: '{}': failed to serialize markers: {e}",
-                        pr.agent_name
-                    );
-                    "[]".to_string()
-                });
+                let markers_json = crate::helpers::serialize_or_empty_array(
+                    &output.markers,
+                    &format!("parallel: '{}'", pr.agent_name),
+                );
                 let context = output.context.clone().unwrap_or_default();
 
                 state

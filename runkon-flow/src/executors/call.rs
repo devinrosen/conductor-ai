@@ -140,13 +140,13 @@ fn execute_call_inner(
         );
 
         // Build variable map and inputs for this attempt
-        let inputs: HashMap<String, String> = {
+        let inputs: Arc<HashMap<String, String>> = Arc::new({
             let var_map = build_variable_map(state);
             var_map
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v))
                 .collect()
-        };
+        });
 
         let effective_bot_name = node
             .bot_name

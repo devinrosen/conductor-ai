@@ -241,7 +241,12 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     &ectx.parent_run_id,
                     ectx.bot_name.as_deref(),
                 )
-                .map_err(|e| EngineError::Workflow(e.to_string()))?;
+                .map_err(|e| {
+                    EngineError::Workflow(format!(
+                        "step '{}': failed to create child agent run: {e}",
+                        params.name
+                    ))
+                })?;
 
             if !ectx.step_id.is_empty() {
                 let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
@@ -280,7 +285,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         let core_schema = params.schema.clone().map(rk_schema_to_core);
         let core_params = crate::workflow::action_executor::ActionParams {
             name: params.name.clone(),
-            inputs: params.inputs.clone(),
+            inputs: (*params.inputs).clone(),
             retries_remaining: params.retries_remaining,
             retry_error: params.retry_error.clone(),
             snippets: params.snippets.clone(),
@@ -594,8 +599,11 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             db_path: Some(self.db_path.clone()),
         };
 
-        let core_result = crate::workflow::engine::resume_workflow(&input)
-            .map_err(|e| EngineError::Workflow(e.to_string()))?;
+        let core_result = crate::workflow::engine::resume_workflow(&input).map_err(|e| {
+            EngineError::Workflow(format!(
+                "failed to resume child workflow run '{workflow_run_id}': {e}"
+            ))
+        })?;
 
         Ok(core_workflow_result_to_rk(core_result))
     }
@@ -613,7 +621,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let core_run = mgr
             .find_resumable_child_run(parent_run_id, workflow_name)
-            .map_err(|e| EngineError::Workflow(e.to_string()))?;
+            .map_err(|e| EngineError::Workflow(format!("failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}")))?;
 
         Ok(core_run.map(crate::workflow::rk_types::run_to_rk))
     }

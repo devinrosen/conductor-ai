@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::traits::action_executor::{ActionParams, ExecutionContext};
@@ -24,7 +25,7 @@ pub fn make_ectx() -> ExecutionContext {
 pub fn make_params(name: &str) -> ActionParams {
     ActionParams {
         name: name.to_string(),
-        inputs: HashMap::new(),
+        inputs: Arc::new(HashMap::new()),
         retries_remaining: 0,
         retry_error: None,
         snippets: vec![],

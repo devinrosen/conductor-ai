@@ -114,6 +114,14 @@ fn fix_backslash_escapes(s: &str) -> String {
     out
 }
 
+/// Serialize `v` to a JSON string; on failure log a warning with `ctx` and return `"[]"`.
+pub fn serialize_or_empty_array<T: serde::Serialize>(v: &T, ctx: &str) -> String {
+    serde_json::to_string(v).unwrap_or_else(|e| {
+        tracing::warn!("{ctx}: failed to serialize to JSON array: {e}");
+        "[]".to_string()
+    })
+}
+
 /// Build a human-readable summary of a workflow execution.
 pub fn build_workflow_summary(state: &ExecutionState) -> String {
     let steps = match state.persistence.get_steps(&state.workflow_run_id) {

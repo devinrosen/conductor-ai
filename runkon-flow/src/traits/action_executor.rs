@@ -25,7 +25,7 @@ pub trait ActionExecutor: Send + Sync {
 /// Per-invocation inputs passed to an `ActionExecutor`.
 pub struct ActionParams {
     pub name: String,
-    pub inputs: HashMap<String, String>,
+    pub inputs: Arc<HashMap<String, String>>,
     #[allow(dead_code)]
     pub retries_remaining: u32,
     pub retry_error: Option<String>,

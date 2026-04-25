@@ -185,7 +185,9 @@ pub(in crate::workflow) fn register_rk_gate_resolvers(
 mod tests {
     use super::*;
     use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
-    use runkon_flow::traits::gate_resolver::{GateContext as RkGateContext, GateParams as RkGateParams};
+    use runkon_flow::traits::gate_resolver::{
+        GateContext as RkGateContext, GateParams as RkGateParams,
+    };
     use runkon_flow::traits::persistence::{NewRun, NewStep, WorkflowPersistence};
 
     fn make_persistence_with_step() -> (Arc<InMemoryWorkflowPersistence>, String) {
@@ -249,16 +251,21 @@ mod tests {
     fn poll_returns_pending_when_not_yet_approved() {
         let (p, step_id) = make_persistence_with_step();
         let resolver = make_resolver(p);
-        let poll = resolver.poll("run-1", &make_params(&step_id), &make_ctx(&step_id)).unwrap();
+        let poll = resolver
+            .poll("run-1", &make_params(&step_id), &make_ctx(&step_id))
+            .unwrap();
         assert!(matches!(poll, RkGatePoll::Pending));
     }
 
     #[test]
     fn poll_returns_approved_with_feedback() {
         let (p, step_id) = make_persistence_with_step();
-        p.approve_gate(&step_id, "reviewer", Some("lgtm"), None).unwrap();
+        p.approve_gate(&step_id, "reviewer", Some("lgtm"), None)
+            .unwrap();
         let resolver = make_resolver(p);
-        let poll = resolver.poll("run-1", &make_params(&step_id), &make_ctx(&step_id)).unwrap();
+        let poll = resolver
+            .poll("run-1", &make_params(&step_id), &make_ctx(&step_id))
+            .unwrap();
         assert!(
             matches!(&poll, RkGatePoll::Approved(Some(s)) if s == "lgtm"),
             "expected Approved(Some(\"lgtm\")), got {poll:?}"
@@ -268,9 +275,12 @@ mod tests {
     #[test]
     fn poll_returns_rejected_with_message() {
         let (p, step_id) = make_persistence_with_step();
-        p.reject_gate(&step_id, "reviewer", Some("not good")).unwrap();
+        p.reject_gate(&step_id, "reviewer", Some("not good"))
+            .unwrap();
         let resolver = make_resolver(p);
-        let poll = resolver.poll("run-1", &make_params(&step_id), &make_ctx(&step_id)).unwrap();
+        let poll = resolver
+            .poll("run-1", &make_params(&step_id), &make_ctx(&step_id))
+            .unwrap();
         assert!(
             matches!(&poll, RkGatePoll::Rejected(s) if s == "not good"),
             "expected Rejected(\"not good\"), got {poll:?}"
@@ -283,7 +293,9 @@ mod tests {
         p.reject_gate(&step_id, "reviewer", None).unwrap();
         let resolver = make_resolver(p);
         let params = make_params(&step_id);
-        let poll = resolver.poll("run-1", &params, &make_ctx(&step_id)).unwrap();
+        let poll = resolver
+            .poll("run-1", &params, &make_ctx(&step_id))
+            .unwrap();
         assert!(
             matches!(&poll, RkGatePoll::Rejected(s) if s.contains("gate")),
             "expected fallback rejection message containing gate name, got {poll:?}"

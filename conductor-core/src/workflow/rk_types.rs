@@ -1,6 +1,12 @@
-// Type converters between runkon-flow and conductor-core persistence types.
-// Lives here (not in persistence_sqlite) so that runkon_bridge and engine can
-// import converters without depending on the persistence module.
+//! Type converters between runkon-flow and conductor-core persistence types.
+//!
+//! Lives here (not in `persistence_sqlite`) so that `runkon_bridge` and `engine` can
+//! import converters without depending on the persistence module.
+//!
+//! This module, along with `runkon_bridge` and `runkon_gate_bridge`, is migration
+//! scaffolding for Phase 3.x of the FlowEngine migration. These bridge modules are
+//! temporary glue that will be removed once the legacy conductor-core execution stack
+//! is deleted in Phase 3.3.
 
 use crate::workflow::manager::FanOutItemRow as CoreFanOutItemRow;
 use crate::workflow::persistence::{
