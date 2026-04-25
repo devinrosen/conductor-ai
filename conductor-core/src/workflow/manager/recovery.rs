@@ -260,14 +260,13 @@ impl<'a> WorkflowManager<'a> {
         }
 
         // Batch-fetch all parent agent runs via AgentManager to avoid N+1 lookups.
-        let parent_ids: Vec<String> = waiting_runs
-            .iter()
-            .map(|(_, parent_run_id)| parent_run_id.clone())
-            .collect();
-
         let agent_mgr = crate::agent::AgentManager::new(self.conn);
-        let id_refs: Vec<&str> = parent_ids.iter().map(String::as_str).collect();
+        let id_refs: Vec<&str> = waiting_runs.iter().map(|(_, id)| id.as_str()).collect();
         let parent_runs = agent_mgr.get_runs_by_ids(&id_refs)?;
+
+        // Batch-fetch the active waiting gate step for each run to avoid N+1 queries.
+        let run_id_refs: Vec<&str> = waiting_runs.iter().map(|(id, _)| id.as_str()).collect();
+        let gate_steps = self.find_waiting_gates_for_runs(&run_id_refs)?;
 
         let mut reaped = 0usize;
         let now = Utc::now();
@@ -281,8 +280,8 @@ impl<'a> WorkflowManager<'a> {
             );
 
             // Check if the active gate step's timeout has elapsed.
-            let gate_step = self.find_waiting_gate(&run_id)?;
-            let gate_timed_out = gate_step.as_ref().is_some_and(|step| {
+            let gate_step = gate_steps.get(&run_id);
+            let gate_timed_out = gate_step.is_some_and(|step| {
                 let timeout_secs = step.gate_timeout.as_deref().and_then(|s| {
                     match crate::workflow_dsl::parse_duration_str(s) {
                         Ok(n) => i64::try_from(n).ok(),
@@ -320,7 +319,7 @@ impl<'a> WorkflowManager<'a> {
             }
 
             // Mark the active gate step as timed_out.
-            if let Some(ref step) = gate_step {
+            if let Some(step) = gate_step {
                 self.update_step_status(
                     &step.id,
                     WorkflowStepStatus::TimedOut,

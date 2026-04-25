@@ -769,6 +769,43 @@ impl<'a> WorkflowManager<'a> {
         Ok(map)
     }
 
+    /// Fetch the active waiting gate step for each of the given run IDs in one query.
+    ///
+    /// Returns a map from workflow_run_id → the single `running`/`waiting` gate step for that
+    /// run.  Runs that have no waiting gate are absent from the map.
+    pub fn find_waiting_gates_for_runs(
+        &self,
+        run_ids: &[&str],
+    ) -> Result<HashMap<String, WorkflowRunStep>> {
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = sql_placeholders(run_ids.len());
+        let sql = format!(
+            "{} \
+             WHERE s.workflow_run_id IN ({placeholders}) AND s.gate_type IS NOT NULL \
+               AND s.gate_approved_at IS NULL \
+               AND s.status IN ('running', 'waiting') \
+             ORDER BY s.workflow_run_id, s.position DESC",
+            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+        );
+        let steps: Vec<WorkflowRunStep> = {
+            let mut stmt = self.conn.prepare_cached(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(run_ids.iter().copied()),
+                row_to_workflow_step,
+            )?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        // Keep only the highest-position step per run (ORDER BY position DESC means
+        // the first row for each run_id is the one we want).
+        let mut map: HashMap<String, WorkflowRunStep> = HashMap::new();
+        for step in steps {
+            map.entry(step.workflow_run_id.clone()).or_insert(step);
+        }
+        Ok(map)
+    }
+
     /// Find the waiting gate step for a workflow run.
     pub fn find_waiting_gate(&self, workflow_run_id: &str) -> Result<Option<WorkflowRunStep>> {
         Ok(self

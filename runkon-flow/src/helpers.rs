@@ -257,13 +257,23 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
         return 0;
     }
 
+    // Build a map from iteration -> set of completed step names to avoid per-key
+    // String clones inside the inner all() check.
+    let mut completed_by_iter: std::collections::HashMap<u32, std::collections::HashSet<&str>> =
+        std::collections::HashMap::new();
+    for (name, iter) in step_map.keys() {
+        completed_by_iter
+            .entry(*iter)
+            .or_default()
+            .insert(name.as_str());
+    }
+
     // Find the highest iteration where all body nodes are completed
     let mut iter = 0u32;
+    let empty: std::collections::HashSet<&str> = std::collections::HashSet::new();
     loop {
-        let all_done = body_keys
-            .iter()
-            .all(|k| step_map.contains_key(&(k.clone(), iter)));
-        if !all_done {
+        let completed = completed_by_iter.get(&iter).unwrap_or(&empty);
+        if !body_keys.iter().all(|k| completed.contains(k.as_str())) {
             break;
         }
         iter += 1;

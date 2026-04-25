@@ -18,21 +18,6 @@ use crate::types::{
     ContextEntry, StepKey, StepResult, WorkflowExecConfig, WorkflowResult, WorkflowRunStep,
 };
 
-/// Input keys that the workflow engine injects automatically from the run context.
-pub const ENGINE_INJECTED_KEYS: &[&str] = &[
-    "ticket_id",
-    "ticket_source_id",
-    "ticket_source_type",
-    "ticket_title",
-    "ticket_body",
-    "ticket_url",
-    "ticket_raw_json",
-    "repo_id",
-    "repo_path",
-    "repo_name",
-    "workflow_run_id",
-];
-
 /// Domain-identity context for a single workflow execution.
 #[derive(Clone)]
 pub struct WorktreeContext {

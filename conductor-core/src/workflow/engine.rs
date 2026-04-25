@@ -228,18 +228,6 @@ pub(super) fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<O
     )
 }
 
-/// Extract completed step keys from a slice of step records.
-///
-/// Used by tests that verify resumption behaviour.
-#[cfg(test)]
-pub(super) fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<StepKey> {
-    steps
-        .iter()
-        .filter(|s| s.status == WorkflowStepStatus::Completed)
-        .map(|s| (s.step_name.clone(), s.iteration as u32))
-        .collect()
-}
-
 /// Validate required workflow inputs are present and apply default values.
 ///
 /// Returns an error if a required input is missing.
@@ -1394,49 +1382,50 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     // Determine execution paths based on target type.
     // - Worktree run: look up worktree and derive repo from it.
     // - Repo/ticket run: look up repo directly (via repo_id or ticket.repo_id).
-    let (worktree_path, _worktree_slug, repo_path) =
-        if let Some(wt_id) = wf_run.worktree_id.as_deref() {
-            let worktree = wt_mgr.get_by_id(wt_id)?;
-            let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
-            if std::path::Path::new(&worktree.path).exists() {
-                (
-                    worktree.path.clone(),
-                    worktree.slug.clone(),
-                    repo.local_path.clone(),
-                )
-            } else {
-                tracing::warn!(
-                    "Worktree path '{}' does not exist; falling back to repo root '{}'",
-                    worktree.path,
-                    repo.local_path
-                );
-                (
-                    repo.local_path.clone(),
-                    String::new(),
-                    repo.local_path.clone(),
-                )
-            }
+    let (worktree_path, _worktree_slug, repo_path) = if let Some(wt_id) =
+        wf_run.worktree_id.as_deref()
+    {
+        let worktree = wt_mgr.get_by_id(wt_id)?;
+        let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
+        if std::path::Path::new(&worktree.path).exists() {
+            (
+                worktree.path.clone(),
+                worktree.slug.clone(),
+                repo.local_path.clone(),
+            )
         } else {
-            // Resolve repo_id from the run or via the linked ticket.
-            // (The ephemeral guard above ensures at least one FK is set.)
-            let effective_repo_id = if let Some(rid) = wf_run.repo_id.as_deref() {
-                rid.to_string()
-            } else {
-                let tid = wf_run.ticket_id.as_deref().expect("guarded above");
-                crate::tickets::TicketSyncer::new(conn)
-                    .get_by_id(tid)
-                    .map_err(|e| {
-                        ConductorError::Workflow(format!(
-                            "Cannot resolve repo for ticket '{}' during resume: {e}",
-                            tid
-                        ))
-                    })?
-                    .repo_id
-            };
-            let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&effective_repo_id)?;
-            let path = repo.local_path.clone();
-            (path.clone(), String::new(), path)
+            tracing::warn!(
+                "Worktree path '{}' does not exist; falling back to repo root '{}'",
+                worktree.path,
+                repo.local_path
+            );
+            (
+                repo.local_path.clone(),
+                String::new(),
+                repo.local_path.clone(),
+            )
+        }
+    } else {
+        // Resolve repo_id from the run or via the linked ticket.
+        // (The ephemeral guard above ensures at least one FK is set.)
+        let effective_repo_id = if let Some(rid) = wf_run.repo_id.as_deref() {
+            rid.to_string()
+        } else {
+            let tid = wf_run.ticket_id.as_deref().expect("ticket_id is Some when worktree_id and repo_id are both None — enforced by the ephemeral run guard above");
+            crate::tickets::TicketSyncer::new(conn)
+                .get_by_id(tid)
+                .map_err(|e| {
+                    ConductorError::Workflow(format!(
+                        "Cannot resolve repo for ticket '{}' during resume: {e}",
+                        tid
+                    ))
+                })?
+                .repo_id
         };
+        let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&effective_repo_id)?;
+        let path = repo.local_path.clone();
+        (path.clone(), String::new(), path)
+    };
 
     // Warn if any running steps have live subprocesses — terminate_subprocesses
     // (called inside reset_failed_steps below) will kill them, but the warning
